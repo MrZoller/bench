@@ -251,6 +251,18 @@ export interface DeviceSpec {
   allocatableBytes: number;
   /** Whether that ceiling can be raised by the user (macOS iogpu.wired_limit_mb, AMD VGM). */
   allocatableTunable?: boolean;
+  /**
+   * Highest the allocation ceiling can actually be raised to, in bytes.
+   *
+   * Absent means "as far as physical memory allows" — true of Apple's `iogpu.wired_limit_mb`,
+   * where the catalogued figure is a 75% default rather than a limit. Present where the platform
+   * states a real maximum: AMD's Variable Graphics Memory exposes 96 of the Ryzen AI Max+'s
+   * 128 GB, so its default *is* its maximum and raising the setting buys nothing.
+   *
+   * Without this the UI told a Ryzen owner that a 117 GiB configuration would fit once they
+   * raised the ceiling, which the platform does not permit.
+   */
+  maxAllocatableBytes?: number;
 
   /** Theoretical peak memory bandwidth, bytes/sec. */
   bandwidthBytesPerSec: number;
@@ -325,6 +337,22 @@ export interface RuntimeSpec {
   supports: readonly { class: DeviceClass; vendor?: string }[];
   /** KV cache dtypes the runtime can actually store. */
   kvPrecisions: readonly KvPrecision[];
+  /**
+   * What this runtime *calls* a precision, where its own name differs from the generic one.
+   *
+   * `KvPrecision` is a width, and the widths are shared: one byte per element is one byte
+   * whether the runtime spells it `q8_0` or `fp8_e4m3`. The names are not shared, and labelling
+   * vLLM's cache "Q8" named a `--kv-cache-dtype` value that does not exist — it takes
+   * `auto`/`fp8`/`fp8_e5m2`/`fp8_e4m3` and has no integer option.
+   *
+   * A label rather than a fourth `KvPrecision` member, because nothing in the arithmetic differs
+   * and a wider type would have to be threaded through `KV_BYTES`, placement, store coercion and
+   * the URL codec to express a distinction the engine never uses. If precision *identity* ever
+   * becomes something the engine reasons about — llama.cpp's `q8_0` KV really does carry block
+   * scales and run nearer 8.5 effective bits — that is the point to split the type, and this
+   * field is what would be replaced.
+   */
+  kvLabels?: Partial<Record<KvPrecision, string>>;
   source: string;
 }
 

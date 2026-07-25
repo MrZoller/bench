@@ -327,6 +327,7 @@
       "capacityGiB": 128,
       "allocatableGiB": 96,
       "allocatableTunable": true,
+      "maxAllocatableGiB": 96,
       "bandwidthGBs": 256,
       "measuredBandwidthGBs": 213,
       "tflops": { "fp16": 59 },
