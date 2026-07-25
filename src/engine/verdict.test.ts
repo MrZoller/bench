@@ -44,15 +44,17 @@ function judge(model: Parameters<typeof evaluate>[0]['model'], quantId: string, 
     usage,
     maxContextTokens: evaluation.maxContextTokens,
     runnableContextTokens: evaluation.runnableContextTokens,
-    // Each archetype is graded at its own prompt length, so this re-runs prefill per call.
-    prefillAt: (promptTokens) =>
-      evaluate({
+    // Each archetype is graded at its own scenario, decode included.
+    evaluateAt: (promptTokens, contextTokens) => {
+      const e = evaluate({
         model,
         quant: getQuant(quantId),
-        usage: { ...usage, promptTokens },
+        usage: { ...usage, promptTokens, contextTokens },
         rig: { device: rig.device, count: rig.count ?? 1 },
         runtime: rig.runtime ?? LLAMA_CPP,
-      }).prefill,
+      });
+      return { decode: e.decode, prefill: e.prefill };
+    },
   };
   return new Map(judgeWorkloads(inputs).map((v) => [v.workload.id, v]));
 }
@@ -215,14 +217,16 @@ describe('context limits and workload fit', () => {
         usage: { contextTokens: 4096, concurrency: 1, promptTokens: 2048, kvPrecision: 'fp16' },
         maxContextTokens: 4096,
         runnableContextTokens: 4096, // Far short of the 32K a RAG query sends.
-        prefillAt: (promptTokens) =>
-          evaluate({
+        evaluateAt: (promptTokens, contextTokens) => {
+          const e = evaluate({
             model: LLAMA_31_8B,
             quant: getQuant('q4_k_m'),
-            usage: { contextTokens: 8192, concurrency: 1, promptTokens, kvPrecision: 'fp16' },
+            usage: { contextTokens, concurrency: 1, promptTokens, kvPrecision: 'fp16' },
             rig: { device: RTX_5090, count: 1 },
             runtime: LLAMA_CPP,
-          }).prefill,
+          });
+          return { decode: e.decode, prefill: e.prefill };
+        },
       }).map((v) => [v.workload.id, v])
     );
 
@@ -281,12 +285,21 @@ describe('context accounting in the verdicts', () => {
         usage: { contextTokens: 32768, concurrency: 1, promptTokens: 2048, kvPrecision: 'fp16' },
         maxContextTokens: 32768,
         runnableContextTokens: 32768,
-        prefillAt: () => ({
-          ttftSeconds: 1,
-          prefillTokensPerSec: 5000,
-          linearFlops: 1,
-          attentionFlops: 1,
-          attentionBound: false,
+        evaluateAt: () => ({
+          decode: {
+            perUserTokensPerSec: 60,
+            aggregateTokensPerSec: 60,
+            weightReadBytes: 1,
+            kvReadBytes: 1,
+            kvBound: false,
+          },
+          prefill: {
+            ttftSeconds: 1,
+            prefillTokensPerSec: 5000,
+            linearFlops: 1,
+            attentionFlops: 1,
+            attentionBound: false,
+          },
         }),
       }).map((v) => [v.workload.id, v])
     );
@@ -316,12 +329,21 @@ describe('context accounting in the verdicts', () => {
         // Between 32,256 and 32,767: rounds to "32K" and would read "Only 32K ... not enough
         // for the 32K document".
         runnableContextTokens: 32700,
-        prefillAt: () => ({
-          ttftSeconds: 1,
-          prefillTokensPerSec: 5000,
-          linearFlops: 1,
-          attentionFlops: 1,
-          attentionBound: false,
+        evaluateAt: () => ({
+          decode: {
+            perUserTokensPerSec: 60,
+            aggregateTokensPerSec: 60,
+            weightReadBytes: 1,
+            kvReadBytes: 1,
+            kvBound: false,
+          },
+          prefill: {
+            ttftSeconds: 1,
+            prefillTokensPerSec: 5000,
+            linearFlops: 1,
+            attentionFlops: 1,
+            attentionBound: false,
+          },
         }),
       }).map((v) => [v.workload.id, v])
     );
@@ -329,5 +351,71 @@ describe('context accounting in the verdicts', () => {
     const reason = verdicts.get('rag')!.reason;
     expect(reason).toMatch(/not enough for the 32K/);
     expect(reason).not.toMatch(/Only 32K of context fits/);
+  });
+});
+
+/**
+ * The four ways this layer had let a verdict disagree with its own evidence. Each was found one
+ * neighbour over from a fix, so these assert the *class* rather than the instance.
+ */
+describe('a verdict never contradicts the numbers behind it', () => {
+  const stub = (perUserTokensPerSec: number, ttftSeconds: number) => ({
+    decode: {
+      perUserTokensPerSec,
+      aggregateTokensPerSec: perUserTokensPerSec,
+      weightReadBytes: 1,
+      kvReadBytes: 1,
+      kvBound: false,
+    },
+    prefill: {
+      ttftSeconds,
+      prefillTokensPerSec: 5000,
+      linearFlops: 1,
+      attentionFlops: 1,
+      attentionBound: false,
+    },
+  });
+
+  const judged = (runnableContextTokens: number, perUser = 60, ttft = 0.2) =>
+    new Map(
+      judgeWorkloads({
+        placement: evaluate({
+          model: LLAMA_31_8B,
+          quant: getQuant('q4_k_m'),
+          usage: { contextTokens: 8192, concurrency: 1, promptTokens: 2048, kvPrecision: 'fp16' },
+          rig: { device: RTX_5090, count: 1 },
+          runtime: LLAMA_CPP,
+        }).placement,
+        decode: stub(perUser, ttft).decode,
+        usage: { contextTokens: 512, concurrency: 1, promptTokens: 512, kvPrecision: 'fp16' },
+        maxContextTokens: runnableContextTokens,
+        runnableContextTokens,
+        evaluateAt: () => stub(perUser, ttft),
+      }).map((v) => [v.workload.id, v])
+    );
+
+  it('fails every archetype whose own prompt cannot fit, however fast it is', () => {
+    // 813 tokens of runnable context: not even one chat turn, at any speed.
+    const verdicts = judged(813, 200, 0.05);
+
+    for (const id of ['chat', 'completion', 'agent', 'rag', 'long-context']) {
+      expect(verdicts.get(id)!.fitness).toBe('fail');
+    }
+  });
+
+  it('never prints a failing measurement as the threshold it missed', () => {
+    // 14.5 tok/s fails the agent's 15 minimum; rounding would show "15".
+    const reason = judged(200_000, 14.506, 1).get('agent')!.reason;
+
+    expect(judged(200_000, 14.506, 1).get('agent')!.fitness).not.toBe('good');
+    expect(reason).not.toMatch(/\b15 tok\/s/);
+    expect(reason).toMatch(/\b14/);
+  });
+
+  it('uses one boundary for a condition and for the reason that explains it', () => {
+    // Just under the tight threshold of 65536 + allowance: must fail *and* say why.
+    const verdicts = judged(65_948);
+    expect(verdicts.get('long-context')!.fitness).toBe('fail');
+    expect(verdicts.get('long-context')!.reason).toMatch(/short of the 128K/);
   });
 });

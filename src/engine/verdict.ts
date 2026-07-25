@@ -120,13 +120,21 @@ export interface VerdictInputs {
    */
   runnableContextTokens: number;
   /**
-   * Prefill re-estimated at an arbitrary prompt length.
+   * The whole scenario re-evaluated at an archetype's own prompt.
    *
-   * A callback rather than a single estimate, because each archetype is graded at its own
-   * characteristic prompt — see `Workload.typicalPromptTokens`. The engine is pure arithmetic,
-   * so seven extra evaluations cost nothing worth optimising.
+   * Both halves, not just prefill. Re-running prefill alone left decode describing the *selected*
+   * cache while the latency described a 16K agent turn — so an agent could be graded on 26.8
+   * tok/s measured at a 512-token context when its own context decodes at 12.4. A callback
+   * because each archetype needs its own; the engine is pure arithmetic, so seven extra
+   * evaluations cost nothing worth optimising.
    */
-  prefillAt: (promptTokens: number) => PrefillEstimate;
+  evaluateAt: (
+    promptTokens: number,
+    contextTokens: number
+  ) => {
+    decode: DecodeEstimate;
+    prefill: PrefillEstimate;
+  };
 }
 
 /**
@@ -136,7 +144,7 @@ export interface VerdictInputs {
  * completion passes, everything below it does too.
  */
 export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
-  const { placement, decode, usage, maxContextTokens, runnableContextTokens, prefillAt } = inputs;
+  const { placement, decode, usage, maxContextTokens, runnableContextTokens, evaluateAt } = inputs;
 
   // Nothing else is meaningful if it cannot load. Said once, rather than seven times.
   if (placement.unsupported || placement.impossible) {
@@ -144,54 +152,84 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
     return WORKLOADS.map((w) => ({ workload: w, fitness: 'fail' as const, reason }));
   }
 
-  const perUser = decode.perUserTokensPerSec;
   const aggregate = decode.aggregateTokensPerSec;
 
-  /** Time to first token for the prompt this archetype would actually send. */
-  const ttftFor = (id: string) => prefillAt(workload(id).typicalPromptTokens).ttftSeconds;
+  /**
+   * What an archetype needs to hold: its prompt plus room to answer. Every fit check reads this
+   * one function, so a boundary cannot be stated differently in a condition and in its reason —
+   * which is exactly how long-context ended up testing 65,536 in one place and 66,048 in the
+   * other.
+   */
+  const needs = (id: string) => workload(id).typicalPromptTokens + RESPONSE_ALLOWANCE;
+  const fits = (id: string) => runnableContextTokens >= needs(id);
 
-  const chatTtft = ttftFor('chat');
-  const completionTtft = ttftFor('completion');
-  const agentTtft = ttftFor('agent');
-  const ragPrefill = prefillAt(workload('rag').typicalPromptTokens);
-  const ragFits = runnableContextTokens >= workload('rag').typicalPromptTokens + RESPONSE_ALLOWANCE;
+  /**
+   * Every archetype measured at its own scenario, decode included. Memoised per id because the
+   * conditions and their reasons each read it.
+   */
+  const cache = new Map<string, ReturnType<typeof evaluateAt>>();
+  const at = (id: string) => {
+    const existing = cache.get(id);
+    if (existing) return existing;
+    const w = workload(id);
+    const fresh = evaluateAt(w.typicalPromptTokens, Math.max(usage.contextTokens, needs(id)));
+    cache.set(id, fresh);
+    return fresh;
+  };
+
+  const rateOf = (id: string) => at(id).decode.perUserTokensPerSec;
+  const ttftOf = (id: string) => at(id).prefill.ttftSeconds;
+
+  const chatTtft = ttftOf('chat');
+  const completionTtft = ttftOf('completion');
+  const agentTtft = ttftOf('agent');
+  const ragPrefill = at('rag').prefill;
+  const ragFits = fits('rag');
 
   return [
     judge('chat', {
-      pass: perUser >= 15 && chatTtft <= 2,
-      tight: perUser >= 10 && chatTtft <= 5,
+      // Even a short conversation needs its own turn to fit — at 128 users on a small card the
+      // runnable context can fall below 1K, and no amount of speed rescues that.
+      pass: fits('chat') && rateOf('chat') >= 15 && chatTtft <= 2,
+      tight: fits('chat') && rateOf('chat') >= 10 && chatTtft <= 5,
       why: () =>
-        perUser < 10
-          ? `${fmt(perUser)} tok/s reads slower than most people do.`
-          : chatTtft > 5
-            ? `A ${fmt(chatTtft)}s wait on a short message breaks the back-and-forth.`
-            : `${fmt(perUser)} tok/s, ${fmt(chatTtft)}s to first token on a short message.`,
+        !fits('chat')
+          ? `Only ${ctx(runnableContextTokens)} of context fits — not even one short exchange.`
+          : rateOf('chat') < 10
+            ? `${fmt(rateOf('chat'))} tok/s reads slower than most people do.`
+            : chatTtft > 5
+              ? `A ${fmt(chatTtft)}s wait on a short message breaks the back-and-forth.`
+              : `${fmt(rateOf('chat'))} tok/s, ${fmt(chatTtft)}s to first token on a short message.`,
     }),
     judge('completion', {
       // A suggestion that arrives after you have typed the next line is worse than none.
-      pass: perUser >= 30 && completionTtft <= 0.4,
-      tight: perUser >= 20 && completionTtft <= 1,
+      pass: fits('completion') && rateOf('completion') >= 30 && completionTtft <= 0.4,
+      tight: fits('completion') && rateOf('completion') >= 20 && completionTtft <= 1,
       why: () =>
-        completionTtft > 1
-          ? `${fmt(completionTtft)}s to first token — the suggestion arrives after you have moved on.`
-          : perUser < 20
-            ? `${fmt(perUser)} tok/s is too slow to finish a line while you pause.`
-            : `${fmt(completionTtft)}s to first token stays inside the window where a suggestion helps.`,
+        !fits('completion')
+          ? `Only ${ctx(runnableContextTokens)} of context fits — less than one suggestion needs.`
+          : completionTtft > 1
+            ? `${fmt(completionTtft)}s to first token — the suggestion arrives after you have moved on.`
+            : rateOf('completion') < 20
+              ? `${fmt(rateOf('completion'))} tok/s is too slow to finish a line while you pause.`
+              : `${fmt(completionTtft)}s to first token stays inside the window where a suggestion helps.`,
     }),
     judge('agent', {
       // Agents need all three: speed, headroom, and a prompt pass that does not stall each turn.
       // Omitting the latency term is what let a machine fail chat while "passing" this, which is
       // backwards — an agent does everything chat does, over a far larger prompt.
-      pass: perUser >= 25 && runnableContextTokens >= 65536 && agentTtft <= 10,
-      tight: perUser >= 15 && runnableContextTokens >= 32768 && agentTtft <= 30,
+      pass:
+        fits('agent') && rateOf('agent') >= 25 && runnableContextTokens >= 65536 && agentTtft <= 10,
+      tight:
+        fits('agent') && rateOf('agent') >= 15 && runnableContextTokens >= 32768 && agentTtft <= 30,
       why: () =>
         runnableContextTokens < 32768
           ? `Only ${ctx(runnableContextTokens)} of context fits — an agent fills that within a few turns.`
           : agentTtft > 30
             ? `${fmt(agentTtft)}s to re-read a 16K prompt makes every step a wait.`
-            : perUser < 15
-              ? `${fmt(perUser)} tok/s makes a multi-step session take minutes per step.`
-              : `${fmt(perUser)} tok/s over ${ctx(runnableContextTokens)} of context, ${fmt(agentTtft)}s per turn.`,
+            : rateOf('agent') < 15
+              ? `${fmt(rateOf('agent'))} tok/s makes a multi-step session take minutes per step.`
+              : `${fmt(rateOf('agent'))} tok/s over ${ctx(runnableContextTokens)} of context, ${fmt(agentTtft)}s per turn.`,
     }),
     judge('rag', {
       // The answer is short; the prompt is not. This lives or dies on prefill — but speed is
@@ -213,7 +251,7 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
       pass: runnableContextTokens >= 131072 + RESPONSE_ALLOWANCE,
       tight: runnableContextTokens >= 65536 + RESPONSE_ALLOWANCE,
       why: () =>
-        runnableContextTokens < 65536
+        runnableContextTokens < 65536 + RESPONSE_ALLOWANCE
           ? `Caps out at ${ctx(runnableContextTokens)} — short of the 128K these jobs assume.`
           : runnableContextTokens > maxContextTokens
             ? `Reaches ${ctx(runnableContextTokens)}, though only with weights offloaded.`
@@ -230,14 +268,14 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
     }),
     judge('serving', {
       // Every concurrent user brings their own cache, which is what actually runs out.
-      pass: usage.concurrency >= 4 && perUser >= 10 && placement.headroomBytes > 0,
-      tight: usage.concurrency >= 2 && perUser >= 5,
+      pass: usage.concurrency >= 4 && rateOf('serving') >= 10 && placement.headroomBytes > 0,
+      tight: usage.concurrency >= 2 && rateOf('serving') >= 5,
       why: () =>
         usage.concurrency < 2
           ? 'Set concurrency above 1 to see whether this holds several users.'
-          : perUser < 5
-            ? `${fmt(perUser)} tok/s each once ${usage.concurrency} users share the device.`
-            : `${usage.concurrency} users at ${fmt(perUser)} tok/s each, ${fmt(aggregate)} aggregate.`,
+          : rateOf('serving') < 5
+            ? `${fmt(rateOf('serving'))} tok/s each once ${usage.concurrency} users share the device.`
+            : `${usage.concurrency} users at ${fmt(rateOf('serving'))} tok/s each, ${fmt(aggregate)} aggregate.`,
     }),
   ];
 }
@@ -253,9 +291,17 @@ function judge(
   };
 }
 
+/**
+ * A measurement, never rounded *up*.
+ *
+ * These appear inside sentences explaining why a threshold was missed, so rounding 14.506 to
+ * "15" produced "15 tok/s makes a multi-step session take minutes per step" against a minimum of
+ * 15 — a number that appears to satisfy the condition it just failed. Same rule as `ctx`.
+ */
 function fmt(value: number): string {
   if (!Number.isFinite(value)) return '—';
-  return value >= 10 ? Math.round(value).toString() : value.toFixed(1);
+  if (value >= 10) return Math.floor(value).toString();
+  return (Math.floor(value * 10) / 10).toFixed(1);
 }
 
 /**

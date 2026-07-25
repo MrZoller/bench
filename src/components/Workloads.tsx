@@ -37,20 +37,18 @@ export function Workloads({ evaluation, config }: { evaluation: Evaluation; conf
     maxContextTokens: evaluation.maxContextTokens,
     runnableContextTokens: evaluation.runnableContextTokens,
     /**
-     * Graded at each archetype's own prompt, so this strip does not move when the prompt slider
-     * does — a completion popup sends what it sends regardless of the current setting.
+     * Graded at each archetype's own scenario, so this strip does not move when the sliders do —
+     * a completion popup sends what it sends regardless of the current setting.
      *
-     * The context is raised with it. Changing only the prompt left placement planned for the
-     * smaller slider context while prefill was estimated for a 32K RAG request: if that larger
-     * request would spill weights, its TTFT omitted the offload penalty entirely and could be
-     * graded usable on resident performance it cannot reach.
+     * Both context and prompt are raised, and decode is re-measured along with prefill. Raising
+     * only the prompt left placement planned for the smaller slider context; re-running only
+     * prefill left decode describing the smaller cache, so an agent could be graded on a rate
+     * measured at 512 tokens while its own turn is 16K.
      */
-    prefillAt: (promptTokens) =>
-      evaluateConfig({
-        ...config,
-        promptTokens,
-        contextTokens: Math.max(config.contextTokens, promptTokens),
-      }).prefill,
+    evaluateAt: (promptTokens, contextTokens) => {
+      const evaluation = evaluateConfig({ ...config, promptTokens, contextTokens });
+      return { decode: evaluation.decode, prefill: evaluation.prefill };
+    },
   });
 
   const usable = verdicts.filter((v) => v.fitness !== 'fail').length;
