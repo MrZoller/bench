@@ -68,15 +68,16 @@ export function expertFraction(model: ModelSpec, batch: number): number {
     return 1 - (1 - perToken / total) ** n;
   }
 
-  // Without expert counts the union can't be modelled, so fall back to the catalog's own
-  // active-parameter figure and hold it flat across batch. Better a known-conservative
-  // estimate than a fabricated curve.
+  // Without expert counts the union cannot be modelled, so fall back to the difference between
+  // the published active figure and the physical dense basis, held flat across batch. Better a
+  // known-conservative estimate than a fabricated curve.
   //
-  // The subtrahend has to be the same dense basis `activeParams` was built from — dense params
-  // minus the embedding table — not the full dense half. Using the latter left gpt-oss-20b
-  // implying 9.5% of experts per token where its config says 4 of 32.
-  const activeDense = denseParams(model) - model.vocabSize * model.hiddenSize;
-  const implied = (model.activeParams - activeDense) / model.expertParams;
+  // The subtrahend is `activeDenseParams` rather than an arithmetic reconstruction of it. Those
+  // agree for every untied text-only model — the whole catalog today — but diverge for a tied
+  // or multimodal one, and there the reconstruction double-counts: it removes a vocabulary
+  // table that `effectiveActiveParams` then adds back through this fraction, charging it twice.
+  // Deriving from the field that already states the basis cannot drift from it.
+  const implied = (model.activeParams - model.activeDenseParams) / model.expertParams;
   return Math.min(1, Math.max(0, implied));
 }
 
