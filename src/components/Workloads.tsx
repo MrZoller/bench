@@ -26,7 +26,7 @@ export function Workloads({ evaluation, config }: { evaluation: Evaluation; conf
   const [expanded, setExpanded] = useState(false);
 
   const verdicts = judgeWorkloads({
-    placement: evaluation.placement,
+    selectedPlacement: evaluation.placement,
     usage: {
       contextTokens: config.contextTokens,
       concurrency: config.concurrency,
@@ -45,8 +45,8 @@ export function Workloads({ evaluation, config }: { evaluation: Evaluation; conf
      * measured at 512 tokens while its own turn is 16K.
      */
     evaluateAt: (promptTokens, contextTokens) => {
-      const evaluation = evaluateConfig({ ...config, promptTokens, contextTokens });
-      return { decode: evaluation.decode, prefill: evaluation.prefill };
+      const at = evaluateConfig({ ...config, promptTokens, contextTokens });
+      return { placement: at.placement, decode: at.decode, prefill: at.prefill };
     },
   });
 
