@@ -71,8 +71,33 @@ reading the test that guards them.
 - **Compute precision comes from the quant's `computeDtype` gated on the runtime's
   `nativeLowPrecision`**, never from storage bit width. llama.cpp dequantizes every GGUF to fp16,
   so it cannot reach a Blackwell card's FP4 rate. Inferring from `bpw` overstated prefill 8×.
-- **Prefill attention respects sliding windows** too, not just KV. Treating every gpt-oss layer as
-  full attention overstates the attention term ~2× at long prompts.
+- **KV shards only as far as the model allows, and `placement` and `speed` must agree on how
+  far.** Weights divide to any degree; GQA divides by attention head, so 4 KV heads on 8 cards
+  replicate across each pair and per-card KV is a quarter, not an eighth. MLA has no head axis at
+  all — vLLM keeps the whole latent on every rank. `kvShards()` is the one answer and both modules
+  call it; when only `placement` knew, the memory panel said each card held the entire DeepSeek
+  cache while the speed panel priced one eighth of it.
+- **A layer split is not a speedup, and a layer count is not a KV divisor.** llama.cpp's default
+  multi-device layout runs whole layers in sequence for one token, so a single stream sees one
+  card's bandwidth and one card's FLOPS however many cards there are — that rig buys capacity,
+  not speed, and modelling it as aggregate credited eight cards with ~4.9x. And on a hybrid model
+  the layers are not interchangeable: Gemma's full-attention layers cache ~128x what its sliding
+  ones do at 128K, so the busiest card is found by _sizing_ an assignment, not by dividing.
+- **Offloaded weights read at the slower of host RAM and the bus to the host** —
+  `min(hostBandwidth, device.hostLinkBytesPerSec)`. `interconnect` is the _device-to-device_ link
+  `tpEfficiency` models and is not this: an H100 SXM talks to its neighbours over NVLink and to
+  the host over PCIe 5.0. Modelling only host RAM made every spilled configuration on a PCIe 4.0
+  card 2.5× too fast, on both decode and TTFT.
+- **Prefill attention is causal and respects sliding windows.** These are decoder-only models, so
+  a full-attention layer computes `N * (N + 1) / 2` query-key pairs, not `N^2` — charging the
+  square nearly doubles the attention term at long prompts and moves the point where the tile
+  claims attention dominates. Sliding layers are causal too: a triangle while the window fills,
+  then a band. The two corrections compound to about 3.7x on gpt-oss at a 16K prompt.
+
+  Correcting this moved the DGX Spark prefill anchor from ~10% over to ~19% over. Per the rule
+  below, the constants were **not** retuned to pull it back — a roofline that matches an anchor
+  because it was fitted to it has stopped being evidence of anything.
+
 - The two calibration anchors are **DGX Spark on gpt-oss-20b** (2,053 tok/s prefill, 49.7 tok/s
   decode) and **EPYC 9654 on DeepSeek-671B Q8** (~6 tok/s). They pin opposite ends of the roofline;
   a model calibrated only for discrete GPUs fails one of them.

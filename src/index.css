@@ -1,9 +1,43 @@
 @import 'tailwindcss';
 
 /*
- * Design tokens land here as CSS custom properties, mirroring src/design/tokens.ts.
- * Kept deliberately bare until the visual pass — see the plan's build order.
+ * Design tokens as CSS custom properties, mirroring src/design/tokens.ts. Keep the two in sync:
+ * components style themselves from these, while canvas code reads the TS module, because
+ * var(--color-*) does not resolve inside a 2D context.
+ *
+ * Every categorical value here was validated against this surface with the dataviz validator.
+ * See the header of tokens.ts before changing one.
  */
+@theme {
+  --color-bg: #08090d;
+  --color-surface: #0f1117;
+  --color-surface-raised: #161923;
+  --color-border: #232735;
+  --color-grid: #1b1f2b;
+  --color-control-border: #646d88;
+
+  --color-text: #e8eaf2;
+  --color-text-muted: #9aa0b5;
+  --color-text-faint: #7d84a0;
+
+  --color-accent: #c084fc;
+  --color-accent-dim: #6d3f96;
+
+  --color-weights: #3987e5;
+  --color-kv-cache: #c98500;
+  --color-overhead: #d55181;
+  --color-free: #1b1f2b;
+
+  --color-good: #0ca30c;
+  --color-warning: #fab219;
+  --color-serious: #ec835a;
+  --color-critical: #e66767;
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  /* Figures are tabular everywhere: a readout that shifts width as it counts is unreadable. */
+  --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+}
 
 html,
 body,
@@ -13,4 +47,38 @@ body,
 
 body {
   margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/*
+ * Numbers that update in place — throughput, footprints, TTFT — use tabular figures so digits
+ * keep their column and the eye can compare two readings without re-finding the decimal point.
+ */
+.tabular {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The instrument-panel chassis: a raised plane with a hairline edge. */
+.panel {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+}
+
+/*
+ * Respect a reduced-motion preference. The Bench animates bar transitions so a change reads as
+ * a change rather than a jump cut; that is an enhancement, never load-bearing.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

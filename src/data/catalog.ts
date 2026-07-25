@@ -21,12 +21,14 @@ interface DeviceRow {
   capacityGiB: number;
   allocatableGiB: number;
   allocatableTunable?: boolean;
+  maxAllocatableGiB?: number;
   bandwidthGBs: number;
   measuredBandwidthGBs?: number;
   // Rows list only the dtypes their datasheet publishes, so TypeScript widens the absent keys
   // to `undefined` across the union of row shapes. Modelled honestly rather than cast away.
   tflops: Record<string, number | undefined>;
   interconnect?: string;
+  hostLinkGBs?: number;
   tdpWatts?: number;
   msrpUsd?: number;
   releasedAt?: string;
@@ -55,12 +57,16 @@ function toDevice(row: DeviceRow): CatalogDevice {
     capacityBytes: row.capacityGiB * GIB,
     allocatableBytes: row.allocatableGiB * GIB,
     ...(row.allocatableTunable ? { allocatableTunable: true } : {}),
+    ...(row.maxAllocatableGiB === undefined
+      ? {}
+      : { maxAllocatableBytes: row.maxAllocatableGiB * GIB }),
     bandwidthBytesPerSec: row.bandwidthGBs * GB,
     ...(row.measuredBandwidthGBs
       ? { measuredBandwidthBytesPerSec: row.measuredBandwidthGBs * GB }
       : {}),
     flops,
     ...(row.interconnect ? { interconnect: row.interconnect } : {}),
+    ...(row.hostLinkGBs === undefined ? {} : { hostLinkBytesPerSec: row.hostLinkGBs * 1e9 }),
     ...(row.tdpWatts ? { tdpWatts: row.tdpWatts } : {}),
     ...(row.msrpUsd ? { msrpUsd: row.msrpUsd } : {}),
     ...(row.releasedAt ? { releasedAt: row.releasedAt } : {}),

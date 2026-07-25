@@ -1,6 +1,6 @@
-import type { ModelSpec, QuantSpec, Rig, RuntimeSpec, UsageSpec } from './types';
+import type { DeviceSpec, ModelSpec, QuantSpec, Rig, RuntimeSpec, UsageSpec } from './types';
 import { activationBytes } from './activations';
-import { kvBytesTotal } from './kv';
+import { kvBytesTotal, layerKvBytes } from './kv';
 import { weightBytes } from './weights';
 
 /**
@@ -18,8 +18,32 @@ import { weightBytes } from './weights';
  *      rather than buried in an efficiency constant.
  */
 
-/** Typical dual-channel DDR5 desktop bandwidth — the speed offloaded weights read at. */
+/** Typical dual-channel DDR5 desktop bandwidth — the speed host RAM itself reads at. */
 export const DEFAULT_HOST_BANDWIDTH = 80e9;
+
+/**
+ * The rate spilled weights actually stream at: the slower of host memory and the link to it.
+ *
+ * Host RAM bandwidth alone was the whole model, so every offloaded configuration read at 80 GB/s
+ * regardless of what the card is plugged into. An RTX 4090 is PCIe 4.0 x16 — 31.5 GB/s one
+ * direction — so a heavily offloaded DeepSeek V3 had both decode and TTFT understated by 2.5x,
+ * well outside the band this engine claims.
+ *
+ * Derived here from the rig rather than passed in, because the previous shape let a caller omit
+ * it and silently get the optimistic default — which is exactly what the whole app did.
+ */
+export function offloadBandwidth(rig: Rig, hostBandwidth: number, runtime?: RuntimeSpec): number {
+  const link = rig.device.hostLinkBytesPerSec;
+  if (link === undefined) return hostBandwidth;
+
+  // Links add only where the devices work at the same time. Under tensor parallelism every card
+  // streams its own shard concurrently, so the rig's links sum — up to host memory itself. Under
+  // a layer split the cards run one after another, so a single token's transfer is limited by
+  // whichever card is currently working: one link, however many are installed. Aggregating there
+  // was the same mistake as aggregating its bandwidth, one function over.
+  const links = runtime?.parallelism === 'layer' ? 1 : effectiveDeviceCount(rig);
+  return Math.min(hostBandwidth, link * links);
+}
 
 export interface Placement {
   fits: boolean;
@@ -50,6 +74,75 @@ export interface Placement {
 
   /** Set when the runtime cannot drive this class of device at all. */
   unsupported?: string;
+}
+
+/**
+ * Whether a model can be sharded across several of these at all.
+ *
+ * Keyed on having a transport, not on device class. A DGX Spark is `unified-soc` and has a real
+ * ConnectX link that `tpEfficiency` already models; a Mac Studio is the same class with nothing
+ * between chassis. Exported so the UI and the store cannot hold divergent copies of this rule —
+ * they did, and the slider offered counts the store immediately reset.
+ *
+ * Deliberately distinct from offload, which really is a discrete-GPU property: spilling needs a
+ * slower *tier*, sharding needs a *link*, and the Spark has one without the other.
+ */
+export function canShard(device: DeviceSpec): boolean {
+  return device.interconnect !== undefined;
+}
+
+/**
+ * Devices that actually cooperate on one request — one, unless there is a link between them.
+ *
+ * Every divisor and every multiplier keyed off `rig.count` directly, so eight Mac Studios divided
+ * a model eight ways and summed eight cards' bandwidth over an interconnect the catalog says they
+ * do not have. `planPlacement` now refuses that rig outright, but a refusal that still returns
+ * arithmetic for the impossible split is half a fix: the figures have to describe the machine that
+ * exists, which is one of them.
+ *
+ * Shared by placement and speed so the memory panel and the throughput panel cannot disagree about
+ * how many devices are in play — the failure mode this file has hit repeatedly.
+ */
+export function effectiveDeviceCount(rig: Rig): number {
+  return canShard(rig.device) ? Math.max(1, rig.count) : 1;
+}
+
+/** Why this format cannot run on this device, or undefined when it can. */
+function unmetRequirement(quant: QuantSpec, device: DeviceSpec): string | undefined {
+  const { vendor, dtype } = quant.requires ?? {};
+  if (vendor !== undefined && device.vendor !== vendor) {
+    return `${quant.label} needs ${vendor} hardware.`;
+  }
+  if (dtype !== undefined && device.flops[dtype] === undefined) {
+    return `${quant.label} needs ${dtype.toUpperCase()} tensor cores, which ${device.name} does not have.`;
+  }
+  return undefined;
+}
+
+/**
+ * The most memory this device could ever hand the model, after any tuning its platform allows.
+ *
+ * `allocatableBytes` is the *default*; this is the ceiling on raising it. Apple's
+ * `iogpu.wired_limit_mb` goes as far as physical memory, so those are capped by capacity — but
+ * AMD's Variable Graphics Memory tops out at 96 of the Ryzen AI Max+'s 128 GB, which is already
+ * its default. Treating physical capacity as everyone's maximum told a Ryzen owner that a
+ * 117 GiB configuration would fit once they raised a setting the platform will not raise.
+ *
+ * Shared so the "you could raise this" claim is made in one place. The Bench and the Envelope
+ * each had their own version of it, which is how one of them came to be wrong.
+ */
+export function maxAllocatablePerDevice(device: DeviceSpec): number {
+  if (device.allocatableTunable !== true) return device.allocatableBytes;
+  return Math.min(device.maxAllocatableBytes ?? device.capacityBytes, device.capacityBytes);
+}
+
+/** Whether raising the ceiling would actually buy this configuration anything. */
+export function raisingCeilingWouldHelp(device: DeviceSpec, usedBytesPerDevice: number): boolean {
+  return (
+    device.allocatableTunable === true &&
+    maxAllocatablePerDevice(device) > device.allocatableBytes &&
+    usedBytesPerDevice <= maxAllocatablePerDevice(device)
+  );
 }
 
 /** Memory a single device can actually give the model, after the runtime takes its cut. */
@@ -92,6 +185,113 @@ export function normalizeRig(rig: Rig): Rig {
   return { ...rig, count: positiveInt(rig.count) };
 }
 
+/**
+ * How many ways the KV cache actually divides across a tensor-parallel rig.
+ *
+ * Weights shard cleanly to any degree; KV does not, and assuming it does is optimistic in the
+ * one direction that matters — it reports a configuration fitting when the real layout does not.
+ *
+ *   - **GQA** shards by attention head, so the degree is capped by the number of KV heads. A
+ *     model with 4 KV heads on 8 cards gives every rank at least one whole head, and the cache
+ *     is replicated across each pair: per-card KV is a quarter of the total, not an eighth.
+ *     Qwen3 30B-A3B on 8x RTX 5080 at 32K and 16 users read 11.1 GiB against a 14.4 GiB ceiling
+ *     and "fits"; the layout it would really produce needs 17.1 GiB.
+ *   - **MLA** caches a single latent per token per layer with nothing to split along, so vLLM
+ *     replicates it on every rank. The divisor is 1 however many cards there are — the case the
+ *     old code was off by the full device count on.
+ *
+ * What each rank holds is `ceil(kvHeads / shards)` heads, so the effective divisor is
+ * `kvHeads / ceil(kvHeads / shards)`. At 4 heads on 8 cards that is 4/1 = 4, and at 4 heads on
+ * 3 cards it is 4/2 = 2 — replication is not always a clean fraction of the rig.
+ *
+ * All of the above describes **tensor parallelism**, which is vLLM's layout and not everyone's.
+ * llama.cpp and Ollama split by *layer* by default: each card owns whole layers and their whole
+ * KV buffers, so the cache divides by the device count with no head axis involved and no MLA
+ * exception. Imposing the tensor-parallel cap on them rejected rigs that work — Qwen3 30B-A3B on
+ * eight 5090s was charged 48 GiB of KV per card and told it would not run, where a layer split
+ * needs about 24 and fits.
+ *
+ * Exported because `estimateDecode` has to price the cache the same way this sizes it. Holding
+ * separate opinions is how the memory panel came to say every card holds the whole MLA latent
+ * while the speed panel charged one eighth of it.
+ */
+/**
+ * How many ways the *weights* divide.
+ *
+ * Tensor parallelism splits every tensor, so any degree works. A layer split hands out whole
+ * layers, so the busiest card holds `ceil(layers / shards)` of them — the same ceiling `kvShards`
+ * applies, because under a layer split the two quantities travel together and rounding only one
+ * of them up describes a machine that does not exist.
+ */
+export function weightShards(model: ModelSpec, shards: number, runtime?: RuntimeSpec): number {
+  if (shards <= 1) return 1;
+  if (runtime?.parallelism !== 'layer') return shards;
+  return model.layers / Math.ceil(model.layers / shards);
+}
+
+export function kvShards(model: ModelSpec, shards: number, runtime?: RuntimeSpec): number {
+  if (shards <= 1) return 1;
+  // A layer split replicates nothing — a card that holds layer 7 holds all of layer 7's cache
+  // and none of anyone else's — but layers are whole and do not always divide evenly. A 36-layer
+  // model on 8 cards puts 5 layers on some and 4 on others, so the busiest card holds a ninth
+  // more than an even split would suggest. Same ceiling as the head axis below, on a different
+  // quantity: assuming it divides cleanly is optimistic in the direction that reports a fit.
+  if (runtime?.parallelism === 'layer') return weightShards(model, shards, runtime);
+
+  const core = model.attention.core;
+  if (core.kind === 'mla') return 1;
+  const headsPerRank = Math.ceil(core.kvHeads / shards);
+  return core.kvHeads / headsPerRank;
+}
+
+/**
+ * What the busiest device holds under a layer split, weights and cache together.
+ *
+ * One assignment, not two. Taking the heaviest-KV card from one packing and the heaviest-weight
+ * card from another and adding them describes a device that does not exist: on a hybrid model the
+ * card carrying the big full-attention caches is precisely the one a balanced scheduler gives
+ * *fewer* layers, so the two maxima land on different cards. Summing them reported Gemma 3 27B on
+ * four 5090s at 31.7 GiB and spilling, where a joint assignment fits it in 30.8 under a 31 GiB
+ * ceiling — the first error tonight in the pessimistic direction, and wrong for the same reason
+ * as all the optimistic ones: two numbers combined that were never measured on the same thing.
+ *
+ * Longest-processing-time again, now on the combined per-layer cost, so the balance being struck
+ * is the one that actually matters to whether the rig fits.
+ */
+function layerSplitBusiest(
+  model: ModelSpec,
+  totalWeightBytes: number,
+  usage: UsageSpec,
+  shards: number,
+  runtime: RuntimeSpec
+): { weightBytes: number; kvBytes: number } {
+  const perLayerWeight = totalWeightBytes / model.layers;
+  const sequences = Math.max(1, usage.concurrency);
+
+  const layers = Array.from({ length: model.layers }, (_, i) => ({
+    weight: perLayerWeight,
+    kv: layerKvBytes(model, i, usage.contextTokens, usage.kvPrecision, runtime) * sequences,
+  })).sort((a, b) => b.weight + b.kv - (a.weight + a.kv));
+
+  const bins = Array.from({ length: Math.max(1, Math.floor(shards)) }, () => ({
+    weight: 0,
+    kv: 0,
+  }));
+  const load = (b: { weight: number; kv: number }) => b.weight + b.kv;
+
+  for (const layer of layers) {
+    let lightest = 0;
+    for (let d = 1; d < bins.length; d++) {
+      if (load(bins[d]) < load(bins[lightest])) lightest = d;
+    }
+    bins[lightest].weight += layer.weight;
+    bins[lightest].kv += layer.kv;
+  }
+
+  const busiest = bins.reduce((a, b) => (load(b) > load(a) ? b : a));
+  return { weightBytes: busiest.weight, kvBytes: busiest.kv };
+}
+
 export function planPlacement(
   model: ModelSpec,
   quant: QuantSpec,
@@ -107,14 +307,35 @@ export function planPlacement(
     model,
     usage.contextTokens,
     usage.concurrency,
-    usage.kvPrecision
+    usage.kvPrecision,
+    // llama.cpp's q8_0/q4_0 KV carries a block scale, so the cache costs more than its nominal
+    // width. Passed rather than assumed, since it is exact for a float format.
+    runtime
   );
   const activations = activationBytes(model, usage, runtime);
 
-  // Tensor parallelism shards weights and KV evenly; activations are per-device, not shared.
-  const shards = rig.count;
-  const weightBytesPerDevice = totalWeightBytes / shards;
-  const kvBytesPerDevice = totalKvBytes / shards;
+  // Activations are per-device rather than shared. Weights and KV each get a divisor, and under
+  // a layer split it is the *same* divisor: a card that owns a layer owns both its parameters
+  // and its cache, so an indivisible layer count rounds them up together. Dividing weights
+  // evenly while rounding KV up was the half-fix — 61 DeepSeek layers over two B200s is 31/30,
+  // and the even split reported 175.4 GiB under a 178 GiB ceiling for a card really holding
+  // 178.3.
+  const shards = effectiveDeviceCount(rig);
+  /**
+   * Layer splits are packed rather than divided, because layers are not interchangeable: a
+   * full-attention layer of a hybrid model holds up to 128x the cache a sliding one does, so the
+   * layer *count* says nothing useful about what any card ends up holding. Weights and cache come
+   * from one assignment so that both figures describe the same device.
+   */
+  const split =
+    runtime.parallelism === 'layer' && shards > 1
+      ? layerSplitBusiest(model, totalWeightBytes, usage, shards, runtime)
+      : {
+          weightBytes: totalWeightBytes / weightShards(model, shards, runtime),
+          kvBytes: totalKvBytes / kvShards(model, shards, runtime),
+        };
+  const weightBytesPerDevice = split.weightBytes;
+  const kvBytesPerDevice = split.kvBytes;
   const usedBytesPerDevice = weightBytesPerDevice + kvBytesPerDevice + activations;
 
   const allocatableBytesPerDevice = allocatablePerDevice(rig, runtime);
@@ -132,9 +353,35 @@ export function planPlacement(
   const impossible =
     !fits && (!canOffload || kvBytesPerDevice + activations > allocatableBytesPerDevice);
 
-  const unsupported = runtime.supports.includes(rig.device.class)
-    ? undefined
-    : `${runtime.label} does not run on ${rig.device.class.replace('-', ' ')} hardware`;
+  const drives = runtime.supports.some(
+    (s) =>
+      s.class === rig.device.class && (s.vendor === undefined || s.vendor === rig.device.vendor)
+  );
+
+  const unsupported = !drives
+    ? `${runtime.label} does not run on ${rig.device.name}.`
+    : // Sharding needs a link, and `canShard` is the one place that knows which devices have one.
+      // Without this the split above ran anyway: eight Mac Studios came back as a supported
+      // placement holding an eighth of the model each, over an interconnect that does not exist.
+      // The Bench hides its device-count control for these rows, but that is the store protecting
+      // one surface — the Matrix, the Envelope and any direct `evaluate` caller went straight past
+      // it, which is the same UI-enforced-rule gap the weight-format check below was added for.
+      rig.count > 1 && !canShard(rig.device)
+      ? `${rig.device.name} has no interconnect, so a model cannot be split across ${rig.count} of them.`
+      : !runtime.kvPrecisions.includes(usage.kvPrecision)
+        ? `${runtime.label} cannot store a ${usage.kvPrecision.toUpperCase()} KV cache.`
+        : // The same guarantee `kvPrecisions` gives the cache, for the weights. llama.cpp loads
+          // GGUF and not AWQ; vLLM reads neither GGUF K-quant. `quantApplies` enforced this for
+          // the picker and the store, but every caller that reaches the engine directly — the
+          // Matrix, the Envelope, anything importing `evaluate` — bypassed it and got capacity and
+          // throughput figures for a checkpoint the runtime cannot open. A rule that only the UI
+          // applies is not a rule the engine has.
+          !runtime.weightFormats.includes(quant.id)
+          ? `${runtime.label} cannot load ${quant.label} weights.`
+          : // A format tied to particular silicon is as unrunnable as a runtime that cannot drive
+            // the device, and was previously waved through — leaving `peakFlops` to read a rate
+            // published for a different format, or for hardware that has no such units at all.
+            unmetRequirement(quant, rig.device);
 
   return {
     fits,

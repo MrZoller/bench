@@ -206,9 +206,32 @@ export const RTX_5090: DeviceSpec = {
   // fixture-based NVFP4 estimate 4x too low and left the card's actual FP4 path untested.
   flops: { fp16: 419 * TFLOP, fp8: 838 * TFLOP, fp4: 1676 * TFLOP },
   interconnect: 'PCIe 5.0 x16',
+  // The link to the *host*, not the one to a neighbouring card. Offloaded weights cross this.
+  hostLinkBytesPerSec: 63 * GB,
   tdpWatts: 575,
   msrpUsd: 1999,
   source: 'https://www.techpowerup.com/gpu-specs/geforce-rtx-5090.c4216',
+};
+
+/**
+ * A 4090 exists in the fixtures for one reason: it is PCIe 4.0, half the 5090's host link, so
+ * it is the case that shows offload bandwidth is a device property rather than a constant.
+ */
+export const RTX_4090: DeviceSpec = {
+  id: 'rtx-4090',
+  name: 'GeForce RTX 4090',
+  vendor: 'NVIDIA',
+  class: 'discrete-gpu',
+  status: 'shipping',
+  capacityBytes: 24 * GIB,
+  allocatableBytes: 23 * GIB,
+  bandwidthBytesPerSec: 1008 * GB,
+  flops: { fp16: 165.2 * TFLOP, fp8: 330.3 * TFLOP },
+  interconnect: 'PCIe 4.0 x16',
+  hostLinkBytesPerSec: 31.5 * GB,
+  tdpWatts: 450,
+  msrpUsd: 1599,
+  source: 'https://www.techpowerup.com/gpu-specs/geforce-rtx-4090.c3889',
 };
 
 /**
@@ -308,7 +331,12 @@ export const LLAMA_CPP: RuntimeSpec = {
   bandwidthEfficiency: 0.82,
   computeEfficiency: 0.12,
   nativeLowPrecision: false,
-  supports: ['discrete-gpu', 'unified-soc', 'cpu-ram'],
+  supports: [{ class: 'discrete-gpu' }, { class: 'unified-soc' }, { class: 'cpu-ram' }],
+  parallelism: 'layer',
+  weightFormats: ['bf16', 'q8_0', 'q6_k', 'q5_k_m', 'q4_k_m', 'iq4_xs', 'q3_k_m', 'mxfp4'],
+  kvPrecisions: ['fp16', 'q8', 'q4'],
+  // q8_0/q4_0 KV blocks carry a 2-byte scale per 32 elements.
+  kvBytesPerElement: { q8: 34 / 32, q4: 18 / 32 },
   source: 'https://github.com/ggml-org/llama.cpp',
 };
 
@@ -322,7 +350,12 @@ export const VLLM: RuntimeSpec = {
   nativeLowPrecision: true,
   // Reserves a fixed fraction of the device up front regardless of what the model needs.
   preallocFraction: 0.9,
-  supports: ['discrete-gpu'],
+  supports: [{ class: 'discrete-gpu' }, { class: 'unified-soc', vendor: 'NVIDIA' }],
+  parallelism: 'tensor',
+  weightFormats: ['bf16', 'fp8', 'int8', 'nvfp4', 'mxfp4', 'awq_4bit'],
+  kvPrecisions: ['fp16', 'q8'],
+  // One byte per element, but vLLM spells it fp8_e4m3 and has no integer option.
+  kvLabels: { q8: 'FP8' },
   source: 'https://docs.vllm.ai/',
 };
 
@@ -333,6 +366,10 @@ export const MLX: RuntimeSpec = {
   bandwidthEfficiency: 0.8,
   computeEfficiency: 0.15,
   nativeLowPrecision: false,
-  supports: ['unified-soc'],
+  // Class is too coarse here: `unified-soc` also covers the DGX Spark and Strix Halo.
+  supports: [{ class: 'unified-soc', vendor: 'Apple' }],
+  parallelism: 'layer',
+  weightFormats: ['bf16', 'int8', 'q8_0', 'q6_k', 'q5_k_m', 'q4_k_m', 'iq4_xs', 'q3_k_m'],
+  kvPrecisions: ['fp16', 'q8'],
   source: 'https://github.com/ml-explore/mlx',
 };

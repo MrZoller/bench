@@ -47,6 +47,14 @@ export interface Evaluation {
   marginalKvBytesPerToken: number;
   /** Largest context this rig can hold at the current concurrency. */
   maxContextTokens: number;
+  /**
+   * The context actually selected, after normalization.
+   *
+   * Carried so a caller can tell "the hardware would hold more" from "the hardware would hold
+   * more and the model would not accept it" — `maxContextThatFits` already caps at the model's
+   * own limit, so at that limit the two figures coincide and headroom stops meaning growth.
+   */
+  contextTokens: number;
   hasSlidingLayers: boolean;
 }
 
@@ -71,9 +79,18 @@ export function evaluate(scenario: Scenario): Evaluation {
     placement,
     decode: estimateDecode(model, quant, usage, rig, runtime, placement, hostBandwidth),
     prefill: estimatePrefill(model, quant, usage, rig, runtime, placement, hostBandwidth),
-    kvBytesPerToken: kvBytesPerToken(model, usage.kvPrecision),
-    marginalKvBytesPerToken: marginalKvBytesPerToken(model, usage.contextTokens, usage.kvPrecision),
+    // The runtime matters here for the same reason it does in placement: llama.cpp's q8_0 cache
+    // costs more than its nominal byte. Omitting it made the headline bytes-per-token figure
+    // disagree with the total placement charges for the same cache — 6% at q8, 12% at q4.
+    kvBytesPerToken: kvBytesPerToken(model, usage.kvPrecision, runtime),
+    marginalKvBytesPerToken: marginalKvBytesPerToken(
+      model,
+      usage.contextTokens,
+      usage.kvPrecision,
+      runtime
+    ),
     maxContextTokens: maxContextThatFits(model, quant, usage, rig, runtime),
+    contextTokens: usage.contextTokens,
     hasSlidingLayers: hasSlidingLayers(model),
   };
 }

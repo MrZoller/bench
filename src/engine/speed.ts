@@ -8,7 +8,7 @@ import type {
   UsageSpec,
 } from './types';
 import { effectiveBandwidth } from './types';
-import { attentionSpanPerToken, kvReadBytesPerToken } from './kv';
+import { attentionPairs, kvReadBytesPerToken } from './kv';
 import {
   activeWeightBytes,
   expertFraction,
@@ -16,7 +16,12 @@ import {
   prefillComputeParams,
 } from './weights';
 import type { Placement } from './placement';
-import { DEFAULT_HOST_BANDWIDTH } from './placement';
+import {
+  DEFAULT_HOST_BANDWIDTH,
+  effectiveDeviceCount,
+  kvShards,
+  offloadBandwidth,
+} from './placement';
 
 /**
  * Throughput and latency, as a roofline.
@@ -28,7 +33,7 @@ import { DEFAULT_HOST_BANDWIDTH } from './placement';
  * precisely what a single "speed" number cannot express.
  *
  * **On accuracy.** This is a roofline, not a simulator. Against the three published anchors in
- * speed.test.ts it reads ~19% over on DGX Spark decode, ~10% over on Spark prefill, and within
+ * speed.test.ts it reads ~19% over on DGX Spark decode, ~19% over on Spark prefill, and within
  * 1% on EPYC decode. It cannot model scheduler behaviour, per-model kernel quality, or thermal
  * throttling. The app must present these as estimates with a band, never as promises.
  *
@@ -91,7 +96,7 @@ const CLASS_BANDWIDTH_UTILIZATION: Record<DeviceClass, number> = {
 const TP_SCALING = { fabric: 0.95, pcie: 0.85, network: 0.7 } as const;
 
 function tpEfficiency(rig: Rig): number {
-  const count = Math.max(1, rig.count);
+  const count = effectiveDeviceCount(rig);
   if (count <= 1) return 1;
 
   const link = rig.device.interconnect ?? '';
@@ -104,15 +109,27 @@ function tpEfficiency(rig: Rig): number {
   return base ** Math.log2(count);
 }
 
-/** Aggregate memory bandwidth the rig actually delivers. */
+/**
+ * Memory bandwidth the rig actually delivers to one token's worth of work.
+ *
+ * Tensor parallelism has every card working on every layer, so their channels add — minus the
+ * all-reduce cost `tpEfficiency` models. A layer split does not: one token passes through
+ * device 1's layers, then device 2's, and each device is idle while another works. The
+ * bandwidth a single stream sees is one card's, however many cards there are.
+ *
+ * Modelling it as aggregate credited an eight-card llama.cpp rig with about 4.9x one card's
+ * bandwidth, which is the opposite of what that rig buys you: capacity, not single-stream speed.
+ * Nothing here models a pipeline scheduler that would overlap requests, so nothing here should
+ * grant the speedup one would produce.
+ */
 export function achievedBandwidth(rig: Rig, runtime: RuntimeSpec): number {
-  return (
+  const perDevice =
     effectiveBandwidth(rig.device) *
     runtime.bandwidthEfficiency *
-    CLASS_BANDWIDTH_UTILIZATION[rig.device.class] *
-    Math.max(1, rig.count) *
-    tpEfficiency(rig)
-  );
+    CLASS_BANDWIDTH_UTILIZATION[rig.device.class];
+
+  if (runtime.parallelism === 'layer') return perDevice;
+  return perDevice * effectiveDeviceCount(rig) * tpEfficiency(rig);
 }
 
 export interface DecodeEstimate {
@@ -123,9 +140,24 @@ export interface DecodeEstimate {
   /** Bytes moved per decode step, split so the UI can show what dominates. */
   weightReadBytes: number;
   kvReadBytes: number;
-  /** True when KV traffic outweighs weight traffic — the long-context regime. */
+  /**
+   * Seconds per step attributable to each, so a caller can name the bottleneck honestly.
+   *
+   * Bytes are not enough once anything spills: offloaded weights cross the host bus at a
+   * fraction of device bandwidth, so a configuration can move fewer weight *bytes* than cache
+   * bytes while spending seventy times longer on them.
+   */
+  weightSeconds: number;
+  kvSeconds: number;
+  /** True when the cache costs more time per step than the weights — the long-context regime. */
   kvBound: boolean;
-  /** Set when weights spill to host RAM, which is usually the whole explanation. */
+  /**
+   * Set when weights spill to host RAM, which is usually the whole explanation.
+   *
+   * `withoutOffloadTokensPerSec` is per user, like `perUserTokensPerSec`, and is built from the
+   * same weight and cache time terms as the real estimate with only the spill removed — so it
+   * answers "what would clearing this buy" rather than "what would a different machine do".
+   */
   offloadPenalty?: { fraction: number; withoutOffloadTokensPerSec: number };
 }
 
@@ -143,15 +175,46 @@ export function estimateDecode(
 
   const weightReadBytes = activeWeightBytes(model, quant, batch);
   // Each sequence re-reads its own cache every step.
-  const kvReadBytes = kvReadBytesPerToken(model, contextTokens, usage.kvPrecision) * batch;
+  const kvReadBytes = kvReadBytesPerToken(model, contextTokens, usage.kvPrecision, runtime) * batch;
 
   const deviceBandwidth = achievedBandwidth(rig, runtime);
+  /**
+   * The cache reads at the bandwidth of the ranks that actually hold a copy, which is not the
+   * whole rig's whenever KV replicates — `achievedBandwidth` sums every device, and dividing the
+   * rig-wide cache by that assumes a perfect split the model may not permit.
+   *
+   * `placement` stopped assuming it; this had to stop too, or the memory panel says each card
+   * holds the entire DeepSeek latent cache while the speed panel prices one eighth of it. Same
+   * divisor, from the same function, so the two cannot drift.
+   */
+  const shards = effectiveDeviceCount(rig);
+  /**
+   * Under tensor parallelism the cache is replicated when it cannot shard, so the rig's
+   * aggregate bandwidth is scaled down by how far it actually divides.
+   *
+   * A layer split needs no such correction: `achievedBandwidth` already returns one device's
+   * figure, and a serial pass reads every layer's cache exactly once across the rig — so the
+   * total cost is always `totalKvBytes / perDeviceBandwidth` no matter which card holds the
+   * heaviest subset. Applying the shard ratio there reduced an already-correct figure by the
+   * rounding slack, overstating KV time by about 11% on gpt-oss's 36 layers over eight cards.
+   */
+  const kvBandwidth =
+    runtime.parallelism === 'layer'
+      ? deviceBandwidth
+      : (deviceBandwidth / shards) * kvShards(model, shards, runtime);
 
   const offload = placement.offloadFraction;
-  const onDeviceBytes = weightReadBytes * (1 - offload) + kvReadBytes;
   const offloadedBytes = weightReadBytes * offload;
+  // The slower of host RAM and the bus to it — a 4090's PCIe 4.0 link caps this at 31.5 GB/s
+  // however fast the DIMMs are.
+  const spillBandwidth = offloadBandwidth(rig, hostBandwidth, runtime);
 
-  const secondsPerStep = onDeviceBytes / deviceBandwidth + offloadedBytes / hostBandwidth;
+  const kvSeconds = kvReadBytes / kvBandwidth;
+  const weightSeconds =
+    (weightReadBytes * (1 - offload)) / deviceBandwidth + offloadedBytes / spillBandwidth;
+
+  // Weights and cache are read in the same step, so the step costs both.
+  const secondsPerStep = weightSeconds + kvSeconds;
   const aggregateTokensPerSec = secondsPerStep > 0 ? batch / secondsPerStep : 0;
 
   const estimate: DecodeEstimate = {
@@ -159,13 +222,23 @@ export function estimateDecode(
     aggregateTokensPerSec,
     weightReadBytes,
     kvReadBytes,
-    kvBound: kvReadBytes > weightReadBytes,
+    weightSeconds,
+    kvSeconds,
+    // Compared as time, not as bytes: the two diverge by orders of magnitude the moment
+    // anything spills to the host bus.
+    kvBound: kvSeconds > weightSeconds,
   };
 
   if (offload > 0) {
-    const resident = (weightReadBytes + kvReadBytes) / deviceBandwidth;
+    // The counterfactual has to be built from the same two time terms as the estimate above,
+    // with only the spill removed. Dividing both byte counts by the aggregate bandwidth quietly
+    // reverted the KV replication as well, so the Bench promised that clearing the spill "would
+    // make it fast" for a rig where the cache alone holds it to merely usable — 44 tok/s claimed
+    // against 27 actually available on 8x RTX 5090 with a four-KV-head model.
+    const resident = weightReadBytes / deviceBandwidth + kvReadBytes / kvBandwidth;
     estimate.offloadPenalty = {
       fraction: offload,
+      // Per user, matching `perUserTokensPerSec` — the byte counts already carry the batch.
       withoutOffloadTokensPerSec: resident > 0 ? 1 / resident : 0,
     };
   }
@@ -212,10 +285,38 @@ export interface PrefillEstimate {
   /** FLOPs split, so the UI can show when quadratic attention takes over. */
   linearFlops: number;
   attentionFlops: number;
+  /**
+   * The same split in *seconds*, which is what a bottleneck claim has to be made on.
+   *
+   * FLOPs are not comparable once the expert half runs at a different rate from everything
+   * else — gpt-oss-20b under MXFP4 has attention at ~53% of linear FLOPs while taking ~1.3x the
+   * linear time. Exposed rather than kept internal because the caller has a third term to weigh
+   * these against, `offloadPenalty.streamingSeconds`, and comparing three things needs all three.
+   */
+  linearSeconds: number;
+  attentionSeconds: number;
   /** True when attention outweighs the linear layers — the long-prompt regime. */
   attentionBound: boolean;
-  /** Set when offloaded weights have to be streamed in before the prompt can be processed. */
-  offloadPenalty?: { fraction: number };
+  /**
+   * Set when offloaded weights have to be streamed in before the prompt can be processed.
+   *
+   * Carries the seconds, not just the fraction: whether streaming is *the* bottleneck depends on
+   * how it compares with the compute terms, and a small spill over a fast bus is a rounding
+   * error next to a long prompt.
+   */
+  offloadPenalty?: { fraction: number; streamingSeconds: number };
+  /**
+   * Set when more than one prompt is in flight, which is usually most of the wait.
+   *
+   * `singlePromptTtftSeconds` removes the queue *at this placement*, holding the spill where it
+   * is. It is not what a concurrency-1 evaluation would return: concurrency also sizes the KV
+   * cache, so one user would often be planned onto a smaller — or no — offload, and this figure
+   * would then be pessimistic. Same convention as `DecodeEstimate.offloadPenalty`, which prices
+   * clearing the spill without re-planning the machine around its absence: each isolates one
+   * term, and answering "what would a different configuration do" is the caller's job, not a
+   * counterfactual's.
+   */
+  concurrencyPenalty?: { prompts: number; singlePromptTtftSeconds: number };
 }
 
 export function estimatePrefill(
@@ -229,6 +330,22 @@ export function estimatePrefill(
 ): PrefillEstimate {
   const contextTokens = Math.max(1, usage.contextTokens);
   const promptTokens = Math.max(1, usage.promptTokens ?? Math.floor(contextTokens * 0.9));
+  /**
+   * Concurrent prompts multiply prefill in a way they do not multiply decode.
+   *
+   * `estimateDecode` batches because decode is memory-bound: the weights are read once per step
+   * whoever is waiting on them, so the tenth user is nearly free. Prefill is compute-bound and a
+   * single long prompt already saturates the units — there is no second user's work to hide
+   * under the first's. Serving `n` prompts is `n` times the arithmetic, and the scheduler can
+   * only choose who waits for it.
+   *
+   * Modelled as one batched pass, so every prompt in the interval pays the whole batch's compute.
+   * Continuous batching with chunked prefill behaves this way: the scheduler admits chunks from
+   * all admitted sequences, so they progress together and finish together. A strict FIFO queue
+   * would instead give a mean of `(n + 1) / 2` passes and a worst case of `n`; this reports the
+   * figure every user sees rather than the one only the first-served user does.
+   */
+  const batch = Math.max(1, usage.concurrency);
 
   // Two FLOPs per parameter per token for the linear layers. MoE routes each token through
   // only its selected experts, so this uses active rather than total parameters — FLOPs scale
@@ -242,15 +359,24 @@ export function estimatePrefill(
   // position that needs them. Per-token it would be 16% of a gpt-oss-20b prompt pass; dropped
   // entirely it understates a *short* prompt by the same margin, since at one token the
   // projection is most of the work.
+  //
+  // Scaled by the batch because every sequence brings its own prompt and its own final position
+  // to project. The exposed FLOP counts describe the whole pass the device performs, which is
+  // what `linearSeconds` and `attentionSeconds` are priced from.
   const linearFlops =
-    2 * (prefillComputeParams(model) * promptTokens + outputProjectionParams(model));
+    2 * (prefillComputeParams(model) * promptTokens + outputProjectionParams(model)) * batch;
   // QK^T and AV. Quadratic on full-attention layers, but only linear on sliding-window ones,
   // which attend over their window however long the prompt gets. Overtakes the linear term on
   // long prompts — why time-to-first-token degrades faster than people expect at big contexts.
   // Scaled by the attention projection width, not the hidden size: a model is free to project
   // into a wider or narrower query space than its residual stream, and most current ones do.
+  //
+  // `attentionPairs` is evaluated at one sequence's length and then multiplied, never at
+  // `promptTokens * batch`: sixteen users sending 2K each is sixteen quadratics over 2K, not one
+  // over 32K. Folding the batch into the length would overstate a concurrent chat workload by
+  // the batch factor again on the term that already dominates long prompts.
   const attentionFlops =
-    4 * promptTokens * attentionSpanPerToken(model, promptTokens) * model.attention.projectionWidth;
+    4 * attentionPairs(model, promptTokens) * model.attention.projectionWidth * batch;
 
   /**
    * Expert-only schemes compute at two rates, not one.
@@ -264,11 +390,14 @@ export function estimatePrefill(
    * So the expert FLOPs are timed at the quant's compute dtype and everything else — dense
    * linear layers, the output projection, and all of attention — at fp16.
    */
-  const throughput = (dtype: QuantSpec['computeDtype']) =>
-    peakFlops(rig.device, { ...quant, computeDtype: dtype }, runtime) *
-    runtime.computeEfficiency *
-    Math.max(1, rig.count) *
-    tpEfficiency(rig);
+  // Same rule as bandwidth: a layer split runs the devices in sequence for one request, so its
+  // FLOPS do not add either. Whatever card is holding the current layer is the only one working.
+  const throughput = (dtype: QuantSpec['computeDtype']) => {
+    const perDevice =
+      peakFlops(rig.device, { ...quant, computeDtype: dtype }, runtime) * runtime.computeEfficiency;
+    if (runtime.parallelism === 'layer') return perDevice;
+    return perDevice * effectiveDeviceCount(rig) * tpEfficiency(rig);
+  };
 
   const expertRate = throughput(quant.computeDtype);
   // `denseBpw` present means the scheme deliberately spares the non-expert tensors; absent
@@ -277,7 +406,11 @@ export function estimatePrefill(
 
   // The experts one token routes through. Zero for a dense model, which is what makes the whole
   // pass fall to the dense rate there rather than claiming a 4x it cannot use on any tensor.
-  const expertLinearFlops = 2 * model.expertParams * expertFraction(model, 1) * promptTokens;
+  // Still the batch-1 expert fraction, scaled by the batch: FLOPs follow the experts each token
+  // routes through, however many tokens are in flight. It is *bytes* that follow the batch-wide
+  // union, which is why the streaming term below sizes itself differently.
+  const expertLinearFlops =
+    2 * model.expertParams * expertFraction(model, 1) * promptTokens * batch;
   const denseLinearFlops = Math.max(0, linearFlops - expertLinearFlops);
 
   const runnable = expertRate > 0 && denseRate > 0;
@@ -300,17 +433,41 @@ export function estimatePrefill(
   // offloaded weight set. Charging the batch-1 union understated MoE TTFT by up to 5x, and
   // dense models could never reveal it because for them the two are identical.
   const offload = placement?.offloadFraction ?? 0;
-  if (offload > 0) {
-    const streamedBytes = activeWeightBytes(model, quant, promptTokens) * offload;
-    ttft += streamedBytes / hostBandwidth;
-  }
+  const streamedSecondsFor = (tokens: number) =>
+    offload > 0
+      ? (activeWeightBytes(model, quant, tokens) * offload) /
+        offloadBandwidth(rig, hostBandwidth, runtime)
+      : 0;
+
+  // Charged once for the pass rather than once per prompt: the batch shares the weights it pulls
+  // across the bus. This is the one term concurrency does *not* multiply, and on a heavily
+  // offloaded rig it is why the tenth concurrent prompt costs less than the first did.
+  const streamingSeconds = streamedSecondsFor(promptTokens * batch);
+  ttft += streamingSeconds;
 
   return {
     ttftSeconds: ttft,
-    prefillTokensPerSec: ttft > 0 && Number.isFinite(ttft) ? promptTokens / ttft : 0,
+    // The machine's prompt-processing rate across every prompt in the pass. Compute-bound work
+    // does not get cheaper per token for being divided among more users, so this holds steady as
+    // concurrency rises while `ttftSeconds` grows — which is the honest way round, and keeps the
+    // published single-prompt anchors comparable with a concurrent estimate.
+    prefillTokensPerSec: ttft > 0 && Number.isFinite(ttft) ? (promptTokens * batch) / ttft : 0,
     linearFlops,
     attentionFlops,
+    linearSeconds,
+    attentionSeconds,
     attentionBound: attentionSeconds > linearSeconds,
-    ...(offload > 0 ? { offloadPenalty: { fraction: offload } } : {}),
+    ...(offload > 0 ? { offloadPenalty: { fraction: offload, streamingSeconds } } : {}),
+    ...(batch > 1
+      ? {
+          concurrencyPenalty: {
+            prompts: batch,
+            // Compute divides out exactly; streaming is re-sized at one prompt's expert union
+            // rather than divided, because it was never multiplied in the first place.
+            singlePromptTtftSeconds:
+              (linearSeconds + attentionSeconds) / batch + streamedSecondsFor(promptTokens),
+          },
+        }
+      : {}),
   };
 }

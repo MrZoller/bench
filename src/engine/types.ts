@@ -182,6 +182,23 @@ export interface QuantSpec {
    * FP8 at all. Collapsing them would hand an FP8 quant a rate that card cannot reach.
    */
   computeDtype: 'fp16' | 'fp8' | 'fp4' | 'int8';
+  /**
+   * Hardware this format needs to run at all, when it is not an open standard.
+   *
+   * NVFP4 needs both halves and neither alone is sufficient. Vendor, because AMD's MI355X
+   * publishes a 9.2 PFLOP/s FP4 rate for its *own* format and handing that to NVFP4 is a
+   * plausible impossibility. Dtype, because "NVIDIA" also covers the 3090, the 4090 and the
+   * H100, none of which have FP4 tensor cores — a vendor-only rule accepted every pre-Blackwell
+   * card in the catalog.
+   *
+   * MXFP4 carries neither: it is the OCP microscaling standard, both vendors implement it, and
+   * a runtime without native support simply dequantizes it.
+   */
+  requires?: {
+    vendor?: string;
+    /** A rate the device must actually publish for this dtype. */
+    dtype?: 'fp4' | 'fp8' | 'int8';
+  };
   /** Rough quality cost vs bf16, for UI guidance only — never fed into the math. */
   qualityNote?: string;
   source: string;
@@ -234,6 +251,18 @@ export interface DeviceSpec {
   allocatableBytes: number;
   /** Whether that ceiling can be raised by the user (macOS iogpu.wired_limit_mb, AMD VGM). */
   allocatableTunable?: boolean;
+  /**
+   * Highest the allocation ceiling can actually be raised to, in bytes.
+   *
+   * Absent means "as far as physical memory allows" — true of Apple's `iogpu.wired_limit_mb`,
+   * where the catalogued figure is a 75% default rather than a limit. Present where the platform
+   * states a real maximum: AMD's Variable Graphics Memory exposes 96 of the Ryzen AI Max+'s
+   * 128 GB, so its default *is* its maximum and raising the setting buys nothing.
+   *
+   * Without this the UI told a Ryzen owner that a 117 GiB configuration would fit once they
+   * raised the ceiling, which the platform does not permit.
+   */
+  maxAllocatableBytes?: number;
 
   /** Theoretical peak memory bandwidth, bytes/sec. */
   bandwidthBytesPerSec: number;
@@ -247,6 +276,16 @@ export interface DeviceSpec {
   flops: Partial<Record<'fp16' | 'bf16' | 'fp8' | 'fp4' | 'int8', number>>;
 
   interconnect?: string;
+  /**
+   * Bandwidth of the link to host memory, bytes/sec — the rate offloaded weights actually
+   * stream at.
+   *
+   * Distinct from `interconnect`, which is the *device-to-device* transport `tpEfficiency`
+   * models: an H100 SXM talks to its neighbours over NVLink 4.0 and to the host over PCIe 5.0,
+   * and only the second one governs spill. Absent on unified-memory and CPU machines, where
+   * there is no separate host to cross to.
+   */
+  hostLinkBytesPerSec?: number;
   tdpWatts?: number;
   msrpUsd?: number;
   releasedAt?: string;
@@ -286,8 +325,66 @@ export interface RuntimeSpec {
    * (vLLM's gpu_memory_utilization) rather than allocating as it goes (llama.cpp).
    */
   preallocFraction?: number;
-  /** Device classes this runtime can drive at all. */
-  supports: readonly DeviceClass[];
+  /**
+   * Hardware this runtime can drive, as class-and-optionally-vendor pairs.
+   *
+   * Neither axis alone is enough. `unified-soc` covers Apple silicon, NVIDIA's GB10 and AMD's
+   * Strix Halo — one memory topology, three incompatible software stacks — so MLX needs the
+   * vendor. But a single runtime-wide vendor is equally wrong: vLLM drives AMD's discrete
+   * accelerators *and* NVIDIA's unified-memory Spark, while driving no Apple hardware at all.
+   * Per-entry vendors are the smallest thing that expresses both.
+   */
+  supports: readonly { class: DeviceClass; vendor?: string }[];
+  /**
+   * How this runtime spreads a model over several devices, which decides how the cache divides.
+   *
+   * `tensor` shards every layer across every card, so KV divides by attention head and stops
+   * when each rank holds one — and an MLA latent, having no head axis, is replicated whole.
+   * `layer` gives each card entire layers and their entire KV buffers, so everything divides by
+   * the device count with no exception. vLLM defaults to the first, llama.cpp and Ollama to the
+   * second, and applying one layout to both rejects rigs that work.
+   */
+  parallelism: 'tensor' | 'layer';
+  /**
+   * Weight formats this runtime can load, by `QuantSpec.id`.
+   *
+   * The same guarantee `kvPrecisions` already gave the cache, which is what makes its absence
+   * here an omission rather than a design: llama.cpp loads GGUF and cannot read an AWQ
+   * checkpoint, MLX reads its own formats and neither GGUF K-quants nor AWQ. Without it the app
+   * would report capacity and throughput for a pairing that cannot be loaded at all.
+   */
+  weightFormats: readonly string[];
+  /** KV cache dtypes the runtime can actually store. */
+  kvPrecisions: readonly KvPrecision[];
+  /**
+   * Bytes per cached element where this runtime's format costs more than its nominal width.
+   *
+   * `KV_BYTES` is the nominal figure and it is exact for a float format — vLLM's FP8 really is
+   * one byte. It is not exact for llama.cpp, whose `q8_0` and `q4_0` KV store 32-element blocks
+   * with a 2-byte scale attached: 34/32 and 18/32 bytes per element, the same block-metadata
+   * overhead `quants.ts` already documents on the weight side.
+   *
+   * 6% and 12% sound ignorable and are not, because the cache is what pushes a configuration
+   * over: Qwen3 4B at Q8_0 on a 4090 at 32K by eight users read 22.6 GiB against a 23 GiB
+   * ceiling and "fits", where the real layout needs 23.7 and has to offload.
+   */
+  kvBytesPerElement?: Partial<Record<KvPrecision, number>>;
+  /**
+   * What this runtime *calls* a precision, where its own name differs from the generic one.
+   *
+   * `KvPrecision` is a width, and the widths are shared: one byte per element is one byte
+   * whether the runtime spells it `q8_0` or `fp8_e4m3`. The names are not shared, and labelling
+   * vLLM's cache "Q8" named a `--kv-cache-dtype` value that does not exist — it takes
+   * `auto`/`fp8`/`fp8_e5m2`/`fp8_e4m3` and has no integer option.
+   *
+   * A label rather than a fourth `KvPrecision` member, because nothing in the arithmetic differs
+   * and a wider type would have to be threaded through `KV_BYTES`, placement, store coercion and
+   * the URL codec to express a distinction the engine never uses. If precision *identity* ever
+   * becomes something the engine reasons about — llama.cpp's `q8_0` KV really does carry block
+   * scales and run nearer 8.5 effective bits — that is the point to split the type, and this
+   * field is what would be replaced.
+   */
+  kvLabels?: Partial<Record<KvPrecision, string>>;
   source: string;
 }
 

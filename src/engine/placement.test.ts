@@ -1,17 +1,30 @@
 import { describe, expect, it } from 'vitest';
-import { allocatablePerDevice, maxContextThatFits, planPlacement } from './placement';
 import {
+  DEFAULT_HOST_BANDWIDTH,
+  allocatablePerDevice,
+  maxAllocatablePerDevice,
+  raisingCeilingWouldHelp,
+  canShard,
+  maxContextThatFits,
+  offloadBandwidth,
+  planPlacement,
+} from './placement';
+import {
+  DEEPSEEK_V3,
   DGX_SPARK,
+  GEMMA_3_12B,
   GPT_OSS_120B,
   LLAMA_31_8B,
   LLAMA_CPP,
   MAC_STUDIO_M3_ULTRA_256,
   MLX,
   QWEN3_32B,
+  RTX_4090,
   RTX_5090,
   STRIX_HALO_395,
   VLLM,
 } from './fixtures';
+import { achievedBandwidth } from './speed';
 import { getQuant } from '@/data/quants';
 import { GIB } from './types';
 import type { DeviceSpec, UsageSpec } from './types';
@@ -167,6 +180,39 @@ describe('fit', () => {
     );
     expect(plan.unsupported).toMatch(/vLLM/);
   });
+
+  /**
+   * `quantApplies` enforced this for the picker and the store, so the app never showed one of
+   * these pairings — but every caller reaching the engine directly walked straight past it and
+   * got capacity and throughput for a checkpoint the runtime cannot open. A rule the UI applies
+   * on the engine's behalf is a rule the engine does not have.
+   */
+  it('flags a weight format the runtime cannot load', () => {
+    const rig = { device: RTX_5090, count: 1 };
+
+    // AWQ is a vLLM format; llama.cpp reads GGUF. Nothing about the hardware rejects it, which is
+    // why the vendor/dtype check alone let it through.
+    const awqOnLlamaCpp = planPlacement(
+      LLAMA_31_8B,
+      getQuant('awq_4bit'),
+      usage(4096),
+      rig,
+      LLAMA_CPP
+    );
+    expect(awqOnLlamaCpp.unsupported).toMatch(/llama\.cpp/);
+
+    // And the reverse, so the check cannot be satisfied by a list that happens to be one-sided.
+    const ggufOnVllm = planPlacement(LLAMA_31_8B, getQuant('q4_k_m'), usage(4096), rig, VLLM);
+    expect(ggufOnVllm.unsupported).toMatch(/vLLM/);
+
+    // The pairing each runtime *can* load stays clean, so the check is not simply refusing work.
+    expect(
+      planPlacement(LLAMA_31_8B, getQuant('q4_k_m'), usage(4096), rig, LLAMA_CPP).unsupported
+    ).toBeUndefined();
+    expect(
+      planPlacement(LLAMA_31_8B, getQuant('awq_4bit'), usage(4096), rig, VLLM).unsupported
+    ).toBeUndefined();
+  });
 });
 
 describe('maximum context', () => {
@@ -238,5 +284,256 @@ describe('memory breakdown', () => {
     expect(long.weightBytesPerDevice).toBe(short.weightBytesPerDevice);
     expect(long.kvBytesPerDevice).toBeCloseTo(short.kvBytesPerDevice * 4, -6);
     expect(long.kvBytesPerDevice / GIB).toBeGreaterThan(3);
+  });
+});
+
+/**
+ * KV does not shard the way weights do, and assuming it does is optimistic in the one direction
+ * that matters — it reports a rig fitting when the layout it would really produce does not.
+ */
+describe('the KV cache shards only as far as the model allows', () => {
+  const plan = (model: typeof QWEN3_32B, count: number) =>
+    planPlacement(
+      model,
+      getQuant('q4_k_m'),
+      { contextTokens: 32768, concurrency: 16, kvPrecision: 'fp16' },
+      { device: RTX_5090, count },
+      VLLM
+    );
+
+  it('stops dividing once every rank holds a whole KV head', () => {
+    // Qwen3-32B has 8 KV heads. Up to 8 cards each rank gets at least one head and the cache
+    // divides; past that the heads are replicated and per-card KV stops falling.
+    const at8 = plan(QWEN3_32B, 8);
+    const at16 = plan(QWEN3_32B, 16);
+
+    expect(at8.kvBytesPerDevice).toBeCloseTo(at8.totalKvBytes / 8, -3);
+    expect(at16.kvBytesPerDevice).toBeCloseTo(at8.kvBytesPerDevice, -3);
+    // Weights keep sharding — it is only KV that has a floor.
+    expect(at16.weightBytesPerDevice).toBeCloseTo(at8.weightBytesPerDevice / 2, -3);
+  });
+
+  it('never divides an MLA latent cache at all', () => {
+    // One latent per token per layer, with no head axis to split along, so vLLM replicates it
+    // on every rank. The old code divided by the full device count — off by 8x on 8 cards.
+    for (const count of [1, 2, 4, 8]) {
+      const p = plan(DEEPSEEK_V3, count);
+      expect(p.kvBytesPerDevice).toBeCloseTo(p.totalKvBytes, -3);
+    }
+  });
+});
+
+/**
+ * Spilled weights read at the slower of host RAM and the bus to it. Modelling only host RAM
+ * made every offloaded configuration 2.5x too fast on a PCIe 4.0 card.
+ */
+describe('offload crosses a real bus', () => {
+  it('takes the device host link when it is slower than host RAM', () => {
+    // 80 GB/s of DDR5 behind a 31.5 GB/s PCIe 4.0 link.
+    expect(offloadBandwidth({ device: RTX_4090, count: 1 }, DEFAULT_HOST_BANDWIDTH)).toBeCloseTo(
+      31.5e9,
+      -6
+    );
+    // And behind a 63 GB/s PCIe 5.0 link, still the link.
+    expect(offloadBandwidth({ device: RTX_5090, count: 1 }, DEFAULT_HOST_BANDWIDTH)).toBeCloseTo(
+      63e9,
+      -6
+    );
+  });
+
+  it('adds up the links on a multi-card rig, then stops at host memory', () => {
+    // Each card streams its own shard over its own link, so two PCIe 4.0 cards move 63 GB/s
+    // between them — charging one card's 31.5 to the whole rig doubled the transfer time.
+    expect(offloadBandwidth({ device: RTX_4090, count: 2 }, DEFAULT_HOST_BANDWIDTH)).toBeCloseTo(
+      63e9,
+      -6
+    );
+    // Four of them would exceed host memory itself, which is then the binding constraint.
+    expect(offloadBandwidth({ device: RTX_4090, count: 4 }, DEFAULT_HOST_BANDWIDTH)).toBe(
+      DEFAULT_HOST_BANDWIDTH
+    );
+  });
+
+  it('falls back to host RAM where there is no host to cross to', () => {
+    // Unified memory has no separate host: the pool in question already is system memory.
+    expect(offloadBandwidth({ device: DGX_SPARK, count: 1 }, DEFAULT_HOST_BANDWIDTH)).toBe(
+      DEFAULT_HOST_BANDWIDTH
+    );
+  });
+});
+
+/**
+ * "You could raise this" is advice, and advice that cannot be taken is worse than none.
+ */
+describe('a ceiling is only raiseable as far as the platform allows', () => {
+  const ryzen: DeviceSpec = { ...STRIX_HALO_395, allocatableTunable: true };
+
+  it('treats a Mac default as raiseable up to physical memory', () => {
+    // `iogpu.wired_limit_mb` is a default at 75%, not a hardware limit.
+    expect(maxAllocatablePerDevice(MAC_STUDIO_M3_ULTRA_256)).toBe(
+      MAC_STUDIO_M3_ULTRA_256.capacityBytes
+    );
+    const between = MAC_STUDIO_M3_ULTRA_256.allocatableBytes + 1;
+    expect(raisingCeilingWouldHelp(MAC_STUDIO_M3_ULTRA_256, between)).toBe(true);
+  });
+
+  it('refuses to promise more than Variable Graphics Memory exposes', () => {
+    // 96 of 128 GB is the AMD maximum, and it is already the catalogued default — so there is
+    // nothing to raise, and a 117 GiB configuration cannot be rescued by a setting.
+    const stated = { ...ryzen, maxAllocatableBytes: 96 * GIB };
+    expect(maxAllocatablePerDevice(stated)).toBe(96 * GIB);
+    expect(raisingCeilingWouldHelp(stated, 117 * GIB)).toBe(false);
+    expect(raisingCeilingWouldHelp(stated, 90 * GIB)).toBe(false);
+  });
+
+  it('never claims a fixed ceiling can move', () => {
+    expect(raisingCeilingWouldHelp(RTX_5090, 1)).toBe(false);
+    expect(maxAllocatablePerDevice(RTX_5090)).toBe(RTX_5090.allocatableBytes);
+  });
+});
+
+/**
+ * Under a layer split, weights and cache travel together: a card that owns a layer owns both.
+ * Rounding only one of them up describes a machine that does not exist.
+ */
+describe('an indivisible layer count rounds weights up too', () => {
+  it('charges the busiest card, not the average one', () => {
+    // DeepSeek V3 has 61 layers. Over two cards that is 31 and 30, so the busy one holds 31/61
+    // of the model — not half of it.
+    const plan = (count: number) =>
+      planPlacement(
+        DEEPSEEK_V3,
+        getQuant('iq4_xs'),
+        { contextTokens: 16384, concurrency: 1, kvPrecision: 'fp16' },
+        { device: RTX_5090, count },
+        LLAMA_CPP
+      );
+
+    const two = plan(2);
+    const one = plan(1);
+    expect(two.weightBytesPerDevice).toBeCloseTo((one.weightBytesPerDevice * 31) / 61, -3);
+    // And the same divisor as the cache, which is the property that was broken.
+    expect(two.weightBytesPerDevice / one.weightBytesPerDevice).toBeCloseTo(
+      two.kvBytesPerDevice / one.kvBytesPerDevice,
+      6
+    );
+  });
+
+  it('leaves tensor-parallel rigs dividing evenly, because they do', () => {
+    const plan = (count: number) =>
+      planPlacement(
+        DEEPSEEK_V3,
+        getQuant('iq4_xs'),
+        { contextTokens: 16384, concurrency: 1, kvPrecision: 'fp16' },
+        { device: RTX_5090, count },
+        VLLM
+      );
+    expect(plan(2).weightBytesPerDevice).toBeCloseTo(plan(1).weightBytesPerDevice / 2, -3);
+  });
+});
+
+/**
+ * A layer count is not a KV divisor on a hybrid model, and a layer split is not a speedup.
+ * Both were being assumed, and both flatter multi-card rigs in the direction that reports a fit.
+ */
+describe('layer splits are sized, not divided', () => {
+  const gemma = (count: number, runtime = LLAMA_CPP) =>
+    planPlacement(
+      GEMMA_3_12B,
+      getQuant('q4_k_m'),
+      { contextTokens: 131072, concurrency: 8, kvPrecision: 'fp16' },
+      { device: RTX_5090, count },
+      runtime
+    );
+
+  it('charges the busiest card for the full-attention layers it lands', () => {
+    // Gemma 3 12B has 8 full-attention layers among 48, and at 128K each caches far more than a
+    // sliding one. Over five cards the full layers cannot be spread evenly — someone holds two —
+    // so the busiest card holds more than a fifth of the cache. Five is reachable: the store
+    // accepts any device count from a URL, and `DEVICE_COUNT_STOPS` is only what the slider offers.
+    const five = gemma(5);
+    const evenShare = gemma(1).kvBytesPerDevice / 5;
+
+    expect(five.kvBytesPerDevice).toBeGreaterThan(evenShare);
+
+    // And a count that *does* divide the full layers evenly gets the even share, so the model is
+    // charging for real imbalance rather than adding a blanket penalty.
+    const eight = gemma(8);
+    expect(eight.kvBytesPerDevice).toBeCloseTo(gemma(1).kvBytesPerDevice / 8, -3);
+  });
+
+  it('takes both figures from the same device', () => {
+    // The card carrying the big full-attention caches is the one a balanced scheduler gives
+    // fewer layers, so the heaviest-KV card and the heaviest-weight card are different cards.
+    // Adding those two maxima describes a device that does not exist — and reported spill for
+    // a rig that fits.
+    const p = gemma(4);
+    const perLayerWeight = gemma(1).weightBytesPerDevice / GEMMA_3_12B.layers;
+
+    // Whatever share of the weights the busiest card holds, it must be a whole number of layers.
+    const layersHeld = p.weightBytesPerDevice / perLayerWeight;
+    expect(layersHeld).toBeCloseTo(Math.round(layersHeld), 6);
+
+    // And the two together must never exceed what one device could hold of each.
+    expect(p.weightBytesPerDevice).toBeLessThanOrEqual(gemma(1).weightBytesPerDevice + 1);
+    expect(p.kvBytesPerDevice).toBeLessThanOrEqual(gemma(1).kvBytesPerDevice + 1);
+  });
+
+  it('never claims a card holds more than the whole cache', () => {
+    for (const count of [1, 2, 4, 8]) {
+      const p = gemma(count);
+      expect(p.kvBytesPerDevice).toBeLessThanOrEqual(p.totalKvBytes + 1);
+    }
+  });
+
+  it('does not grant a serial split aggregate bandwidth', () => {
+    // Whole layers run in sequence for one token, so a single stream sees one card's bandwidth
+    // however many cards there are. Tensor parallelism really does add channels.
+    const perDevice = achievedBandwidth({ device: RTX_5090, count: 1 }, LLAMA_CPP);
+    expect(achievedBandwidth({ device: RTX_5090, count: 8 }, LLAMA_CPP)).toBeCloseTo(perDevice, -6);
+
+    const tp1 = achievedBandwidth({ device: RTX_5090, count: 1 }, VLLM);
+    expect(achievedBandwidth({ device: RTX_5090, count: 8 }, VLLM)).toBeGreaterThan(tp1 * 4);
+  });
+});
+
+/**
+ * Sharding needs a transport, and the split ran regardless of whether one exists — eight Mac
+ * Studios came back as a supported placement holding an eighth of the model each, over an
+ * interconnect the catalog says they do not have. The Bench hides its device-count control for
+ * these rows, but that is one surface's store protecting itself; the Matrix, the Envelope and any
+ * direct `evaluate` caller reach `planPlacement` without passing through it.
+ */
+describe('a rig is only sharded when its devices can talk to each other', () => {
+  const macRig = (count: number) => ({ device: MAC_STUDIO_M3_ULTRA_256, count });
+
+  it('refuses a multi-device rig with no interconnect', () => {
+    expect(canShard(MAC_STUDIO_M3_ULTRA_256)).toBe(false);
+
+    const plan = planPlacement(LLAMA_31_8B, getQuant('q4_k_m'), usage(4096), macRig(8), MLX);
+    expect(plan.unsupported).toMatch(/no interconnect/i);
+  });
+
+  it('does not divide the model across devices it has refused', () => {
+    const one = planPlacement(LLAMA_31_8B, getQuant('q4_k_m'), usage(4096), macRig(1), MLX);
+    const eight = planPlacement(LLAMA_31_8B, getQuant('q4_k_m'), usage(4096), macRig(8), MLX);
+
+    // The figure that gave it away: an eighth of the weights per machine, for a rig that cannot
+    // move a tensor between them.
+    expect(eight.weightBytesPerDevice).toBe(one.weightBytesPerDevice);
+  });
+
+  it('still shards hardware that has a link', () => {
+    // The Spark is `unified-soc` like the Mac and has ConnectX-7, which is the whole reason
+    // `canShard` keys on the transport rather than the device class.
+    const rig = { device: DGX_SPARK, count: 2 };
+    const plan = planPlacement(LLAMA_31_8B, getQuant('q4_k_m'), usage(4096), rig, LLAMA_CPP);
+
+    expect(plan.unsupported).toBeUndefined();
+  });
+
+  it('leaves a single device of unshardable hardware alone', () => {
+    const plan = planPlacement(LLAMA_31_8B, getQuant('q4_k_m'), usage(4096), macRig(1), MLX);
+    expect(plan.unsupported).toBeUndefined();
   });
 });
