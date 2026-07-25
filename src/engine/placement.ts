@@ -1,6 +1,6 @@
 import type { DeviceSpec, ModelSpec, QuantSpec, Rig, RuntimeSpec, UsageSpec } from './types';
 import { activationBytes } from './activations';
-import { kvBytesTotal } from './kv';
+import { kvBytesBusiestDevice, kvBytesTotal } from './kv';
 import { weightBytes } from './weights';
 
 /**
@@ -254,7 +254,22 @@ export function planPlacement(
   // 178.3.
   const shards = rig.count;
   const weightBytesPerDevice = totalWeightBytes / weightShards(model, shards, runtime);
-  const kvBytesPerDevice = totalKvBytes / kvShards(model, shards, runtime);
+  /**
+   * Layer splits are sized rather than divided, because layers are not interchangeable: a
+   * full-attention layer of a hybrid model holds up to 128x what a sliding one does, so the
+   * layer *count* says nothing useful about what the busiest card ends up holding.
+   */
+  const kvBytesPerDevice =
+    runtime.parallelism === 'layer' && shards > 1
+      ? kvBytesBusiestDevice(
+          model,
+          usage.contextTokens,
+          usage.concurrency,
+          usage.kvPrecision,
+          shards,
+          runtime
+        )
+      : totalKvBytes / kvShards(model, shards, runtime);
   const usedBytesPerDevice = weightBytesPerDevice + kvBytesPerDevice + activations;
 
   const allocatableBytesPerDevice = allocatablePerDevice(rig, runtime);
