@@ -209,13 +209,23 @@ export function Matrix({ config }: { config: Config }) {
    * trailing capacity suffix that got cut, so two columns became indistinguishable — the exact
    * failure the rotation was introduced to fix.
    *
-   * Rotated 45 degrees, so the vertical extent is the label's width times sin(45). ~6.5px per
-   * character at this size is an estimate rather than a measurement, but it errs long, and the
-   * cost of erring is whitespace where the cost of erring short is an unreadable header.
+   * Rotated 45 degrees, so the vertical extent is the label's width times sin(45).
+   *
+   * 8px per character is an estimate rather than a measurement, and the point of the estimate is
+   * that it errs *long*: the cost of erring is whitespace, where the cost of erring short is a
+   * header clipped by the `overflow-x-auto` container, which clips vertically rather than
+   * scrolling. The first version claimed to err long at 6.5 and did not — the app's font stack
+   * renders the widest catalogued label at **7.03px per character**, so the constant was 8% short
+   * and the `+20` was absorbing all of it, leaving 1.08px of clearance on a 204px row.
+   *
+   * That was invisible until `e2e/matrix-header.spec.ts` measured it, and it was not merely tight:
+   * `--font-sans` resolves to `system-ui`, which is SF on macOS and whatever fontconfig picks on a
+   * CI runner. A metrics difference of 1% either way decided whether the header clipped. The spec
+   * now asserts the clearance directly, so this constant cannot quietly go short again.
    */
   const headerHeight = useMemo(() => {
     const longest = Math.max(0, ...devices.map((d) => shortName(d.name).length));
-    return Math.ceil(longest * 6.5 * Math.SQRT1_2) + 20;
+    return Math.ceil(longest * 8 * Math.SQRT1_2) + 20;
   }, [devices]);
 
   return (

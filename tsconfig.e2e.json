@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    /* DOM, because half of every spec is a `page.evaluate` body that runs in the browser. */
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "resolveJsonModule": true,
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true,
+
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+
+    "types": ["node"]
+  },
+  "include": ["e2e/**/*.ts"]
+}

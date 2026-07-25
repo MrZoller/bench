@@ -10,11 +10,12 @@ when they break. It is the handoff document between sessions.
 ## Commands
 
 - Test: `npm test` (`test:watch`, `test:coverage` also exist)
+- Browser tests: `npm run test:e2e` (Playwright; builds and serves automatically)
 - Run: `npm run dev`
 - Lint/format: `npm run lint` / `npm run format` (`format:check` is the CI gate)
 - Build: `npm run build`
 
-CI runs **lint → format:check → test → build**; run them before pushing.
+CI runs **lint → format:check → test → build → test:e2e**; run them before pushing.
 
 ## Stack
 
@@ -32,6 +33,11 @@ CI runs **lint → format:check → test → build**; run them before pushing.
 ## Conventions
 
 - Conventional commits: `type(scope): summary`
+- **`e2e/` is for what jsdom structurally cannot answer**, not for a second copy of the unit suite.
+  Layout, scrolling, `@media (pointer: coarse)`, and canvas actually painting. Everything else stays
+  in Vitest, where it runs in a second. The rule exists because the gap already shipped a bug: a
+  scroll anchor on a `display: contents` element generates no principal box, so `scrollIntoView`
+  returned early in every real browser while jsdom — which has no `scrollIntoView` at all — passed it.
 - **The engine's reference tests are the spec, not scaffolding.** They assert against llama.cpp's
   published file sizes, DeepSeek's stated KV footprint, and measured throughput on a DGX Spark
   and an EPYC 9654. If one fails, the model is wrong — do not widen the band to make it pass.

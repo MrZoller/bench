@@ -31,3 +31,50 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  # A separate job rather than more steps on `build`, for two reasons. It needs a ~170MB browser
+  # download that the other gates do not, and Playwright's `webServer` builds for itself — so
+  # sharing a job would run `npm run build` twice and serialise work that has no dependency between
+  # its halves.
+  #
+  # What it covers is disjoint rather than additional: jsdom has no layout engine, so scrolling,
+  # geometry, coarse-pointer media queries and canvas painting are all unfalsifiable there. One such
+  # gap already shipped a bug; see e2e/matrix-scroll.spec.ts.
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Keyed on the Playwright version, since that is what decides the browser build.
+      - name: Cache browsers
+        id: browser-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ hashFiles('package-lock.json') }}
+
+      - name: Install browsers
+        # Both declared projects are Chromium — `Desktop Chrome` and `Pixel 5` name no channel, so
+        # they use the bundled build rather than a system Chrome. `--with-deps` is still run on a
+        # cache hit, because it installs system libraries rather than the browser.
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser tests
+        run: npm run test:e2e
+
+      - name: Upload the report when the browser run fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7

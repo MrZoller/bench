@@ -39,16 +39,18 @@ deployment, and the follow-up list in [issues #12–#20](https://github.com/MrZo
 | 4. Design tokens + the Bench       | **done** (#5)     | Hero surface. Load the `dataviz` skill before any chart/meter/palette code                         |
 | 5. Verdict + explain layers        | **done** (#4)     | Seven workload archetypes. See **Verdicts**, below                                                 |
 | 6. Envelope + Matrix surfaces      | **done** (#7, #8) | Context × concurrency feasibility field; model × device heatmap                                    |
-| 7. URL state, responsive, a11y     | **mostly** (#6)   | Querystring round-trips a scenario. No browser-level test pass — #19; URL defects in #15, #16      |
+| 7. URL state, responsive, a11y     | **mostly** (#6)   | Querystring round-trips a scenario. Browser-level pass in `e2e/` (#19); URL defect in #15         |
 | 8. Weekly catalog refresh + deploy | **next**          | Scheduled `build-catalog` → PR on diff; static deploy to a zoller.ai subdomain                     |
 
-**Correctness debt is tracked as issues, not here.** Six are open once this lands. #9 and #10,
+**Correctness debt is tracked as issues, not here.** Four are open once this lands. #9 and #10,
 which graded a configuration as working when it is not, are fixed — together with #11, which
 printed a figure measured at a different scenario from the one its sentence described. Filed as
 three bugs, one class; written up under **Verdicts** below. What remains is labelling (#13), UI
-state (#15), a browser-level test pass (#19), the MLX questions (#18, #33), and three touch targets
-too small for a coarse pointer (#29). Both engine bugs are fixed: the layer-split spill fraction
-(#14) and prefill having no notion of a cached prefix (#23); see **Engine** below.
+state (#15), MLX's unmeasured 8-bit KV (#33), and three touch targets too small for a coarse
+pointer (#29). Both engine bugs are fixed: the layer-split spill fraction (#14) and prefill having
+no notion of a cached prefix (#23); see **Engine** below. The browser-level test gap (#19) is
+closed, and with it the legend overflow (#34) that only a browser could falsify; see **Tests**
+below.
 
 ## Decisions already made
 
@@ -234,6 +236,28 @@ reading the test that guards them.
   The knobs were left alone deliberately. Re-centring right after removing what a fudge factor was
   masking is how the next error gets hidden. All three sit inside the ±30% band the tests assert.
 
+**Tests**
+
+- **`e2e/` covers what jsdom structurally cannot, and nothing else.** Layout, scrolling,
+  `@media (pointer: coarse)`, and canvas actually painting — everything else stays in Vitest, where
+  it runs in a second. The rule is not tidiness: the gap shipped a bug. The Matrix's click-to-scroll
+  was anchored on a `display: contents` element, which generates no principal box, so
+  `scrollIntoView` returned early in every real browser — and jsdom has no `scrollIntoView` at all,
+  so the guarded call passed every test. Caught in review; the replacement was believed correct and
+  had never been observed working. All three scroll specs now fail if the anchor is put back.
+- **A spec that measures the wrong element is worse than no spec**, and this suite produced three
+  of them on the first run: a region-wide button locator that caught the measure toggles instead of
+  the grid cells, `getByLabel('Model')` matching the Matrix's own section name, and
+  `getByRole('button', { selected })`, which Playwright rejects outright. Each looked like an app
+  bug for a few minutes. Mutation-check anything asserting geometry.
+- **The touch project is emulation, so it asserts the emulation first.**
+  `matchMedia('(pointer: coarse)').matches` is checked in its own test before any size is measured,
+  or a change in how Playwright emulates a device silently moves every other assertion onto the
+  mouse branch, where they all pass.
+- **`vite preview` binds `localhost`, which is `::1` on an IPv6 host** — so the config passes
+  `--host 127.0.0.1` to match the URL Playwright probes. Without it the run dies on a `webServer`
+  timeout that says nothing about why.
+
 **Verdicts**
 
 - **Grade a tier on the measurement its own sentence quotes, and on the scenario it recommends.**
@@ -382,6 +406,7 @@ section is for the questions those issues cannot settle.
 
 ```
 npm test && npm run lint && npm run format:check && npm run build
+npm run test:e2e                # Playwright; builds and serves on 127.0.0.1:4173 itself
 npm run catalog -- --dry-run    # re-derive the model catalog without writing
 ```
 
