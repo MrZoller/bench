@@ -379,27 +379,69 @@ export function Bench() {
  */
 function ShareLink() {
   const config = useConfig();
-  const [copied, setCopied] = useState(false);
+  const [state, setState] = useState<'idle' | 'copied' | 'unavailable'>('idle');
+  const [href, setHref] = useState('');
+
+  const label =
+    state === 'copied'
+      ? 'Link copied'
+      : state === 'unavailable'
+        ? 'Copy it from here'
+        : 'Copy link to this scenario';
 
   return (
-    <button
-      type="button"
-      onClick={() => {
-        const { origin, pathname } = window.location;
-        const href = `${origin}${pathname}${configToShareSearch(config as Config)}`;
-        void navigator.clipboard?.writeText(href).then(
-          () => {
-            setCopied(true);
-            window.setTimeout(() => setCopied(false), 2000);
-          },
-          () => setCopied(false)
-        );
-      }}
-      className="rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-accent)] hover:border-[var(--color-accent-dim)]"
-    >
-      {/* aria-live so the confirmation is announced, not just seen. */}
-      <span aria-live="polite">{copied ? 'Link copied' : 'Copy link to this scenario'}</span>
-    </button>
+    <div className="flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        onClick={() => {
+          const { origin, pathname } = window.location;
+          const link = `${origin}${pathname}${configToShareSearch(config as Config)}`;
+          setHref(link);
+
+          /**
+           * `navigator.clipboard` is undefined on non-secure origins and in some embedded
+           * browsers, and the optional chain meant the button did nothing at all there while
+           * still looking like it had worked — the worst of the three possible outcomes.
+           *
+           * The fallback is the link itself, selected and ready for a manual copy. No
+           * `document.execCommand('copy')`: it is deprecated, it needs a selection in the
+           * document anyway, and it fails silently in exactly the same contexts.
+           */
+          const writer = navigator.clipboard?.writeText(link);
+          if (writer === undefined) {
+            setState('unavailable');
+            return;
+          }
+
+          void writer.then(
+            () => {
+              setState('copied');
+              window.setTimeout(() => setState('idle'), 2000);
+            },
+            // A rejected write — permission denied, document not focused — lands here, and
+            // means the same thing to the user as no API at all.
+            () => setState('unavailable')
+          );
+        }}
+        className="rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-accent)] hover:border-[var(--color-accent-dim)]"
+      >
+        {/* aria-live so the confirmation is announced, not just seen. */}
+        <span aria-live="polite">{label}</span>
+      </button>
+
+      {state === 'unavailable' && (
+        <input
+          readOnly
+          aria-label="Link to this scenario"
+          value={href}
+          // Select on focus so one keystroke copies it — the closest thing to the button
+          // working that a browser without clipboard access allows.
+          onFocus={(e) => e.currentTarget.select()}
+          ref={(el) => el?.select()}
+          className="min-w-0 flex-1 rounded-md border border-[var(--color-border)] bg-transparent px-2 py-1.5 text-xs text-[var(--color-text-muted)]"
+        />
+      )}
+    </div>
   );
 }
 
