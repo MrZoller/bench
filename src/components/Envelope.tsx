@@ -65,6 +65,15 @@ const STATE_STYLE: Record<CellState, { fill: string; label: string; hint: string
   },
 };
 
+/**
+ * Narrowest a column may be, in CSS pixels.
+ *
+ * Set by the widest label the axis can produce: `uniqueLabels` falls back to an exact count like
+ * "131,072" when two columns would otherwise share a header, and that needs about 50px at 10px
+ * type. Below this the container scrolls rather than the labels overlapping.
+ */
+const MIN_COLUMN_PX = 52;
+
 export function Envelope({ config }: { config: Config }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const headingId = useId();
@@ -224,24 +233,36 @@ export function Envelope({ config }: { config: Config }) {
           ))}
         </ol>
 
-        <div className="flex-1">
-          <canvas
-            ref={canvasRef}
-            role="img"
-            aria-label={describe(grid, counts, total, currentCell)}
-            className="h-48 w-full rounded"
-          />
-          <ol
-            aria-hidden="true"
-            className="tabular mt-1 grid text-[10px] text-[var(--color-text-faint)]"
-            style={{ gridTemplateColumns: `repeat(${grid.contexts.length}, 1fr)` }}
-          >
-            {grid.contexts.map((c, i) => (
-              <li key={c} className="text-center">
-                {contextLabels[i]}
-              </li>
-            ))}
-          </ol>
+        {/*
+          The plot and its axis scroll together as one unit rather than being squeezed.
+
+          Truncating the labels instead would undo the disambiguation they exist for — "131,072"
+          and "131,073" clipped to the same width are indistinguishable again, which is the bug
+          `uniqueLabels` was written to fix. An equal-width grid on a phone gives each column
+          about 25px, and an exact count needs roughly 50, so the columns get a floor and the
+          container scrolls when they do not fit. The canvas shares the floor so the cells stay
+          aligned with their headers.
+        */}
+        <div className="min-w-0 flex-1 overflow-x-auto">
+          <div style={{ minWidth: `${grid.contexts.length * MIN_COLUMN_PX}px` }}>
+            <canvas
+              ref={canvasRef}
+              role="img"
+              aria-label={describe(grid, counts, total, currentCell)}
+              className="h-48 w-full rounded"
+            />
+            <ol
+              aria-hidden="true"
+              className="tabular mt-1 grid text-[10px] text-[var(--color-text-faint)]"
+              style={{ gridTemplateColumns: `repeat(${grid.contexts.length}, 1fr)` }}
+            >
+              {grid.contexts.map((c, i) => (
+                <li key={c} className="text-center">
+                  {contextLabels[i]}
+                </li>
+              ))}
+            </ol>
+          </div>
         </div>
       </div>
 
@@ -362,6 +383,24 @@ function describe(
   total: number,
   current: EnvelopeCell | undefined
 ): string {
+  /**
+   * The closed cells, split the way the legend splits them.
+   *
+   * This summary is the *only* form the picture takes for a screen reader, so a distinction the
+   * legend draws and this does not is a distinction that reader never gets. It went on saying
+   * every closed combination "will not run at all" after the visible legend learned to say some
+   * of them are one setting away.
+   */
+  const closed = grid.cells.flat().filter((c) => c.state === 'over');
+  const raiseable = closed.filter((c) => c.overBecause === 'allocation').length;
+  const beyond = closed.length - raiseable;
+
+  const whyClosed =
+    raiseable > 0 && beyond > 0
+      ? `${beyond} of ${total} will not run at all, and ${raiseable} more exceed only the default allocation ceiling, which you can raise.`
+      : raiseable > 0
+        ? `${raiseable} of ${total} exceed the default allocation ceiling, which you can raise.`
+        : `${closed.length} of ${total} combinations will not run at all.`;
   // The ring is the only mark on this panel with no textual equivalent, so it goes first.
   const here = current
     ? `Currently at ${tokens(current.contextTokens)} context and ${current.concurrency} ${
@@ -375,7 +414,7 @@ function describe(
     if (counts.unsupported) {
       return `${here}This runtime cannot drive this hardware, so none of the ${total} combinations run.`;
     }
-    return `${here}No comfortable configuration in this range. ${counts.over ?? 0} of ${total} combinations will not run at all.`;
+    return `${here}No comfortable configuration in this range. ${whyClosed}`;
   }
   const widest = grid.cells[0].filter((c) => c.state === 'comfortable').at(-1);
   return (

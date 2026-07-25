@@ -582,3 +582,30 @@ describe('the Envelope legend covers every reason its cells are closed', () => {
     }
   });
 });
+
+/**
+ * The canvas summary is the only form the picture takes for a screen reader, so any distinction
+ * the legend draws and it does not is one that reader never receives.
+ */
+describe('the spoken summary says everything the legend says', () => {
+  it('mentions the raiseable ceiling, not just "will not run"', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-512');
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+
+    const region = screen.getByRole('region', { name: /how much room/i });
+    const plot = within(region).getByRole('img');
+    const spoken = plot.getAttribute('aria-label') ?? '';
+
+    // Whenever the visible legend offers the raiseable explanation, the spoken one must too.
+    const legendSaysRaiseable =
+      within(region).queryByText(/which you can raise/i) !== null ||
+      within(region).queryByText(/past the ceiling it hands out by default/i) !== null;
+    if (legendSaysRaiseable) {
+      expect(spoken).toMatch(/allocation ceiling, which you can raise/i);
+    }
+  });
+});
