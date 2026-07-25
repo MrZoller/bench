@@ -273,3 +273,34 @@ describe('the Bench keeps its claims consistent with its own numbers', () => {
     expect(screen.getByText(/213/)).toBeInTheDocument();
   });
 });
+
+describe('the Bench refuses impossible combinations', () => {
+  it('does not offer NVFP4 on hardware that cannot run it', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    expect(screen.getByRole('option', { name: /NVFP4/i })).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mi355x');
+    expect(screen.queryByRole('option', { name: /NVFP4/i })).not.toBeInTheDocument();
+  });
+
+  /**
+   * `rate()` rounds, so classifying the raw estimate could print "15 tok/s · Slow" against a
+   * threshold of 15. The verdict is read off the displayed number instead.
+   */
+  it('never labels a displayed rate against a threshold it has already crossed', () => {
+    render(<App />);
+    const verdicts = screen.getByRole('region', { name: 'Verdicts' });
+    const shown = Number(
+      within(verdicts).getByText(/tok\/s per user/).previousSibling?.textContent
+    );
+
+    if (!Number.isFinite(shown)) return;
+    const word = ['Fast', 'Usable', 'Slow'].find((w) => within(verdicts).queryByText(w) !== null);
+    if (shown >= 30) expect(word).toBe('Fast');
+    else if (shown >= 15) expect(word).toBe('Usable');
+    else expect(word).toBe('Slow');
+  });
+});

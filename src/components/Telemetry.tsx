@@ -1,6 +1,6 @@
 import type { Evaluation } from '@/engine';
 import type { StatusTone } from '@/design/tokens';
-import { gibLabel, rate, seconds, tokens } from '@/lib/format';
+import { gibLabel, percent, rate, seconds, tokens } from '@/lib/format';
 
 /**
  * Three readouts, deliberately not one.
@@ -116,7 +116,15 @@ function capacityReading(
 }
 
 function decodeReading(evaluation: Evaluation): Reading {
-  const perUser = evaluation.decode.perUserTokensPerSec;
+  /**
+   * Classified on the *displayed* figure, not the raw one.
+   *
+   * `rate()` rounds, so an estimate of 14.7 prints as "15" — and judged on 14.7 it is labelled
+   * Slow, putting "15 tok/s · Slow" on screen against a threshold of 15. Reading the same value
+   * the user reads removes the disagreement rather than narrowing the window where it happens.
+   */
+  const shown = rate(evaluation.decode.perUserTokensPerSec);
+  const perUser = Number(shown);
 
   // Thresholds are reading speed, not benchmarks: below ~10 tok/s a chat feels like waiting,
   // and above ~30 it outruns most people.
@@ -125,7 +133,7 @@ function decodeReading(evaluation: Evaluation): Reading {
   return {
     key: 'decode',
     label: 'Decode',
-    value: rate(perUser),
+    value: shown,
     unit: 'tok/s per user',
     tone,
     verdict: perUser >= DECODE_FAST ? 'Fast' : perUser >= DECODE_USABLE ? 'Usable' : 'Slow',
@@ -136,7 +144,7 @@ function decodeReading(evaluation: Evaluation): Reading {
 }
 
 function prefillReading(evaluation: Evaluation): Reading {
-  const { ttftSeconds, prefillTokensPerSec, attentionBound } = evaluation.prefill;
+  const { ttftSeconds, prefillTokensPerSec, attentionBound, offloadPenalty } = evaluation.prefill;
   const tone: StatusTone = ttftSeconds <= 2 ? 'good' : ttftSeconds <= 10 ? 'warning' : 'critical';
 
   return {
@@ -146,9 +154,16 @@ function prefillReading(evaluation: Evaluation): Reading {
     unit: '',
     tone,
     verdict: ttftSeconds <= 2 ? 'Responsive' : ttftSeconds <= 10 ? 'Noticeable' : 'Slow start',
-    detail: attentionBound
-      ? `${rate(prefillTokensPerSec)} tok/s prompt processing. Quadratic attention now dominates the pass, so this degrades faster than linearly as the prompt grows.`
-      : `${rate(prefillTokensPerSec)} tok/s prompt processing, bound by compute on the linear layers.`,
+    detail: offloadPenalty
+      ? // The streaming term is added to TTFT before any compute happens, so on a spilled
+        // configuration it is usually the whole answer — naming compute here sends someone
+        // looking for a faster GPU when the fix is fitting the weights on the one they have.
+        `${rate(prefillTokensPerSec)} tok/s prompt processing, dominated by streaming ${percent(
+          offloadPenalty.fraction
+        )} of the weights across the host bus before the prompt can start.`
+      : attentionBound
+        ? `${rate(prefillTokensPerSec)} tok/s prompt processing. Quadratic attention now dominates the pass, so this degrades faster than linearly as the prompt grows.`
+        : `${rate(prefillTokensPerSec)} tok/s prompt processing, bound by compute on the linear layers.`,
   };
 }
 

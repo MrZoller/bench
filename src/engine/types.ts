@@ -182,6 +182,14 @@ export interface QuantSpec {
    * FP8 at all. Collapsing them would hand an FP8 quant a rate that card cannot reach.
    */
   computeDtype: 'fp16' | 'fp8' | 'fp4' | 'int8';
+  /**
+   * Vendor whose silicon this format needs, when it is not an open standard.
+   *
+   * NVFP4 is Blackwell-native: AMD's MI355X publishes a 9.2 PFLOP/s FP4 rate for its *own*
+   * format, and handing that number to NVFP4 produces a plausible, impossible result. MXFP4 has
+   * no such restriction — it is the OCP microscaling standard and both vendors implement it.
+   */
+  requiresVendor?: string;
   /** Rough quality cost vs bf16, for UI guidance only — never fed into the math. */
   qualityNote?: string;
   source: string;

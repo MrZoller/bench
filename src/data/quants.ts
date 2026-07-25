@@ -52,6 +52,8 @@ export const QUANTS: readonly QuantSpec[] = [
     // 4-bit mantissa plus an FP8 scale per 16-element block: 4 + 8/16.
     bpw: 4.5,
     computeDtype: 'fp4',
+    // Blackwell-native. AMD's FP4 rate is for its own format, not this one.
+    requiresVendor: 'NVIDIA',
     qualityNote: 'Blackwell-native 4-bit. Better quality than MXFP4 at slightly more memory.',
     source:
       'https://developer.nvidia.com/blog/introducing-nvfp4-for-efficient-and-accurate-low-precision-inference/',

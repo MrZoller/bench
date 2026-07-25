@@ -179,3 +179,19 @@ describe('the store agrees with the controls', () => {
     expect(getQuant(quantId).denseBpw).toBeUndefined();
   });
 });
+
+describe('quantization must be able to run where it is selected', () => {
+  it('drops a vendor-locked format when the hardware is another vendor', () => {
+    useConfig.setState(DEFAULT_CONFIG);
+    const store = useConfig.getState();
+
+    store.set('deviceId', 'rtx-5090');
+    store.set('quantId', 'nvfp4');
+    expect(useConfig.getState().quantId).toBe('nvfp4');
+
+    // NVFP4 is Blackwell-native; the MI355X's FP4 rate is for AMD's own format, and letting
+    // this through would hand `peakFlops` 9.2 PFLOP/s from different silicon.
+    store.set('deviceId', 'mi355x');
+    expect(useConfig.getState().quantId).not.toBe('nvfp4');
+  });
+});

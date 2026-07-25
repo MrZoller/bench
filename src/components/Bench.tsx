@@ -8,6 +8,7 @@ import { Segmented, Select, StopSlider } from './Controls';
 import { compact, gibLabel, params, percent, tokens } from '@/lib/format';
 import type { KvPrecision } from '@/engine/types';
 import { canShard } from '@/engine/placement';
+import { quantApplies } from '@/lib/quantChoice';
 
 /**
  * The Bench — the hero surface.
@@ -62,22 +63,16 @@ export function Bench() {
     return within.length > 0 ? [...within, config.contextTokens] : [config.contextTokens];
   }, [config.contextTokens]);
 
-  /**
-   * Expert-only schemes are hidden for dense models.
-   *
-   * MXFP4 sets `denseBpw: 16`, so on a model with no routed experts it produces exactly a BF16
-   * footprint and decode basis while the control goes on claiming "MXFP4 (expert-only)" — the
-   * label and the arithmetic disagree, and the arithmetic is right. Hiding it is better than
-   * showing a no-op: there is nothing for the user to learn from selecting it.
-   */
-  const quantOptions = useMemo(() => {
-    const expertOnly = (q: (typeof QUANTS)[number]) => q.denseBpw !== undefined;
-    return QUANTS.filter((q) => model.expertParams > 0 || !expertOnly(q)).map((q) => ({
-      value: q.id,
-      label: q.label,
-      note: q.qualityNote,
-    }));
-  }, [model.expertParams]);
+  /** Formats that cannot run here, or would do nothing here. See `quantApplies`. */
+  const quantOptions = useMemo(
+    () =>
+      QUANTS.filter((q) => quantApplies(q, model, device)).map((q) => ({
+        value: q.id,
+        label: q.label,
+        note: q.qualityNote,
+      })),
+    [model, device]
+  );
 
   /** Whether the configuration runs at all. */
   const runnable = !evaluation.placement.unsupported && !evaluation.placement.impossible;
@@ -312,7 +307,7 @@ export function Bench() {
                 ? `. That would make it fast — but not here, with ${percent(
                     evaluation.placement.offloadFraction
                   )} of the weights crossing the host bus every token.`
-                : '. That is why a model this size can be fast anywhere it does fit.'}{' '}
+                : '. Whether that is fast depends on the memory it is reading from, which the decode figure above measures.'}{' '}
             Total parameters set what fits; active parameters set how fast it feels.
           </p>
           {model.experts && (

@@ -166,7 +166,12 @@ export function planPlacement(
     ? `${runtime.label} does not run on ${DEVICE_CLASS_PROSE[rig.device.class]}.`
     : runtime.requiresVendor && rig.device.vendor !== runtime.requiresVendor
       ? `${runtime.label} runs only on ${runtime.requiresVendor} hardware.`
-      : undefined;
+      : // A vendor-specific weight format is as unrunnable as a vendor-specific runtime, and
+        // was previously waved through — leaving `peakFlops` to read a rate published for a
+        // different format on the same silicon.
+        quant.requiresVendor && rig.device.vendor !== quant.requiresVendor
+        ? `${quant.label} needs ${quant.requiresVendor} hardware.`
+        : undefined;
 
   return {
     fits,

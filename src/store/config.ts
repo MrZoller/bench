@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { KvPrecision } from '@/engine/types';
 import { evaluate, type Evaluation } from '@/engine';
 import { canShard } from '@/engine/placement';
+import { FALLBACK_QUANT_ID, quantApplies } from '@/lib/quantChoice';
 import { getDevice, getModel, MODELS, DEVICES } from '@/data/catalog';
 import { getQuant } from '@/data/quants';
 import { getRuntime, RUNTIMES } from '@/data/runtimes';
@@ -72,7 +73,9 @@ function coerce(config: Config): Config {
    * 40K Qwen would report fit, memory and speed for a 1M window it cannot process.
    */
   const resolvedQuant = known(config.quantId, getQuant, DEFAULT_CONFIG.quantId);
-  const quantId = expertOnlyOnDense(resolvedQuant, modelId) ? 'bf16' : resolvedQuant;
+  const quantId = quantApplies(getQuant(resolvedQuant), getModel(modelId), device)
+    ? resolvedQuant
+    : FALLBACK_QUANT_ID;
 
   const contextTokens = Math.min(
     getModel(modelId).maxContext,
@@ -126,15 +129,6 @@ function coerce(config: Config): Config {
  * hand-editable querystring, where `Number(params.get('ctx'))` on nonsense yields NaN, and
  * silently pinning that to the smallest legal context is its own wrong answer.
  */
-/** True when the quant spares non-expert tensors and the model has no experts to spare. */
-function expertOnlyOnDense(quantId: string, modelId: string): boolean {
-  try {
-    return getQuant(quantId).denseBpw !== undefined && getModel(modelId).expertParams === 0;
-  } catch {
-    return false;
-  }
-}
-
 function clamp(value: number, min: number, max: number, fallback: number): number {
   if (!Number.isFinite(value)) return fallback;
   return Math.min(max, Math.max(min, Math.round(value)));
