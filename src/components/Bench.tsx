@@ -9,6 +9,7 @@ import { BudgetBar } from './BudgetBar';
 import { Telemetry } from './Telemetry';
 import { Workloads } from './Workloads';
 import { Envelope } from './Envelope';
+import { DETAIL_ANCHOR_ID, Matrix } from './Matrix';
 import { Segmented, Select, StopSlider } from './Controls';
 import { compact, gibLabel, params, percent, tokens } from '@/lib/format';
 import type { KvPrecision } from '@/engine/types';
@@ -258,7 +259,16 @@ export function Bench() {
 
       {/* The hero, the three answers it does not collapse into one, and what they add up to.
           The bar and the tiles read `canOffload` from the same expression, so they cannot describe
-          one placement two different ways — which they did, over exactly this distinction. */}
+          one placement two different ways — which they did, over exactly this distinction.
+
+          The anchor is where a Matrix click scrolls back to: the detail it loads sits several
+          sections above the grid, so without one the viewport stayed on an unchanged Matrix and
+          the click looked like it had done nothing. */}
+      {/* `h-0 -mb-5` rather than `contents`: `display: contents` generates no principal box, and
+          scrollIntoView returns early for an element without one — so the anchor was silently a
+          no-op in every real browser while jsdom, which has no scrollIntoView at all, could never
+          show it. Zero height with the flex `gap-5` cancelled costs no layout. */}
+      <div id={DETAIL_ANCHOR_ID} aria-hidden="true" className="h-0 -mb-5" />
       <BudgetBar evaluation={evaluation} canOffload={device.class === 'discrete-gpu'} />
       <Telemetry
         evaluation={evaluation}
@@ -267,6 +277,7 @@ export function Bench() {
       />
       <Workloads evaluation={evaluation} config={config} />
       <Envelope config={config} />
+      <Matrix config={config} />
 
       {/* Usage: the half of the question that is about you, not the hardware. */}
       <section aria-label="Usage" className="panel grid gap-5 p-5 sm:grid-cols-2">
