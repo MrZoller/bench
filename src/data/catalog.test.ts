@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { CATALOG_GENERATED_AT, DEVICES, MODELS, getDevice, getModel } from './catalog';
+import {
+  CATALOG_GENERATED_AT,
+  DEVICES,
+  MODELS,
+  getDevice,
+  getModel,
+  modelsByPopularity,
+} from './catalog';
 import { getQuant } from './quants';
 import { evaluate } from '@/engine';
 import { LLAMA_CPP, GPT_OSS_120B, DEEPSEEK_V3, QWEN3_32B } from '@/engine/fixtures';
@@ -154,6 +161,9 @@ describe('generated model catalog', () => {
     expect(model.hiddenSize).toBe(fixture.hiddenSize);
     expect(model.vocabSize).toBe(fixture.vocabSize);
     expect(model.attention.core).toEqual(fixture.attention.core);
+    // Derived independently on both sides — by hand from config.json for the fixture, from the
+    // API for the catalog — so this is the check that catches a wrong width in either.
+    expect(model.attention.projectionWidth).toBe(fixture.attention.projectionWidth);
     expect(model.expertParams).toBe(fixture.expertParams);
     expect(Math.abs(model.totalParams - fixture.totalParams) / fixture.totalParams).toBeLessThan(
       0.02
@@ -205,6 +215,57 @@ describe('generated model catalog', () => {
     // Still resident: the tower loads with the model even for a text-only request.
     expect(model.totalParams / 1e9).toBeCloseTo(totalB, 1);
     expect(model.activeDenseParams).toBe(model.totalParams - model.nonLanguageParams!);
+  });
+
+  /**
+   * Attention scales by the query projection width, which is not the hidden size for most
+   * current models. Asserted against widths read from each repo's own config, and deliberately
+   * including a model that projects *narrower* — a one-directional test would pass under a
+   * "multiply hidden size by a constant" regression.
+   */
+  it.each([
+    ['zai-org/GLM-4.5-Air', 12288, 3.0],
+    ['deepseek-ai/DeepSeek-V3', 20480, 2.857],
+    ['Qwen/Qwen3-30B-A3B', 4096, 2.0],
+    ['openai/gpt-oss-20b', 4096, 1.422],
+    ['unsloth/gemma-3-27b-it', 4096, 0.762],
+    ['NousResearch/Meta-Llama-3.1-8B-Instruct', 4096, 1.0],
+  ])('%s projects attention to its own width, not the hidden size', (id, width, ratio) => {
+    const model = getModel(id);
+    expect(model.attention.projectionWidth).toBe(width);
+    expect(model.attention.projectionWidth / model.hiddenSize).toBeCloseTo(ratio, 2);
+  });
+
+  it('has most of the catalog projecting to something other than its hidden size', () => {
+    const differing = MODELS.filter((m) => m.attention.projectionWidth !== m.hiddenSize);
+    // 12 of 17 today. If this ever drops to zero the field has silently become hiddenSize again.
+    expect(differing.length).toBeGreaterThan(8);
+    // Both directions are represented, so the correction cannot be a one-way fudge.
+    expect(differing.some((m) => m.attention.projectionWidth > m.hiddenSize)).toBe(true);
+    expect(differing.some((m) => m.attention.projectionWidth < m.hiddenSize)).toBe(true);
+  });
+
+  /**
+   * Mirrored seeds carry the canonical repo's traffic, not the mirror's. NousResearch's Llama
+   * 3.1 70B has ~4.8K downloads against Meta's ~1.24M, which sorted the best-known model in the
+   * catalog to last place.
+   */
+  it.each([
+    ['NousResearch/Meta-Llama-3.1-70B-Instruct', 'meta-llama/Llama-3.1-70B-Instruct'],
+    ['NousResearch/Meta-Llama-3.1-8B-Instruct', 'meta-llama/Llama-3.1-8B-Instruct'],
+    ['unsloth/gemma-3-12b-it', 'google/gemma-3-12b-it'],
+    ['unsloth/gemma-3-27b-it', 'google/gemma-3-27b-it'],
+  ])('%s takes its popularity from the canonical repo', (id, canonical) => {
+    const model = getModel(id);
+    expect(model.popularity?.measuredOn).toBe(canonical);
+    expect(model.popularity?.downloads ?? 0).toBeGreaterThan(500_000);
+  });
+
+  it('does not rank the best-known model last', () => {
+    const ranked = modelsByPopularity();
+    const llama70 = ranked.findIndex((m) => m.id.endsWith('Meta-Llama-3.1-70B-Instruct'));
+    expect(llama70).toBeGreaterThanOrEqual(0);
+    expect(llama70).toBeLessThan(ranked.length - 1);
   });
 
   /**

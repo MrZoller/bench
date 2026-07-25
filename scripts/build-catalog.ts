@@ -6,8 +6,9 @@
  *
  *   - `/api/models/{id}?expand[]=safetensors` — exact parameter counts by dtype, summed from
  *     the repo's own safetensors index. Not a rounded marketing figure.
- *   - `/{id}/raw/main/config.json` — the architecture itself: layers, KV heads, head dim,
- *     expert counts, attention window pattern, native quantization.
+ *   - `/{id}/raw/<sha>/config.json` — the architecture itself: layers, KV heads, head dim,
+ *     expert counts, attention window pattern, native quantization. Every fetch after the first
+ *     is pinned to the commit that one resolved, so a row cannot straddle a publisher push.
  *
  * Everything the engine needs is computed from those. Where a field can't be determined the
  * script throws rather than guessing: a wrong KV formula silently costs someone a GPU, and a
@@ -48,6 +49,15 @@ interface Seed {
     totalParams?: number;
     reason: string;
   };
+  /**
+   * Repo to read downloads and likes from, when the seed is a mirror.
+   *
+   * Weights come from the mirror because the original is gated, but its traffic does not:
+   * NousResearch's Llama 3.1 70B has 4.8K downloads against Meta's 1.24M, which sorted the
+   * best-known model in the catalog to last place. Gating applies to `/raw/` and `/resolve/`,
+   * not to API metadata, so the canonical figures are readable without a token.
+   */
+  popularityId?: string;
 }
 
 /**
@@ -62,8 +72,18 @@ const SEEDS: Seed[] = [
   { id: 'Qwen/Qwen3-14B', name: 'Qwen3 14B', org: 'Alibaba' },
   { id: 'Qwen/Qwen3-32B', name: 'Qwen3 32B', org: 'Alibaba' },
   // Gemma is gated on google/*, so these point at open mirrors of the same weights.
-  { id: 'unsloth/gemma-3-12b-it', name: 'Gemma 3 12B', org: 'Google' },
-  { id: 'unsloth/gemma-3-27b-it', name: 'Gemma 3 27B', org: 'Google' },
+  {
+    id: 'unsloth/gemma-3-12b-it',
+    name: 'Gemma 3 12B',
+    org: 'Google',
+    popularityId: 'google/gemma-3-12b-it',
+  },
+  {
+    id: 'unsloth/gemma-3-27b-it',
+    name: 'Gemma 3 27B',
+    org: 'Google',
+    popularityId: 'google/gemma-3-27b-it',
+  },
   { id: 'mistralai/Mistral-Small-24B-Instruct-2501', name: 'Mistral Small 24B', org: 'Mistral' },
 
   // --- Llama: gated on meta-llama, so mirrors keep the catalog buildable without a token ---
@@ -71,11 +91,13 @@ const SEEDS: Seed[] = [
     id: 'NousResearch/Meta-Llama-3.1-8B-Instruct',
     name: 'Llama 3.1 8B Instruct',
     org: 'Meta',
+    popularityId: 'meta-llama/Llama-3.1-8B-Instruct',
   },
   {
     id: 'NousResearch/Meta-Llama-3.1-70B-Instruct',
     name: 'Llama 3.1 70B Instruct',
     org: 'Meta',
+    popularityId: 'meta-llama/Llama-3.1-70B-Instruct',
   },
 
   // --- MoE: the interesting cases for unified-memory hardware ---
@@ -126,6 +148,8 @@ const SEEDS: Seed[] = [
 
 interface HfApiModel {
   id: string;
+  /** Commit the API resolved. Returned only when explicitly requested via `expand[]=sha`. */
+  sha?: string;
   downloads?: number;
   likes?: number;
   createdAt?: string;
@@ -182,27 +206,46 @@ type AttentionCore =
  * Multi-head latent attention caches one compressed latent per token per layer; grouped-query
  * caches keys and values per KV head. Detected by the presence of `kv_lora_rank`, which is
  * what DeepSeek's config uses and no GQA model defines.
+ *
+ * Also returns the **attention projection width**, which is what QK^T and AV actually scale by
+ * and is emphatically *not* `hidden_size`. A model is free to project to a wider or narrower
+ * query space than its residual stream, and most current ones do: GLM-4.5-Air is 3x its hidden
+ * size, Qwen3's MoEs 2x, while Gemma 3 27B and Mistral Small are *narrower*. Using hidden size
+ * mis-scaled long-prompt TTFT in both directions.
  */
-function deriveAttentionCore(id: string, config: HfConfig): AttentionCore {
+function deriveAttention(
+  id: string,
+  config: HfConfig
+): { core: AttentionCore; projectionWidth: number } {
+  const heads = require(num(config, 'num_attention_heads'), id, 'num_attention_heads');
   const kvLoraRank = num(config, 'kv_lora_rank');
+
   if (kvLoraRank !== undefined) {
+    const qkRopeHeadDim = require(num(config, 'qk_rope_head_dim'), id, 'qk_rope_head_dim');
+    const qkNopeHeadDim = require(num(config, 'qk_nope_head_dim'), id, 'qk_nope_head_dim');
+    const vHeadDim = require(num(config, 'v_head_dim'), id, 'v_head_dim');
+
     return {
-      kind: 'mla',
-      kvLoraRank,
-      qkRopeHeadDim: require(num(config, 'qk_rope_head_dim'), id, 'qk_rope_head_dim'),
+      core: { kind: 'mla', kvLoraRank, qkRopeHeadDim },
+      // MLA is the case that forces a single averaged width rather than one head dimension:
+      // its query space (qk_nope + qk_rope) and value space differ — 24576 against 16384 for
+      // DeepSeek V3 — and the engine charges QK and AV at one rate.
+      projectionWidth: (heads * (qkNopeHeadDim + qkRopeHeadDim) + heads * vHeadDim) / 2,
     };
   }
 
-  const heads = require(num(config, 'num_attention_heads'), id, 'num_attention_heads');
   const hidden = require(num(config, 'hidden_size'), id, 'hidden_size');
   // Most configs state head_dim; older ones imply it from hidden_size / num_attention_heads.
-  const headDim = num(config, 'head_dim') ?? hidden / heads;
+  const headDim = require(num(config, 'head_dim') ?? hidden / heads, id, 'head_dim');
 
   return {
-    kind: 'gqa',
-    // Absent num_key_value_heads means full multi-head attention: one KV head per query head.
-    kvHeads: num(config, 'num_key_value_heads') ?? heads,
-    headDim: require(headDim, id, 'head_dim'),
+    core: {
+      kind: 'gqa',
+      // Absent num_key_value_heads means full multi-head attention: one KV head per query head.
+      kvHeads: num(config, 'num_key_value_heads') ?? heads,
+      headDim,
+    },
+    projectionWidth: heads * headDim,
   };
 }
 
@@ -430,9 +473,10 @@ function classifyTensor(name: string): 'language' | 'other' | 'unknown' {
  */
 async function fetchSafetensorsHeader(
   id: string,
+  revision: string,
   shard: string
 ): Promise<Record<string, { dtype?: string; shape?: number[] }>> {
-  const url = `https://huggingface.co/${id}/resolve/main/${shard}`;
+  const url = `https://huggingface.co/${id}/resolve/${revision}/${shard}`;
 
   const lengthResponse = await fetch(url, { headers: { ...headers, Range: 'bytes=0-7' } });
   // 206 specifically, not merely ok: a mirror that ignores Range answers 200 with the whole
@@ -461,17 +505,29 @@ async function fetchSafetensorsHeader(
   const headerResponse = await fetch(url, {
     headers: { ...headers, Range: `bytes=8-${8 + headerLength - 1}` },
   });
-  if (!headerResponse.ok) {
-    throw new DerivationError(`${id}: HTTP ${headerResponse.status} reading ${shard} header`);
+  // The same 206 check as above, and it has to be repeated rather than inferred: the first
+  // range being honoured does not promise the second one will be. A 200 here would buffer the
+  // entire shard, which is the exact download this function exists to avoid.
+  if (headerResponse.status !== 206) {
+    throw new DerivationError(
+      `${id}: ${shard} answered ${headerResponse.status} to the header range request, ` +
+        'expected 206. Refusing to buffer a full shard.'
+    );
   }
-  const header = JSON.parse(Buffer.from(await headerResponse.arrayBuffer()).toString('utf8'));
+  const headerBytes = Buffer.from(await headerResponse.arrayBuffer());
+  if (headerBytes.length !== headerLength) {
+    throw new DerivationError(
+      `${id}: ${shard} returned ${headerBytes.length} header bytes, expected ${headerLength}`
+    );
+  }
+  const header = JSON.parse(headerBytes.toString('utf8'));
   delete header.__metadata__;
   return header as Record<string, { dtype?: string; shape?: number[] }>;
 }
 
 /** Tensor names in a repo, and which shard each lives in. */
-async function fetchTensorMap(id: string): Promise<Record<string, string>> {
-  const url = `https://huggingface.co/${id}/raw/main/model.safetensors.index.json`;
+async function fetchTensorMap(id: string, revision: string): Promise<Record<string, string>> {
+  const url = `https://huggingface.co/${id}/raw/${revision}/model.safetensors.index.json`;
   const response = await fetch(url, { headers });
 
   if (response.ok) {
@@ -486,7 +542,7 @@ async function fetchTensorMap(id: string): Promise<Record<string, string>> {
   }
 
   // Unsharded repo — the single file's own header is the index.
-  const header = await fetchSafetensorsHeader(id, 'model.safetensors');
+  const header = await fetchSafetensorsHeader(id, revision, 'model.safetensors');
   return Object.fromEntries(Object.keys(header).map((name) => [name, 'model.safetensors']));
 }
 
@@ -502,8 +558,8 @@ interface StackShape {
   nonLanguageParams: number;
 }
 
-async function deriveStackShape(id: string): Promise<StackShape> {
-  const weightMap = await fetchTensorMap(id);
+async function deriveStackShape(id: string, revision: string): Promise<StackShape> {
+  const weightMap = await fetchTensorMap(id, revision);
   const names = Object.keys(weightMap);
 
   const unknown = names.filter((name) => classifyTensor(name) === 'unknown');
@@ -523,7 +579,7 @@ async function deriveStackShape(id: string): Promise<StackShape> {
 
   let nonLanguageParams = 0;
   for (const shard of otherShards) {
-    const header = await fetchSafetensorsHeader(id, shard);
+    const header = await fetchSafetensorsHeader(id, revision, shard);
     for (const [name, tensor] of Object.entries(header)) {
       if (classifyTensor(name) !== 'other') continue;
       if (tensor.dtype && PACKED_DTYPES.has(tensor.dtype.toUpperCase())) {
@@ -541,11 +597,34 @@ async function deriveStackShape(id: string): Promise<StackShape> {
 
 async function buildModel(seed: Seed) {
   const api = await fetchJson<HfApiModel>(
-    `https://huggingface.co/api/models/${seed.id}?expand[]=safetensors&expand[]=downloads&expand[]=likes&expand[]=createdAt`,
+    `https://huggingface.co/api/models/${seed.id}?expand[]=safetensors&expand[]=downloads&expand[]=likes&expand[]=createdAt&expand[]=sha`,
     seed.id
   );
+
+  /**
+   * Every subsequent fetch is pinned to this commit rather than to `main`.
+   *
+   * A model row is assembled from four requests — this one, config.json, the safetensors index,
+   * and the shard headers. Resolving `main` separately each time means a publisher pushing
+   * mid-run can straddle two revisions and produce a row whose expert counts, embedding size
+   * and totals describe different models. Nothing would fail; the numbers would just be wrong
+   * together, which is the failure mode this file exists to prevent.
+   *
+   * One caveat the pin does not cover: the API's `safetensors` block is an asynchronously
+   * computed cache and is not guaranteed to correspond to the `sha` reported beside it.
+   */
+  const revision = api.sha;
+  if (!revision) {
+    throw new DerivationError(
+      `${seed.id}: API returned no commit sha, so the fetches cannot be pinned to one revision`
+    );
+  }
+
   const config = textConfig(
-    await fetchJson<HfConfig>(`https://huggingface.co/${seed.id}/raw/main/config.json`, seed.id)
+    await fetchJson<HfConfig>(
+      `https://huggingface.co/${seed.id}/raw/${revision}/config.json`,
+      seed.id
+    )
   );
 
   const layers = require(num(config, 'num_hidden_layers'), seed.id, 'num_hidden_layers');
@@ -608,15 +687,42 @@ async function buildModel(seed: Seed) {
    * Kept as its own field rather than folded into `activeParams`, because the published figure
    * is what the catalog tests check against vendors and what users recognise on a model card.
    */
-  const stack = await deriveStackShape(seed.id);
+  const stack = await deriveStackShape(seed.id, revision);
   const activeDenseParams = Math.max(
     0,
     denseParams - stack.nonLanguageParams - (stack.tiedEmbeddings ? 0 : embeddingParams)
   );
 
   const layerWindows = deriveLayerWindows(config, layers);
+  const attention = deriveAttention(seed.id, config);
   const quantMethod = (config.quantization_config as Record<string, unknown> | undefined)
     ?.quant_method;
+
+  // A mirror's own traffic is not the model's. Weights still come from the mirror, so only
+  // the popularity figures are re-fetched, and only when a seed names a canonical repo.
+  const popularitySource = seed.popularityId
+    ? await fetchJson<HfApiModel>(
+        `https://huggingface.co/api/models/${seed.popularityId}?expand[]=downloads&expand[]=likes`,
+        `${seed.id} popularity`
+      )
+    : api;
+
+  if (seed.popularityId) {
+    // HF silently redirects renamed repos, so a stale or mistyped canonical id would return a
+    // different model's traffic and look entirely plausible.
+    if (popularitySource.id !== seed.popularityId) {
+      throw new DerivationError(
+        `${seed.id}: popularity id ${seed.popularityId} resolved to ${popularitySource.id}`
+      );
+    }
+    // These were asked for explicitly, so absent is a signal rather than a default. Falling back
+    // to 0 would recreate the exact bug this indirection exists to fix.
+    if (popularitySource.downloads === undefined) {
+      throw new DerivationError(
+        `${seed.id}: ${seed.popularityId} returned no download count to substitute`
+      );
+    }
+  }
 
   return {
     id: seed.id,
@@ -633,14 +739,24 @@ async function buildModel(seed: Seed) {
     hiddenSize,
     vocabSize,
     attention: {
-      core: deriveAttentionCore(seed.id, config),
+      core: attention.core,
+      projectionWidth: attention.projectionWidth,
       ...(layerWindows ? { layerWindows } : {}),
     },
     ...(typeof quantMethod === 'string' ? { nativeQuant: quantMethod } : {}),
     maxContext: require(num(config, 'max_position_embeddings'), seed.id, 'max_position_embeddings'),
-    popularity: { downloads: api.downloads ?? 0, likes: api.likes ?? 0 },
+    popularity: {
+      downloads: popularitySource.downloads ?? 0,
+      likes: popularitySource.likes ?? 0,
+      // Recorded so the figures are attributable: these describe the canonical repo, while
+      // every other field on this row describes the mirror the weights were read from.
+      ...(seed.popularityId ? { measuredOn: seed.popularityId } : {}),
+    },
     ...(api.createdAt ? { releasedAt: api.createdAt } : {}),
-    source: `https://huggingface.co/${seed.id}`,
+    // The exact commit every figure on this row was derived from, so a suspicious number can be
+    // reproduced rather than merely re-fetched against whatever `main` says today.
+    revision,
+    source: `https://huggingface.co/${seed.id}/tree/${revision}`,
     ...(seed.overrides ? { overrideNote: seed.overrides.reason } : {}),
   };
 }

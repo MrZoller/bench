@@ -98,13 +98,18 @@ function toModel(raw: unknown): CatalogModel {
         'Regenerate with `npm run catalog`.'
     );
   }
-  // A catalog generated before activeDenseParams existed would leave it undefined, and every
-  // throughput figure downstream would quietly become NaN rather than fail here.
-  if (!Number.isFinite(model.activeDenseParams) || model.activeDenseParams <= 0) {
-    throw new Error(
-      `Catalog model ${model.id ?? '<unknown>'} has no usable activeDenseParams. ` +
-        'Regenerate with `npm run catalog`.'
-    );
+  // A catalog generated before these fields existed leaves them undefined, and every throughput
+  // figure downstream would quietly become NaN rather than failing here.
+  for (const [field, value] of [
+    ['activeDenseParams', model.activeDenseParams],
+    ['attention.projectionWidth', model.attention?.projectionWidth],
+  ] as const) {
+    if (!Number.isFinite(value) || (value as number) <= 0) {
+      throw new Error(
+        `Catalog model ${model.id ?? '<unknown>'} has no usable ${field}. ` +
+          'Regenerate with `npm run catalog`.'
+      );
+    }
   }
   return model;
 }

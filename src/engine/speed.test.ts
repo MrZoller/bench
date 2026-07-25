@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { estimateDecode, estimatePrefill } from './speed';
+import { achievedBandwidth, estimateDecode, estimatePrefill } from './speed';
 import { effectiveActiveParams } from './weights';
 import { planPlacement } from './placement';
 import {
@@ -118,11 +118,11 @@ describe('calibration against published benchmarks', () => {
 
     // 12 full layers over the whole prompt, 12 sliding layers capped at 128 keys.
     const span = 12 * 16384 + 12 * 128;
-    expect(result.attentionFlops).toBe(4 * 16384 * span * GPT_OSS_20B.hiddenSize);
+    expect(result.attentionFlops).toBe(4 * 16384 * span * GPT_OSS_20B.attention.projectionWidth);
 
     // Treating every layer as full attention — the mistake kv.ts already avoids on the
     // memory side — would overstate the attention term by nearly 2x.
-    const uniform = 4 * 16384 * (24 * 16384) * GPT_OSS_20B.hiddenSize;
+    const uniform = 4 * 16384 * (24 * 16384) * GPT_OSS_20B.attention.projectionWidth;
     expect(uniform / result.attentionFlops).toBeGreaterThan(1.9);
   });
 
@@ -298,5 +298,38 @@ describe('compute precision lookup', () => {
   it('still serves INT8 from the FP8 rate when only that is published', () => {
     const fp8Only: DeviceSpec = { ...RTX_5090, flops: { fp16: 419 * TFLOP, fp8: 838 * TFLOP } };
     expect(prefill('int8', fp8Only) / prefill('bf16', fp8Only)).toBeCloseTo(2, 1);
+  });
+});
+
+/**
+ * Interconnect tiers. Matching only /nvlink/ collapsed Infinity Fabric and Ethernet into the
+ * PCIe default, which at eight devices compounds over three doublings — and the two err in
+ * opposite directions, so a single default cannot serve both.
+ */
+describe('tensor-parallel scaling by interconnect', () => {
+  const withLink = (interconnect: string): DeviceSpec => ({ ...RTX_5090, interconnect });
+  const aggregate = (interconnect: string, count: number) =>
+    achievedBandwidth({ device: withLink(interconnect), count }, VLLM);
+
+  it('treats Infinity Fabric as fabric-class, not PCIe', () => {
+    expect(aggregate('Infinity Fabric', 8)).toBeCloseTo(aggregate('NVLink 4.0', 8), -9);
+    expect(aggregate('Infinity Fabric', 8)).toBeGreaterThan(aggregate('PCIe 5.0 x16', 8) * 1.3);
+  });
+
+  it('puts an Ethernet link below PCIe rather than equal to it', () => {
+    expect(aggregate('ConnectX-7 200GbE', 8)).toBeLessThan(aggregate('PCIe 5.0 x16', 8));
+  });
+
+  it('applies the tier only once there is more than one device', () => {
+    const links = ['NVLink 5.0', 'PCIe 4.0 x16', 'ConnectX-7 200GbE'];
+    // Identical at count 1 — no link is crossed, so its quality cannot matter...
+    for (const link of links) {
+      expect(aggregate(link, 1)).toBeCloseTo(aggregate('NVLink 5.0', 1), -9);
+    }
+    // ...and all three separate at count 2, which is what makes the agreement above meaningful
+    // rather than an artifact of the early return.
+    const [fabric, pcie, network] = links.map((l) => aggregate(l, 2));
+    expect(fabric).toBeGreaterThan(pcie);
+    expect(pcie).toBeGreaterThan(network);
   });
 });

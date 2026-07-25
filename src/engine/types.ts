@@ -36,6 +36,20 @@ export type AttentionCore =
 export interface AttentionSpec {
   core: AttentionCore;
   /**
+   * Width of the query/value projection — `num_attention_heads * head_dim` — which QK^T and AV
+   * scale by.
+   *
+   * Deliberately not `hiddenSize`. A model may project into a wider or narrower attention space
+   * than its residual stream, and most current ones do: GLM-4.5-Air is 3x its hidden size and
+   * DeepSeek 2.9x, while Gemma 3 27B and Mistral Small are *narrower*. Substituting hidden size
+   * understated GLM's attention term by 67% and overstated Gemma 3 27B's by 31% — errors in
+   * opposite directions, so no single correction factor could have absorbed them.
+   *
+   * For MLA this is the mean of the query space (`heads * (qk_nope + qk_rope)`) and the value
+   * space (`heads * v_head_dim`), which differ; the engine charges QK and AV at one rate.
+   */
+  projectionWidth: number;
+  /**
    * Per-layer attention window in tokens; `null` means that layer attends over the full
    * context. Absent entirely means every layer is full attention.
    *
@@ -108,8 +122,19 @@ export interface ModelSpec {
   nativeQuant?: string;
   maxContext: number;
 
-  popularity?: { downloads: number; likes: number };
+  popularity?: {
+    downloads: number;
+    likes: number;
+    /**
+     * Repo the figures were read from, when it differs from `id`. Gated originals are seeded
+     * via open mirrors, but a mirror's traffic is not the model's — Meta's Llama 3.1 70B has
+     * ~255x the downloads of the NousResearch copy the weights come from.
+     */
+    measuredOn?: string;
+  };
   releasedAt?: string;
+  /** Commit every figure on this row was derived from, so a suspicious number is reproducible. */
+  revision?: string;
   /** Provenance for every derived figure — this catalog is generated, never typed from memory. */
   source: string;
 }

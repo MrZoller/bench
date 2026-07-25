@@ -65,13 +65,37 @@ const CLASS_BANDWIDTH_UTILIZATION: Record<DeviceClass, number> = {
   'cpu-ram': 0.62,
 };
 
-/** Per-doubling tensor-parallel efficiency, by interconnect quality. */
-const TP_SCALING = { nvlink: 0.95, pcie: 0.85 } as const;
+/**
+ * Per-doubling tensor-parallel efficiency, by interconnect tier.
+ *
+ * Three tiers rather than "NVLink or everything else". Matching only `/nvlink/` put AMD's
+ * Infinity Fabric and the Spark's Ethernet link in the same bucket despite them sitting on
+ * opposite sides of PCIe — and at eight devices the constant compounds over three doublings,
+ * so the two cases were wrong by ~40% in opposite directions.
+ *
+ *   - `fabric`  — on-package/on-node switched links. NVLink, and AMD's Infinity Fabric, whose
+ *     ~896 GB/s of peer bandwidth per GPU in an 8-OAM node is NVLink-class.
+ *   - `pcie`    — the commodity case: cards in slots, sharing a root complex.
+ *   - `network` — Ethernet or InfiniBand between chassis. A Spark's 200GbE is ~25 GB/s per
+ *     direction, well *below* PCIe 5.0 x16, so the old default flattered it.
+ *
+ * These carry the same identifiability caveat as the bandwidth constants in the header: they
+ * are a defensible ordering, not a measured decomposition. No published multi-device benchmark
+ * currently pins them, and nothing in the app reaches `count > 1` yet.
+ */
+const TP_SCALING = { fabric: 0.95, pcie: 0.85, network: 0.7 } as const;
 
 function tpEfficiency(rig: Rig): number {
   const count = Math.max(1, rig.count);
   if (count <= 1) return 1;
-  const base = /nvlink/i.test(rig.device.interconnect ?? '') ? TP_SCALING.nvlink : TP_SCALING.pcie;
+
+  const link = rig.device.interconnect ?? '';
+  const base = /nvlink|infinity fabric|xgmi/i.test(link)
+    ? TP_SCALING.fabric
+    : /ethernet|gbe|infiniband|connectx/i.test(link)
+      ? TP_SCALING.network
+      : TP_SCALING.pcie;
+
   return base ** Math.log2(count);
 }
 
@@ -208,8 +232,10 @@ export function estimatePrefill(
   // QK^T and AV. Quadratic on full-attention layers, but only linear on sliding-window ones,
   // which attend over their window however long the prompt gets. Overtakes the linear term on
   // long prompts — why time-to-first-token degrades faster than people expect at big contexts.
+  // Scaled by the attention projection width, not the hidden size: a model is free to project
+  // into a wider or narrower query space than its residual stream, and most current ones do.
   const attentionFlops =
-    4 * promptTokens * attentionSpanPerToken(model, promptTokens) * model.hiddenSize;
+    4 * promptTokens * attentionSpanPerToken(model, promptTokens) * model.attention.projectionWidth;
 
   const peak = peakFlops(rig.device, quant, runtime);
   const achieved = peak * runtime.computeEfficiency * Math.max(1, rig.count) * tpEfficiency(rig);

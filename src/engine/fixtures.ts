@@ -29,7 +29,9 @@ export const LLAMA_31_8B: ModelSpec = {
   layers: 32,
   hiddenSize: 4096,
   vocabSize: 128256,
-  attention: { core: { kind: 'gqa', kvHeads: 8, headDim: 128 } },
+  // 32 query heads x 128 = 4096, equal to hidden size. The case where the old shortcut
+  // happened to be right, which is why it kept passing.
+  attention: { core: { kind: 'gqa', kvHeads: 8, headDim: 128 }, projectionWidth: 32 * 128 },
   maxContext: 131072,
   source: 'https://huggingface.co/NousResearch/Meta-Llama-3.1-8B-Instruct/raw/main/config.json',
 };
@@ -47,7 +49,8 @@ export const QWEN3_32B: ModelSpec = {
   layers: 64,
   hiddenSize: 5120,
   vocabSize: 151936,
-  attention: { core: { kind: 'gqa', kvHeads: 8, headDim: 128 } },
+  // 64 query heads x 128 = 8192 against a 5120 hidden size: 1.6x.
+  attention: { core: { kind: 'gqa', kvHeads: 8, headDim: 128 }, projectionWidth: 64 * 128 },
   maxContext: 40960,
   source: 'https://huggingface.co/Qwen/Qwen3-32B/raw/main/config.json',
 };
@@ -77,7 +80,13 @@ export const DEEPSEEK_V3: ModelSpec = {
   layers: 61,
   hiddenSize: 7168,
   vocabSize: 129280,
-  attention: { core: { kind: 'mla', kvLoraRank: 512, qkRopeHeadDim: 64 } },
+  // MLA projects wider than it caches: 128 heads x (128 nope + 64 rope) = 24576 for queries
+  // against 128 x 128 = 16384 for values. The engine charges QK and AV at one rate, so this is
+  // their mean — 2.9x the 7168 hidden size.
+  attention: {
+    core: { kind: 'mla', kvLoraRank: 512, qkRopeHeadDim: 64 },
+    projectionWidth: (128 * (128 + 64) + 128 * 128) / 2,
+  },
   nativeQuant: 'fp8',
   maxContext: 163840,
   source: 'https://huggingface.co/deepseek-ai/DeepSeek-V3/raw/main/config.json',
@@ -112,6 +121,8 @@ export const GEMMA_3_12B: ModelSpec = {
   vocabSize: 262208,
   attention: {
     core: { kind: 'gqa', kvHeads: 8, headDim: 256 },
+    // 16 query heads x 256 = 4096 against a 3840 hidden size: 1.07x, the narrowest gap here.
+    projectionWidth: 16 * 256,
     // sliding_window_pattern 6: every 6th layer attends over the full context.
     layerWindows: Array.from({ length: 48 }, (_, i) => ((i + 1) % 6 === 0 ? null : 1024)),
   },
@@ -139,6 +150,8 @@ export const GPT_OSS_120B: ModelSpec = {
   vocabSize: 201088,
   attention: {
     core: { kind: 'gqa', kvHeads: 8, headDim: 64 },
+    // 64 query heads x 64 = 4096 against a 2880 hidden size: 1.42x.
+    projectionWidth: 64 * 64,
     layerWindows: alternatingWindows(36, 128),
   },
   nativeQuant: 'mxfp4',
@@ -166,6 +179,7 @@ export const GPT_OSS_20B: ModelSpec = {
   vocabSize: 201088,
   attention: {
     core: { kind: 'gqa', kvHeads: 8, headDim: 64 },
+    projectionWidth: 64 * 64,
     layerWindows: alternatingWindows(24, 128),
   },
   nativeQuant: 'mxfp4',
