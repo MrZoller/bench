@@ -104,15 +104,27 @@ function tpEfficiency(rig: Rig): number {
   return base ** Math.log2(count);
 }
 
-/** Aggregate memory bandwidth the rig actually delivers. */
+/**
+ * Memory bandwidth the rig actually delivers to one token's worth of work.
+ *
+ * Tensor parallelism has every card working on every layer, so their channels add — minus the
+ * all-reduce cost `tpEfficiency` models. A layer split does not: one token passes through
+ * device 1's layers, then device 2's, and each device is idle while another works. The
+ * bandwidth a single stream sees is one card's, however many cards there are.
+ *
+ * Modelling it as aggregate credited an eight-card llama.cpp rig with about 4.9x one card's
+ * bandwidth, which is the opposite of what that rig buys you: capacity, not single-stream speed.
+ * Nothing here models a pipeline scheduler that would overlap requests, so nothing here should
+ * grant the speedup one would produce.
+ */
 export function achievedBandwidth(rig: Rig, runtime: RuntimeSpec): number {
-  return (
+  const perDevice =
     effectiveBandwidth(rig.device) *
     runtime.bandwidthEfficiency *
-    CLASS_BANDWIDTH_UTILIZATION[rig.device.class] *
-    Math.max(1, rig.count) *
-    tpEfficiency(rig)
-  );
+    CLASS_BANDWIDTH_UTILIZATION[rig.device.class];
+
+  if (runtime.parallelism === 'layer') return perDevice;
+  return perDevice * Math.max(1, rig.count) * tpEfficiency(rig);
 }
 
 export interface DecodeEstimate {
@@ -322,11 +334,14 @@ export function estimatePrefill(
    * So the expert FLOPs are timed at the quant's compute dtype and everything else — dense
    * linear layers, the output projection, and all of attention — at fp16.
    */
-  const throughput = (dtype: QuantSpec['computeDtype']) =>
-    peakFlops(rig.device, { ...quant, computeDtype: dtype }, runtime) *
-    runtime.computeEfficiency *
-    Math.max(1, rig.count) *
-    tpEfficiency(rig);
+  // Same rule as bandwidth: a layer split runs the devices in sequence for one request, so its
+  // FLOPS do not add either. Whatever card is holding the current layer is the only one working.
+  const throughput = (dtype: QuantSpec['computeDtype']) => {
+    const perDevice =
+      peakFlops(rig.device, { ...quant, computeDtype: dtype }, runtime) * runtime.computeEfficiency;
+    if (runtime.parallelism === 'layer') return perDevice;
+    return perDevice * Math.max(1, rig.count) * tpEfficiency(rig);
+  };
 
   const expertRate = throughput(quant.computeDtype);
   // `denseBpw` present means the scheme deliberately spares the non-expert tensors; absent

@@ -77,6 +77,12 @@ reading the test that guards them.
   all — vLLM keeps the whole latent on every rank. `kvShards()` is the one answer and both modules
   call it; when only `placement` knew, the memory panel said each card held the entire DeepSeek
   cache while the speed panel priced one eighth of it.
+- **A layer split is not a speedup, and a layer count is not a KV divisor.** llama.cpp's default
+  multi-device layout runs whole layers in sequence for one token, so a single stream sees one
+  card's bandwidth and one card's FLOPS however many cards there are — that rig buys capacity,
+  not speed, and modelling it as aggregate credited eight cards with ~4.9x. And on a hybrid model
+  the layers are not interchangeable: Gemma's full-attention layers cache ~128x what its sliding
+  ones do at 128K, so the busiest card is found by _sizing_ an assignment, not by dividing.
 - **Offloaded weights read at the slower of host RAM and the bus to the host** —
   `min(hostBandwidth, device.hostLinkBytesPerSec)`. `interconnect` is the _device-to-device_ link
   `tpEfficiency` models and is not this: an H100 SXM talks to its neighbours over NVLink and to
