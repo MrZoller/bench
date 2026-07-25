@@ -1,5 +1,6 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { DEVICES, MODELS, RUNTIMES, evaluateConfig, useConfig } from '@/store/config';
+import { useUrlSync } from '@/store/useUrlSync';
 import { QUANTS } from '@/data/quants';
 import { CATALOG_GENERATED_AT, getDevice, getModel } from '@/data/catalog';
 import { BudgetBar } from './BudgetBar';
@@ -37,6 +38,7 @@ const KV_PRECISIONS: readonly { value: KvPrecision; label: string }[] = [
 
 export function Bench() {
   const config = useConfig();
+  useUrlSync();
   const set = useConfig((s) => s.set);
 
   const evaluation = useMemo(() => evaluateConfig(config), [config]);
@@ -114,6 +116,7 @@ export function Bench() {
             What runs on your hardware, and how comfortably.
           </p>
         </div>
+        <ShareLink />
         <p className="max-w-md text-xs leading-relaxed text-[var(--color-text-faint)]">
           Estimates from a roofline model calibrated against published measurements. Treat them as a
           band, not a promise. Model catalog generated{' '}
@@ -245,6 +248,36 @@ export function Bench() {
         </aside>
       )}
     </div>
+  );
+}
+
+/**
+ * Copies the current address, which already encodes the scenario.
+ *
+ * Deliberately reads `location.href` at click time rather than rebuilding the URL: the address
+ * bar is kept in sync by `useUrlSync`, and rebuilding here would be a second encoder to drift
+ * from the first.
+ */
+function ShareLink() {
+  const [copied, setCopied] = useState(false);
+
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        void navigator.clipboard?.writeText(window.location.href).then(
+          () => {
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 2000);
+          },
+          () => setCopied(false)
+        );
+      }}
+      className="rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-accent)] hover:border-[var(--color-accent-dim)]"
+    >
+      {/* aria-live so the confirmation is announced, not just seen. */}
+      <span aria-live="polite">{copied ? 'Link copied' : 'Copy link to this scenario'}</span>
+    </button>
   );
 }
 

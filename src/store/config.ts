@@ -1,48 +1,17 @@
 import { create } from 'zustand';
-import type { KvPrecision } from '@/engine/types';
 import { evaluate, type Evaluation } from '@/engine';
 import { getDevice, getModel, MODELS, DEVICES } from '@/data/catalog';
 import { getQuant } from '@/data/quants';
 import { getRuntime, RUNTIMES } from '@/data/runtimes';
+import { searchToConfig } from './url';
+import { DEFAULT_CONFIG, type Config } from './scenario';
 
-/**
- * The whole scenario, in one object.
- *
- * Deliberately flat and made of ids rather than objects: this is what serialises into the
- * querystring, so a link reproduces an exact scenario. Anything that cannot be reconstructed
- * from these seven fields does not belong in the store.
- */
-export interface Config {
-  modelId: string;
-  quantId: string;
-  runtimeId: string;
-  deviceId: string;
-  deviceCount: number;
-  contextTokens: number;
-  concurrency: number;
-  promptTokens: number;
-  kvPrecision: KvPrecision;
-}
-
-/**
- * Openers chosen to land on the comparison the tool exists to make: a 120B MoE that fits
- * comfortably in a Spark's unified memory and would need offload on a consumer card. Starting
- * on a model that trivially fits would hide the point.
- */
-export const DEFAULT_CONFIG: Config = {
-  modelId: 'openai/gpt-oss-120b',
-  quantId: 'mxfp4',
-  runtimeId: 'llama.cpp',
-  deviceId: 'dgx-spark',
-  deviceCount: 1,
-  contextTokens: 32768,
-  concurrency: 1,
-  promptTokens: 8192,
-  kvPrecision: 'fp16',
-};
+export { DEFAULT_CONFIG, type Config };
 
 interface ConfigStore extends Config {
   set: <K extends keyof Config>(key: K, value: Config[K]) => void;
+  /** Adopt a whole scenario at once — used when the user navigates back or forward. */
+  replace: (config: Partial<Config>) => void;
   reset: () => void;
 }
 
@@ -118,10 +87,23 @@ function clamp(value: number, min: number, max: number, fallback: number): numbe
 }
 
 export const useConfig = create<ConfigStore>((set) => ({
-  ...DEFAULT_CONFIG,
+  // Coerced on the way in: the initial state can come from a hand-edited link.
+  ...coerce(readInitialConfig()),
   set: (key, value) => set((state) => coerce({ ...state, [key]: value })),
+  replace: (config) => set(coerce({ ...DEFAULT_CONFIG, ...config })),
   reset: () => set(DEFAULT_CONFIG),
 }));
+
+/**
+ * The scenario the page was opened with.
+ *
+ * Guarded for a non-browser environment because the store is imported by tests and, later, by
+ * any prerender step — neither has a `location`.
+ */
+function readInitialConfig(): Config {
+  if (typeof window === 'undefined') return DEFAULT_CONFIG;
+  return searchToConfig(window.location.search);
+}
 
 /**
  * Resolve the config into engine inputs and evaluate.
