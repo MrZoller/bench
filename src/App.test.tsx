@@ -1062,6 +1062,79 @@ describe('the Matrix acknowledges the cell you clicked', () => {
     expect(marked()).toHaveLength(1);
     expect(marked()[0].getAttribute('aria-label')).not.toBe(before);
   });
+
+  /**
+   * Every cell is scored with `deviceCount: 1`. On a linked rig the mark therefore pointed at a
+   * square whose capacity and speed describe a different machine from the one the Bench is
+   * showing — and clicking it, the one square that ought to be a no-op, silently reset the
+   * configuration to a single device.
+   */
+  it('marks nothing when the Bench is on a rig this grid does not score', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const matrix = () => screen.getByRole('region', { name: /every model on every machine/i });
+    const marked = () =>
+      within(matrix())
+        .getAllByRole('button')
+        .filter((b) => b.getAttribute('aria-current') === 'true');
+
+    // A device with an interconnect, so the count is offered rather than clamped back to 1.
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    expect(marked()).toHaveLength(1);
+
+    act(() => useConfig.getState().set('deviceCount', 4));
+    expect(marked()).toHaveLength(0);
+
+    // And the grid says why, rather than leaving the reader to notice the mark has gone.
+    expect(within(matrix()).getByRole('heading', { level: 2 })).toHaveTextContent(
+      /one device per cell/i
+    );
+
+    // Back to a rig the grid does score, and the mark returns.
+    act(() => useConfig.getState().set('deviceCount', 1));
+    expect(marked()).toHaveLength(1);
+  });
+});
+
+/**
+ * `kvPrecision` is an internal width, not a name anyone types. vLLM has no integer-Q8 cache — the
+ * catalog maps that value to FP8 for exactly that reason — so upper-casing it in the heading
+ * described a setting that does not exist, in the panel most likely to be screenshotted.
+ */
+describe('the Matrix names the cache the runtime actually has', () => {
+  const heading = () =>
+    within(screen.getByRole('region', { name: /every model on every machine/i })).getByRole(
+      'heading',
+      { level: 2 }
+    );
+
+  it('calls the one-byte cache FP8 under vLLM, as the Bench control does', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'vllm');
+    act(() => useConfig.getState().set('kvPrecision', 'q8'));
+
+    expect(heading()).toHaveTextContent(/FP8 KV/);
+    expect(heading()).not.toHaveTextContent(/Q8 KV/);
+  });
+
+  // llama.cpp keeps the table's own name, which is the fallback path — worth its own case so the
+  // fix cannot be mistaken for "always print FP8". (Its real flag is `q8_0`; naming the width
+  // rather than the flag is a milder version of the same gap, and is filed separately rather than
+  // grown into this change.)
+  it('leaves llama.cpp’s Q8 alone, so the fallback path is exercised too', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'llama.cpp');
+    act(() => useConfig.getState().set('kvPrecision', 'q8'));
+
+    expect(heading()).toHaveTextContent(/Q8 KV/);
+  });
 });
 
 /**
