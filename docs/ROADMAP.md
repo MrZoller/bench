@@ -26,16 +26,16 @@ Three things are the moat, in order:
 
 ## Status
 
-| Phase                              | State    | Notes                                                                                              |
-| ---------------------------------- | -------- | -------------------------------------------------------------------------------------------------- |
-| 1. Scaffold                        | **done** | React 19 + TS strict + Vite + Tailwind v4 + Zustand. CI: lint → format:check → test → build        |
-| 2. Engine                          | **done** | `src/engine/`, pure, no React. Pinned to published measurements at both ends of the hardware range |
-| 3. Catalogs                        | **done** | [PR #1](https://github.com/MrZoller/bench/pull/1) — 17 models derived from HF, 25 devices curated  |
-| 4. Design tokens + the Bench       | **next** | Hero surface. Load the `dataviz` skill before any chart/meter/palette code                         |
-| 5. Verdict + explain layers        | pending  | Workload archetypes; the total-vs-active-params teaching moment                                    |
-| 6. Envelope + Matrix surfaces      | pending  | Context × concurrency feasibility field; model × device heatmap                                    |
-| 7. URL state, responsive, a11y     | pending  | Full config in the querystring so a link reproduces a scenario                                     |
-| 8. Weekly catalog refresh + deploy | pending  | Scheduled `build-catalog` → PR on diff; static deploy to a zoller.ai subdomain                     |
+| Phase                              | State                                                | Notes                                                                                                   |
+| ---------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| 1. Scaffold                        | **done**                                             | React 19 + TS strict + Vite + Tailwind v4 + Zustand. CI: lint → format:check → test → build             |
+| 2. Engine                          | **done**                                             | `src/engine/`, pure, no React. Pinned to published measurements at both ends of the hardware range      |
+| 3. Catalogs                        | on [PR #1](https://github.com/MrZoller/bench/pull/1) | Complete, not yet on `main` — 17 models derived from HF, 25 devices curated. `npm run catalog` needs it |
+| 4. Design tokens + the Bench       | **next**                                             | Hero surface. Load the `dataviz` skill before any chart/meter/palette code                              |
+| 5. Verdict + explain layers        | pending                                              | Workload archetypes; the total-vs-active-params teaching moment                                         |
+| 6. Envelope + Matrix surfaces      | pending                                              | Context × concurrency feasibility field; model × device heatmap                                         |
+| 7. URL state, responsive, a11y     | pending                                              | Full config in the querystring so a link reproduces a scenario                                          |
+| 8. Weekly catalog refresh + deploy | pending                                              | Scheduled `build-catalog` → PR on diff; static deploy to a zoller.ai subdomain                          |
 
 ## Decisions already made
 
@@ -75,6 +75,11 @@ reading the test that guards them.
 - The two calibration anchors are **DGX Spark on gpt-oss-20b** (2,053 tok/s prefill, 49.7 tok/s
   decode) and **EPYC 9654 on DeepSeek-671B Q8** (~6 tok/s). They pin opposite ends of the roofline;
   a model calibrated only for discrete GPUs fails one of them.
+- **Do not retune the constants to re-centre an anchor after fixing a bug.** Correcting the
+  per-token basis moved Spark decode from ~10% under to ~19% over and Spark prefill from ~6% under
+  to ~10% over, while EPYC stayed within 1% — proof the old fit was partly absorbing those errors.
+  The knobs were left alone deliberately. Re-centring right after removing what a fudge factor was
+  masking is how the next error gets hidden. All three sit inside the ±30% band the tests assert.
 
 **Catalog**
 
@@ -85,8 +90,21 @@ reading the test that guards them.
 - **Multi-Token Prediction modules inflate reported totals** (DeepSeek V3/R1 by ~13B, GLM-4.5-Air
   by ~4B) and inference never loads them. Detected via `num_nextn_predict_layers` and _refused_,
   not estimated; the seed list carries the published figure with a written reason.
-- **Active params exclude the input embedding** — decode gathers one row rather than reading the
-  table. This is what reconciles every derived figure with its vendor's.
+- **`activeParams` excludes the input embedding unconditionally, and that is the _published_
+  convention, not the physical one.** It is what reconciles every derived figure with its
+  vendor's, and it is the wrong basis for decode. The engine reads `activeDenseParams`:
+  - the embedding is subtracted only when **untied**. A tied table _is_ the output projection —
+    a full vocab matmul every step — so subtracting it understates Gemma 3 12B by 5%.
+  - **tied-ness comes from the absence of an `lm_head.weight` tensor**, never from
+    `config.tie_word_embeddings`. That key is undefined on both Gemma 3 repos despite them being
+    tied; trusting it drops a 1.0B table decode does read.
+  - **non-text towers** (Gemma 3's vision encoder, ~0.42B) stay in `totalParams` and are excluded
+    per token. The tensor classifier tests non-language prefixes _first_, against the name with a
+    leading `model.` stripped — newer transformers exports nest the tower as
+    `model.vision_tower.*`, which the `model.` language prefix would otherwise swallow silently.
+- **Prefill additionally excludes the output projection.** Logits are computed for the positions
+  that need them — one — not every prompt token. Charging it per token overstated gpt-oss-20b
+  prefill 16%.
 - **MoE layer selection has two conventions** and transformers implements each with a specific
   phase: DeepSeek `i >= first_k_dense_replace && i % moe_layer_freq == 0`, Qwen
   `(i + 1) % decoder_sparse_step == 0`. Conflating them overcounts by a whole layer whenever the
@@ -96,9 +114,10 @@ reading the test that guards them.
 
 ## Open questions
 
-- **Codex connector coverage is unconfirmed** for this repo. PR #1 received no bot review. The
-  `gh` token cannot list app installations (403 is expected and proves nothing), so this needs
-  checking at <https://github.com/settings/installations>.
+- ~~Codex connector coverage is unconfirmed.~~ **Confirmed working.** Both PRs were reviewed by
+  `chatgpt-codex-connector`; PR #1 drew four P2 findings, all valid, all fixed in `6ffa766`. The
+  reviews arrived roughly 40 minutes after the pushes, which is long enough to look like absence —
+  don't conclude the connector is missing from a quiet first half-hour.
 - **`main` is unprotected.** Rulesets need GitHub Pro on a private repo, so the "PRs only, all
   threads resolved" rule is convention rather than enforcement. Re-run the ruleset POST if the
   repo goes public.
