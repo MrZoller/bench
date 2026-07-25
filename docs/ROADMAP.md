@@ -42,12 +42,12 @@ deployment, and the follow-up list in [issues #12–#20](https://github.com/MrZo
 | 7. URL state, responsive, a11y     | **mostly** (#6)   | Querystring round-trips a scenario. No browser-level test pass — #19; URL defects in #15, #16      |
 | 8. Weekly catalog refresh + deploy | **next**          | Scheduled `build-catalog` → PR on diff; static deploy to a zoller.ai subdomain                     |
 
-**Correctness debt is tracked as issues, not here.** Nine are open. #9 and #10, which graded a
+**Correctness debt is tracked as issues, not here.** Ten are open. #9 and #10, which graded a
 configuration as working when it is not, are fixed — together with #11, which printed a figure
 measured at a different scenario from the one its sentence described. Filed as three bugs, one
 class; written up under **Verdicts** below. What remains is labelling (#13, #20), UI state (#12,
-#15, #16), test and performance debt (#17, #19), the MLX question (#18), and one engine bug in the
-layer-split spill fraction (#14).
+#15, #16), test and performance debt (#17, #19), the MLX question (#18), and two engine bugs: the
+layer-split spill fraction (#14), and prefill having no notion of a cached prefix (#23).
 
 ## Decisions already made
 
@@ -204,6 +204,16 @@ reading the test that guards them.
     grade taken at twice the session it named, and the 64K it claimed would have been `tight`.
     Caught in review, not by the suite. If a sentence names a scenario, that name has to come from
     the same expression the estimate was called with.
+
+    What the session buys is on the decode axis, and only there. `estimatePrefill` derives its
+    linear and attention work from `promptTokens` alone, so the context reaches it through the
+    placement or not at all: on the 4090 above, turn and session TTFT differ by 1.5% — the
+    streaming term — and on a resident rig they are identical to the digit. The agent latency bars
+    are therefore a turn's prompt pass priced on the session's placement, which is right for an
+    agent whose prefix is cached and optimistic for one that resends its history. Fixing that needs
+    an estimator that can attend new tokens against a cached prefix
+    ([#23](https://github.com/MrZoller/bench/issues/23)) rather than anything in this file. Raised
+    by Codex as P1 on PR #22; the mechanism is exactly as reported.
 
   - **The RAG sentence printed a machine-wide rate beside one document's time.** See the
     `prefillTokensPerSec` note under **Engine**. Two figures in one sentence have to divide into

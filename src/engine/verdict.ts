@@ -446,11 +446,21 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
       // Omitting the latency term is what let a machine fail chat while "passing" this, which is
       // backwards — an agent does everything chat does, over a far larger prompt.
       //
-      // Rate and latency both come from `agentMeasured`, which is the session each tier endorses
-      // rather than the turn the archetype names. A tier that recommends a 64K session has to be
-      // graded with 64K in the cache; measured at the 16K turn, the two things that degrade with
-      // a filling session — a cache that spills and a longer read of it — were invisible to the
-      // predicate that promises the session will work.
+      // Rate and latency both come from `agentMeasured`: one evaluation, planned with the session
+      // each tier endorses in the cache rather than only the turn the archetype names. What that
+      // buys is almost all on the decode side, and that is where the defect was — 8B BF16 on one
+      // 4090 goes 49.7 -> 8.6 tok/s between the two, because a 64K cache spills the weights.
+      //
+      // It buys much less on the prefill side, and an earlier version of this comment claimed
+      // otherwise. `estimatePrefill` takes its linear and attention work from `promptTokens`
+      // alone, so the context reaches it only through the placement: on that same 4090 the turn
+      // and the session differ by 1.5%, the streaming term, and on a resident rig they are
+      // identical. So this term is the turn's prompt pass priced on the session's placement —
+      // which is what the sentences below say, and is the right figure for an agent whose prefix
+      // is cached. Charging a re-read of the session instead needs an estimator that can attend
+      // new tokens against a cached prefix, which is #23. Passing the whole session as the prompt
+      // is the option available today and is wrong in the other direction: it models an agent
+      // with no prefix cache at all.
       pass:
         fits('agent') &&
         agentRate >= 25 &&
