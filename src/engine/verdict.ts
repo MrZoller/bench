@@ -108,7 +108,16 @@ function workload(id: string): Workload {
 }
 
 export interface VerdictInputs {
-  placement: Placement;
+  /**
+   * The selected configuration's placement, used for one thing only: deciding whether anything
+   * can load at all.
+   *
+   * Deliberately *not* the placement any archetype is graded against — see `evaluateAt`, which
+   * returns a placement planned at the archetype's own context. This one is destructured under a
+   * different name inside so that a condition reaching for `placement` does not silently get the
+   * slider's.
+   */
+  selectedPlacement: Placement;
   usage: UsageSpec;
   /** Largest context the rig can hold with every weight resident. */
   maxContextTokens: number;
@@ -125,16 +134,23 @@ export interface VerdictInputs {
    * deliberately not an input, because batch and serving quietly went on using it after every
    * other archetype had moved across, and an unused field cannot be reached for by mistake.
    *
-   * Both halves, not just prefill. Re-running prefill alone left decode describing the *selected*
-   * cache while the latency described a 16K agent turn — so an agent could be graded on 26.8
-   * tok/s measured at a 512-token context when its own context decodes at 12.4. A callback
-   * because each archetype needs its own; the engine is pure arithmetic, so seven extra
-   * evaluations cost nothing worth optimising.
+   * All three parts, not just prefill. Each was added after the previous omission produced a
+   * verdict that disagreed with its own evidence:
+   *
+   *   - prefill alone left decode describing the *selected* cache while the latency described a
+   *     16K agent turn, so an agent could be graded on 26.8 tok/s measured at a 512-token
+   *     context when its own context decodes at 12.4;
+   *   - decode and prefill left `placement` describing the slider's context, so serving was
+   *     forced from `good` to `tight` by spill belonging to a scenario it is not graded at.
+   *
+   * A callback because each archetype needs its own; the engine is pure arithmetic, so seven
+   * extra evaluations cost nothing worth optimising.
    */
   evaluateAt: (
     promptTokens: number,
     contextTokens: number
   ) => {
+    placement: Placement;
     decode: DecodeEstimate;
     prefill: PrefillEstimate;
   };
@@ -147,11 +163,14 @@ export interface VerdictInputs {
  * completion passes, everything below it does too.
  */
 export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
-  const { placement, usage, maxContextTokens, runnableContextTokens, evaluateAt } = inputs;
+  const { selectedPlacement, usage, maxContextTokens, runnableContextTokens, evaluateAt } = inputs;
 
-  // Nothing else is meaningful if it cannot load. Said once, rather than seven times.
-  if (placement.unsupported || placement.impossible) {
-    const reason = placement.unsupported ?? 'The model does not fit and cannot spill to host RAM.';
+  // Nothing else is meaningful if it cannot load. Said once, rather than seven times. Every
+  // archetype evaluates at a context no smaller than the selected one, so nothing that fails
+  // here could succeed at its own scenario.
+  if (selectedPlacement.unsupported || selectedPlacement.impossible) {
+    const reason =
+      selectedPlacement.unsupported ?? 'The model does not fit and cannot spill to host RAM.';
     return WORKLOADS.map((w) => ({ workload: w, fitness: 'fail' as const, reason }));
   }
 
@@ -183,6 +202,8 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
 
   const rateOf = (id: string) => at(id).decode.perUserTokensPerSec;
   const ttftOf = (id: string) => at(id).prefill.ttftSeconds;
+  /** Headroom as planned for *this* archetype's context, never the slider's. */
+  const headroomOf = (id: string) => at(id).placement.headroomBytes;
 
   const chatTtft = ttftOf('chat');
   const completionTtft = ttftOf('completion');
@@ -279,7 +300,7 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
         fits('serving') &&
         usage.concurrency >= 4 &&
         rateOf('serving') >= 10 &&
-        placement.headroomBytes > 0,
+        headroomOf('serving') > 0,
       tight: fits('serving') && usage.concurrency >= 2 && rateOf('serving') >= 5,
       why: () =>
         !fits('serving')

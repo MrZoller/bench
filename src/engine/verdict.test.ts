@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { judgeWorkloads, WORKLOADS, type VerdictInputs } from './verdict';
 import { evaluate } from './index';
+import type { Placement } from './placement';
 import {
   DGX_SPARK,
   EPYC_9654,
@@ -13,6 +14,22 @@ import {
   MAC_STUDIO_M3_ULTRA_256,
 } from './fixtures';
 import { getQuant } from '@/data/quants';
+
+/** Resident, with room to spare — these tests are about rate and latency, not capacity. */
+const RESIDENT: Placement = {
+  fits: true,
+  weightBytesPerDevice: 1,
+  kvBytesPerDevice: 1,
+  activationBytesPerDevice: 1,
+  usedBytesPerDevice: 3,
+  allocatableBytesPerDevice: 10,
+  totalWeightBytes: 1,
+  totalKvBytes: 1,
+  headroomBytes: 7,
+  utilization: 0.3,
+  offloadFraction: 0,
+  impossible: false,
+};
 
 /**
  * The verdict layer turns a number into a decision, so what these tests guard is the *shape* of
@@ -39,7 +56,7 @@ function judge(model: Parameters<typeof evaluate>[0]['model'], quantId: string, 
   });
 
   const inputs: VerdictInputs = {
-    placement: evaluation.placement,
+    selectedPlacement: evaluation.placement,
     usage,
     maxContextTokens: evaluation.maxContextTokens,
     runnableContextTokens: evaluation.runnableContextTokens,
@@ -52,7 +69,7 @@ function judge(model: Parameters<typeof evaluate>[0]['model'], quantId: string, 
         rig: { device: rig.device, count: rig.count ?? 1 },
         runtime: rig.runtime ?? LLAMA_CPP,
       });
-      return { decode: e.decode, prefill: e.prefill };
+      return { placement: e.placement, decode: e.decode, prefill: e.prefill };
     },
   };
   return new Map(judgeWorkloads(inputs).map((v) => [v.workload.id, v]));
@@ -211,7 +228,7 @@ describe('context limits and workload fit', () => {
 
     const verdicts = new Map(
       judgeWorkloads({
-        placement: base.placement,
+        selectedPlacement: base.placement,
         usage: { contextTokens: 4096, concurrency: 1, promptTokens: 2048, kvPrecision: 'fp16' },
         maxContextTokens: 4096,
         runnableContextTokens: 4096, // Far short of the 32K a RAG query sends.
@@ -223,7 +240,7 @@ describe('context limits and workload fit', () => {
             rig: { device: RTX_5090, count: 1 },
             runtime: LLAMA_CPP,
           });
-          return { decode: e.decode, prefill: e.prefill };
+          return { placement: e.placement, decode: e.decode, prefill: e.prefill };
         },
       }).map((v) => [v.workload.id, v])
     );
@@ -260,6 +277,7 @@ describe('context limits and workload fit', () => {
  */
 describe('a verdict never contradicts the numbers behind it', () => {
   const stub = (perUserTokensPerSec: number, ttftSeconds: number) => ({
+    placement: RESIDENT,
     decode: {
       perUserTokensPerSec,
       aggregateTokensPerSec: perUserTokensPerSec,
@@ -281,7 +299,7 @@ describe('a verdict never contradicts the numbers behind it', () => {
   const judged = (runnableContextTokens: number, perUser = 60, ttft = 0.2) =>
     new Map(
       judgeWorkloads({
-        placement: evaluate({
+        selectedPlacement: evaluate({
           model: LLAMA_31_8B,
           quant: getQuant('q4_k_m'),
           usage: { contextTokens: 8192, concurrency: 1, promptTokens: 2048, kvPrecision: 'fp16' },
@@ -327,6 +345,7 @@ describe('a verdict never contradicts the numbers behind it', () => {
  */
 describe('no archetype escapes its own scenario', () => {
   const stub = (perUser: number) => ({
+    placement: RESIDENT,
     decode: {
       perUserTokensPerSec: perUser,
       aggregateTokensPerSec: perUser,
@@ -348,7 +367,7 @@ describe('no archetype escapes its own scenario', () => {
   const judged = (runnableContextTokens: number, concurrency = 8) =>
     new Map(
       judgeWorkloads({
-        placement: evaluate({
+        selectedPlacement: evaluate({
           model: LLAMA_31_8B,
           quant: getQuant('q4_k_m'),
           usage: { contextTokens: 4096, concurrency, promptTokens: 512, kvPrecision: 'fp16' },
@@ -371,6 +390,30 @@ describe('no archetype escapes its own scenario', () => {
     for (const workload of WORKLOADS) {
       expect(verdicts.get(workload.id)!.fitness).toBe('fail');
     }
+  });
+
+  it('grades an archetype on its own placement, not the placement of the slider', () => {
+    // The selected scenario is spilled to host RAM — no headroom left. Serving's own 2K turns
+    // are resident. Serving is graded at *its* scenario, so the slider's spill must not reach it.
+    const spilled: Placement = {
+      ...RESIDENT,
+      fits: false,
+      headroomBytes: -1,
+      utilization: 1.4,
+      offloadFraction: 0.3,
+    };
+
+    const verdicts = new Map(
+      judgeWorkloads({
+        selectedPlacement: spilled,
+        usage: { contextTokens: 512, concurrency: 8, promptTokens: 512, kvPrecision: 'fp16' },
+        maxContextTokens: 400_000,
+        runnableContextTokens: 400_000,
+        evaluateAt: () => stub(200),
+      }).map((v) => [v.workload.id, v])
+    );
+
+    expect(verdicts.get('serving')!.fitness).toBe('good');
   });
 
   it('passes them all again once the room is there', () => {
