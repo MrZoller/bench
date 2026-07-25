@@ -10,7 +10,9 @@ import {
   LLAMA_31_8B,
   LLAMA_CPP,
   MLX,
+  RTX_4090,
   RTX_5090,
+  VLLM,
   MAC_STUDIO_M3_ULTRA_256,
 } from './fixtures';
 import { getQuant } from '@/data/quants';
@@ -815,6 +817,11 @@ describe('a tight verdict always names the bar it missed', () => {
     // bug for any rig in that band.
     ['long-context', 200_000, 60, 300, /300s to read 128K is a long wait/],
     ['long-context', 200_000, 3.2, 110, /3\.2 tok\/s/],
+    // Serving joined this table when it gained a latency bar. Its four `good` bars were three
+    // hand-written branches that could not have absorbed a fourth; these two are the bands that
+    // leave it tight on the rate alone and on the queue alone.
+    ['serving', 400_000, 7, 0.2, /10 tok\/s/],
+    ['serving', 400_000, 60, 15, /to first token/],
   ] as const)('explains %s at rate %s and ttft %s', (id, runnable, rate, ttft, expected) => {
     const verdict = graded(runnable, rate, ttft).get(id)!;
 
@@ -871,5 +878,190 @@ describe('a tight verdict always names the bar it missed', () => {
     expect(chat.reason).toMatch(/15 tok\/s/);
     expect(chat.reason).toMatch(/to first token/);
     expect(chat.reason).toMatch(/ and /);
+  });
+});
+
+/**
+ * One defect, found three times: a tier graded on a measurement other than the one it recommends.
+ *
+ * The long-context tight tier was the first instance and the only one fixed at the time — it was
+ * admitting a 64K machine and timing it on a 128K prompt. The same shape was live in three more
+ * places, which is the ordinary outcome here: a review names a subset of a class.
+ *
+ *   - serving graded capacity and decode and never read its own prefill, so a deployment where
+ *     every user waits minutes for a first token was reported healthy;
+ *   - both agent tiers read a rate measured at the 16K turn while recommending the machine for a
+ *     32K or 64K session;
+ *   - the RAG sentence printed a machine-wide prompt rate beside the time for one document.
+ *
+ * These assert the class rather than the three instances, at both ends: a stub that varies with the
+ * scenario proves the *right* scenario is the one being read, and the real configurations from the
+ * issues prove the arithmetic is worth reading.
+ */
+describe('a tier is graded on the measurement it recommends', () => {
+  const stub = (perUser: number, ttft: number, prefillTokensPerSec = 5000) => ({
+    placement: RESIDENT,
+    decode: {
+      perUserTokensPerSec: perUser,
+      aggregateTokensPerSec: perUser,
+      weightReadBytes: 1,
+      kvReadBytes: 1,
+      weightSeconds: 1,
+      kvSeconds: 0.1,
+      kvBound: false,
+    },
+    prefill: {
+      ttftSeconds: ttft,
+      prefillTokensPerSec,
+      linearFlops: 1,
+      attentionFlops: 1,
+      linearSeconds: 0.1,
+      attentionSeconds: 0.1,
+      attentionBound: false,
+    },
+  });
+
+  /** Judges with an `evaluateAt` free to answer differently per scenario, and records what was asked. */
+  const judgedAt = (
+    runnableContextTokens: number,
+    concurrency: number,
+    speed: (promptTokens: number, contextTokens: number) => ReturnType<typeof stub>,
+    contextTokens = 512
+  ) => {
+    const seen: Array<[number, number]> = [];
+    const verdicts = new Map(
+      judgeWorkloads({
+        selectedPlacement: RESIDENT,
+        usage: { contextTokens, concurrency, promptTokens: 512, kvPrecision: 'fp16' },
+        maxContextTokens: runnableContextTokens,
+        runnableContextTokens,
+        evaluateAt: (promptTokens, contextTokens) => {
+          seen.push([promptTokens, contextTokens]);
+          return speed(promptTokens, contextTokens);
+        },
+      }).map((v) => [v.workload.id, v])
+    );
+    return { verdicts, seen };
+  };
+
+  it('grades the agent at the session context its tier claims, not at one turn', () => {
+    // Fast with a turn in the cache, slow once a session fills it — which is the real shape of a
+    // rig whose weights spill as the cache grows, and the shape a 16K measurement cannot see.
+    const { verdicts, seen } = judgedAt(200_000, 1, (_prompt, context) =>
+      stub(context >= 65536 ? 8.6 : 49.7, 1)
+    );
+    const agent = verdicts.get('agent')!;
+
+    expect(seen).toContainEqual([16384, 65536]);
+    // 8.6 tok/s is under the tight tier's 15, so the endorsement is withdrawn entirely.
+    expect(agent.fitness).toBe('fail');
+    expect(agent.reason).toMatch(/8\.6 tok\/s/);
+    expect(agent.reason).not.toMatch(/49/);
+  });
+
+  it('measures the reduced agent session when that is the one it admits', () => {
+    // 40K runnable: the good tier's 64K is out of reach, so the tight tier's 32K session is both
+    // what is recommended and what has to be timed. Reading the 64K figure here would fail a rig
+    // for a session it was never offered.
+    const { verdicts, seen } = judgedAt(40_000, 1, (_prompt, context) =>
+      stub(context >= 65536 ? 8.6 : 40, 1)
+    );
+    const agent = verdicts.get('agent')!;
+
+    expect(seen).toContainEqual([16384, 32768]);
+    expect(agent.fitness).toBe('tight');
+    expect(agent.reason).toMatch(/short of the 64K/);
+    expect(agent.reason).not.toMatch(/8\.6/);
+  });
+
+  it('names the session it measured, not the tier bar, when the slider asks for more', () => {
+    // Every archetype is floored at the configured context, not pinned to its own, because that
+    // cache really is the size the user asked for. So the tier's bar and the evaluated session are
+    // two different numbers above 64K, and the sentence has to quote the second: quoting the bar
+    // failed a rig at "10 tok/s with a 64K session in the cache" on evidence from 128K, when the
+    // 64K it named would have been tight.
+    const { verdicts, seen } = judgedAt(
+      200_000,
+      1,
+      (_prompt, context) => stub(context >= 131072 ? 9 : 60, 1),
+      131072
+    );
+    const agent = verdicts.get('agent')!;
+
+    expect(seen).toContainEqual([16384, 131072]);
+    expect(seen).not.toContainEqual([16384, 65536]);
+    expect(agent.fitness).toBe('fail');
+    expect(agent.reason).toMatch(/9\.0 tok\/s/);
+    expect(agent.reason).toMatch(/128K session/);
+    expect(agent.reason).not.toMatch(/64K/);
+  });
+
+  it('says whose throughput the batch figure is', () => {
+    // `batchAggregate` sums every worker, so at 32 of them it is 32x what one job finishes at —
+    // the same unlabelled-aggregate defect as #11, on the other aggregate in the file.
+    const alone = judgedAt(400_000, 1, () => stub(60, 1)).verdicts.get('batch')!;
+    const crowded = judgedAt(400_000, 32, () => stub(60, 1)).verdicts.get('batch')!;
+
+    expect(alone.reason).toMatch(/end to end —/);
+    expect(alone.reason).not.toMatch(/across/);
+    expect(crowded.reason).toMatch(/end to end across 32 workers/);
+  });
+
+  it('reads the prefill of the serving scenario, not only its capacity and decode', () => {
+    // Everything the old predicates looked at is healthy: it fits, and 40 tok/s each is well over
+    // the 10 a served user expects. Only the queue is broken.
+    const serving = judgedAt(400_000, 8, () => stub(40, 165)).verdicts.get('serving')!;
+
+    expect(serving.fitness).toBe('fail');
+    expect(serving.reason).toMatch(/165s before anyone sees a token/);
+  });
+
+  it('keeps serving good when the queue is short as well as the rate', () => {
+    // The mirror of the case above, so the new bar cannot be satisfied by failing everything.
+    const serving = judgedAt(400_000, 8, () => stub(40, 2)).verdicts.get('serving')!;
+
+    expect(serving.fitness).toBe('good');
+    expect(serving.reason).toMatch(/to first token/);
+  });
+
+  it('prints a RAG rate that divides into the wait beside it', () => {
+    // Eight users, a 4s wait, and a machine-wide rate of 32,768 * 8 / 4. The sentence is about one
+    // document, so its two figures have to multiply back to that document's length; unqualified,
+    // the rate was eight times too large for the wait printed next to it.
+    const rag = judgedAt(400_000, 8, () => stub(60, 4, (32768 * 8) / 4)).verdicts.get('rag')!;
+
+    expect(rag.fitness).toBe('good');
+    const [, rate, seconds] = rag.reason.match(/([\d.]+) tok\/s.*?([\d.]+)s for a 32K one/)!;
+    expect(Number(rate) * Number(seconds)).toBeCloseTo(32768, -2);
+    // The machine-wide figure, which is what used to be printed here.
+    expect(rag.reason).not.toMatch(/65536|65,536/);
+  });
+
+  /**
+   * The configurations from the issues, so the thresholds are exercised against real arithmetic
+   * rather than only against a stub that was told what to say.
+   */
+  it('withdraws serving from a machine whose users wait minutes for a first token', () => {
+    // Llama 3.1 8B Q4_K_M on an EPYC 9654, four users: it fits and decodes ~40 tok/s each, and
+    // the four 2K prompts take about 165 seconds before anyone sees a token.
+    const verdicts = judge(LLAMA_31_8B, 'q4_k_m', { device: EPYC_9654, concurrency: 4 });
+    const serving = verdicts.get('serving')!;
+
+    expect(serving.fitness).toBe('fail');
+    expect(serving.reason).toMatch(/before anyone sees a token/);
+  });
+
+  it('withdraws the agent from a machine that only holds its session', () => {
+    // Llama 3.1 8B at BF16 on one 4090 under vLLM: 49.7 tok/s at the 16K turn, and about 8.6 once
+    // its own 64K session is resident, because the weights spill to make room for the cache.
+    const agent = judge(LLAMA_31_8B, 'bf16', {
+      device: RTX_4090,
+      runtime: VLLM,
+      contextTokens: 512,
+    }).get('agent')!;
+
+    expect(agent.fitness).toBe('fail');
+    expect(agent.reason).toMatch(/64K session/);
+    expect(agent.reason).not.toMatch(/49/);
   });
 });

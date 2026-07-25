@@ -44,6 +44,22 @@ const RESPONSE_ALLOWANCE = 512;
 const LONG_CONTEXT_TIGHT_PROMPT = 65536;
 const LONG_CONTEXT_TIGHT_NEEDS = LONG_CONTEXT_TIGHT_PROMPT + RESPONSE_ALLOWANCE;
 
+/**
+ * The session sizes the two agent tiers recommend a machine for — and therefore have to grade it
+ * at.
+ *
+ * Both tiers read a decode rate measured at the archetype's 16K *turn* while their capacity bars
+ * endorsed the rig for a 32K or 64K *session*, which is the long-context defect one archetype
+ * over: a grade taken at a smaller working set than the one it is recommending. Llama 3.1 8B at
+ * BF16 on one 4090 under vLLM was `good` at "49 tok/s"; at the 64K session that tier claims, its
+ * weights spill and it decodes at about 8.6 — under even the tight tier's 15.
+ *
+ * Both figures are the *context*, not a prompt, so no response allowance is added: `UsageSpec`
+ * counts the whole window and these are the capacity bars the predicates already tested.
+ */
+const AGENT_SESSION_CONTEXT = 65536;
+const AGENT_TIGHT_SESSION_CONTEXT = 32768;
+
 export interface Workload {
   id: string;
   label: string;
@@ -227,6 +243,9 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
     return seconds > 0 ? (RESPONSE_ALLOWANCE * workers) / seconds : 0;
   };
 
+  /** Says whose throughput `batchAggregate` is, whenever it is more than one worker's. */
+  const batchWorkers = () => (usage.concurrency > 1 ? ` across ${usage.concurrency} workers` : '');
+
   /**
    * What an archetype needs to hold: its prompt plus room to answer. Every fit check reads this
    * one function, so a boundary cannot be stated differently in a condition and in its reason —
@@ -295,9 +314,65 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
 
   const chatTtft = ttftOf('chat');
   const completionTtft = ttftOf('completion');
-  const agentTtft = ttftOf('agent');
+  /**
+   * Read through `ttftOf` at each use rather than bound here, unlike its two neighbours.
+   *
+   * Every serving predicate and every serving sentence is reached only after the user-count
+   * conjunct, so at the default concurrency of 1 the serving scenario is never evaluated at all —
+   * as it was not before this archetype gained a latency term. `evaluateOnce` memoises, so the
+   * repeated calls cost nothing; binding it here would add a whole `evaluateAt` (two binary
+   * searches, per #17) to every render of the common case, to grade a bar that case never sees.
+   */
+  const servingTtft = () => ttftOf('serving');
   const ragPrefill = at('rag').prefill;
   const ragFits = fits('rag');
+
+  /**
+   * How fast a document is read, as opposed to how fast the machine reads documents.
+   *
+   * `prefillTokensPerSec` is `(promptTokens * batch) / ttft` — deliberately machine-wide, so it
+   * holds steady as concurrency rises while `ttftSeconds` grows with it. Printed unqualified beside
+   * "31s for a 32K document" it was eight times the rate that document is read at, and the two
+   * numbers in one sentence did not divide into each other. Dividing the batch back out makes them
+   * reconcile exactly: the printed length over the printed rate is the printed wait. The Telemetry
+   * tile took the other route and labelled its figure "across all N prompts in flight"; that works
+   * for a tile reporting the machine, not for a sentence whose subject is one document.
+   */
+  const ragPerDocumentTokensPerSec =
+    ragPrefill.prefillTokensPerSec / Math.max(1, usage.concurrency);
+
+  /**
+   * Agent, measured once at the session context its tiers recommend rather than at its 16K turn.
+   *
+   * `agentSession` is whichever session the rig can hold, and every agent predicate and every
+   * agent sentence reads this one evaluation — the `longMeasured` pattern, for the same reason.
+   * The consequence is deliberate: a rig that holds 64K has its *tight* tier timed at 64K too,
+   * though that tier would admit a 32K session. The reduced figure is for machines that cannot
+   * hold more, not a lenient reading for machines that can, and splitting it — good at 64K, tight
+   * at 32K — puts the grade and the sentence back on different measurements the moment `good`
+   * fails and `tight` holds. With one value in both, `pass` implies `tight` by construction.
+   */
+  const holdsFullSession = runnableContextTokens >= AGENT_SESSION_CONTEXT;
+  /**
+   * The session that is actually evaluated — and therefore the only session the sentences may
+   * name.
+   *
+   * The `Math.max` is the same floor every other archetype takes through `at()`: a configured
+   * context larger than the tier's is the scenario the user is asking about, and the cache really
+   * is that size. But the tier's bar and the evaluated size are then two different numbers, and
+   * printing the bar beside a figure measured at the slider is this diff's own defect one
+   * archetype further on: at a 128K slider the row said "10 tok/s with a 64K session in the
+   * cache", failing a rig on evidence from a session twice the size of the one it named — and the
+   * 64K it did claim would have been `tight`. The bar keeps its own sentence (`holdsFullSession`,
+   * below); everything quoting a measurement quotes this.
+   */
+  const agentSession = Math.max(
+    usage.contextTokens,
+    holdsFullSession ? AGENT_SESSION_CONTEXT : AGENT_TIGHT_SESSION_CONTEXT
+  );
+  const agentMeasured = evaluateOnce(workload('agent').typicalPromptTokens, agentSession);
+  const agentRate = agentMeasured.decode.perUserTokensPerSec;
+  const agentTtft = agentMeasured.prefill.ttftSeconds;
 
   /**
    * Long-context, measured twice: once at the archetype's full request and once at the reduced
@@ -370,33 +445,49 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
       // Agents need all three: speed, headroom, and a prompt pass that does not stall each turn.
       // Omitting the latency term is what let a machine fail chat while "passing" this, which is
       // backwards — an agent does everything chat does, over a far larger prompt.
+      //
+      // Rate and latency both come from `agentMeasured`, which is the session each tier endorses
+      // rather than the turn the archetype names. A tier that recommends a 64K session has to be
+      // graded with 64K in the cache; measured at the 16K turn, the two things that degrade with
+      // a filling session — a cache that spills and a longer read of it — were invisible to the
+      // predicate that promises the session will work.
       pass:
-        fits('agent') && rateOf('agent') >= 25 && runnableContextTokens >= 65536 && agentTtft <= 10,
+        fits('agent') &&
+        agentRate >= 25 &&
+        runnableContextTokens >= AGENT_SESSION_CONTEXT &&
+        agentTtft <= 10,
       tight:
-        fits('agent') && rateOf('agent') >= 15 && runnableContextTokens >= 32768 && agentTtft <= 30,
+        fits('agent') &&
+        agentRate >= 15 &&
+        runnableContextTokens >= AGENT_TIGHT_SESSION_CONTEXT &&
+        agentTtft <= 30,
       why: () =>
         !fits('agent')
           ? shortfall('agent', 'an agent turn')
           : // Between the 16.5K a turn needs and the 32K a session needs, the turn requirement
             // is satisfied — reporting it as the reason named a figure the configuration meets.
-            runnableContextTokens < 32768
-            ? `${ctx(runnableContextTokens)} of context holds a turn but not a session — an agent needs ${ctx(32768)} to keep its history across steps.`
+            runnableContextTokens < AGENT_TIGHT_SESSION_CONTEXT
+            ? `${ctx(runnableContextTokens)} of context holds a turn but not a session — an agent needs ${ctx(AGENT_TIGHT_SESSION_CONTEXT)} to keep its history across steps.`
             : agentTtft > 30
-              ? `${secs(agentTtft)}s to re-read a 16K prompt makes every step a wait.`
-              : rateOf('agent') < 15
-                ? `${fmt(rateOf('agent'))} tok/s makes a multi-step session take minutes per step.`
+              ? `${secs(agentTtft)}s to re-read a 16K prompt with a ${ctx(agentSession)} session behind it makes every step a wait.`
+              : agentRate < 15
+                ? `${fmt(agentRate)} tok/s once a ${ctx(agentSession)} session is in the cache makes a multi-step run take minutes per step.`
                 : // All three good-tier bars. The capacity one is the easiest to hit and was the
                   // most misleading: a 40K-capped model reading "139 tok/s over 40K of context,
                   // 4.0s per turn" is three healthy figures explaining nothing.
                   (shortOfGood(
-                    runnableContextTokens < 65536 &&
-                      `${ctx(runnableContextTokens)} of context is short of the ${ctx(65536)} a comfortable session keeps`,
-                    rateOf('agent') < 25 &&
-                      `${fmt(rateOf('agent'))} tok/s is under the 25 tok/s that keeps a step brisk`,
+                    !holdsFullSession &&
+                      `${ctx(runnableContextTokens)} of context is short of the ${ctx(AGENT_SESSION_CONTEXT)} a comfortable session keeps`,
+                    agentRate < 25 &&
+                      `${fmt(agentRate)} tok/s with a ${ctx(agentSession)} session in the cache is under the 25 tok/s that keeps a step brisk`,
                     agentTtft > 10 &&
-                      `${secs(agentTtft)}s to re-read a 16K prompt is longer than a brisk step allows`
+                      `${secs(agentTtft)}s to re-read a 16K prompt with ${ctx(agentSession)} in the cache is longer than a brisk step allows`
                   ) ??
-                  `${fmt(rateOf('agent'))} tok/s over ${ctx(runnableContextTokens)} of context, ${secs(agentTtft)}s per turn.`),
+                  // Capacity and rate are stated as separate clauses on purpose. "49 tok/s over
+                  // 128K of context" reads as a rate that holds at 128K, which is the claim this
+                  // tier was making and could not support; the rate belongs to the session it was
+                  // measured at, and that session is named next to it.
+                  `Holds ${ctx(runnableContextTokens)}; ${fmt(agentRate)} tok/s and ${secs(agentTtft)}s per turn with a ${ctx(agentSession)} session in the cache.`),
     }),
     judge('rag', {
       // The answer is short; the prompt is not. This lives or dies on prefill — but speed is
@@ -424,7 +515,10 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
                     `${secs(ragPrefill.ttftSeconds)}s to read the document is over the 5s bar`,
                   rateOf('rag') < 10 && `it answers at only ${fmt(rateOf('rag'))} tok/s`
                 ) ??
-                `${Math.round(ragPrefill.prefillTokensPerSec)} tok/s prompt processing — ${secs(ragPrefill.ttftSeconds)}s for a 32K document.`),
+                // `fmt`, not `Math.round`: a rate fails by being too small, so rounding one up in
+                // a sentence about how fast this reads is the same flattery the formatters exist
+                // to prevent — 999.6 tok/s printed as "1000" beside its own unrounded wait.
+                `${fmt(ragPerDocumentTokensPerSec)} tok/s through a document — ${secs(ragPrefill.ttftSeconds)}s for a 32K one.`),
     }),
     judge('long-context', {
       // Offload-aware: the resident figure is zero for any spilled configuration, which would
@@ -512,18 +606,39 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
       why: () =>
         !fits('batch')
           ? shortfall('batch', 'a batch job')
-          : batchAggregate() >= 5
-            ? `${fmt(batchAggregate())} tok/s end to end — latency does not matter here, only the total.`
-            : `${fmt(batchAggregate())} tok/s end to end, prompts included, makes even an overnight run small.`,
+          : // The same qualifier the RAG sentence needed, on the other aggregate in this file:
+            // this figure sums every worker, so at 32 of them it is 32x what one job finishes at.
+            // Nothing here divides into it — no per-job time is printed beside it — but "end to
+            // end" describes the prompt-plus-answer span, not the worker count, and read alone it
+            // invites the per-job reading. Telemetry's wording, for the same reason.
+            batchAggregate() >= 5
+            ? `${fmt(batchAggregate())} tok/s end to end${batchWorkers()} — latency does not matter here, only the total.`
+            : `${fmt(batchAggregate())} tok/s end to end${batchWorkers()}, prompts included, makes even an overnight run small.`,
     }),
     judge('serving', {
       // Every concurrent user brings their own cache, which is what actually runs out.
+      //
+      // And every concurrent user brings their own prompt, which is what they wait on. Capacity
+      // and decode were the whole grade, so this was the one archetype with no latency term at
+      // all — Llama 3.1 8B Q4_K_M on an EPYC 9654 at four users fits and decodes 39.8 tok/s
+      // apiece, and was reported healthy while the four 2K prompts take about 165 seconds before
+      // anyone sees a token. That gap grew rather than shrank when `estimatePrefill` learned about
+      // concurrency: the estimate became right and nothing on this path read it.
+      //
+      // The budgets are looser than chat's 2s and 5s on the same reasoning that makes them tight
+      // there. A shared deployment queues by design — `estimatePrefill` prices one batched pass,
+      // so this is the wait every admitted prompt sees, not the first-served one's — and a few
+      // seconds of queue is what a served user is actually buying. Ten seconds is the edge of
+      // comfortable, thirty is the edge of tolerable, and minutes is a broken deployment however
+      // fast it decodes once it starts.
       pass:
         fits('serving') &&
         usage.concurrency >= 4 &&
         rateOf('serving') >= 10 &&
-        headroomOf('serving') > 0,
-      tight: fits('serving') && usage.concurrency >= 2 && rateOf('serving') >= 5,
+        headroomOf('serving') > 0 &&
+        servingTtft() <= 10,
+      tight:
+        fits('serving') && usage.concurrency >= 2 && rateOf('serving') >= 5 && servingTtft() <= 30,
       why: () =>
         !fits('serving')
           ? shortfall('serving', `a turn each for ${usage.concurrency} users`)
@@ -531,25 +646,32 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
             ? 'Set concurrency above 1 to see whether this holds several users.'
             : rateOf('serving') < 5
               ? `${fmt(rateOf('serving'))} tok/s each once ${usage.concurrency} users share the device.`
-              : // Spill is the one thing here that can hold serving back while every printed
-                // figure looks healthy — the rate is fine, the fit is fine, and the reason said
-                // so, leaving the actual constraint invisible.
-                headroomOf('serving') <= 0
-                ? `${usage.concurrency} users at ${fmt(rateOf('serving'))} tok/s each, but the weights are spilling to host RAM — every additional user makes that worse rather than simply not fitting.`
-                : // Everything printed above this point is healthy, so whatever downgraded the
-                  // verdict has to be named or the row reads as a pass that was marked down for
-                  // no reason. Two things can reach here: too few users to be a serving test at
-                  // all, and a rate below what a served user expects.
-                  usage.concurrency < 4
-                  ? // Reaching here only guarantees 5 tok/s, so calling the rate healthy on the
-                    // way to naming the user count asserted something the very next branch calls
-                    // insufficient. Both causes are live between 5 and 10, and both get said.
-                    rateOf('serving') >= 10
-                    ? `${usage.concurrency} users at ${fmt(rateOf('serving'))} tok/s each is healthy, but a serving deployment is graded from 4 concurrent users up — this is measuring a quieter machine than the archetype describes.`
-                    : `${usage.concurrency} users at ${fmt(rateOf('serving'))} tok/s each falls short twice over — this archetype is graded from 4 concurrent users, at 10 tok/s apiece.`
-                  : rateOf('serving') < 10
-                    ? `${usage.concurrency} users share the device at ${fmt(rateOf('serving'))} tok/s each, under the 10 tok/s a served user expects.`
-                    : `${usage.concurrency} users at ${fmt(rateOf('serving'))} tok/s each, ${fmt(at('serving').decode.aggregateTokensPerSec)} aggregate.`,
+              : servingTtft() > 30
+                ? `${secs(servingTtft())}s before anyone sees a token — ${usage.concurrency} prompts have to be read first, and prefill does not batch the way decode does.`
+                : // Four good-tier bars now, through the same builder as the other tiers rather
+                  // than the nested ternaries this used to hand-write. Those covered two causes in
+                  // three branches and could not have absorbed a fourth: spill had a branch of its
+                  // own above, which is why a spilling row never mentioned the user count, and the
+                  // pair that did name both had to re-state the rate in each. This is the file's
+                  // own lesson about hand-written copies of one sentence, applied to the tier that
+                  // still had them.
+                  (shortOfGood(
+                    // No internal "and", and no internal comma: `shortOfGood` joins its items with
+                    // commas and a final "and", so a bar carrying either of its own leaves the
+                    // reader unable to see where one item stops. Three of these can be live at
+                    // once.
+                    usage.concurrency < 4 &&
+                      `it is measuring ${usage.concurrency} users against the 4 concurrent users a serving deployment is graded from`,
+                    rateOf('serving') < 10 &&
+                      `${fmt(rateOf('serving'))} tok/s each is under the 10 tok/s a served user expects`,
+                    // Spill can hold serving back while every printed figure looks healthy: the
+                    // rate is fine, the fit is fine, and the reason said so.
+                    headroomOf('serving') <= 0 &&
+                      'the weights are spilling to host RAM so every additional user makes that worse rather than simply not fitting',
+                    servingTtft() > 10 &&
+                      `${secs(servingTtft())}s to first token across ${usage.concurrency} queued prompts is longer than a served user waits`
+                  ) ??
+                  `${usage.concurrency} users at ${fmt(rateOf('serving'))} tok/s each, ${fmt(at('serving').decode.aggregateTokensPerSec)} aggregate, ${secs(servingTtft())}s to first token.`),
     }),
   ];
 }

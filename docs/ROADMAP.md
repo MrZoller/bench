@@ -29,7 +29,7 @@ Three things are the moat, in order:
 ## Status
 
 Seven of eight phases are on `main` as of 25 July 2026. What remains is the weekly refresh job,
-deployment, and the follow-up list in [issues #9–#20](https://github.com/MrZoller/bench/issues).
+deployment, and the follow-up list in [issues #12–#20](https://github.com/MrZoller/bench/issues).
 
 | Phase                              | State             | Notes                                                                                              |
 | ---------------------------------- | ----------------- | -------------------------------------------------------------------------------------------------- |
@@ -42,8 +42,12 @@ deployment, and the follow-up list in [issues #9–#20](https://github.com/MrZol
 | 7. URL state, responsive, a11y     | **mostly** (#6)   | Querystring round-trips a scenario. No browser-level test pass — #19; URL defects in #15, #16      |
 | 8. Weekly catalog refresh + deploy | **next**          | Scheduled `build-catalog` → PR on diff; static deploy to a zoller.ai subdomain                     |
 
-**Correctness debt is tracked as issues, not here.** Twelve are open. #9 and #10 are the ones to
-clear before deploying: both grade a configuration as working when it is not.
+**Correctness debt is tracked as issues, not here.** Nine are open. #9 and #10, which graded a
+configuration as working when it is not, are fixed — together with #11, which printed a figure
+measured at a different scenario from the one its sentence described. Filed as three bugs, one
+class; written up under **Verdicts** below. What remains is labelling (#13, #20), UI state (#12,
+#15, #16), test and performance debt (#17, #19), the MLX question (#18), and one engine bug in the
+layer-split spill fraction (#14).
 
 ## Decisions already made
 
@@ -66,10 +70,12 @@ Settled, with reasons. Reopen only with new information.
   point. This is not a decision to ignore reviews: fix root causes, then merge, then file the rest.
   See #9–#20 for what that produced in practice. **This overrides the global "a PR is unfinished
   until the latest review is clean" rule, for this repo.**
-- **Expect a review to name a subset of a class.** Twice in one session the finding named N
-  instances and the same defect was live in N+2 places — a missing-cause audit raised for three
-  verdict tiers was also true of chat and rag; an Envelope fix had a mirror-image omission one
-  branch over. Fixing only what is named is the most common way a round here fails to converge.
+- **Expect a review to name a subset of a class.** Three times now the finding named N instances
+  and the same defect was live in N+2 places — a missing-cause audit raised for three verdict tiers
+  was also true of chat and rag; an Envelope fix had a mirror-image omission one branch over; and
+  the long-context "grade the job you admit" fix was separately true of serving, agent and rag
+  (#9–#11), filed as three unrelated bugs and in fact one. Fixing only what is named is the most
+  common way a round here fails to converge.
 - **The seven archetypes are not a ladder, and completion may outrank chat.** The ordering is real
   but it is _only_ about latency budgets, and it does not survive contact with capacity. Completion
   sends 512 tokens where chat sends 1,024, so at 128 users on a small card the chat cache spills
@@ -124,8 +130,9 @@ reading the test that guards them.
   not one over 32K), and the offload streaming term is charged **once** — sized at the batch-wide
   expert union, but not multiplied by it, because the batch shares the weights it pulls across the
   bus. `prefillTokensPerSec` is machine-wide as a result, which is what keeps the published
-  single-prompt anchors comparable with a concurrent estimate. (#11 is the one place still printing
-  it as though it were per document.)
+  single-prompt anchors comparable with a concurrent estimate. Every sentence quoting it therefore
+  has to say whose rate it is: the RAG verdict divides the batch back out, because the wait printed
+  beside it is one document's; Telemetry and batch label theirs as aggregate instead. (#11.)
 - **A rule the UI enforces is not a rule the engine has.** `quantApplies` kept unloadable
   model/runtime pairings out of the picker, so the app looked correct while `planPlacement`
   returned capacity and throughput for checkpoints that cannot be opened — AWQ under llama.cpp, a
@@ -163,13 +170,48 @@ reading the test that guards them.
 
 **Verdicts**
 
-- **Grade a tier on the measurement its own sentence quotes.** The long-context tight tier admits
-  a machine holding 64K and was timing it on the archetype's full 128K request — a prompt that rig
-  has nowhere to put, and prefill is quadratic, so the impossible request routinely failed the tier
-  that had just admitted it on capacity. The half-fix was worse than the bug: pointing the
-  _reasons_ at the window the machine holds while the _predicate_ still read the reduced job meant
-  a rig holding 160K was graded on its 64K measurement while the sentence beside it reported 1046s
-  against a 600s bar. One value in both.
+- **Grade a tier on the measurement its own sentence quotes, and on the scenario it recommends.**
+  The long-context tight tier admits a machine holding 64K and was timing it on the archetype's full
+  128K request — a prompt that rig has nowhere to put, and prefill is quadratic, so the impossible
+  request routinely failed the tier that had just admitted it on capacity. The half-fix was worse
+  than the bug: pointing the _reasons_ at the window the machine holds while the _predicate_ still
+  read the reduced job meant a rig holding 160K was graded on its 64K measurement while the sentence
+  beside it reported 1046s against a 600s bar. One value in both.
+
+  That was one instance of a class, and three more were live in the same file (#9, #10, #11 — fixed
+  together, since fixing them apart is how the first one took two attempts):
+
+  - **Serving had no latency term at all.** Capacity and decode were the whole grade, so a
+    deployment where every user waits minutes for a first token read as healthy: Llama 3.1 8B
+    Q4_K_M on an EPYC 9654 at four users fits, decodes ~40 tok/s each, and takes ~165s to read the
+    four 2K prompts. The gap _grew_ when `estimatePrefill` learned about concurrency — the estimate
+    became right and nothing on this path read it. Bars are 10s and 30s, looser than chat's 2s and
+    5s because a shared deployment queues by design.
+  - **The agent tiers recommended a session and measured a turn.** Both read a rate taken at the
+    archetype's 16K turn while their capacity bars endorsed the rig for a 32K or 64K session. 8B at
+    BF16 on one 4090 under vLLM: 49.7 tok/s at the turn, ~8.6 once its own 64K session is resident
+    and the weights spill to make room — below even the tight tier's 15. Fixed the long-context way,
+    with one `agentMeasured` at whichever session the rig can hold, read by both tiers and every
+    sentence. The consequence is deliberate: a rig that holds 64K has its _tight_ tier timed at 64K
+    too. The reduced figure is for machines that cannot hold more, not a lenient reading for
+    machines that can — and splitting it puts the grade and the sentence back on different
+    measurements the moment `good` fails and `tight` holds.
+
+    The first attempt at this reproduced the defect inside its own fix, which is worth knowing
+    about: like every archetype it floors the evaluation at the configured context, so above 64K
+    the tier's _bar_ and the _evaluated_ session are different numbers — and the new sentences
+    printed the bar. At a 128K slider the row read "10 tok/s with a 64K session in the cache", a
+    grade taken at twice the session it named, and the 64K it claimed would have been `tight`.
+    Caught in review, not by the suite. If a sentence names a scenario, that name has to come from
+    the same expression the estimate was called with.
+
+  - **The RAG sentence printed a machine-wide rate beside one document's time.** See the
+    `prefillTokensPerSec` note under **Engine**. Two figures in one sentence have to divide into
+    each other, and at eight users these were off by eight.
+
+  The lesson generalises past this file: a predicate and its sentence are one claim, and the
+  scenario is part of the measurement, not context around it.
+
 - **A tight verdict must name the bar it missed.** Once the fail-level branches are exhausted it is
   easy to fall through to a positive fallback, which prints healthy figures beside a downgrade and
   explains nothing — "139 tok/s over 40K of context, 4.0s per turn" is three good numbers and no
@@ -219,7 +261,7 @@ reading the test that guards them.
 
 ## Open questions
 
-Correctness follow-ups live in [issues #9–#20](https://github.com/MrZoller/bench/issues). This
+Correctness follow-ups live in [issues #12–#20](https://github.com/MrZoller/bench/issues). This
 section is for the questions those issues cannot settle.
 
 - **MLX has no native quantization entries** ([#18](https://github.com/MrZoller/bench/issues/18)).
