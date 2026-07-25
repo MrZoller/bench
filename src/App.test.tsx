@@ -466,3 +466,57 @@ describe('the Bench and its tiles cannot disagree', () => {
     expect(radios.filter((r) => (r as HTMLInputElement).checked)).toHaveLength(1);
   });
 });
+
+/**
+ * The share button is the distribution mechanism, so its failure modes matter more than most.
+ * Both of these were silent: no clipboard meant the button did nothing while looking like it
+ * had worked, and an unthrottled history write can throw on a dragged slider.
+ */
+describe('sharing a scenario degrades honestly', () => {
+  const clipboard = navigator.clipboard;
+
+  afterEach(() => {
+    Object.defineProperty(navigator, 'clipboard', { value: clipboard, configurable: true });
+  });
+
+  it('offers the link for manual copying when there is no clipboard API', async () => {
+    const user = userEvent.setup();
+    // After `setup`, which installs its own clipboard stub. Undefined is what a non-secure
+    // origin or an embedded browser actually gives you.
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: /Copy link to this scenario/i }));
+
+    const field = screen.getByLabelText('Link to this scenario') as HTMLInputElement;
+    expect(field.value).toMatch(/\?m=/);
+    expect(screen.queryByText('Link copied')).not.toBeInTheDocument();
+  });
+
+  it('says so rather than silently failing when the write is refused', async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: () => Promise.reject(new Error('denied')) },
+      configurable: true,
+    });
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: /Copy link to this scenario/i }));
+
+    expect(await screen.findByLabelText('Link to this scenario')).toBeInTheDocument();
+  });
+
+  it('survives a browser that refuses a history write', async () => {
+    const replaceState = window.history.replaceState;
+    window.history.replaceState = () => {
+      throw new DOMException('throttled', 'SecurityError');
+    };
+    try {
+      const user = userEvent.setup();
+      // Rendering alone writes the URL, and a throw there would take the app down.
+      render(<App />);
+      await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+      expect(screen.getByRole('region', { name: 'Verdicts' })).toBeInTheDocument();
+    } finally {
+      window.history.replaceState = replaceState;
+    }
+  });
+});
