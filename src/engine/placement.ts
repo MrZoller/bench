@@ -18,8 +18,24 @@ import { weightBytes } from './weights';
  *      rather than buried in an efficiency constant.
  */
 
-/** Typical dual-channel DDR5 desktop bandwidth — the speed offloaded weights read at. */
+/** Typical dual-channel DDR5 desktop bandwidth — the speed host RAM itself reads at. */
 export const DEFAULT_HOST_BANDWIDTH = 80e9;
+
+/**
+ * The rate spilled weights actually stream at: the slower of host memory and the link to it.
+ *
+ * Host RAM bandwidth alone was the whole model, so every offloaded configuration read at 80 GB/s
+ * regardless of what the card is plugged into. An RTX 4090 is PCIe 4.0 x16 — 31.5 GB/s one
+ * direction — so a heavily offloaded DeepSeek V3 had both decode and TTFT understated by 2.5x,
+ * well outside the band this engine claims.
+ *
+ * Derived here from the device rather than passed in, because the previous shape let a caller
+ * omit it and silently get the optimistic default — which is exactly what the whole app did.
+ */
+export function offloadBandwidth(device: DeviceSpec, hostBandwidth: number): number {
+  const link = device.hostLinkBytesPerSec;
+  return link === undefined ? hostBandwidth : Math.min(hostBandwidth, link);
+}
 
 export interface Placement {
   fits: boolean;
@@ -119,6 +135,37 @@ export function normalizeRig(rig: Rig): Rig {
   return { ...rig, count: positiveInt(rig.count) };
 }
 
+/**
+ * How many ways the KV cache actually divides across a tensor-parallel rig.
+ *
+ * Weights shard cleanly to any degree; KV does not, and assuming it does is optimistic in the
+ * one direction that matters — it reports a configuration fitting when the real layout does not.
+ *
+ *   - **GQA** shards by attention head, so the degree is capped by the number of KV heads. A
+ *     model with 4 KV heads on 8 cards gives every rank at least one whole head, and the cache
+ *     is replicated across each pair: per-card KV is a quarter of the total, not an eighth.
+ *     Qwen3 30B-A3B on 8x RTX 5080 at 32K and 16 users read 11.1 GiB against a 14.4 GiB ceiling
+ *     and "fits"; the layout it would really produce needs 17.1 GiB.
+ *   - **MLA** caches a single latent per token per layer with nothing to split along, so vLLM
+ *     replicates it on every rank. The divisor is 1 however many cards there are — the case the
+ *     old code was off by the full device count on.
+ *
+ * What each rank holds is `ceil(kvHeads / shards)` heads, so the effective divisor is
+ * `kvHeads / ceil(kvHeads / shards)`. At 4 heads on 8 cards that is 4/1 = 4, and at 4 heads on
+ * 3 cards it is 4/2 = 2 — replication is not always a clean fraction of the rig.
+ *
+ * Exported because `estimateDecode` has to price the cache the same way this sizes it. Holding
+ * separate opinions is how the memory panel came to say every card holds the whole MLA latent
+ * while the speed panel charged one eighth of it.
+ */
+export function kvShards(model: ModelSpec, shards: number): number {
+  if (shards <= 1) return 1;
+  const core = model.attention.core;
+  if (core.kind === 'mla') return 1;
+  const headsPerRank = Math.ceil(core.kvHeads / shards);
+  return core.kvHeads / headsPerRank;
+}
+
 export function planPlacement(
   model: ModelSpec,
   quant: QuantSpec,
@@ -138,10 +185,11 @@ export function planPlacement(
   );
   const activations = activationBytes(model, usage, runtime);
 
-  // Tensor parallelism shards weights and KV evenly; activations are per-device, not shared.
+  // Tensor parallelism shards weights evenly; activations are per-device, not shared. KV is the
+  // exception and gets its own divisor — see `kvShards`.
   const shards = rig.count;
   const weightBytesPerDevice = totalWeightBytes / shards;
-  const kvBytesPerDevice = totalKvBytes / shards;
+  const kvBytesPerDevice = totalKvBytes / kvShards(model, shards);
   const usedBytesPerDevice = weightBytesPerDevice + kvBytesPerDevice + activations;
 
   const allocatableBytesPerDevice = allocatablePerDevice(rig, runtime);
