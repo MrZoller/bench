@@ -1,6 +1,6 @@
 import type { DeviceSpec, ModelSpec, QuantSpec, Rig, RuntimeSpec, UsageSpec } from './types';
 import { activationBytes } from './activations';
-import { kvBytesBusiestDevice, kvBytesTotal } from './kv';
+import { kvBytesTotal, layerKvBytes } from './kv';
 import { weightBytes } from './weights';
 
 /**
@@ -228,6 +228,54 @@ export function kvShards(model: ModelSpec, shards: number, runtime?: RuntimeSpec
   return core.kvHeads / headsPerRank;
 }
 
+/**
+ * What the busiest device holds under a layer split, weights and cache together.
+ *
+ * One assignment, not two. Taking the heaviest-KV card from one packing and the heaviest-weight
+ * card from another and adding them describes a device that does not exist: on a hybrid model the
+ * card carrying the big full-attention caches is precisely the one a balanced scheduler gives
+ * *fewer* layers, so the two maxima land on different cards. Summing them reported Gemma 3 27B on
+ * four 5090s at 31.7 GiB and spilling, where a joint assignment fits it in 30.8 under a 31 GiB
+ * ceiling — the first error tonight in the pessimistic direction, and wrong for the same reason
+ * as all the optimistic ones: two numbers combined that were never measured on the same thing.
+ *
+ * Longest-processing-time again, now on the combined per-layer cost, so the balance being struck
+ * is the one that actually matters to whether the rig fits.
+ */
+function layerSplitBusiest(
+  model: ModelSpec,
+  totalWeightBytes: number,
+  usage: UsageSpec,
+  shards: number,
+  runtime: RuntimeSpec
+): { weightBytes: number; kvBytes: number } {
+  const perLayerWeight = totalWeightBytes / model.layers;
+  const sequences = Math.max(1, usage.concurrency);
+
+  const layers = Array.from({ length: model.layers }, (_, i) => ({
+    weight: perLayerWeight,
+    kv: layerKvBytes(model, i, usage.contextTokens, usage.kvPrecision, runtime) * sequences,
+  })).sort((a, b) => b.weight + b.kv - (a.weight + a.kv));
+
+  const bins = Array.from({ length: Math.max(1, Math.floor(shards)) }, () => ({
+    weight: 0,
+    kv: 0,
+  }));
+  const load = (b: { weight: number; kv: number }) => b.weight + b.kv;
+
+  for (const layer of layers) {
+    let lightest = 0;
+    for (let d = 1; d < bins.length; d++) {
+      if (load(bins[d]) < load(bins[lightest])) lightest = d;
+    }
+    bins[lightest].weight += layer.weight;
+    bins[lightest].kv += layer.kv;
+  }
+
+  const busiest = bins.reduce((a, b) => (load(b) > load(a) ? b : a));
+  return { weightBytes: busiest.weight, kvBytes: busiest.kv };
+}
+
 export function planPlacement(
   model: ModelSpec,
   quant: QuantSpec,
@@ -257,23 +305,21 @@ export function planPlacement(
   // and the even split reported 175.4 GiB under a 178 GiB ceiling for a card really holding
   // 178.3.
   const shards = rig.count;
-  const weightBytesPerDevice = totalWeightBytes / weightShards(model, shards, runtime);
   /**
-   * Layer splits are sized rather than divided, because layers are not interchangeable: a
-   * full-attention layer of a hybrid model holds up to 128x what a sliding one does, so the
-   * layer *count* says nothing useful about what the busiest card ends up holding.
+   * Layer splits are packed rather than divided, because layers are not interchangeable: a
+   * full-attention layer of a hybrid model holds up to 128x the cache a sliding one does, so the
+   * layer *count* says nothing useful about what any card ends up holding. Weights and cache come
+   * from one assignment so that both figures describe the same device.
    */
-  const kvBytesPerDevice =
+  const split =
     runtime.parallelism === 'layer' && shards > 1
-      ? kvBytesBusiestDevice(
-          model,
-          usage.contextTokens,
-          usage.concurrency,
-          usage.kvPrecision,
-          shards,
-          runtime
-        )
-      : totalKvBytes / kvShards(model, shards, runtime);
+      ? layerSplitBusiest(model, totalWeightBytes, usage, shards, runtime)
+      : {
+          weightBytes: totalWeightBytes / weightShards(model, shards, runtime),
+          kvBytes: totalKvBytes / kvShards(model, shards, runtime),
+        };
+  const weightBytesPerDevice = split.weightBytes;
+  const kvBytesPerDevice = split.kvBytes;
   const usedBytesPerDevice = weightBytesPerDevice + kvBytesPerDevice + activations;
 
   const allocatableBytesPerDevice = allocatablePerDevice(rig, runtime);
