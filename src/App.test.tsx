@@ -507,6 +507,21 @@ describe('sharing a scenario degrades honestly', () => {
     expect(screen.queryByText('Link copied')).not.toBeInTheDocument();
   });
 
+  it('keeps the fallback link current when the scenario changes underneath it', async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: /Copy link to this scenario/i }));
+
+    const field = () => screen.getByLabelText('Link to this scenario') as HTMLInputElement;
+    expect(field().value).not.toContain('rtx-5080');
+
+    // The field stays on screen; the scenario moves. Holding the link in state left it offering
+    // whatever was selected at the click, so a manual copy shared the wrong configuration.
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5080');
+    expect(field().value).toContain('rtx-5080');
+  });
+
   it('says so rather than silently failing when the write is refused', async () => {
     const user = userEvent.setup();
     Object.defineProperty(navigator, 'clipboard', {
@@ -741,5 +756,54 @@ describe('the KV control names something the runtime accepts', () => {
 
     const group = screen.getByRole('group', { name: /KV precision/i });
     expect(within(group).getByText('Q8')).toBeInTheDocument();
+  });
+});
+
+/**
+ * The ring has no visual equivalent for a screen reader, so its sentence has to carry everything
+ * the table carries about that one cell — the same wording and the same disambiguated label.
+ */
+describe('the spoken marker describes the same cell the table does', () => {
+  it('borrows the table wording rather than re-deriving it', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-512');
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+
+    const region = screen.getByRole('region', { name: /how much room/i });
+    const spoken = within(region).getByRole('img').getAttribute('aria-label') ?? '';
+
+    // Open the table and read the marked cell, which is the same scenario the ring sits on.
+    await user.click(within(region).getByRole('button', { name: /region as a table/i }));
+    const table = within(region).getByRole('table');
+    const marked = within(table).getByText(/▸/).closest('td')?.textContent ?? '';
+
+    // Whatever the table says about that cell, the ring's sentence must say too.
+    const said = marked.replace('▸', '').trim().toLowerCase();
+    expect(spoken.toLowerCase()).toContain(said);
+  });
+});
+
+/**
+ * `fast` was gated on `runnable` and the sentences underneath it were not, so an unsupported
+ * configuration still blamed host-bus spill or pointed at a decode tile reading "Unsupported".
+ */
+describe('the teaching aside makes no speed claim about a configuration that cannot run', () => {
+  it('says so plainly instead of explaining a number that means nothing', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // An MoE model, so the aside renders at all — then MLX on an NVIDIA card, which cannot run.
+    await user.selectOptions(screen.getByLabelText('Model'), 'openai/gpt-oss-120b');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+
+    expect(screen.getByText(/does not run as selected/i)).toBeInTheDocument();
+    expect(screen.queryByText(/crossing the host bus every token/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Even resident it would be slow/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/the decode figure above measures/i)).not.toBeInTheDocument();
   });
 });

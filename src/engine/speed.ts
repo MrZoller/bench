@@ -8,7 +8,7 @@ import type {
   UsageSpec,
 } from './types';
 import { effectiveBandwidth } from './types';
-import { attentionSpanPerToken, kvReadBytesPerToken } from './kv';
+import { attentionPairs, kvReadBytesPerToken } from './kv';
 import {
   activeWeightBytes,
   expertFraction,
@@ -28,7 +28,7 @@ import { DEFAULT_HOST_BANDWIDTH, kvShards, offloadBandwidth } from './placement'
  * precisely what a single "speed" number cannot express.
  *
  * **On accuracy.** This is a roofline, not a simulator. Against the three published anchors in
- * speed.test.ts it reads ~19% over on DGX Spark decode, ~10% over on Spark prefill, and within
+ * speed.test.ts it reads ~19% over on DGX Spark decode, ~19% over on Spark prefill, and within
  * 1% on EPYC decode. It cannot model scheduler behaviour, per-model kernel quality, or thermal
  * throttling. The app must present these as estimates with a band, never as promises.
  *
@@ -158,7 +158,7 @@ export function estimateDecode(
 
   const weightReadBytes = activeWeightBytes(model, quant, batch);
   // Each sequence re-reads its own cache every step.
-  const kvReadBytes = kvReadBytesPerToken(model, contextTokens, usage.kvPrecision) * batch;
+  const kvReadBytes = kvReadBytesPerToken(model, contextTokens, usage.kvPrecision, runtime) * batch;
 
   const deviceBandwidth = achievedBandwidth(rig, runtime);
   /**
@@ -171,7 +171,7 @@ export function estimateDecode(
    * divisor, from the same function, so the two cannot drift.
    */
   const shards = Math.max(1, rig.count);
-  const kvBandwidth = (deviceBandwidth / shards) * kvShards(model, shards);
+  const kvBandwidth = (deviceBandwidth / shards) * kvShards(model, shards, runtime);
 
   const offload = placement.offloadFraction;
   const offloadedBytes = weightReadBytes * offload;
@@ -308,8 +308,7 @@ export function estimatePrefill(
   // long prompts — why time-to-first-token degrades faster than people expect at big contexts.
   // Scaled by the attention projection width, not the hidden size: a model is free to project
   // into a wider or narrower query space than its residual stream, and most current ones do.
-  const attentionFlops =
-    4 * promptTokens * attentionSpanPerToken(model, promptTokens) * model.attention.projectionWidth;
+  const attentionFlops = 4 * attentionPairs(model, promptTokens) * model.attention.projectionWidth;
 
   /**
    * Expert-only schemes compute at two rates, not one.

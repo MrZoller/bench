@@ -184,12 +184,28 @@ export function normalizeRig(rig: Rig): Rig {
  * `kvHeads / ceil(kvHeads / shards)`. At 4 heads on 8 cards that is 4/1 = 4, and at 4 heads on
  * 3 cards it is 4/2 = 2 — replication is not always a clean fraction of the rig.
  *
+ * All of the above describes **tensor parallelism**, which is vLLM's layout and not everyone's.
+ * llama.cpp and Ollama split by *layer* by default: each card owns whole layers and their whole
+ * KV buffers, so the cache divides by the device count with no head axis involved and no MLA
+ * exception. Imposing the tensor-parallel cap on them rejected rigs that work — Qwen3 30B-A3B on
+ * eight 5090s was charged 48 GiB of KV per card and told it would not run, where a layer split
+ * needs about 24 and fits.
+ *
  * Exported because `estimateDecode` has to price the cache the same way this sizes it. Holding
  * separate opinions is how the memory panel came to say every card holds the whole MLA latent
  * while the speed panel charged one eighth of it.
  */
-export function kvShards(model: ModelSpec, shards: number): number {
+export function kvShards(model: ModelSpec, shards: number, runtime?: RuntimeSpec): number {
   if (shards <= 1) return 1;
+  // A layer split replicates nothing — a card that holds layer 7 holds all of layer 7's cache
+  // and none of anyone else's — but layers are whole and do not always divide evenly. A 36-layer
+  // model on 8 cards puts 5 layers on some and 4 on others, so the busiest card holds a ninth
+  // more than an even split would suggest. Same ceiling as the head axis below, on a different
+  // quantity: assuming it divides cleanly is optimistic in the direction that reports a fit.
+  if (runtime?.parallelism === 'layer') {
+    return model.layers / Math.ceil(model.layers / shards);
+  }
+
   const core = model.attention.core;
   if (core.kind === 'mla') return 1;
   const headsPerRank = Math.ceil(core.kvHeads / shards);
@@ -211,7 +227,10 @@ export function planPlacement(
     model,
     usage.contextTokens,
     usage.concurrency,
-    usage.kvPrecision
+    usage.kvPrecision,
+    // llama.cpp's q8_0/q4_0 KV carries a block scale, so the cache costs more than its nominal
+    // width. Passed rather than assumed, since it is exact for a float format.
+    runtime
   );
   const activations = activationBytes(model, usage, runtime);
 
@@ -219,7 +238,7 @@ export function planPlacement(
   // exception and gets its own divisor — see `kvShards`.
   const shards = rig.count;
   const weightBytesPerDevice = totalWeightBytes / shards;
-  const kvBytesPerDevice = totalKvBytes / kvShards(model, shards);
+  const kvBytesPerDevice = totalKvBytes / kvShards(model, shards, runtime);
   const usedBytesPerDevice = weightBytesPerDevice + kvBytesPerDevice + activations;
 
   const allocatableBytesPerDevice = allocatablePerDevice(rig, runtime);

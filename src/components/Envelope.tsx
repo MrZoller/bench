@@ -248,7 +248,7 @@ export function Envelope({ config }: { config: Config }) {
             <canvas
               ref={canvasRef}
               role="img"
-              aria-label={describe(grid, counts, total, currentCell)}
+              aria-label={describe(grid, counts, total, currentCell, contextLabels)}
               className="h-48 w-full rounded"
             />
             <ol
@@ -381,7 +381,8 @@ function describe(
   grid: EnvelopeGrid,
   counts: Record<string, number>,
   total: number,
-  current: EnvelopeCell | undefined
+  current: EnvelopeCell | undefined,
+  contextLabels: readonly string[]
 ): string {
   /**
    * The closed cells, split the way the legend splits them.
@@ -401,11 +402,22 @@ function describe(
       : raiseable > 0
         ? `${raiseable} of ${total} exceed the default allocation ceiling, which you can raise.`
         : `${closed.length} of ${total} combinations will not run at all.`;
-  // The ring is the only mark on this panel with no textual equivalent, so it goes first.
+  /**
+   * The ring is the only mark on this panel with no textual equivalent, so it goes first.
+   *
+   * Two things it has to borrow rather than re-derive. The context reads from the same
+   * disambiguated axis labels the visible headers use — formatting it independently rendered
+   * 131,072 and 131,073 both as "128K", so a screen-reader user could not tell which of two
+   * evaluated columns the ring was on, which is precisely what `uniqueLabels` exists to prevent.
+   * And the state reads through `describeCell`, so a cell that merely exceeds a raiseable ceiling
+   * is not announced as "will not run" while the table beside it says it is one setting away.
+   */
+  const index = current ? grid.contexts.indexOf(current.contextTokens) : -1;
+  const where = index >= 0 ? contextLabels[index] : current ? tokens(current.contextTokens) : '';
   const here = current
-    ? `Currently at ${tokens(current.contextTokens)} context and ${current.concurrency} ${
+    ? `Currently at ${where} context and ${current.concurrency} ${
         current.concurrency === 1 ? 'user' : 'users'
-      }: ${STATE_STYLE[current.state].label.toLowerCase()}. `
+      }: ${describeCell(current).toLowerCase()}. `
     : '';
 
   const comfortable = counts.comfortable ?? 0;
