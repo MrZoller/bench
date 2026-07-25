@@ -461,6 +461,22 @@ describe('a verdict counts the whole request, not half of it', () => {
     expect(rank[many.fitness]).toBeLessThanOrEqual(rank[one.fitness]);
   });
 
+  it('will not recommend long-context analysis a machine can hold but not perform', () => {
+    // The route this rewarded: offloading almost everything *raises* the runnable context, so a
+    // capacity-only grade got better the more the configuration spilled. DeepSeek V3 at BF16 on
+    // one 5090 reaches 163,840 tokens and takes about eighteen minutes to read a full window.
+    const verdicts = judge(DEEPSEEK_V3, 'bf16', { device: RTX_5090, contextTokens: 512 });
+    const long = verdicts.get('long-context')!;
+
+    expect(long.fitness).toBe('fail');
+    expect(long.reason).toMatch(/before saying anything|the work does not/);
+  });
+
+  it('still passes long-context on a machine that can actually work in the window', () => {
+    const long = judge(LLAMA_31_8B, 'q4_k_m', { device: RTX_5090 }).get('long-context')!;
+    expect(long.fitness).not.toBe('fail');
+  });
+
   it('will not call RAG usable when the answer takes minutes', () => {
     // Prefill is only half the request: a RAG-sized cache that decodes at a crawl still has to
     // write the reply, and grading on TTFT alone printed the prefill rate as though that were
