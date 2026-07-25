@@ -186,6 +186,9 @@ describe('quantization must be able to run where it is selected', () => {
     const store = useConfig.getState();
 
     store.set('deviceId', 'rtx-5090');
+    // NVFP4 is a safetensors format vLLM loads; llama.cpp reads GGUF and cannot open it, so the
+    // runtime has to be one that could before the vendor rule is the thing under test.
+    store.set('runtimeId', 'vllm');
     store.set('quantId', 'nvfp4');
     expect(useConfig.getState().quantId).toBe('nvfp4');
 
@@ -193,5 +196,49 @@ describe('quantization must be able to run where it is selected', () => {
     // this through would hand `peakFlops` 9.2 PFLOP/s from different silicon.
     store.set('deviceId', 'mi355x');
     expect(useConfig.getState().quantId).not.toBe('nvfp4');
+  });
+});
+
+describe('a runtime cannot be given a checkpoint it cannot read', () => {
+  it('drops AWQ when the runtime is llama.cpp', () => {
+    useConfig.setState(DEFAULT_CONFIG);
+    const store = useConfig.getState();
+
+    store.set('deviceId', 'rtx-5090');
+    store.set('runtimeId', 'vllm');
+    store.set('quantId', 'awq_4bit');
+    expect(useConfig.getState().quantId).toBe('awq_4bit');
+
+    // llama.cpp loads GGUF. An AWQ checkpoint is a different container it cannot open, and
+    // reporting capacity and throughput for the pair describes a run that cannot start.
+    store.set('runtimeId', 'llama.cpp');
+    expect(useConfig.getState().quantId).not.toBe('awq_4bit');
+  });
+
+  it('drops a vendor safetensors format when the runtime is llama.cpp', () => {
+    useConfig.setState(DEFAULT_CONFIG);
+    const store = useConfig.getState();
+
+    store.set('deviceId', 'rtx-5090');
+    store.set('runtimeId', 'vllm');
+    store.set('quantId', 'fp8');
+    expect(useConfig.getState().quantId).toBe('fp8');
+
+    store.set('runtimeId', 'llama.cpp');
+    expect(useConfig.getState().quantId).not.toBe('fp8');
+  });
+
+  it('drops AWQ on MLX as well, which reads neither GGUF nor AWQ checkpoints', () => {
+    useConfig.setState(DEFAULT_CONFIG);
+    const store = useConfig.getState();
+
+    store.set('deviceId', 'rtx-5090');
+    store.set('runtimeId', 'vllm');
+    store.set('quantId', 'awq_4bit');
+    expect(useConfig.getState().quantId).toBe('awq_4bit');
+
+    store.set('deviceId', 'mac-studio-m3-ultra-256');
+    store.set('runtimeId', 'mlx');
+    expect(useConfig.getState().quantId).not.toBe('awq_4bit');
   });
 });

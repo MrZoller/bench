@@ -74,7 +74,7 @@ function coerce(config: Config): Config {
    */
   const runtime = getRuntime(known(config.runtimeId, getRuntime, DEFAULT_CONFIG.runtimeId));
   const resolvedQuant = known(config.quantId, getQuant, DEFAULT_CONFIG.quantId);
-  const quantId = quantApplies(getQuant(resolvedQuant), getModel(modelId), device)
+  const quantId = quantApplies(getQuant(resolvedQuant), getModel(modelId), device, runtime)
     ? resolvedQuant
     : FALLBACK_QUANT_ID;
 

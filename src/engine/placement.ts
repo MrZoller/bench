@@ -32,13 +32,17 @@ export const DEFAULT_HOST_BANDWIDTH = 80e9;
  * Derived here from the rig rather than passed in, because the previous shape let a caller omit
  * it and silently get the optimistic default — which is exactly what the whole app did.
  */
-export function offloadBandwidth(rig: Rig, hostBandwidth: number): number {
+export function offloadBandwidth(rig: Rig, hostBandwidth: number, runtime?: RuntimeSpec): number {
   const link = rig.device.hostLinkBytesPerSec;
   if (link === undefined) return hostBandwidth;
-  // Each card has its own link and spills its own shard, so a rig streams over all of them at
-  // once — up to the point where host memory itself is the limit. Charging one card's link to
-  // the whole rig doubled the transfer time of any spilled two-card configuration.
-  return Math.min(hostBandwidth, link * Math.max(1, rig.count));
+
+  // Links add only where the devices work at the same time. Under tensor parallelism every card
+  // streams its own shard concurrently, so the rig's links sum — up to host memory itself. Under
+  // a layer split the cards run one after another, so a single token's transfer is limited by
+  // whichever card is currently working: one link, however many are installed. Aggregating there
+  // was the same mistake as aggregating its bandwidth, one function over.
+  const links = runtime?.parallelism === 'layer' ? 1 : Math.max(1, rig.count);
+  return Math.min(hostBandwidth, link * links);
 }
 
 export interface Placement {

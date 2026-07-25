@@ -345,6 +345,15 @@ export interface RuntimeSpec {
    * second, and applying one layout to both rejects rigs that work.
    */
   parallelism: 'tensor' | 'layer';
+  /**
+   * Weight formats this runtime can load, by `QuantSpec.id`.
+   *
+   * The same guarantee `kvPrecisions` already gave the cache, which is what makes its absence
+   * here an omission rather than a design: llama.cpp loads GGUF and cannot read an AWQ
+   * checkpoint, MLX reads its own formats and neither GGUF K-quants nor AWQ. Without it the app
+   * would report capacity and throughput for a pairing that cannot be loaded at all.
+   */
+  weightFormats: readonly string[];
   /** KV cache dtypes the runtime can actually store. */
   kvPrecisions: readonly KvPrecision[];
   /**
