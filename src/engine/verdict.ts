@@ -339,14 +339,35 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
     judge('long-context', {
       // Offload-aware: the resident figure is zero for any spilled configuration, which would
       // fail a card that holds 128K of KV perfectly well once its weights are on the host.
-      pass: runnableContextTokens >= 131072 + RESPONSE_ALLOWANCE,
-      tight: runnableContextTokens >= 65536 + RESPONSE_ALLOWANCE,
+      //
+      // Capacity was the whole grade, and it was the last archetype without a speed term —
+      // which is exactly the configuration that route rewards. DeepSeek V3 at BF16 on one 5090
+      // offloads 98% of its weights and therefore *reaches* 163,840 tokens, so it passed while
+      // taking eighteen minutes to first token and answering at 0.87 tok/s. Holding a window is
+      // not the same as being able to work in it.
+      //
+      // The budgets are wide on purpose. Reading a whole repository is not an interactive act
+      // and nobody expects it to be, so two minutes to first token is comfortable here where it
+      // would be catastrophic for chat. Ten minutes and 2 tok/s is the edge of a thing you would
+      // still start and walk away from.
+      pass:
+        runnableContextTokens >= 131072 + RESPONSE_ALLOWANCE &&
+        ttftOf('long-context') <= 120 &&
+        rateOf('long-context') >= 5,
+      tight:
+        runnableContextTokens >= 65536 + RESPONSE_ALLOWANCE &&
+        ttftOf('long-context') <= 600 &&
+        rateOf('long-context') >= 2,
       why: () =>
         runnableContextTokens < 65536 + RESPONSE_ALLOWANCE
           ? shortfall('long-context', 'the 128K window these jobs assume')
-          : runnableContextTokens > maxContextTokens
-            ? `Reaches ${ctx(runnableContextTokens)}, though only with weights offloaded.`
-            : `Holds ${ctx(runnableContextTokens)} at this concurrency.`,
+          : ttftOf('long-context') > 600
+            ? `Holds ${ctx(runnableContextTokens)}, but takes ${secs(ttftOf('long-context'))}s to read it before saying anything.`
+            : rateOf('long-context') < 2
+              ? `Holds ${ctx(runnableContextTokens)} and answers at ${fmt(rateOf('long-context'))} tok/s — the window fits, the work does not.`
+              : runnableContextTokens > maxContextTokens
+                ? `Reaches ${ctx(runnableContextTokens)}, though only with weights offloaded — ${secs(ttftOf('long-context'))}s to read a full window.`
+                : `Holds ${ctx(runnableContextTokens)} at this concurrency, ${secs(ttftOf('long-context'))}s to read a full window.`,
     }),
     judge('batch', {
       // No latency budget at all — but the request still has to fit, and the throughput has to
