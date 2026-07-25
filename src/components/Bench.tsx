@@ -385,7 +385,18 @@ export function Bench() {
 function ShareLink() {
   const config = useConfig();
   const [state, setState] = useState<'idle' | 'copied' | 'unavailable'>('idle');
-  const [href, setHref] = useState('');
+
+  /**
+   * Derived, not captured.
+   *
+   * Holding the link in state froze it at the click that revealed the field: adjusting any
+   * control afterwards left the still-visible input offering the previous scenario, so a manual
+   * copy shared something the user was no longer looking at. That is the same class of bug the
+   * full encoding exists to prevent — a link that means something other than it appears to.
+   */
+  const href = `${window.location.origin}${window.location.pathname}${configToShareSearch(
+    config as Config
+  )}`;
 
   const label =
     state === 'copied'
@@ -399,10 +410,6 @@ function ShareLink() {
       <button
         type="button"
         onClick={() => {
-          const { origin, pathname } = window.location;
-          const link = `${origin}${pathname}${configToShareSearch(config as Config)}`;
-          setHref(link);
-
           /**
            * `navigator.clipboard` is undefined on non-secure origins and in some embedded
            * browsers, and the optional chain meant the button did nothing at all there while
@@ -412,7 +419,7 @@ function ShareLink() {
            * `document.execCommand('copy')`: it is deprecated, it needs a selection in the
            * document anyway, and it fails silently in exactly the same contexts.
            */
-          const writer = navigator.clipboard?.writeText(link);
+          const writer = navigator.clipboard?.writeText(href);
           if (writer === undefined) {
             setState('unavailable');
             return;

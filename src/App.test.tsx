@@ -445,6 +445,21 @@ describe('sharing a scenario degrades honestly', () => {
     expect(screen.queryByText('Link copied')).not.toBeInTheDocument();
   });
 
+  it('keeps the fallback link current when the scenario changes underneath it', async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: /Copy link to this scenario/i }));
+
+    const field = () => screen.getByLabelText('Link to this scenario') as HTMLInputElement;
+    expect(field().value).not.toContain('rtx-5080');
+
+    // The field stays on screen; the scenario moves. Holding the link in state left it offering
+    // whatever was selected at the click, so a manual copy shared the wrong configuration.
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5080');
+    expect(field().value).toContain('rtx-5080');
+  });
+
   it('says so rather than silently failing when the write is refused', async () => {
     const user = userEvent.setup();
     Object.defineProperty(navigator, 'clipboard', {
