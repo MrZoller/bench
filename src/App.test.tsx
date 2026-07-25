@@ -663,3 +663,30 @@ describe('the KV control names something the runtime accepts', () => {
     expect(within(group).getByText('Q8')).toBeInTheDocument();
   });
 });
+
+/**
+ * The ring has no visual equivalent for a screen reader, so its sentence has to carry everything
+ * the table carries about that one cell — the same wording and the same disambiguated label.
+ */
+describe('the spoken marker describes the same cell the table does', () => {
+  it('borrows the table wording rather than re-deriving it', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-512');
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+
+    const region = screen.getByRole('region', { name: /how much room/i });
+    const spoken = within(region).getByRole('img').getAttribute('aria-label') ?? '';
+
+    // Open the table and read the marked cell, which is the same scenario the ring sits on.
+    await user.click(within(region).getByRole('button', { name: /region as a table/i }));
+    const table = within(region).getByRole('table');
+    const marked = within(table).getByText(/▸/).closest('td')?.textContent ?? '';
+
+    // Whatever the table says about that cell, the ring's sentence must say too.
+    const said = marked.replace('▸', '').trim().toLowerCase();
+    expect(spoken.toLowerCase()).toContain(said);
+  });
+});
