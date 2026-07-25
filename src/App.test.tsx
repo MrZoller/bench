@@ -460,6 +460,22 @@ describe('sharing a scenario degrades honestly', () => {
     expect(field().value).toContain('rtx-5080');
   });
 
+  it('does not steal focus back on every later change', async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: /Copy link to this scenario/i }));
+
+    // The field is shown and selected. From here the user goes back to the controls — and a
+    // callback ref recreated each render pulled focus straight back, so a keyboard user could
+    // press an arrow key once and then lose the control they were operating.
+    const users = screen.getByLabelText('Concurrent users');
+    users.focus();
+    fireEvent.change(users, { target: { value: '4' } });
+
+    expect(document.activeElement).toBe(users);
+  });
+
   it('says so rather than silently failing when the write is refused', async () => {
     const user = userEvent.setup();
     Object.defineProperty(navigator, 'clipboard', {

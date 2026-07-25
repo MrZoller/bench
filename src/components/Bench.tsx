@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { DEVICES, MODELS, RUNTIMES, evaluateConfig, useConfig, type Config } from '@/store/config';
 import { useUrlSync } from '@/store/useUrlSync';
 import { configToShareSearch } from '@/store/url';
@@ -409,6 +409,31 @@ function ShareLink() {
     config as Config
   )}`;
 
+  /**
+   * Cleared whenever a new attempt starts.
+   *
+   * Without that, a second click during the two-second confirmation window inherits the first
+   * click's timer: if the second write is refused, the fallback field appears and then the stale
+   * timeout resets to `idle` and removes it. A transient failure would go silent within two
+   * seconds of being reported.
+   */
+  const resetTimer = useRef<number | undefined>(undefined);
+
+  /**
+   * Selected once, when the field first appears.
+   *
+   * A callback ref is recreated on every render, so React re-invoked it on every configuration
+   * change and `select()` pulled focus off whatever control the user was operating. A keyboard
+   * user could press an arrow key once and then lose the control — the fallback for one
+   * accessibility problem creating a worse one.
+   */
+  const fieldRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (state === 'unavailable') fieldRef.current?.select();
+  }, [state]);
+
+  useEffect(() => () => window.clearTimeout(resetTimer.current), []);
+
   const label =
     state === 'copied'
       ? 'Link copied'
@@ -430,6 +455,8 @@ function ShareLink() {
            * `document.execCommand('copy')`: it is deprecated, it needs a selection in the
            * document anyway, and it fails silently in exactly the same contexts.
            */
+          window.clearTimeout(resetTimer.current);
+
           const writer = navigator.clipboard?.writeText(href);
           if (writer === undefined) {
             setState('unavailable');
@@ -439,7 +466,7 @@ function ShareLink() {
           void writer.then(
             () => {
               setState('copied');
-              window.setTimeout(() => setState('idle'), 2000);
+              resetTimer.current = window.setTimeout(() => setState('idle'), 2000);
             },
             // A rejected write — permission denied, document not focused — lands here, and
             // means the same thing to the user as no API at all.
@@ -460,7 +487,7 @@ function ShareLink() {
           // Select on focus so one keystroke copies it — the closest thing to the button
           // working that a browser without clipboard access allows.
           onFocus={(e) => e.currentTarget.select()}
-          ref={(el) => el?.select()}
+          ref={fieldRef}
           className="min-w-0 flex-1 rounded-md border border-[var(--color-border)] bg-transparent px-2 py-1.5 text-xs text-[var(--color-text-muted)]"
         />
       )}
