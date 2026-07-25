@@ -1,12 +1,4 @@
-import type {
-  DeviceClass,
-  DeviceSpec,
-  ModelSpec,
-  QuantSpec,
-  Rig,
-  RuntimeSpec,
-  UsageSpec,
-} from './types';
+import type { DeviceSpec, ModelSpec, QuantSpec, Rig, RuntimeSpec, UsageSpec } from './types';
 import { activationBytes } from './activations';
 import { kvBytesTotal } from './kv';
 import { weightBytes } from './weights';
@@ -28,13 +20,6 @@ import { weightBytes } from './weights';
 
 /** Typical dual-channel DDR5 desktop bandwidth — the speed offloaded weights read at. */
 export const DEFAULT_HOST_BANDWIDTH = 80e9;
-
-/** Device classes as prose. The enum reads fine in code and badly in a sentence. */
-const DEVICE_CLASS_PROSE: Record<DeviceClass, string> = {
-  'discrete-gpu': 'discrete GPUs',
-  'unified-soc': 'unified-memory hardware',
-  'cpu-ram': 'CPU and system RAM',
-};
 
 export interface Placement {
   fits: boolean;
@@ -174,10 +159,15 @@ export function planPlacement(
   const impossible =
     !fits && (!canOffload || kvBytesPerDevice + activations > allocatableBytesPerDevice);
 
-  const unsupported = !runtime.supports.includes(rig.device.class)
-    ? `${runtime.label} does not run on ${DEVICE_CLASS_PROSE[rig.device.class]}.`
-    : runtime.requiresVendor && rig.device.vendor !== runtime.requiresVendor
-      ? `${runtime.label} runs only on ${runtime.requiresVendor} hardware.`
+  const drives = runtime.supports.some(
+    (s) =>
+      s.class === rig.device.class && (s.vendor === undefined || s.vendor === rig.device.vendor)
+  );
+
+  const unsupported = !drives
+    ? `${runtime.label} does not run on ${rig.device.name}.`
+    : !runtime.kvPrecisions.includes(usage.kvPrecision)
+      ? `${runtime.label} cannot store a ${usage.kvPrecision.toUpperCase()} KV cache.`
       : // A format tied to particular silicon is as unrunnable as a runtime that cannot drive
         // the device, and was previously waved through — leaving `peakFlops` to read a rate
         // published for a different format, or for hardware that has no such units at all.

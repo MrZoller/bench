@@ -1,4 +1,4 @@
-import type { RuntimeSpec } from '@/engine/types';
+import type { DeviceSpec, RuntimeSpec } from '@/engine/types';
 import { GIB } from '@/engine/types';
 
 /**
@@ -31,7 +31,9 @@ export const RUNTIMES: readonly RuntimeSpec[] = [
     // low-precision rates are simply not reachable from here.
     computeEfficiency: 0.12,
     nativeLowPrecision: false,
-    supports: ['discrete-gpu', 'unified-soc', 'cpu-ram'],
+    supports: [{ class: 'discrete-gpu' }, { class: 'unified-soc' }, { class: 'cpu-ram' }],
+    // GGUF K-quants for the cache as well as the weights: `--cache-type-k q8_0 q4_0`.
+    kvPrecisions: ['fp16', 'q8', 'q4'],
     source: 'https://github.com/ggml-org/llama.cpp',
   },
   {
@@ -44,7 +46,12 @@ export const RUNTIMES: readonly RuntimeSpec[] = [
     nativeLowPrecision: true,
     // Reserves a fixed fraction of the device up front regardless of what the model needs.
     preallocFraction: 0.9,
-    supports: ['discrete-gpu'],
+    // Discrete accelerators from either vendor, plus NVIDIA's unified-memory Spark, which is a
+    // CUDA target with an official playbook. Not Apple or AMD unified memory.
+    supports: [{ class: 'discrete-gpu' }, { class: 'unified-soc', vendor: 'NVIDIA' }],
+    // `--kv-cache-dtype` takes auto/native or an FP8 variant. There is no 4-bit KV cache, and
+    // offering one lets a long-context OOM be reported as a comfortable fit.
+    kvPrecisions: ['fp16', 'q8'],
     source: 'https://docs.vllm.ai/',
   },
   {
@@ -54,9 +61,9 @@ export const RUNTIMES: readonly RuntimeSpec[] = [
     bandwidthEfficiency: 0.8,
     computeEfficiency: 0.15,
     nativeLowPrecision: false,
-    supports: ['unified-soc'],
     // Class is too coarse here: `unified-soc` also covers the DGX Spark and Strix Halo.
-    requiresVendor: 'Apple',
+    supports: [{ class: 'unified-soc', vendor: 'Apple' }],
+    kvPrecisions: ['fp16', 'q8'],
     source: 'https://github.com/ml-explore/mlx',
   },
 ] as const;
@@ -69,7 +76,14 @@ export function getRuntime(id: string): RuntimeSpec {
   return runtime;
 }
 
-/** Runtimes that can actually drive a device class — the rest are offered but marked. */
-export function runtimesFor(deviceClass: RuntimeSpec['supports'][number]): readonly RuntimeSpec[] {
-  return RUNTIMES.filter((r) => r.supports.includes(deviceClass));
+/** Whether a runtime can drive a particular device, by class and vendor. */
+export function runtimeDrives(runtime: RuntimeSpec, device: DeviceSpec): boolean {
+  return runtime.supports.some(
+    (s) => s.class === device.class && (s.vendor === undefined || s.vendor === device.vendor)
+  );
+}
+
+/** Runtimes that can drive a given device. */
+export function runtimesFor(device: DeviceSpec): readonly RuntimeSpec[] {
+  return RUNTIMES.filter((r) => runtimeDrives(r, device));
 }

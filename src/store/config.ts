@@ -72,6 +72,7 @@ function coerce(config: Config): Config {
    * tops out between 32K and 164K while the slider offers stops up to 1M, so without this a
    * 40K Qwen would report fit, memory and speed for a 1M window it cannot process.
    */
+  const runtime = getRuntime(known(config.runtimeId, getRuntime, DEFAULT_CONFIG.runtimeId));
   const resolvedQuant = known(config.quantId, getQuant, DEFAULT_CONFIG.quantId);
   const quantId = quantApplies(getQuant(resolvedQuant), getModel(modelId), device)
     ? resolvedQuant
@@ -116,9 +117,11 @@ function coerce(config: Config): Config {
       contextTokens,
       clamp(config.promptTokens, 1, 1_048_576, DEFAULT_CONFIG.promptTokens)
     ),
-    kvPrecision: (['fp16', 'q8', 'q4'] as const).includes(config.kvPrecision)
+    // Held inside what the runtime can actually store, not merely inside the type. A 4-bit
+    // cache on vLLM would charge 0.5 bytes per element for something it cannot allocate.
+    kvPrecision: runtime.kvPrecisions.includes(config.kvPrecision)
       ? config.kvPrecision
-      : DEFAULT_CONFIG.kvPrecision,
+      : (runtime.kvPrecisions[0] ?? DEFAULT_CONFIG.kvPrecision),
   };
 }
 

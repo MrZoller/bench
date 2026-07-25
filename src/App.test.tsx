@@ -339,3 +339,35 @@ describe('the slider never displays a value the engine is not using', () => {
     }
   });
 });
+
+describe('the Bench offers only what the runtime can do', () => {
+  it('drops a 4-bit KV cache when the runtime has no such flag', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'llama.cpp');
+    expect(screen.getByRole('button', { name: 'Q4' })).toBeInTheDocument();
+
+    // vLLM's --kv-cache-dtype has no 4-bit option; offering one charges 0.5 bytes per element
+    // for something it cannot allocate, turning a long-context OOM into a reported fit.
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'vllm');
+    expect(screen.queryByRole('button', { name: 'Q4' })).not.toBeInTheDocument();
+    expect(useConfig.getState().kvPrecision).not.toBe('q4');
+  });
+
+  it('runs vLLM on a Spark, which is a CUDA target', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'dgx-spark');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'vllm');
+
+    const verdicts = screen.getByRole('region', { name: 'Verdicts' });
+    expect(within(verdicts).queryByText('Unsupported')).not.toBeInTheDocument();
+
+    // Apple unified memory is still refused — the class alone was never the rule.
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
+    expect(within(verdicts).getAllByText('Unsupported').length).toBeGreaterThan(0);
+  });
+});

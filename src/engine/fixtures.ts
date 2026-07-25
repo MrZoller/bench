@@ -308,7 +308,8 @@ export const LLAMA_CPP: RuntimeSpec = {
   bandwidthEfficiency: 0.82,
   computeEfficiency: 0.12,
   nativeLowPrecision: false,
-  supports: ['discrete-gpu', 'unified-soc', 'cpu-ram'],
+  supports: [{ class: 'discrete-gpu' }, { class: 'unified-soc' }, { class: 'cpu-ram' }],
+  kvPrecisions: ['fp16', 'q8', 'q4'],
   source: 'https://github.com/ggml-org/llama.cpp',
 };
 
@@ -322,7 +323,8 @@ export const VLLM: RuntimeSpec = {
   nativeLowPrecision: true,
   // Reserves a fixed fraction of the device up front regardless of what the model needs.
   preallocFraction: 0.9,
-  supports: ['discrete-gpu'],
+  supports: [{ class: 'discrete-gpu' }, { class: 'unified-soc', vendor: 'NVIDIA' }],
+  kvPrecisions: ['fp16', 'q8'],
   source: 'https://docs.vllm.ai/',
 };
 
@@ -333,8 +335,8 @@ export const MLX: RuntimeSpec = {
   bandwidthEfficiency: 0.8,
   computeEfficiency: 0.15,
   nativeLowPrecision: false,
-  supports: ['unified-soc'],
   // Class is too coarse here: `unified-soc` also covers the DGX Spark and Strix Halo.
-  requiresVendor: 'Apple',
+  supports: [{ class: 'unified-soc', vendor: 'Apple' }],
+  kvPrecisions: ['fp16', 'q8'],
   source: 'https://github.com/ml-explore/mlx',
 };

@@ -303,16 +303,18 @@ export interface RuntimeSpec {
    * (vLLM's gpu_memory_utilization) rather than allocating as it goes (llama.cpp).
    */
   preallocFraction?: number;
-  /** Device classes this runtime can drive at all. */
-  supports: readonly DeviceClass[];
   /**
-   * Vendor this runtime is additionally restricted to, when class alone is too coarse.
+   * Hardware this runtime can drive, as class-and-optionally-vendor pairs.
    *
-   * `unified-soc` covers Apple silicon, NVIDIA's GB10 and AMD's Strix Halo, which share a
-   * memory topology and nothing else. MLX drives only the first, so without this it reported
-   * plausible throughput for a DGX Spark it cannot run on at all.
+   * Neither axis alone is enough. `unified-soc` covers Apple silicon, NVIDIA's GB10 and AMD's
+   * Strix Halo — one memory topology, three incompatible software stacks — so MLX needs the
+   * vendor. But a single runtime-wide vendor is equally wrong: vLLM drives AMD's discrete
+   * accelerators *and* NVIDIA's unified-memory Spark, while driving no Apple hardware at all.
+   * Per-entry vendors are the smallest thing that expresses both.
    */
-  requiresVendor?: string;
+  supports: readonly { class: DeviceClass; vendor?: string }[];
+  /** KV cache dtypes the runtime can actually store. */
+  kvPrecisions: readonly KvPrecision[];
   source: string;
 }
 

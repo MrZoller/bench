@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { DEVICES, MODELS, RUNTIMES, evaluateConfig, useConfig } from '@/store/config';
+import { getRuntime, runtimeDrives } from '@/data/runtimes';
 import { QUANTS } from '@/data/quants';
 import { CATALOG_GENERATED_AT, getDevice, getModel } from '@/data/catalog';
 import { BudgetBar } from './BudgetBar';
@@ -43,6 +44,7 @@ export function Bench() {
   const evaluation = useMemo(() => evaluateConfig(config), [config]);
   const model = getModel(config.modelId);
   const device = getDevice(config.deviceId);
+  const runtime = getRuntime(config.runtimeId);
 
   /**
    * Context stops, capped at what this model supports.
@@ -62,6 +64,20 @@ export function Bench() {
     const stops = new Set([...withinModel, model.maxContext, config.contextTokens]);
     return [...stops].filter((t) => t <= model.maxContext).sort((a, b) => a - b);
   }, [model.maxContext, config.contextTokens]);
+
+  /**
+   * Every discrete control includes whatever is stored, for the same reason the context slider
+   * does: `coerce` accepts any integer in range, so a value from a URL — `?u=3` — would be
+   * evaluated as three users while the slider displayed two.
+   */
+  const concurrencyStops = useMemo(
+    () => withStored(CONCURRENCY_STOPS, config.concurrency),
+    [config.concurrency]
+  );
+  const deviceCountStops = useMemo(
+    () => withStored(DEVICE_COUNT_STOPS, config.deviceCount),
+    [config.deviceCount]
+  );
 
   /** The prompt is part of the context, so it cannot be offered beyond it. */
   const promptStops = useMemo(() => {
@@ -161,27 +177,32 @@ export function Bench() {
     []
   );
 
-  const runtimeOptions = useMemo(() => {
-    const device = DEVICES.find((d) => d.id === config.deviceId);
-    // Class *and* vendor, matching `planPlacement`. Checking only the class left MLX on a DGX
-    // Spark without its accessible warning while the tiles below said "Unsupported" — the note
-    // is what a screen-reader user tabbing through the picker actually hears.
-    const drives = (r: (typeof RUNTIMES)[number]) =>
-      device !== undefined &&
-      r.supports.includes(device.class) &&
-      (r.requiresVendor === undefined || r.requiresVendor === device.vendor);
-
-    return RUNTIMES.map((r) => ({
-      value: r.id,
-      label: r.label,
-      note:
-        device && !drives(r)
+  const runtimeOptions = useMemo(
+    () =>
+      RUNTIMES.map((r) => ({
+        value: r.id,
+        label: r.label,
+        // The note is the control's accessible description, so a "does not run here" warning
+        // has to live in it — a screen-reader user tabbing the picker hears nothing otherwise.
+        note: !runtimeDrives(r, device)
           ? `Does not run on ${device.name}`
           : r.preallocFraction
             ? `Reserves ${Math.round(r.preallocFraction * 100)}% of the device up front`
             : undefined,
-    }));
-  }, [config.deviceId]);
+      })),
+    [device]
+  );
+
+  /**
+   * KV precisions the selected runtime can actually store.
+   *
+   * vLLM's `--kv-cache-dtype` takes native or FP8 variants and has no 4-bit cache; offering one
+   * charged 0.5 bytes per element and could turn a long-context OOM into a reported fit.
+   */
+  const kvOptions = useMemo(
+    () => KV_PRECISIONS.filter((k) => runtime.kvPrecisions.includes(k.value)),
+    [runtime]
+  );
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-5 p-4 sm:p-6">
@@ -252,8 +273,8 @@ export function Bench() {
         />
         <StopSlider
           label="Concurrent users"
-          stops={CONCURRENCY_STOPS}
-          value={nearestStop(CONCURRENCY_STOPS, config.concurrency)}
+          stops={concurrencyStops}
+          value={nearestStop(concurrencyStops, config.concurrency)}
           onChange={(v) => set('concurrency', v)}
           format={(v) => String(v)}
         />
@@ -268,13 +289,13 @@ export function Bench() {
           label="KV precision"
           value={config.kvPrecision}
           onChange={(v) => set('kvPrecision', v)}
-          options={KV_PRECISIONS}
+          options={kvOptions}
         />
         {shardable ? (
           <StopSlider
             label="Device count"
-            stops={DEVICE_COUNT_STOPS}
-            value={nearestStop(DEVICE_COUNT_STOPS, config.deviceCount)}
+            stops={deviceCountStops}
+            value={nearestStop(deviceCountStops, config.deviceCount)}
             onChange={(v) => set('deviceCount', v)}
             format={(v) => `${v}x`}
           />
@@ -332,6 +353,11 @@ export function Bench() {
       )}
     </div>
   );
+}
+
+/** The fixed stops plus whatever is currently stored, so the control can always show it. */
+function withStored(stops: readonly number[], stored: number): number[] {
+  return [...new Set([...stops, stored])].sort((a, b) => a - b);
 }
 
 /** Snap an arbitrary value (from a URL, say) to the nearest slider stop. */
