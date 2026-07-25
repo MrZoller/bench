@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { configToSearch, sameScenario, searchToConfig } from './url';
+import { configToSearch, configToShareSearch, sameScenario, searchToConfig } from './url';
 import { DEFAULT_CONFIG, type Config } from './config';
 
 /**
@@ -12,9 +12,82 @@ describe('scenario URLs', () => {
     expect(configToSearch(DEFAULT_CONFIG)).toBe('');
   });
 
-  it('writes only what differs from the default', () => {
+  it('still writes the default scenario in full when someone asks for a link to it', () => {
+    // The bare address bar is honest — it claims nothing. A copied link claims something, so the
+    // default scenario is the one case where the two encoders differ, and the share side has to
+    // spell it out or the highest-volume share of all drifts with the next defaults change.
+    const shared = configToShareSearch(DEFAULT_CONFIG);
+    const params = new URLSearchParams(shared.slice(1));
+
+    expect([...params.keys()].sort()).toEqual(['ctx', 'd', 'kv', 'm', 'n', 'p', 'q', 'r', 'u']);
+    expect(searchToConfig(shared)).toEqual(DEFAULT_CONFIG);
+  });
+
+  it('writes every field once anything differs, not just the field that differs', () => {
+    // The sparse version wrote `?d=rtx-5090` and let the other eight fall back to whatever
+    // DEFAULT_CONFIG says on the day the link is *opened*. A link pasted into a forum thread
+    // would then change meaning the next time a default moved. Completeness is what makes the
+    // querystring independent of the deployment that reads it.
     const search = configToSearch({ ...DEFAULT_CONFIG, deviceId: 'rtx-5090' });
-    expect(search).toBe('?d=rtx-5090');
+    const params = new URLSearchParams(search.slice(1));
+
+    expect([...params.keys()].sort()).toEqual(['ctx', 'd', 'kv', 'm', 'n', 'p', 'q', 'r', 'u']);
+    expect(params.get('d')).toBe('rtx-5090');
+    expect(params.get('m')).toBe(DEFAULT_CONFIG.modelId);
+  });
+
+  it('reproduces a shared scenario even when every default has since changed', () => {
+    const shared: Config = {
+      modelId: 'Qwen/Qwen3-32B',
+      quantId: 'q5_k_m',
+      runtimeId: 'vllm',
+      deviceId: 'rtx-5090',
+      deviceCount: 2,
+      contextTokens: 32768,
+      concurrency: 4,
+      promptTokens: 4096,
+      kvPrecision: 'q8',
+    };
+    const link = configToSearch(shared);
+
+    // Stand in for a future deployment: read the link back against defaults that share not one
+    // value with it. Nothing may leak through from the reader's side.
+    const laterDefaults: Config = {
+      modelId: 'meta-llama/Llama-3.1-8B-Instruct',
+      quantId: 'q4_k_m',
+      runtimeId: 'llama.cpp',
+      deviceId: 'm3-ultra-512',
+      deviceCount: 1,
+      contextTokens: 8192,
+      concurrency: 1,
+      promptTokens: 1024,
+      kvPrecision: 'fp16',
+    };
+    const params = new URLSearchParams(link.slice(1));
+    const reread: Config = { ...laterDefaults };
+    const fields = {
+      m: 'modelId',
+      q: 'quantId',
+      r: 'runtimeId',
+      d: 'deviceId',
+      n: 'deviceCount',
+      ctx: 'contextTokens',
+      u: 'concurrency',
+      p: 'promptTokens',
+      kv: 'kvPrecision',
+    } as const;
+
+    for (const [short, full] of Object.entries(fields)) {
+      const raw = params.get(short);
+      if (raw === null) continue;
+      if (typeof laterDefaults[full] === 'number') {
+        (reread[full] as number) = Number(raw);
+      } else {
+        (reread[full] as string) = raw;
+      }
+    }
+
+    expect(reread).toEqual(shared);
   });
 
   it('round-trips a fully specified scenario', () => {

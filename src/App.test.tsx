@@ -143,7 +143,12 @@ describe('the Bench does not overclaim', () => {
     await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
 
     expect(screen.queryByText(/runs fast/i)).not.toBeInTheDocument();
-    expect(screen.getByText(/crossing the host bus/i)).toBeInTheDocument();
+    // Either explanation is honest; what must never appear is a claim of speed. Which one shows
+    // depends on whether the engine's resident estimate would itself have been fast.
+    const explained =
+      screen.queryAllByText(/crossing the host bus/i).length +
+      screen.queryAllByText(/Even resident it would be slow/i).length;
+    expect(explained).toBeGreaterThan(0);
   });
 
   it('explains a full card as a full card, not as a Mac', async () => {
@@ -354,12 +359,13 @@ describe('the Bench offers only what the runtime can do', () => {
 
     await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
     await user.selectOptions(screen.getByLabelText('Runtime'), 'llama.cpp');
-    expect(screen.getByRole('button', { name: 'Q4' })).toBeInTheDocument();
+    // A radio now, not a toggle button: these are mutually exclusive alternatives.
+    expect(screen.getByRole('radio', { name: 'Q4' })).toBeInTheDocument();
 
     // vLLM's --kv-cache-dtype has no 4-bit option; offering one charges 0.5 bytes per element
     // for something it cannot allocate, turning a long-context OOM into a reported fit.
     await user.selectOptions(screen.getByLabelText('Runtime'), 'vllm');
-    expect(screen.queryByRole('button', { name: 'Q4' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: 'Q4' })).not.toBeInTheDocument();
     expect(useConfig.getState().kvPrecision).not.toBe('q4');
   });
 
@@ -425,5 +431,33 @@ describe('the Envelope agrees with the verdicts beside it', () => {
     await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
 
     expect(screen.getByRole('img', { name: /will not run at all/i })).toBeInTheDocument();
+  });
+});
+
+describe('the Bench and its tiles cannot disagree', () => {
+  it('makes the aside and the decode tile use the same classification', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Sweep a range of configurations; wherever the tile says "Fast", the aside must agree, and
+    // wherever it does not, the aside must not claim speed. Sharing the thresholds was not
+    // enough — the tile classified its rounded figure and the aside the raw one.
+    for (const device of ['rtx-5090', 'rtx-5080', 'dgx-spark', 'mac-studio-m3-ultra-256']) {
+      await user.selectOptions(screen.getByLabelText('Hardware'), device);
+
+      const verdicts = screen.getByRole('region', { name: 'Verdicts' });
+      const tileSaysFast = within(verdicts).queryByText('Fast') !== null;
+      const asideClaimsFast = screen.queryByText(/runs fast/i) !== null;
+      expect(asideClaimsFast).toBe(tileSaysFast);
+    }
+  });
+
+  it('exposes mutually exclusive choices as radios, not independent toggles', () => {
+    render(<App />);
+    const group = screen.getByRole('group', { name: /KV precision/i });
+    const radios = within(group).getAllByRole('radio');
+
+    expect(radios.length).toBeGreaterThan(1);
+    expect(radios.filter((r) => (r as HTMLInputElement).checked)).toHaveLength(1);
   });
 });

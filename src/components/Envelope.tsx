@@ -9,7 +9,7 @@ import { getDevice, getModel } from '@/data/catalog';
 import { getQuant } from '@/data/quants';
 import { getRuntime } from '@/data/runtimes';
 import { colors, marks, withAlpha } from '@/design/tokens';
-import { CAPACITY_TIGHT, DECODE_USABLE } from './Telemetry';
+import { CAPACITY_TIGHT, DECODE_USABLE } from '@/lib/verdicts';
 import { rate, tokens } from '@/lib/format';
 import type { Config } from '@/store/scenario';
 

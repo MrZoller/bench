@@ -1,17 +1,19 @@
 import { useMemo, useState } from 'react';
-import { DEVICES, MODELS, RUNTIMES, evaluateConfig, useConfig } from '@/store/config';
+import { DEVICES, MODELS, RUNTIMES, evaluateConfig, useConfig, type Config } from '@/store/config';
 import { useUrlSync } from '@/store/useUrlSync';
+import { configToShareSearch } from '@/store/url';
 import { getRuntime, runtimeDrives } from '@/data/runtimes';
 import { QUANTS } from '@/data/quants';
 import { CATALOG_GENERATED_AT, getDevice, getModel } from '@/data/catalog';
 import { BudgetBar } from './BudgetBar';
-import { DECODE_FAST, Telemetry } from './Telemetry';
+import { Telemetry } from './Telemetry';
 import { Workloads } from './Workloads';
 import { Envelope } from './Envelope';
 import { Segmented, Select, StopSlider } from './Controls';
 import { compact, gibLabel, params, percent, tokens } from '@/lib/format';
 import type { KvPrecision } from '@/engine/types';
 import { canShard } from '@/engine/placement';
+import { classifyDecode } from '@/lib/verdicts';
 import { quantApplies } from '@/lib/quantChoice';
 
 /**
@@ -115,7 +117,7 @@ export function Bench() {
    * claiming "fast" across the 15-30 band that the tile calls merely "Usable" — the fifth way
    * this one sentence has managed to contradict the number printed beside it.
    */
-  const fast = runnable && evaluation.decode.perUserTokensPerSec >= DECODE_FAST;
+  const fast = runnable && classifyDecode(evaluation.decode.perUserTokensPerSec).isFast;
   /**
    * Sharding needs a transport between devices, which is what `interconnect` records — not the
    * device class. Keying off the class disabled it for the DGX Spark, whose catalog row
@@ -343,9 +345,15 @@ export function Bench() {
             {fast
               ? ', so it decodes at roughly that model size rather than its full one.'
               : evaluation.placement.offloadFraction > 0
-                ? `. That would make it fast — but not here, with ${percent(
-                    evaluation.placement.offloadFraction
-                  )} of the weights crossing the host bus every token.`
+                ? // Only claimed when the engine's own resident estimate agrees: a model can
+                  // spill *and* still be slow with everything resident, and blaming the spill
+                  // then sends someone to buy memory that will not fix it.
+                  classifyDecode(evaluation.decode.offloadPenalty?.withoutOffloadTokensPerSec ?? 0)
+                    .isFast
+                  ? `. That would make it fast — but not here, with ${percent(
+                      evaluation.placement.offloadFraction
+                    )} of the weights crossing the host bus every token.`
+                  : '. Even resident it would be slow here, so fitting it is not the whole story.'
                 : '. Whether that is fast depends on the memory it is reading from, which the decode figure above measures.'}{' '}
             Total parameters set what fits; active parameters set how fast it feels.
           </p>
@@ -363,20 +371,25 @@ export function Bench() {
 }
 
 /**
- * Copies the current address, which already encodes the scenario.
+ * Copies a link that names the scenario in full.
  *
- * Deliberately reads `location.href` at click time rather than rebuilding the URL: the address
- * bar is kept in sync by `useUrlSync`, and rebuilding here would be a second encoder to drift
- * from the first.
+ * Not `location.href`: the address bar is deliberately bare on an untouched default page, because
+ * it claims nothing there. A copied link always claims something — it says "this is what I was
+ * looking at" — so every field is written out and the link cannot drift when a default moves.
+ * `configToShareSearch` is the same encoder the address bar uses, minus the empty case, so there
+ * is still only one place that knows the format.
  */
 function ShareLink() {
+  const config = useConfig();
   const [copied, setCopied] = useState(false);
 
   return (
     <button
       type="button"
       onClick={() => {
-        void navigator.clipboard?.writeText(window.location.href).then(
+        const { origin, pathname } = window.location;
+        const href = `${origin}${pathname}${configToShareSearch(config as Config)}`;
+        void navigator.clipboard?.writeText(href).then(
           () => {
             setCopied(true);
             window.setTimeout(() => setCopied(false), 2000);

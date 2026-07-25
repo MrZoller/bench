@@ -40,19 +40,20 @@ function judge(model: Parameters<typeof evaluate>[0]['model'], quantId: string, 
 
   const inputs: VerdictInputs = {
     placement: evaluation.placement,
-    decode: evaluation.decode,
     usage,
     maxContextTokens: evaluation.maxContextTokens,
     runnableContextTokens: evaluation.runnableContextTokens,
-    // Each archetype is graded at its own prompt length, so this re-runs prefill per call.
-    prefillAt: (promptTokens) =>
-      evaluate({
+    // Each archetype is graded at its own scenario, decode included.
+    evaluateAt: (promptTokens, contextTokens) => {
+      const e = evaluate({
         model,
         quant: getQuant(quantId),
-        usage: { ...usage, promptTokens },
+        usage: { ...usage, promptTokens, contextTokens },
         rig: { device: rig.device, count: rig.count ?? 1 },
         runtime: rig.runtime ?? LLAMA_CPP,
-      }).prefill,
+      });
+      return { decode: e.decode, prefill: e.prefill };
+    },
   };
   return new Map(judgeWorkloads(inputs).map((v) => [v.workload.id, v]));
 }
@@ -211,18 +212,19 @@ describe('context limits and workload fit', () => {
     const verdicts = new Map(
       judgeWorkloads({
         placement: base.placement,
-        decode: base.decode,
         usage: { contextTokens: 4096, concurrency: 1, promptTokens: 2048, kvPrecision: 'fp16' },
         maxContextTokens: 4096,
         runnableContextTokens: 4096, // Far short of the 32K a RAG query sends.
-        prefillAt: (promptTokens) =>
-          evaluate({
+        evaluateAt: (promptTokens, contextTokens) => {
+          const e = evaluate({
             model: LLAMA_31_8B,
             quant: getQuant('q4_k_m'),
-            usage: { contextTokens: 8192, concurrency: 1, promptTokens, kvPrecision: 'fp16' },
+            usage: { contextTokens, concurrency: 1, promptTokens, kvPrecision: 'fp16' },
             rig: { device: RTX_5090, count: 1 },
             runtime: LLAMA_CPP,
-          }).prefill,
+          });
+          return { decode: e.decode, prefill: e.prefill };
+        },
       }).map((v) => [v.workload.id, v])
     );
 
@@ -249,5 +251,131 @@ describe('context limits and workload fit', () => {
     expect(evaluation.maxContextTokens).toBe(0);
     // ...while the runnable one reflects the KV that genuinely fits.
     expect(evaluation.runnableContextTokens).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The four ways this layer had let a verdict disagree with its own evidence. Each was found one
+ * neighbour over from a fix, so these assert the *class* rather than the instance.
+ */
+describe('a verdict never contradicts the numbers behind it', () => {
+  const stub = (perUserTokensPerSec: number, ttftSeconds: number) => ({
+    decode: {
+      perUserTokensPerSec,
+      aggregateTokensPerSec: perUserTokensPerSec,
+      weightReadBytes: 1,
+      kvReadBytes: 1,
+      weightSeconds: 1,
+      kvSeconds: 0.1,
+      kvBound: false,
+    },
+    prefill: {
+      ttftSeconds,
+      prefillTokensPerSec: 5000,
+      linearFlops: 1,
+      attentionFlops: 1,
+      attentionBound: false,
+    },
+  });
+
+  const judged = (runnableContextTokens: number, perUser = 60, ttft = 0.2) =>
+    new Map(
+      judgeWorkloads({
+        placement: evaluate({
+          model: LLAMA_31_8B,
+          quant: getQuant('q4_k_m'),
+          usage: { contextTokens: 8192, concurrency: 1, promptTokens: 2048, kvPrecision: 'fp16' },
+          rig: { device: RTX_5090, count: 1 },
+          runtime: LLAMA_CPP,
+        }).placement,
+        usage: { contextTokens: 512, concurrency: 1, promptTokens: 512, kvPrecision: 'fp16' },
+        maxContextTokens: runnableContextTokens,
+        runnableContextTokens,
+        evaluateAt: () => stub(perUser, ttft),
+      }).map((v) => [v.workload.id, v])
+    );
+
+  it('fails every archetype whose own prompt cannot fit, however fast it is', () => {
+    // 813 tokens of runnable context: not even one chat turn, at any speed.
+    const verdicts = judged(813, 200, 0.05);
+
+    for (const id of ['chat', 'completion', 'agent', 'rag', 'long-context']) {
+      expect(verdicts.get(id)!.fitness).toBe('fail');
+    }
+  });
+
+  it('never prints a failing measurement as the threshold it missed', () => {
+    // 14.5 tok/s fails the agent's 15 minimum; rounding would show "15".
+    const reason = judged(200_000, 14.506, 1).get('agent')!.reason;
+
+    expect(judged(200_000, 14.506, 1).get('agent')!.fitness).not.toBe('good');
+    expect(reason).not.toMatch(/\b15 tok\/s/);
+    expect(reason).toMatch(/\b14/);
+  });
+
+  it('uses one boundary for a condition and for the reason that explains it', () => {
+    // Just under the tight threshold of 65536 + allowance: must fail *and* say why.
+    const verdicts = judged(65_948);
+    expect(verdicts.get('long-context')!.fitness).toBe('fail');
+    expect(verdicts.get('long-context')!.reason).toMatch(/short of the 128K/);
+  });
+});
+
+/**
+ * Every archetype, gated the same way — the property I asserted twice and shipped false twice,
+ * because batch and serving kept using the slider's own measurement after the others moved.
+ */
+describe('no archetype escapes its own scenario', () => {
+  const stub = (perUser: number) => ({
+    decode: {
+      perUserTokensPerSec: perUser,
+      aggregateTokensPerSec: perUser,
+      weightReadBytes: 1,
+      kvReadBytes: 1,
+      weightSeconds: 1,
+      kvSeconds: 0.1,
+      kvBound: false,
+    },
+    prefill: {
+      ttftSeconds: 0.2,
+      prefillTokensPerSec: 5000,
+      linearFlops: 1,
+      attentionFlops: 1,
+      attentionBound: false,
+    },
+  });
+
+  const judged = (runnableContextTokens: number, concurrency = 8) =>
+    new Map(
+      judgeWorkloads({
+        placement: evaluate({
+          model: LLAMA_31_8B,
+          quant: getQuant('q4_k_m'),
+          usage: { contextTokens: 4096, concurrency, promptTokens: 512, kvPrecision: 'fp16' },
+          rig: { device: RTX_5090, count: 1 },
+          runtime: LLAMA_CPP,
+        }).placement,
+        usage: { contextTokens: 512, concurrency, promptTokens: 512, kvPrecision: 'fp16' },
+        maxContextTokens: runnableContextTokens,
+        runnableContextTokens,
+        evaluateAt: () => stub(200),
+      }).map((v) => [v.workload.id, v])
+    );
+
+  it('fails every archetype whose declared request cannot fit, at any speed', () => {
+    // 768 tokens: below the smallest declared request — inline completion's 512 prompt plus
+    // its response allowance — so nothing can fit, including batch's 4K and serving's 2K,
+    // which were the two still reading the slider's own evaluation.
+    const verdicts = judged(768);
+
+    for (const workload of WORKLOADS) {
+      expect(verdicts.get(workload.id)!.fitness).toBe('fail');
+    }
+  });
+
+  it('passes them all again once the room is there', () => {
+    const verdicts = judged(400_000, 4);
+    const passing = WORKLOADS.filter((w) => verdicts.get(w.id)!.fitness !== 'fail');
+    expect(passing.length).toBeGreaterThan(4);
   });
 });

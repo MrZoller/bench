@@ -27,7 +27,6 @@ export function Workloads({ evaluation, config }: { evaluation: Evaluation; conf
 
   const verdicts = judgeWorkloads({
     placement: evaluation.placement,
-    decode: evaluation.decode,
     usage: {
       contextTokens: config.contextTokens,
       concurrency: config.concurrency,
@@ -36,12 +35,32 @@ export function Workloads({ evaluation, config }: { evaluation: Evaluation; conf
     },
     maxContextTokens: evaluation.maxContextTokens,
     runnableContextTokens: evaluation.runnableContextTokens,
-    // Graded at each archetype's own prompt, so this strip does not move when the prompt
-    // slider does — a completion popup sends what it sends regardless of the current setting.
-    prefillAt: (promptTokens) => evaluateConfig({ ...config, promptTokens }).prefill,
+    /**
+     * Graded at each archetype's own scenario, so this strip does not move when the sliders do —
+     * a completion popup sends what it sends regardless of the current setting.
+     *
+     * Both context and prompt are raised, and decode is re-measured along with prefill. Raising
+     * only the prompt left placement planned for the smaller slider context; re-running only
+     * prefill left decode describing the smaller cache, so an agent could be graded on a rate
+     * measured at 512 tokens while its own turn is 16K.
+     */
+    evaluateAt: (promptTokens, contextTokens) => {
+      const evaluation = evaluateConfig({ ...config, promptTokens, contextTokens });
+      return { decode: evaluation.decode, prefill: evaluation.prefill };
+    },
   });
 
   const usable = verdicts.filter((v) => v.fitness !== 'fail').length;
+
+  /**
+   * When nothing can run, every row carries the same sentence — so it is said once, above the
+   * list, and the rows keep only their status. Seven identical explanations read as seven
+   * separate problems.
+   */
+  const sharedReason =
+    verdicts.every((v) => v.fitness === 'fail') && new Set(verdicts.map((v) => v.reason)).size === 1
+      ? verdicts[0].reason
+      : undefined;
 
   return (
     <section aria-labelledby={headingId} className="panel p-5">
@@ -54,6 +73,13 @@ export function Workloads({ evaluation, config }: { evaluation: Evaluation; conf
           workloads
         </p>
       </header>
+
+      {sharedReason && (
+        <p className="mt-3 text-sm text-[var(--color-critical)]">
+          <span aria-hidden="true">▲ </span>
+          {sharedReason}
+        </p>
+      )}
 
       <ul className="mt-4 flex flex-col gap-2">
         {verdicts.map(({ workload, fitness, reason }) => {
@@ -77,7 +103,13 @@ export function Workloads({ evaluation, config }: { evaluation: Evaluation; conf
               </span>
 
               <span className="order-3 col-span-2 text-xs leading-relaxed text-[var(--color-text-muted)] sm:order-none sm:col-span-1">
-                {expanded ? `${workload.description} ${reason}` : reason}
+                {sharedReason
+                  ? expanded
+                    ? workload.description
+                    : ''
+                  : expanded
+                    ? `${workload.description} ${reason}`
+                    : reason}
               </span>
             </li>
           );
