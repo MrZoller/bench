@@ -33,7 +33,12 @@ export const RUNTIMES: readonly RuntimeSpec[] = [
     nativeLowPrecision: false,
     supports: [{ class: 'discrete-gpu' }, { class: 'unified-soc' }, { class: 'cpu-ram' }],
     // GGUF K-quants for the cache as well as the weights: `--cache-type-k q8_0 q4_0`.
+    // Splits by whole layers across cards by default, so the cache divides evenly.
+    parallelism: 'layer',
     kvPrecisions: ['fp16', 'q8', 'q4'],
+    // `q8_0` and `q4_0` KV store 32-element blocks with a 2-byte scale: 34/32 and 18/32 bytes
+    // per element. The same block-metadata overhead quants.ts documents on the weight side.
+    kvBytesPerElement: { q8: 34 / 32, q4: 18 / 32 },
     source: 'https://github.com/ggml-org/llama.cpp',
   },
   {
@@ -49,6 +54,8 @@ export const RUNTIMES: readonly RuntimeSpec[] = [
     // Discrete accelerators from either vendor, plus NVIDIA's unified-memory Spark, which is a
     // CUDA target with an official playbook. Not Apple or AMD unified memory.
     supports: [{ class: 'discrete-gpu' }, { class: 'unified-soc', vendor: 'NVIDIA' }],
+    // Tensor-parallel by default: every layer sharded across every rank.
+    parallelism: 'tensor',
     // `--kv-cache-dtype` takes auto/native or an FP8 variant. There is no 4-bit KV cache, and
     // offering one lets a long-context OOM be reported as a comfortable fit.
     kvPrecisions: ['fp16', 'q8'],
@@ -67,6 +74,9 @@ export const RUNTIMES: readonly RuntimeSpec[] = [
     nativeLowPrecision: false,
     // Class is too coarse here: `unified-soc` also covers the DGX Spark and Strix Halo.
     supports: [{ class: 'unified-soc', vendor: 'Apple' }],
+    // Single-machine only in the catalogue, so this never divides anything today — declared
+    // because the field is required, and a layer split is what a multi-device MLX would do.
+    parallelism: 'layer',
     kvPrecisions: ['fp16', 'q8'],
     source: 'https://github.com/ml-explore/mlx',
   },

@@ -447,3 +447,25 @@ describe('the KV control names something the runtime accepts', () => {
     expect(within(group).getByText('Q8')).toBeInTheDocument();
   });
 });
+
+/**
+ * `fast` was gated on `runnable` and the sentences underneath it were not, so an unsupported
+ * configuration still blamed host-bus spill or pointed at a decode tile reading "Unsupported".
+ */
+describe('the teaching aside makes no speed claim about a configuration that cannot run', () => {
+  it('says so plainly instead of explaining a number that means nothing', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // An MoE model, so the aside renders at all — then MLX on an NVIDIA card, which cannot run.
+    await user.selectOptions(screen.getByLabelText('Model'), 'openai/gpt-oss-120b');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+
+    expect(screen.getByText(/does not run as selected/i)).toBeInTheDocument();
+    expect(screen.queryByText(/crossing the host bus every token/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Even resident it would be slow/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/the decode figure above measures/i)).not.toBeInTheDocument();
+  });
+});
