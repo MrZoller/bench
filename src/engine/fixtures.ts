@@ -333,6 +333,7 @@ export const LLAMA_CPP: RuntimeSpec = {
   nativeLowPrecision: false,
   supports: [{ class: 'discrete-gpu' }, { class: 'unified-soc' }, { class: 'cpu-ram' }],
   parallelism: 'layer',
+  weightFormats: ['bf16', 'q8_0', 'q6_k', 'q5_k_m', 'q4_k_m', 'iq4_xs', 'q3_k_m', 'mxfp4'],
   kvPrecisions: ['fp16', 'q8', 'q4'],
   // q8_0/q4_0 KV blocks carry a 2-byte scale per 32 elements.
   kvBytesPerElement: { q8: 34 / 32, q4: 18 / 32 },
@@ -351,6 +352,7 @@ export const VLLM: RuntimeSpec = {
   preallocFraction: 0.9,
   supports: [{ class: 'discrete-gpu' }, { class: 'unified-soc', vendor: 'NVIDIA' }],
   parallelism: 'tensor',
+  weightFormats: ['bf16', 'fp8', 'int8', 'nvfp4', 'mxfp4', 'awq_4bit'],
   kvPrecisions: ['fp16', 'q8'],
   // One byte per element, but vLLM spells it fp8_e4m3 and has no integer option.
   kvLabels: { q8: 'FP8' },
@@ -367,6 +369,7 @@ export const MLX: RuntimeSpec = {
   // Class is too coarse here: `unified-soc` also covers the DGX Spark and Strix Halo.
   supports: [{ class: 'unified-soc', vendor: 'Apple' }],
   parallelism: 'layer',
+  weightFormats: ['bf16', 'int8', 'q8_0', 'q6_k', 'q5_k_m', 'q4_k_m', 'iq4_xs', 'q3_k_m'],
   kvPrecisions: ['fp16', 'q8'],
   source: 'https://github.com/ml-explore/mlx',
 };

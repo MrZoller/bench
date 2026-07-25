@@ -299,6 +299,9 @@ describe('the Bench refuses impossible combinations', () => {
     render(<App />);
 
     await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    // NVFP4 is a safetensors format; llama.cpp reads GGUF and cannot open it at all, so the
+    // vendor rule under test only becomes visible under a runtime that could load it.
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'vllm');
     expect(screen.getByRole('option', { name: /NVFP4/i })).toBeInTheDocument();
 
     await user.selectOptions(screen.getByLabelText('Hardware'), 'mi355x');
@@ -347,8 +350,9 @@ describe('the slider never displays a value the engine is not using', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    // Blackwell has them.
+    // Blackwell has them — under a runtime that can load the format.
     await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'vllm');
     expect(screen.getByRole('option', { name: /NVFP4/i })).toBeInTheDocument();
 
     // Ada and Hopper are NVIDIA and have none, so the vendor check alone was not enough.
