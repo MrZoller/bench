@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
-import { DEVICES, MODELS, RUNTIMES, evaluateConfig, useConfig } from '@/store/config';
+import { DEVICES, MODELS, RUNTIMES, evaluateConfig, useConfig, type Config } from '@/store/config';
 import { useUrlSync } from '@/store/useUrlSync';
+import { configToShareSearch } from '@/store/url';
 import { getRuntime, runtimeDrives } from '@/data/runtimes';
 import { QUANTS } from '@/data/quants';
 import { CATALOG_GENERATED_AT, getDevice, getModel } from '@/data/catalog';
@@ -368,20 +369,25 @@ export function Bench() {
 }
 
 /**
- * Copies the current address, which already encodes the scenario.
+ * Copies a link that names the scenario in full.
  *
- * Deliberately reads `location.href` at click time rather than rebuilding the URL: the address
- * bar is kept in sync by `useUrlSync`, and rebuilding here would be a second encoder to drift
- * from the first.
+ * Not `location.href`: the address bar is deliberately bare on an untouched default page, because
+ * it claims nothing there. A copied link always claims something — it says "this is what I was
+ * looking at" — so every field is written out and the link cannot drift when a default moves.
+ * `configToShareSearch` is the same encoder the address bar uses, minus the empty case, so there
+ * is still only one place that knows the format.
  */
 function ShareLink() {
+  const config = useConfig();
   const [copied, setCopied] = useState(false);
 
   return (
     <button
       type="button"
       onClick={() => {
-        void navigator.clipboard?.writeText(window.location.href).then(
+        const { origin, pathname } = window.location;
+        const href = `${origin}${pathname}${configToShareSearch(config as Config)}`;
+        void navigator.clipboard?.writeText(href).then(
           () => {
             setCopied(true);
             window.setTimeout(() => setCopied(false), 2000);
