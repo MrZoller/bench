@@ -1,7 +1,7 @@
-import { useId, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import type { Evaluation } from '@/engine';
 import { judgeWorkloads, type Fitness } from '@/engine/verdict';
-import { evaluateConfig, type Config } from '@/store/config';
+import { estimateConfig, type Config } from '@/store/config';
 
 /**
  * What the setup can actually be used for.
@@ -28,30 +28,46 @@ export function Workloads({ evaluation, config }: { evaluation: Evaluation; conf
   const headingId = useId();
   const [expanded, setExpanded] = useState(false);
 
-  const verdicts = judgeWorkloads({
-    selectedPlacement: evaluation.placement,
-    usage: {
-      contextTokens: config.contextTokens,
-      concurrency: config.concurrency,
-      promptTokens: config.promptTokens,
-      kvPrecision: config.kvPrecision,
-    },
-    maxContextTokens: evaluation.maxContextTokens,
-    runnableContextTokens: evaluation.runnableContextTokens,
-    /**
-     * Graded at each archetype's own scenario, so this strip does not move when the sliders do —
-     * a completion popup sends what it sends regardless of the current setting.
-     *
-     * Both context and prompt are raised, and decode is re-measured along with prefill. Raising
-     * only the prompt left placement planned for the smaller slider context; re-running only
-     * prefill left decode describing the smaller cache, so an agent could be graded on a rate
-     * measured at 512 tokens while its own turn is 16K.
-     */
-    evaluateAt: (promptTokens, contextTokens) => {
-      const at = evaluateConfig({ ...config, promptTokens, contextTokens });
-      return { placement: at.placement, decode: at.decode, prefill: at.prefill };
-    },
-  });
+  /**
+   * Memoised on the scenario, which is the only thing the grades depend on.
+   *
+   * Without it, toggling the descriptions below re-graded all seven archetypes — a button that
+   * changes nothing but which strings are rendered was paying for the whole verdict layer. The
+   * dependencies are `evaluation` and `config`, both of which the Bench already holds stable
+   * between renders that do not change the scenario.
+   */
+  const verdicts = useMemo(
+    () =>
+      judgeWorkloads({
+        selectedPlacement: evaluation.placement,
+        usage: {
+          contextTokens: config.contextTokens,
+          concurrency: config.concurrency,
+          promptTokens: config.promptTokens,
+          kvPrecision: config.kvPrecision,
+        },
+        maxContextTokens: evaluation.maxContextTokens,
+        runnableContextTokens: evaluation.runnableContextTokens,
+        /**
+         * Graded at each archetype's own scenario, so this strip does not move when the sliders do
+         * — a completion popup sends what it sends regardless of the current setting.
+         *
+         * Both context and prompt are raised, and decode is re-measured along with prefill. Raising
+         * only the prompt left placement planned for the smaller slider context; re-running only
+         * prefill left decode describing the smaller cache, so an agent could be graded on a rate
+         * measured at 512 tokens while its own turn is 16K.
+         *
+         * `estimateConfig`, not `evaluateConfig`: the latter also computes `maxContextTokens` and
+         * `runnableContextTokens`, and each of those is a binary search over the model's whole
+         * context range. This callback discarded both, every time, for every archetype — roughly
+         * forty `planPlacement` calls to use one, and on a layer-split rig each of those sorts the
+         * model's layers.
+         */
+        evaluateAt: (promptTokens, contextTokens) =>
+          estimateConfig({ ...config, promptTokens, contextTokens }),
+      }),
+    [evaluation, config]
+  );
 
   const usable = verdicts.filter((v) => v.fitness !== 'fail').length;
 

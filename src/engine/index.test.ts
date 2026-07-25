@@ -1,8 +1,18 @@
-import { describe, expect, it } from 'vitest';
-import { evaluate, type Scenario } from './index';
+import { describe, expect, it, vi } from 'vitest';
+import { estimateScenario, evaluate, type Scenario } from './index';
+import { maxContextThatFits } from './placement';
 import { DGX_SPARK, GPT_OSS_120B, LLAMA_31_8B, LLAMA_CPP, QWEN3_32B, RTX_5090 } from './fixtures';
 import { getQuant } from '@/data/quants';
 import type { DeviceSpec } from './types';
+
+/**
+ * Wrapped rather than replaced, so every test in this file still runs the real arithmetic. The spy
+ * exists only so the cost assertion below can count the two binary searches instead of timing them.
+ */
+vi.mock('./placement', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./placement')>();
+  return { ...actual, maxContextThatFits: vi.fn(actual.maxContextThatFits) };
+});
 
 const base: Scenario = {
   model: LLAMA_31_8B,
@@ -190,5 +200,92 @@ describe('the offload cliff is visible on both numbers users watch', () => {
     // streamed term must reflect the full offloaded set.
     const streamed = result.weights.totalBytes * result.placement.offloadFraction * 0.9;
     expect(result.prefill.ttftSeconds).toBeGreaterThan(streamed / 80e9);
+  });
+});
+
+/**
+ * The verdict layer re-evaluates every archetype at that archetype's own scenario and uses three
+ * fields of the result, so it was paying for two `maxContextThatFits` binary searches per call and
+ * discarding both. `estimateScenario` is those three fields and nothing else.
+ *
+ * What has to hold is that it is the *same* three fields — a cheaper path that quietly normalizes a
+ * scenario differently would move grades rather than speed them up, and nothing in the verdict
+ * tests would notice, because they would move together.
+ */
+describe('estimateScenario is evaluate without the context searches', () => {
+  const scenarios: { label: string; scenario: Scenario }[] = [
+    { label: 'resident', scenario: base },
+    {
+      label: 'offloaded MoE',
+      scenario: {
+        ...base,
+        model: GPT_OSS_120B,
+        quant: getQuant('mxfp4'),
+        usage: { contextTokens: 4096, concurrency: 1, promptTokens: 512, kvPrecision: 'fp16' },
+      },
+    },
+    {
+      label: 'layer split over eight cards',
+      scenario: {
+        ...base,
+        model: QWEN3_32B,
+        usage: { contextTokens: 32768, concurrency: 8, promptTokens: 2048, kvPrecision: 'fp16' },
+        rig: { device: RTX_5090, count: 8 },
+      },
+    },
+    {
+      label: 'unsupported pairing',
+      scenario: { ...base, model: GPT_OSS_120B, quant: getQuant('awq_4bit') },
+    },
+    {
+      label: 'degenerate usage, which each path normalizes for itself',
+      scenario: {
+        ...base,
+        usage: { contextTokens: 0, concurrency: 0, promptTokens: 0, kvPrecision: 'fp16' },
+      },
+    },
+    {
+      // The one field this split moved: `evaluate` used to destructure `hostBandwidth` and now
+      // never reads it, so a future re-inlining would drop it with nothing to notice. Paired with
+      // an offloaded scenario, where it is the term that actually moves decode and prefill.
+      label: 'a non-default host bandwidth on an offloaded rig',
+      scenario: {
+        ...base,
+        model: GPT_OSS_120B,
+        quant: getQuant('mxfp4'),
+        usage: { contextTokens: 4096, concurrency: 1, promptTokens: 512, kvPrecision: 'fp16' },
+        hostBandwidth: 12e9,
+      },
+    },
+  ];
+
+  it.each(scenarios)('agrees with evaluate on $label', ({ scenario }) => {
+    const full = evaluate(scenario);
+    const cheap = estimateScenario(scenario);
+
+    expect(cheap.placement).toEqual(full.placement);
+    expect(cheap.decode).toEqual(full.decode);
+    expect(cheap.prefill).toEqual(full.prefill);
+  });
+
+  /**
+   * The whole point of the narrower function, counted rather than asserted about its return shape.
+   *
+   * The first version of this checked `Object.keys`, which TypeScript already guarantees — an
+   * implementation that ran both searches and threw the answers away would have passed it
+   * unchanged, which is precisely the thing being removed. Counting the searches rather than timing
+   * them, because a wall-clock assertion would be flaky in CI and would say nothing about why.
+   */
+  it('runs neither context search, where evaluate runs both', () => {
+    const searches = vi.mocked(maxContextThatFits);
+
+    searches.mockClear();
+    estimateScenario(base);
+    expect(searches).not.toHaveBeenCalled();
+
+    // And the spy is wired to something that does fire, so the assertion above is not vacuous.
+    searches.mockClear();
+    evaluate(base);
+    expect(searches).toHaveBeenCalledTimes(2);
   });
 });
