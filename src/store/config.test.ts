@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_CONFIG, evaluateConfig, useConfig, type Config } from './config';
 import { getModel } from '@/data/catalog';
+import { getQuant } from '@/data/quants';
 
 /**
  * The store is the boundary between untrusted input and the engine.
@@ -115,5 +116,82 @@ describe('evaluating a config', () => {
       expect(Number.isNaN(decode.perUserTokensPerSec)).toBe(false);
       expect(Number.isNaN(placement.utilization)).toBe(false);
     }
+  });
+});
+
+/**
+ * An expert-only quantization on a dense model is a no-op its own label denies, so the picker
+ * hides it there — which means the selection has to move with it, or the control and the store
+ * disagree about what is selected.
+ */
+describe('quantization follows the model', () => {
+  it('drops an expert-only scheme when the model has no experts', () => {
+    useConfig.setState(DEFAULT_CONFIG);
+    const store = useConfig.getState();
+
+    store.set('quantId', 'mxfp4');
+    expect(useConfig.getState().quantId).toBe('mxfp4'); // gpt-oss is MoE, so it stands.
+
+    store.set('modelId', 'Qwen/Qwen3-32B');
+    expect(useConfig.getState().quantId).not.toBe('mxfp4');
+  });
+
+  it('leaves a uniform scheme alone on any model', () => {
+    useConfig.setState(DEFAULT_CONFIG);
+    const store = useConfig.getState();
+
+    store.set('quantId', 'q4_k_m');
+    store.set('modelId', 'Qwen/Qwen3-32B');
+    expect(useConfig.getState().quantId).toBe('q4_k_m');
+  });
+});
+
+/**
+ * The store and the picker must agree about what is selectable. Both of these were cases where
+ * the control offered something the store then quietly took away.
+ */
+describe('the store agrees with the controls', () => {
+  it('keeps a multi-device count on hardware that has a link between units', () => {
+    useConfig.setState(DEFAULT_CONFIG);
+    const store = useConfig.getState();
+
+    // The Spark is unified-soc *and* has ConnectX, so the picker offers a count — and the
+    // store used to reset it to 1 on every change, making the linked case unevaluatable.
+    store.set('deviceId', 'dgx-spark');
+    store.set('deviceCount', 4);
+    expect(useConfig.getState().deviceCount).toBe(4);
+
+    store.set('deviceId', 'mac-studio-m3-ultra-256');
+    expect(useConfig.getState().deviceCount).toBe(1);
+  });
+
+  /**
+   * The default quant is `mxfp4`, which the picker hides for dense models — so resolving an
+   * unknown id to the default *before* checking applicability landed a dense model on exactly
+   * the option the rule exists to prevent.
+   */
+  it('never resolves an unknown quantization onto an expert-only default', () => {
+    useConfig.setState({ ...DEFAULT_CONFIG, modelId: 'Qwen/Qwen3-32B' });
+    useConfig.getState().set('quantId', 'not-a-real-quant');
+
+    const { quantId, modelId } = useConfig.getState();
+    expect(getModel(modelId).expertParams).toBe(0);
+    expect(getQuant(quantId).denseBpw).toBeUndefined();
+  });
+});
+
+describe('quantization must be able to run where it is selected', () => {
+  it('drops a vendor-locked format when the hardware is another vendor', () => {
+    useConfig.setState(DEFAULT_CONFIG);
+    const store = useConfig.getState();
+
+    store.set('deviceId', 'rtx-5090');
+    store.set('quantId', 'nvfp4');
+    expect(useConfig.getState().quantId).toBe('nvfp4');
+
+    // NVFP4 is Blackwell-native; the MI355X's FP4 rate is for AMD's own format, and letting
+    // this through would hand `peakFlops` 9.2 PFLOP/s from different silicon.
+    store.set('deviceId', 'mi355x');
+    expect(useConfig.getState().quantId).not.toBe('nvfp4');
   });
 });

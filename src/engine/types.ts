@@ -182,6 +182,23 @@ export interface QuantSpec {
    * FP8 at all. Collapsing them would hand an FP8 quant a rate that card cannot reach.
    */
   computeDtype: 'fp16' | 'fp8' | 'fp4' | 'int8';
+  /**
+   * Hardware this format needs to run at all, when it is not an open standard.
+   *
+   * NVFP4 needs both halves and neither alone is sufficient. Vendor, because AMD's MI355X
+   * publishes a 9.2 PFLOP/s FP4 rate for its *own* format and handing that to NVFP4 is a
+   * plausible impossibility. Dtype, because "NVIDIA" also covers the 3090, the 4090 and the
+   * H100, none of which have FP4 tensor cores — a vendor-only rule accepted every pre-Blackwell
+   * card in the catalog.
+   *
+   * MXFP4 carries neither: it is the OCP microscaling standard, both vendors implement it, and
+   * a runtime without native support simply dequantizes it.
+   */
+  requires?: {
+    vendor?: string;
+    /** A rate the device must actually publish for this dtype. */
+    dtype?: 'fp4' | 'fp8' | 'int8';
+  };
   /** Rough quality cost vs bf16, for UI guidance only — never fed into the math. */
   qualityNote?: string;
   source: string;
@@ -286,16 +303,18 @@ export interface RuntimeSpec {
    * (vLLM's gpu_memory_utilization) rather than allocating as it goes (llama.cpp).
    */
   preallocFraction?: number;
-  /** Device classes this runtime can drive at all. */
-  supports: readonly DeviceClass[];
   /**
-   * Vendor this runtime is additionally restricted to, when class alone is too coarse.
+   * Hardware this runtime can drive, as class-and-optionally-vendor pairs.
    *
-   * `unified-soc` covers Apple silicon, NVIDIA's GB10 and AMD's Strix Halo, which share a
-   * memory topology and nothing else. MLX drives only the first, so without this it reported
-   * plausible throughput for a DGX Spark it cannot run on at all.
+   * Neither axis alone is enough. `unified-soc` covers Apple silicon, NVIDIA's GB10 and AMD's
+   * Strix Halo — one memory topology, three incompatible software stacks — so MLX needs the
+   * vendor. But a single runtime-wide vendor is equally wrong: vLLM drives AMD's discrete
+   * accelerators *and* NVIDIA's unified-memory Spark, while driving no Apple hardware at all.
+   * Per-entry vendors are the smallest thing that expresses both.
    */
-  requiresVendor?: string;
+  supports: readonly { class: DeviceClass; vendor?: string }[];
+  /** KV cache dtypes the runtime can actually store. */
+  kvPrecisions: readonly KvPrecision[];
   source: string;
 }
 

@@ -1,4 +1,4 @@
-import type { DeviceClass, ModelSpec, QuantSpec, Rig, RuntimeSpec, UsageSpec } from './types';
+import type { DeviceSpec, ModelSpec, QuantSpec, Rig, RuntimeSpec, UsageSpec } from './types';
 import { activationBytes } from './activations';
 import { kvBytesTotal } from './kv';
 import { weightBytes } from './weights';
@@ -20,13 +20,6 @@ import { weightBytes } from './weights';
 
 /** Typical dual-channel DDR5 desktop bandwidth — the speed offloaded weights read at. */
 export const DEFAULT_HOST_BANDWIDTH = 80e9;
-
-/** Device classes as prose. The enum reads fine in code and badly in a sentence. */
-const DEVICE_CLASS_PROSE: Record<DeviceClass, string> = {
-  'discrete-gpu': 'discrete GPUs',
-  'unified-soc': 'unified-memory hardware',
-  'cpu-ram': 'CPU and system RAM',
-};
 
 export interface Placement {
   fits: boolean;
@@ -57,6 +50,33 @@ export interface Placement {
 
   /** Set when the runtime cannot drive this class of device at all. */
   unsupported?: string;
+}
+
+/**
+ * Whether a model can be sharded across several of these at all.
+ *
+ * Keyed on having a transport, not on device class. A DGX Spark is `unified-soc` and has a real
+ * ConnectX link that `tpEfficiency` already models; a Mac Studio is the same class with nothing
+ * between chassis. Exported so the UI and the store cannot hold divergent copies of this rule —
+ * they did, and the slider offered counts the store immediately reset.
+ *
+ * Deliberately distinct from offload, which really is a discrete-GPU property: spilling needs a
+ * slower *tier*, sharding needs a *link*, and the Spark has one without the other.
+ */
+export function canShard(device: DeviceSpec): boolean {
+  return device.interconnect !== undefined;
+}
+
+/** Why this format cannot run on this device, or undefined when it can. */
+function unmetRequirement(quant: QuantSpec, device: DeviceSpec): string | undefined {
+  const { vendor, dtype } = quant.requires ?? {};
+  if (vendor !== undefined && device.vendor !== vendor) {
+    return `${quant.label} needs ${vendor} hardware.`;
+  }
+  if (dtype !== undefined && device.flops[dtype] === undefined) {
+    return `${quant.label} needs ${dtype.toUpperCase()} tensor cores, which ${device.name} does not have.`;
+  }
+  return undefined;
 }
 
 /** Memory a single device can actually give the model, after the runtime takes its cut. */
@@ -139,11 +159,19 @@ export function planPlacement(
   const impossible =
     !fits && (!canOffload || kvBytesPerDevice + activations > allocatableBytesPerDevice);
 
-  const unsupported = !runtime.supports.includes(rig.device.class)
-    ? `${runtime.label} does not run on ${DEVICE_CLASS_PROSE[rig.device.class]}.`
-    : runtime.requiresVendor && rig.device.vendor !== runtime.requiresVendor
-      ? `${runtime.label} runs only on ${runtime.requiresVendor} hardware.`
-      : undefined;
+  const drives = runtime.supports.some(
+    (s) =>
+      s.class === rig.device.class && (s.vendor === undefined || s.vendor === rig.device.vendor)
+  );
+
+  const unsupported = !drives
+    ? `${runtime.label} does not run on ${rig.device.name}.`
+    : !runtime.kvPrecisions.includes(usage.kvPrecision)
+      ? `${runtime.label} cannot store a ${usage.kvPrecision.toUpperCase()} KV cache.`
+      : // A format tied to particular silicon is as unrunnable as a runtime that cannot drive
+        // the device, and was previously waved through — leaving `peakFlops` to read a rate
+        // published for a different format, or for hardware that has no such units at all.
+        unmetRequirement(quant, rig.device);
 
   return {
     fits,

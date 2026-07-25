@@ -105,10 +105,11 @@ describe('calibration against published benchmarks', () => {
     // The 5090 lists 419 TFLOP fp16 and 838 TFLOP fp8.
     expect(fp8.prefillTokensPerSec / bf16.prefillTokensPerSec).toBeCloseTo(2, 1);
 
-    // NVFP4 asks for an fp4 rate the 5090 fixture does not publish, so it falls back to fp8
-    // rather than silently dropping to fp16 or producing zero.
+    // The 5090 has real FP4 tensor cores at 4x fp16, so NVFP4 — a uniform format — gets them.
+    // The no-fallback rule is asserted separately, against cards that genuinely lack the units.
     const nvfp4 = estimatePrefill(QWEN3_32B, getQuant('nvfp4'), usage, rig, VLLM);
-    expect(nvfp4.prefillTokensPerSec).toBeCloseTo(fp8.prefillTokensPerSec, 0);
+    expect(nvfp4.prefillTokensPerSec / bf16.prefillTokensPerSec).toBeCloseTo(4, 0);
+    expect(nvfp4.prefillTokensPerSec).toBeGreaterThan(fp8.prefillTokensPerSec);
   });
 
   it('charges sliding-window layers linear rather than quadratic prefill attention', () => {
@@ -331,5 +332,110 @@ describe('tensor-parallel scaling by interconnect', () => {
     const [fabric, pcie, network] = links.map((l) => aggregate(l, 2));
     expect(fabric).toBeGreaterThan(pcie);
     expect(pcie).toBeGreaterThan(network);
+  });
+});
+
+/**
+ * The precision lookup must be able to miss in *both* directions, and the two rules are
+ * symmetric: a card is only ever given a rate for silicon it actually has.
+ */
+describe('precision fallbacks never invent silicon', () => {
+  const prefill = (quantId: string, flops: DeviceSpec['flops']) =>
+    estimatePrefill(
+      QWEN3_32B,
+      getQuant(quantId),
+      { contextTokens: 8192, concurrency: 1, kvPrecision: 'fp16', promptTokens: 8192 },
+      { device: { ...RTX_5090, flops }, count: 1 },
+      VLLM
+    ).prefillTokensPerSec;
+
+  it('does not lend an FP8 rate to FP4 on a card with no FP4 units', () => {
+    // The H100 shape: strong FP8, no FP4 at all.
+    const hopper = { fp16: 989 * TFLOP, fp8: 1979 * TFLOP };
+    expect(prefill('nvfp4', hopper)).toBeCloseTo(prefill('bf16', hopper), 0);
+  });
+
+  it('does not lend an INT8 rate to FP8 on a card with no FP8 units', () => {
+    // The Ampere shape: INT8 tensor cores, no FP8.
+    const ampere = { fp16: 142 * TFLOP, int8: 284 * TFLOP };
+    expect(prefill('fp8', ampere)).toBeCloseTo(prefill('bf16', ampere), 0);
+  });
+
+  it('still uses a real FP4 rate when the card publishes one', () => {
+    const blackwell = { fp16: 419 * TFLOP, fp8: 838 * TFLOP, fp4: 1676 * TFLOP };
+    expect(prefill('nvfp4', blackwell) / prefill('bf16', blackwell)).toBeCloseTo(4, 0);
+  });
+});
+
+/**
+ * An expert-only quantization computes at two rates, and crediting the whole prefill pass at
+ * the faster one overstates every model with a substantial dense half.
+ */
+describe('expert-only formats are timed at two rates', () => {
+  // A real Blackwell shape: FP4 units present at 4x fp16.
+  // The 5090 fixture already carries real FP4 rates; named for what the test is about.
+  const blackwell = RTX_5090;
+  const rate = (model: typeof QWEN3_32B, quantId: string) =>
+    estimatePrefill(
+      model,
+      getQuant(quantId),
+      { contextTokens: 4096, concurrency: 1, kvPrecision: 'fp16', promptTokens: 1024 },
+      { device: blackwell, count: 1 },
+      VLLM
+    ).prefillTokensPerSec;
+
+  it('gives a dense model no speedup at all from an expert-only format', () => {
+    // MXFP4 sets denseBpw: 16, so with no routed experts every tensor stays BF16. Claiming the
+    // FP4 peak here was a 4x on work that does not exist.
+    expect(rate(QWEN3_32B, 'mxfp4')).toBeCloseTo(rate(QWEN3_32B, 'bf16'), 0);
+  });
+
+  it('gives an MoE model a partial speedup, between the two rates', () => {
+    const speedup = rate(GPT_OSS_20B, 'mxfp4') / rate(GPT_OSS_20B, 'bf16');
+    expect(speedup).toBeGreaterThan(1.5);
+    expect(speedup).toBeLessThan(4);
+  });
+
+  it('still gives a uniform 4-bit format the full rate', () => {
+    // NVFP4 has no denseBpw, so nothing is spared and the whole pass runs at the FP4 peak.
+    for (const model of [QWEN3_32B, GPT_OSS_20B]) {
+      expect(rate(model, 'nvfp4') / rate(model, 'bf16')).toBeCloseTo(4, 0);
+    }
+  });
+});
+
+/**
+ * Once the expert half computes at a different rate from everything else, FLOP counts stop
+ * being comparable and the attention/linear bound has to be judged on time.
+ */
+describe('the prefill bound is judged on time, not FLOPs', () => {
+  // The 5090 fixture already carries real FP4 rates; named for what the test is about.
+  const blackwell = RTX_5090;
+
+  it('reports attention-bound when attention costs more time than the linear layers', () => {
+    const result = estimatePrefill(
+      GPT_OSS_20B,
+      getQuant('mxfp4'),
+      { contextTokens: 32768, concurrency: 1, kvPrecision: 'fp16', promptTokens: 16384 },
+      { device: blackwell, count: 1 },
+      VLLM
+    );
+
+    // Attention is the smaller FLOP count and still the larger share of the wall clock, because
+    // most of the linear work runs at the 4x FP4 rate and attention does not.
+    expect(result.attentionFlops).toBeLessThan(result.linearFlops);
+    expect(result.attentionBound).toBe(true);
+  });
+
+  it('agrees with the FLOP comparison when both halves run at one rate', () => {
+    // bf16 is uniform, so time is proportional to FLOPs and the two tests coincide.
+    const result = estimatePrefill(
+      GPT_OSS_20B,
+      getQuant('bf16'),
+      { contextTokens: 32768, concurrency: 1, kvPrecision: 'fp16', promptTokens: 16384 },
+      { device: blackwell, count: 1 },
+      VLLM
+    );
+    expect(result.attentionBound).toBe(result.attentionFlops > result.linearFlops);
   });
 });

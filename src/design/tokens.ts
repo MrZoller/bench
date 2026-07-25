@@ -33,13 +33,27 @@ export const colors = {
   border: '#232735',
   /** Hairline grid — recessive by design; never competes with a mark. */
   grid: '#1b1f2b',
+  /**
+   * Edge of an interactive control, distinct from the panel hairline above.
+   *
+   * `border` is deliberately recessive — 1.18:1 against the raised fill — which is right for a
+   * panel edge and wrong for a select. A control's boundary is what identifies it as
+   * interactive, so it needs the 3:1 non-text minimum *before* it is focused, not after. This
+   * step measures 3.41:1 against the fill and 3.67:1 against the panel.
+   */
+  controlBorder: '#646d88',
 
   // --- Ink -------------------------------------------------------------------------------
   // Static content: labels, titles, units, axis captions, and figures. Text never wears a
   // series colour — a coloured mark beside it carries the identity instead.
   text: '#e8eaf2',
   textMuted: '#9aa0b5',
-  textFaint: '#6f7690',
+  /**
+   * Raised from `#6f7690` (4.20:1). This token labels every control and verdict — normal-sized
+   * load-bearing text, so the threshold is 4.5:1 rather than the 3:1 that applies to a mark.
+   * At 5.10:1 it still sits clearly below `textMuted` at 7.25:1, so the hierarchy survives.
+   */
+  textFaint: '#7d84a0',
 
   // --- Accent = live / interactive --------------------------------------------------------
   /**
@@ -77,7 +91,13 @@ export const colors = {
   good: '#0ca30c',
   warning: '#fab219',
   serious: '#ec835a',
-  critical: '#d03b3b',
+  /**
+   * Raised from the reference palette's `#d03b3b`, which measures 3.93:1 on this surface. That
+   * clears the 3:1 bar for a *graphical* element, which is what the validator checks, but this
+   * token is used on 14px text — "Will not run", the overflow warning — where the threshold is
+   * 4.5:1. This step is the reference ramp's own red and measures 5.84:1.
+   */
+  critical: '#e66767',
 } as const;
 
 /**

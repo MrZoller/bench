@@ -1,6 +1,6 @@
 import type { Evaluation } from '@/engine';
 import type { StatusTone } from '@/design/tokens';
-import { gibLabel, rate, seconds, tokens } from '@/lib/format';
+import { gibLabel, percent, rate, seconds, tokens } from '@/lib/format';
 
 /**
  * Three readouts, deliberately not one.
@@ -14,6 +14,17 @@ import { gibLabel, rate, seconds, tokens } from '@/lib/format';
  * Each tile carries an icon and a word alongside its colour — a verdict must never be conveyed
  * by hue alone.
  */
+
+/**
+ * Decode thresholds, in tokens per second per user.
+ *
+ * Exported because two places make claims about speed — this tile and the teaching aside — and
+ * every time they have held their own copy of the number they have drifted apart. Reading speed
+ * and patience, not benchmarks: below ~10 you watch a cursor, ~15 keeps pace with reading, past
+ * ~30 it outruns most people.
+ */
+export const DECODE_FAST = 30;
+export const DECODE_USABLE = 15;
 
 const TONE_STYLE: Record<StatusTone, { color: string; icon: string; word: string }> = {
   good: { color: 'var(--color-good)', icon: '●', word: 'Comfortable' },
@@ -33,7 +44,11 @@ interface Reading {
   detail: string;
 }
 
-function capacityReading(evaluation: Evaluation, canOffload: boolean): Reading {
+function capacityReading(
+  evaluation: Evaluation,
+  canOffload: boolean,
+  tunableCeiling: boolean
+): Reading {
   const { placement } = evaluation;
 
   if (placement.unsupported) {
@@ -64,7 +79,12 @@ function capacityReading(evaluation: Evaluation, canOffload: boolean): Reading {
        */
       detail: canOffload
         ? 'The cache and workspace alone overflow the card, and those cannot be offloaded. Lower the context, the concurrency, or the KV precision.'
-        : 'Past the allocatable ceiling with nowhere to spill — a shared-memory machine has no faster tier to fall back from.',
+        : tunableCeiling
+          ? // The ceiling is a default, not a hardware limit: macOS caps wired GPU memory near
+            // 75% and AMD exposes a Variable Graphics Memory setting. Reporting a flat "will
+            // not run" hides the one thing that would actually fix it.
+            'Past the default allocation ceiling — but this machine lets you raise it, and the catalog figure is the untuned default rather than a hardware limit.'
+          : 'Past the allocatable ceiling with nowhere to spill — a shared-memory machine has no faster tier to fall back from.',
     };
   }
   if (placement.offloadFraction > 0) {
@@ -96,18 +116,27 @@ function capacityReading(evaluation: Evaluation, canOffload: boolean): Reading {
 }
 
 function decodeReading(evaluation: Evaluation): Reading {
-  const perUser = evaluation.decode.perUserTokensPerSec;
+  /**
+   * Classified on the *displayed* figure, not the raw one.
+   *
+   * `rate()` rounds, so an estimate of 14.7 prints as "15" — and judged on 14.7 it is labelled
+   * Slow, putting "15 tok/s · Slow" on screen against a threshold of 15. Reading the same value
+   * the user reads removes the disagreement rather than narrowing the window where it happens.
+   */
+  const shown = rate(evaluation.decode.perUserTokensPerSec);
+  const perUser = Number(shown);
 
   // Thresholds are reading speed, not benchmarks: below ~10 tok/s a chat feels like waiting,
   // and above ~30 it outruns most people.
-  const tone: StatusTone = perUser >= 30 ? 'good' : perUser >= 15 ? 'warning' : 'serious';
+  const tone: StatusTone =
+    perUser >= DECODE_FAST ? 'good' : perUser >= DECODE_USABLE ? 'warning' : 'serious';
   return {
     key: 'decode',
     label: 'Decode',
-    value: rate(perUser),
+    value: shown,
     unit: 'tok/s per user',
     tone,
-    verdict: perUser >= 30 ? 'Fast' : perUser >= 15 ? 'Usable' : 'Slow',
+    verdict: perUser >= DECODE_FAST ? 'Fast' : perUser >= DECODE_USABLE ? 'Usable' : 'Slow',
     detail: evaluation.decode.kvBound
       ? 'KV traffic now outweighs weight traffic — at this context the cache, not the model, sets the speed.'
       : 'Bound by weight bandwidth. Lower quantization or faster memory is what moves this.',
@@ -115,29 +144,59 @@ function decodeReading(evaluation: Evaluation): Reading {
 }
 
 function prefillReading(evaluation: Evaluation): Reading {
-  const { ttftSeconds, prefillTokensPerSec, attentionBound } = evaluation.prefill;
-  const tone: StatusTone = ttftSeconds <= 2 ? 'good' : ttftSeconds <= 10 ? 'warning' : 'critical';
+  const { ttftSeconds, prefillTokensPerSec, attentionBound, offloadPenalty } = evaluation.prefill;
+
+  /**
+   * Classified on the displayed figure, exactly as decode is. `seconds()` rounds, so 10.27s
+   * prints as "10 s" and, judged raw, is labelled "Slow start" against a visible threshold of
+   * 10 — the same disagreement the decode tile had, in the function next door. Fixing one and
+   * not the other is how it survived a round.
+   */
+  const shown = seconds(ttftSeconds);
+  const displayed = parseDisplayedSeconds(shown, ttftSeconds);
+
+  const tone: StatusTone = displayed <= 2 ? 'good' : displayed <= 10 ? 'warning' : 'critical';
+
+  /**
+   * Streaming is named as the bottleneck only when it outweighs the rest of the pass. An 8%
+   * spill over a fast bus adds ~0.01s to a ~1.15s prompt, and calling that the cause sends
+   * someone to fix the wrong thing — the mirror of the error this branch was added to correct.
+   */
+  const streamingDominates =
+    offloadPenalty !== undefined &&
+    offloadPenalty.streamingSeconds > ttftSeconds - offloadPenalty.streamingSeconds;
 
   return {
     key: 'prefill',
     label: 'Time to first token',
-    value: seconds(ttftSeconds),
+    value: shown,
     unit: '',
     tone,
-    verdict: ttftSeconds <= 2 ? 'Responsive' : ttftSeconds <= 10 ? 'Noticeable' : 'Slow start',
-    detail: attentionBound
-      ? `${rate(prefillTokensPerSec)} tok/s prompt processing. Quadratic attention now dominates the pass, so this degrades faster than linearly as the prompt grows.`
-      : `${rate(prefillTokensPerSec)} tok/s prompt processing, bound by compute on the linear layers.`,
+    verdict: displayed <= 2 ? 'Responsive' : displayed <= 10 ? 'Noticeable' : 'Slow start',
+    detail: streamingDominates
+      ? `${rate(prefillTokensPerSec)} tok/s prompt processing, dominated by streaming ${percent(
+          offloadPenalty!.fraction
+        )} of the weights across the host bus before the prompt can start.`
+      : attentionBound
+        ? `${rate(prefillTokensPerSec)} tok/s prompt processing. Quadratic attention now dominates the pass, so this degrades faster than linearly as the prompt grows.`
+        : `${rate(prefillTokensPerSec)} tok/s prompt processing, bound by compute on the linear layers.`,
   };
 }
 
 export function Telemetry({
   evaluation,
   canOffload,
+  tunableCeiling,
 }: {
   evaluation: Evaluation;
   /** True for discrete GPUs, the only class with a slower tier to spill to. */
   canOffload: boolean;
+  /**
+   * True when raising the allocation ceiling could actually make this fit: the ceiling is
+   * user-raiseable *and* the model is inside the machine's physical capacity. DeepSeek V3 at
+   * BF16 wants 1,253 GiB on a 512 GiB Mac, and no sysctl fixes that.
+   */
+  tunableCeiling: boolean;
 }) {
   /**
    * A runtime that cannot drive this hardware has no throughput, so none is shown.
@@ -162,7 +221,7 @@ export function Telemetry({
 
   const readings: Reading[] = blocked
     ? [
-        capacityReading(evaluation, canOffload),
+        capacityReading(evaluation, canOffload, tunableCeiling),
         ...(['Decode', 'Time to first token'] as const).map((label, i) => ({
           key: `blocked-${i}`,
           label,
@@ -176,7 +235,7 @@ export function Telemetry({
         })),
       ]
     : [
-        capacityReading(evaluation, canOffload),
+        capacityReading(evaluation, canOffload, tunableCeiling),
         decodeReading(evaluation),
         prefillReading(evaluation),
       ];
@@ -212,4 +271,19 @@ export function Telemetry({
       })}
     </section>
   );
+}
+
+/**
+ * The number a reader takes from a formatted duration.
+ *
+ * `seconds()` switches units, so the printed figure is not always in seconds — "450 ms" reads as
+ * 0.45. Parsing it back is what keeps the verdict tied to what is on screen, and it falls back
+ * to the raw value if the format ever changes shape.
+ */
+function parseDisplayedSeconds(shown: string, raw: number): number {
+  const value = Number.parseFloat(shown);
+  if (!Number.isFinite(value)) return raw;
+  if (shown.endsWith('ms')) return value / 1000;
+  if (shown.endsWith('min')) return value * 60;
+  return value;
 }

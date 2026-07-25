@@ -1,13 +1,16 @@
 import { useMemo } from 'react';
 import { DEVICES, MODELS, RUNTIMES, evaluateConfig, useConfig } from '@/store/config';
+import { getRuntime, runtimeDrives } from '@/data/runtimes';
 import { QUANTS } from '@/data/quants';
 import { CATALOG_GENERATED_AT, getDevice, getModel } from '@/data/catalog';
 import { BudgetBar } from './BudgetBar';
-import { Telemetry } from './Telemetry';
+import { DECODE_FAST, Telemetry } from './Telemetry';
 import { Workloads } from './Workloads';
 import { Segmented, Select, StopSlider } from './Controls';
-import { compact, gibLabel, params, tokens } from '@/lib/format';
+import { compact, gibLabel, params, percent, tokens } from '@/lib/format';
 import type { KvPrecision } from '@/engine/types';
+import { canShard } from '@/engine/placement';
+import { quantApplies } from '@/lib/quantChoice';
 
 /**
  * The Bench — the hero surface.
@@ -42,18 +45,85 @@ export function Bench() {
   const evaluation = useMemo(() => evaluateConfig(config), [config]);
   const model = getModel(config.modelId);
   const device = getDevice(config.deviceId);
+  const runtime = getRuntime(config.runtimeId);
+
+  /**
+   * Context stops, capped at what this model supports.
+   *
+   * Built per model rather than fixed, because `coerce` clamps the stored context to
+   * `model.maxContext` and a fixed list would then show a value the engine is not using — drag
+   * a 40,960-token Qwen to 64K and the store holds 40,960 while the slider reads 32K, with the
+   * budget bar and throughput computed for neither.
+   */
+  const contextStops = useMemo(() => {
+    const withinModel = CONTEXT_STOPS.filter((t) => t < model.maxContext);
+    // The stored value is always a stop, even when it is not one of the fixed ones. Switching
+    // from a 40,960-token model to a larger one keeps that 40,960 — `coerce` only caps — so a
+    // list of "fixed stops plus this model's maximum" would show 32K for a context the engine
+    // is evaluating at 40,960. Including it means the control cannot display a value the
+    // engine is not using.
+    const stops = new Set([...withinModel, model.maxContext, config.contextTokens]);
+    return [...stops].filter((t) => t <= model.maxContext).sort((a, b) => a - b);
+  }, [model.maxContext, config.contextTokens]);
+
+  /**
+   * Every discrete control includes whatever is stored, for the same reason the context slider
+   * does: `coerce` accepts any integer in range, so a value from a URL — `?u=3` — would be
+   * evaluated as three users while the slider displayed two.
+   */
+  const concurrencyStops = useMemo(
+    () => withStored(CONCURRENCY_STOPS, config.concurrency),
+    [config.concurrency]
+  );
+  const deviceCountStops = useMemo(
+    () => withStored(DEVICE_COUNT_STOPS, config.deviceCount),
+    [config.deviceCount]
+  );
+
+  /** The prompt is part of the context, so it cannot be offered beyond it. */
+  const promptStops = useMemo(() => {
+    const within = PROMPT_STOPS.filter((t) => t < config.contextTokens);
+    // Same rule: whatever is stored has to be selectable, or the label lies about the estimate.
+    const stops = new Set([...within, config.contextTokens, config.promptTokens]);
+    return [...stops].filter((t) => t <= config.contextTokens).sort((a, b) => a - b);
+  }, [config.contextTokens, config.promptTokens]);
+
+  /** Formats that cannot run here, or would do nothing here. See `quantApplies`. */
+  const quantOptions = useMemo(
+    () =>
+      QUANTS.filter((q) => quantApplies(q, model, device)).map((q) => ({
+        value: q.id,
+        label: q.label,
+        note: q.qualityNote,
+      })),
+    [model, device]
+  );
 
   /** Whether the configuration runs at all. */
   const runnable = !evaluation.placement.unsupported && !evaluation.placement.impossible;
   /**
-   * Whether a *speed* claim is defensible, which is a stricter question than whether it runs.
-   * A discrete GPU that spills most of its weights over PCIe is runnable and slow — DeepSeek V3
-   * on a 5090 offloads 93% and decodes at 3.9 tok/s — so "would still run fast" contradicts the
-   * verdict tiles directly above it.
+   * Whether a *speed* claim is defensible — a stricter question than whether it runs, and one I
+   * have now got wrong in three different ways.
+   *
+   * Offload is not the only route to slow: DeepSeek V3 at Q4 fits an EPYC 9654 with nothing
+   * spilled, and decodes at ~10 tok/s, which the tile beside this correctly calls "Slow".
+   *
+   * The threshold is imported rather than repeated. Holding a local copy is how this ended up
+   * claiming "fast" across the 15-30 band that the tile calls merely "Usable" — the fifth way
+   * this one sentence has managed to contradict the number printed beside it.
    */
-  const fast = runnable && evaluation.placement.offloadFraction === 0;
-  /** Only discrete GPUs shard a model across devices. */
-  const shardable = device.class === 'discrete-gpu';
+  const fast = runnable && evaluation.decode.perUserTokensPerSec >= DECODE_FAST;
+  /**
+   * Sharding needs a transport between devices, which is what `interconnect` records — not the
+   * device class. Keying off the class disabled it for the DGX Spark, whose catalog row
+   * declares ConnectX-7 200GbE and which `tpEfficiency` already models as a network link; the
+   * two-Spark cluster is the case that hardware exists to serve.
+   *
+   * Deliberately separate from `canOffload` below, which really is a discrete-GPU property:
+   * spilling needs a slower *tier*, sharding needs a *link*, and only one device has one
+   * without the other.
+   */
+  const shardable = canShard(device);
 
   const modelOptions = useMemo(
     () =>
@@ -83,27 +153,57 @@ export function Bench() {
         value: d.id,
         label: `${d.name} — ${gibLabel(d.capacityBytes)}`,
         // Pre-release specs must stay visibly labelled, not silently mixed in with shipping ones.
+        // The tunable note matters for the same reason in reverse: the ceiling is a default, and
+        // treating it as a hardware limit turns a raiseable setting into a flat "will not run".
+        // Status warning first, then the tunable ceiling, then whatever the curator wrote. The
+        // last of those was being dropped entirely — including the 3090's note that estimates
+        // assume PCIe and do not model its optional NVLink bridge, which is precisely the
+        // caveat an owner of a bridged pair needs.
+        // Combined rather than ranked: the Ryzen AI Max+ is both tunable *and* carries a note
+        // that the engine uses its measured 213 GB/s instead of the 256 GB/s sticker — a 17%
+        // difference in every throughput figure. Ranking these dropped the provenance.
         note:
-          d.status !== 'shipping'
-            ? `${d.status === 'rumored' ? 'Rumoured' : 'Announced'} — specs may change`
-            : undefined,
+          [
+            d.status !== 'shipping'
+              ? `${d.status === 'rumored' ? 'Rumoured' : 'Announced'} — specs may change`
+              : undefined,
+            d.allocatableTunable
+              ? `${gibLabel(d.allocatableBytes)} allocatable by default, and raiseable`
+              : undefined,
+            d.note,
+          ]
+            .filter(Boolean)
+            .join(' ') || undefined,
       })),
     []
   );
 
-  const runtimeOptions = useMemo(() => {
-    const device = DEVICES.find((d) => d.id === config.deviceId);
-    return RUNTIMES.map((r) => ({
-      value: r.id,
-      label: r.label,
-      note:
-        device && !r.supports.includes(device.class)
+  const runtimeOptions = useMemo(
+    () =>
+      RUNTIMES.map((r) => ({
+        value: r.id,
+        label: r.label,
+        // The note is the control's accessible description, so a "does not run here" warning
+        // has to live in it — a screen-reader user tabbing the picker hears nothing otherwise.
+        note: !runtimeDrives(r, device)
           ? `Does not run on ${device.name}`
           : r.preallocFraction
             ? `Reserves ${Math.round(r.preallocFraction * 100)}% of the device up front`
             : undefined,
-    }));
-  }, [config.deviceId]);
+      })),
+    [device]
+  );
+
+  /**
+   * KV precisions the selected runtime can actually store.
+   *
+   * vLLM's `--kv-cache-dtype` takes native or FP8 variants and has no 4-bit cache; offering one
+   * charged 0.5 bytes per element and could turn a long-context OOM into a reported fit.
+   */
+  const kvOptions = useMemo(
+    () => KV_PRECISIONS.filter((k) => runtime.kvPrecisions.includes(k.value)),
+    [runtime]
+  );
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-5 p-4 sm:p-6">
@@ -142,7 +242,7 @@ export function Bench() {
           label="Quantization"
           value={config.quantId}
           onChange={(v) => set('quantId', v)}
-          options={QUANTS.map((q) => ({ value: q.id, label: q.label, note: q.qualityNote }))}
+          options={quantOptions}
         />
         <Select
           label="Runtime"
@@ -154,29 +254,36 @@ export function Bench() {
 
       {/* The hero, the three answers it does not collapse into one, and what they add up to. */}
       <BudgetBar evaluation={evaluation} />
-      <Telemetry evaluation={evaluation} canOffload={shardable} />
+      <Telemetry
+        evaluation={evaluation}
+        canOffload={device.class === 'discrete-gpu'}
+        tunableCeiling={
+          device.allocatableTunable === true &&
+          evaluation.placement.usedBytesPerDevice <= device.capacityBytes
+        }
+      />
       <Workloads evaluation={evaluation} config={config} />
 
       {/* Usage: the half of the question that is about you, not the hardware. */}
       <section aria-label="Usage" className="panel grid gap-5 p-5 sm:grid-cols-2">
         <StopSlider
           label="Context per sequence"
-          stops={CONTEXT_STOPS}
-          value={nearestStop(CONTEXT_STOPS, config.contextTokens)}
+          stops={contextStops}
+          value={nearestStop(contextStops, config.contextTokens)}
           onChange={(v) => set('contextTokens', v)}
           format={tokens}
         />
         <StopSlider
           label="Concurrent users"
-          stops={CONCURRENCY_STOPS}
-          value={nearestStop(CONCURRENCY_STOPS, config.concurrency)}
+          stops={concurrencyStops}
+          value={nearestStop(concurrencyStops, config.concurrency)}
           onChange={(v) => set('concurrency', v)}
           format={(v) => String(v)}
         />
         <StopSlider
           label="Prompt length"
-          stops={PROMPT_STOPS}
-          value={nearestStop(PROMPT_STOPS, config.promptTokens)}
+          stops={promptStops}
+          value={nearestStop(promptStops, config.promptTokens)}
           onChange={(v) => set('promptTokens', v)}
           format={tokens}
         />
@@ -184,13 +291,13 @@ export function Bench() {
           label="KV precision"
           value={config.kvPrecision}
           onChange={(v) => set('kvPrecision', v)}
-          options={KV_PRECISIONS}
+          options={kvOptions}
         />
         {shardable ? (
           <StopSlider
             label="Device count"
-            stops={DEVICE_COUNT_STOPS}
-            value={nearestStop(DEVICE_COUNT_STOPS, config.deviceCount)}
+            stops={deviceCountStops}
+            value={nearestStop(deviceCountStops, config.deviceCount)}
             onChange={(v) => set('deviceCount', v)}
             format={(v) => `${v}x`}
           />
@@ -231,8 +338,10 @@ export function Bench() {
             {fast
               ? ', so it decodes at roughly that model size rather than its full one.'
               : evaluation.placement.offloadFraction > 0
-                ? '. That would make it fast — but not here, with most of the weights crossing the host bus every token.'
-                : '. That is why a model this size can be fast anywhere it does fit.'}{' '}
+                ? `. That would make it fast — but not here, with ${percent(
+                    evaluation.placement.offloadFraction
+                  )} of the weights crossing the host bus every token.`
+                : '. Whether that is fast depends on the memory it is reading from, which the decode figure above measures.'}{' '}
             Total parameters set what fits; active parameters set how fast it feels.
           </p>
           {model.experts && (
@@ -246,6 +355,11 @@ export function Bench() {
       )}
     </div>
   );
+}
+
+/** The fixed stops plus whatever is currently stored, so the control can always show it. */
+function withStored(stops: readonly number[], stored: number): number[] {
+  return [...new Set([...stops, stored])].sort((a, b) => a - b);
 }
 
 /** Snap an arbitrary value (from a URL, say) to the nearest slider stop. */
