@@ -6,6 +6,7 @@ import {
   DEEPSEEK_V3,
   DGX_SPARK,
   EPYC_9654,
+  GPT_OSS_120B,
   GPT_OSS_20B,
   LLAMA_31_8B,
   LLAMA_CPP,
@@ -439,3 +440,63 @@ describe('the prefill bound is judged on time, not FLOPs', () => {
     expect(result.attentionBound).toBe(result.attentionFlops > result.linearFlops);
   });
 });
+
+/**
+ * A bottleneck claim is an instruction: it tells someone which component to spend money on.
+ * Both of these named a term that was not the largest, which sends them to fix the wrong thing.
+ */
+describe('the pass reports the term that actually costs the most', () => {
+  it('exposes prefill time per component, not only FLOPs', () => {
+    // FLOPs stop being comparable once the expert half runs at a different rate — an MXFP4 MoE
+    // has attention at ~53% of linear FLOPs while taking ~1.3x the linear time. The seconds are
+    // what a "what dominates" claim has to be made on.
+    const prefill = estimatePrefill(
+      GPT_OSS_120B,
+      getQuant('mxfp4'),
+      { contextTokens: 32768, concurrency: 1, promptTokens: 32768, kvPrecision: 'fp16' },
+      { device: RTX_5090, count: 1 },
+      VLLM
+    );
+
+    expect(prefill.linearSeconds).toBeGreaterThan(0);
+    expect(prefill.attentionSeconds).toBeGreaterThan(0);
+    expect(prefill.attentionBound).toBe(prefill.attentionSeconds > prefill.linearSeconds);
+    // The three terms account for the whole wait.
+    const streaming = prefill.offloadPenalty?.streamingSeconds ?? 0;
+    expect(prefill.linearSeconds + prefill.attentionSeconds + streaming).toBeCloseTo(
+      prefill.ttftSeconds,
+      6
+    );
+  });
+
+  it('prices the cache exactly as the placement sizes it', () => {
+    // The property, not the formula: whatever share of the cache a card is said to *hold*, that
+    // is the share it must be timed for. Asserting `kvBound === (kvSeconds > weightSeconds)`
+    // instead — which was the first version of this test — restates the definition and passes
+    // for any input, including the eightfold disagreement it was written to catch.
+    const usage = { contextTokens: 32768, concurrency: 16, kvPrecision: 'fp16' as const };
+    const quant = getQuant('q4_k_m');
+
+    for (const model of [DEEPSEEK_V3, QWEN3_32B, LLAMA_31_8B]) {
+      const one = { device: RTX_5090, count: 1 };
+      const many = { device: RTX_5090, count: 8 };
+
+      const p1 = planPlacement(model, quant, usage, one, VLLM);
+      const p8 = planPlacement(model, quant, usage, many, VLLM);
+      const d1 = estimateDecode(model, quant, usage, one, VLLM, p1);
+      const d8 = estimateDecode(model, quant, usage, many, VLLM, p8);
+
+      // How much less cache one card holds on the big rig, and how much less time it spends
+      // reading it — the second corrected for the all-reduce penalty the first does not carry.
+      const heldRatio = p1.kvBytesPerDevice / p8.kvBytesPerDevice;
+      const timedRatio = d1.kvSeconds / d8.kvSeconds / (tpPenalty(many) / tpPenalty(one));
+
+      expect(timedRatio).toBeCloseTo(heldRatio, 6);
+    }
+  });
+});
+
+/** The rig-scaling factor decode carries and placement does not, isolated so a test can undo it. */
+function tpPenalty(rig: { device: typeof RTX_5090; count: number }): number {
+  return achievedBandwidth(rig, VLLM) / (achievedBandwidth({ ...rig, count: 1 }, VLLM) * rig.count);
+}
