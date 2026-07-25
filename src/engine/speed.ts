@@ -183,13 +183,26 @@ export function estimateDecode(
    * divisor, from the same function, so the two cannot drift.
    */
   const shards = Math.max(1, rig.count);
-  const kvBandwidth = (deviceBandwidth / shards) * kvShards(model, shards, runtime);
+  /**
+   * Under tensor parallelism the cache is replicated when it cannot shard, so the rig's
+   * aggregate bandwidth is scaled down by how far it actually divides.
+   *
+   * A layer split needs no such correction: `achievedBandwidth` already returns one device's
+   * figure, and a serial pass reads every layer's cache exactly once across the rig — so the
+   * total cost is always `totalKvBytes / perDeviceBandwidth` no matter which card holds the
+   * heaviest subset. Applying the shard ratio there reduced an already-correct figure by the
+   * rounding slack, overstating KV time by about 11% on gpt-oss's 36 layers over eight cards.
+   */
+  const kvBandwidth =
+    runtime.parallelism === 'layer'
+      ? deviceBandwidth
+      : (deviceBandwidth / shards) * kvShards(model, shards, runtime);
 
   const offload = placement.offloadFraction;
   const offloadedBytes = weightReadBytes * offload;
   // The slower of host RAM and the bus to it — a 4090's PCIe 4.0 link caps this at 31.5 GB/s
   // however fast the DIMMs are.
-  const spillBandwidth = offloadBandwidth(rig, hostBandwidth);
+  const spillBandwidth = offloadBandwidth(rig, hostBandwidth, runtime);
 
   const kvSeconds = kvReadBytes / kvBandwidth;
   const weightSeconds =
@@ -376,7 +389,7 @@ export function estimatePrefill(
   let streamingSeconds = 0;
   if (offload > 0) {
     const streamedBytes = activeWeightBytes(model, quant, promptTokens) * offload;
-    streamingSeconds = streamedBytes / offloadBandwidth(rig, hostBandwidth);
+    streamingSeconds = streamedBytes / offloadBandwidth(rig, hostBandwidth, runtime);
     ttft += streamingSeconds;
   }
 

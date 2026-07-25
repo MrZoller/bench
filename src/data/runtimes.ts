@@ -35,6 +35,9 @@ export const RUNTIMES: readonly RuntimeSpec[] = [
     // GGUF K-quants for the cache as well as the weights: `--cache-type-k q8_0 q4_0`.
     // Splits by whole layers across cards by default, so the cache divides evenly.
     parallelism: 'layer',
+    // GGUF: the K-quants and I-quants, plus the plain float baselines it converts to. Not AWQ,
+    // which is a different checkpoint format it cannot read, and not the vendor 4-bit schemes.
+    weightFormats: ['bf16', 'q8_0', 'q6_k', 'q5_k_m', 'q4_k_m', 'iq4_xs', 'q3_k_m', 'mxfp4'],
     kvPrecisions: ['fp16', 'q8', 'q4'],
     // `q8_0` and `q4_0` KV store 32-element blocks with a 2-byte scale: 34/32 and 18/32 bytes
     // per element. The same block-metadata overhead quants.ts documents on the weight side.
@@ -56,6 +59,9 @@ export const RUNTIMES: readonly RuntimeSpec[] = [
     supports: [{ class: 'discrete-gpu' }, { class: 'unified-soc', vendor: 'NVIDIA' }],
     // Tensor-parallel by default: every layer sharded across every rank.
     parallelism: 'tensor',
+    // Safetensors checkpoints: float baselines, the vendor low-precision formats, and AWQ.
+    // Not GGUF, which is llama.cpp's container.
+    weightFormats: ['bf16', 'fp8', 'int8', 'nvfp4', 'mxfp4', 'awq_4bit'],
     // `--kv-cache-dtype` takes auto/native or an FP8 variant. There is no 4-bit KV cache, and
     // offering one lets a long-context OOM be reported as a comfortable fit.
     kvPrecisions: ['fp16', 'q8'],
@@ -77,6 +83,12 @@ export const RUNTIMES: readonly RuntimeSpec[] = [
     // Single-machine only in the catalogue, so this never divides anything today — declared
     // because the field is required, and a layer split is what a multi-device MLX would do.
     parallelism: 'layer',
+    // MLX quantizes with its own affine scheme at 4 and 8 bits, and the catalog has no
+    // MLX-native entries for those — so the GGUF K-quants stand in *by width*, which is what a
+    // roofline over bits-per-weight actually consumes. Not exact: MLX 4-bit is nearer 4.5 bpw
+    // than Q4_K_M's 4.83. Recorded as a modelling choice rather than a claim that MLX reads
+    // GGUF, which it does not. What it genuinely cannot do is AWQ or the vendor formats.
+    weightFormats: ['bf16', 'int8', 'q8_0', 'q6_k', 'q5_k_m', 'q4_k_m', 'iq4_xs', 'q3_k_m'],
     kvPrecisions: ['fp16', 'q8'],
     source: 'https://github.com/ml-explore/mlx',
   },

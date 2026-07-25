@@ -87,12 +87,12 @@ export function Bench() {
   /** Formats that cannot run here, or would do nothing here. See `quantApplies`. */
   const quantOptions = useMemo(
     () =>
-      QUANTS.filter((q) => quantApplies(q, model, device)).map((q) => ({
+      QUANTS.filter((q) => quantApplies(q, model, device, runtime)).map((q) => ({
         value: q.id,
         label: q.label,
         note: q.qualityNote,
       })),
-    [model, device]
+    [model, device, runtime]
   );
 
   /** Whether the configuration runs at all. */
