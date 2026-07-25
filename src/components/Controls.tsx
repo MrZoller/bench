@@ -109,7 +109,14 @@ export function StopSlider<T extends number | string>({
   );
 }
 
-/** Segmented control for short, mutually exclusive choices where seeing all options helps. */
+/**
+ * Segmented control for short, mutually exclusive choices where seeing all options helps.
+ *
+ * Native radio inputs under the styling, not buttons with `aria-pressed`. Toggle buttons say
+ * "this one is on" independently; they never say "and choosing it turned the others off", so a
+ * screen-reader user could not tell these were alternatives, and arrow-key navigation — which
+ * people expect inside a group of radios — did not work at all.
+ */
 export function Segmented<T extends string>({
   label,
   value,
@@ -121,6 +128,8 @@ export function Segmented<T extends string>({
   onChange: (value: T) => void;
   options: readonly { value: T; label: string }[];
 }) {
+  const name = useId();
+
   return (
     <fieldset className="flex flex-col gap-1">
       <legend className="text-xs font-medium tracking-wide text-[var(--color-text-faint)] uppercase">
@@ -130,19 +139,26 @@ export function Segmented<T extends string>({
         {options.map((option) => {
           const active = option.value === value;
           return (
-            <button
+            <label
               key={option.value}
-              type="button"
-              aria-pressed={active}
-              onClick={() => onChange(option.value)}
-              className={`flex-1 rounded px-2 py-1 text-sm transition-colors ${
+              className={`flex-1 cursor-pointer rounded px-2 py-1 text-center text-sm transition-colors focus-within:ring-2 focus-within:ring-[var(--color-accent)] ${
                 active
                   ? 'bg-[var(--color-accent-dim)] text-[var(--color-text)]'
                   : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
               }`}
             >
+              <input
+                type="radio"
+                name={name}
+                value={option.value}
+                checked={active}
+                onChange={() => onChange(option.value)}
+                // Visually hidden rather than `hidden`: it has to stay focusable and reachable
+                // by arrow keys, which is the whole reason for using a radio here.
+                className="sr-only"
+              />
               {option.label}
-            </button>
+            </label>
           );
         })}
       </div>
