@@ -11,6 +11,7 @@ import {
 import {
   DEEPSEEK_V3,
   DGX_SPARK,
+  GEMMA_3_12B,
   GPT_OSS_120B,
   LLAMA_31_8B,
   LLAMA_CPP,
@@ -22,6 +23,7 @@ import {
   STRIX_HALO_395,
   VLLM,
 } from './fixtures';
+import { achievedBandwidth } from './speed';
 import { getQuant } from '@/data/quants';
 import { GIB } from './types';
 import type { DeviceSpec, UsageSpec } from './types';
@@ -393,5 +395,53 @@ describe('an indivisible layer count rounds weights up too', () => {
         VLLM
       );
     expect(plan(2).weightBytesPerDevice).toBeCloseTo(plan(1).weightBytesPerDevice / 2, -3);
+  });
+});
+
+/**
+ * A layer count is not a KV divisor on a hybrid model, and a layer split is not a speedup.
+ * Both were being assumed, and both flatter multi-card rigs in the direction that reports a fit.
+ */
+describe('layer splits are sized, not divided', () => {
+  const gemma = (count: number, runtime = LLAMA_CPP) =>
+    planPlacement(
+      GEMMA_3_12B,
+      getQuant('q4_k_m'),
+      { contextTokens: 131072, concurrency: 8, kvPrecision: 'fp16' },
+      { device: RTX_5090, count },
+      runtime
+    );
+
+  it('charges the busiest card for the full-attention layers it lands', () => {
+    // Gemma 3 12B has 8 full-attention layers among 48, and at 128K each caches far more than a
+    // sliding one. Over five cards the full layers cannot be spread evenly — someone holds two —
+    // so the busiest card holds more than a fifth of the cache. Five is reachable: the store
+    // accepts any device count from a URL, and `DEVICE_COUNT_STOPS` is only what the slider offers.
+    const five = gemma(5);
+    const evenShare = gemma(1).kvBytesPerDevice / 5;
+
+    expect(five.kvBytesPerDevice).toBeGreaterThan(evenShare);
+
+    // And a count that *does* divide the full layers evenly gets the even share, so the model is
+    // charging for real imbalance rather than adding a blanket penalty.
+    const eight = gemma(8);
+    expect(eight.kvBytesPerDevice).toBeCloseTo(gemma(1).kvBytesPerDevice / 8, -3);
+  });
+
+  it('never claims a card holds more than the whole cache', () => {
+    for (const count of [1, 2, 4, 8]) {
+      const p = gemma(count);
+      expect(p.kvBytesPerDevice).toBeLessThanOrEqual(p.totalKvBytes + 1);
+    }
+  });
+
+  it('does not grant a serial split aggregate bandwidth', () => {
+    // Whole layers run in sequence for one token, so a single stream sees one card's bandwidth
+    // however many cards there are. Tensor parallelism really does add channels.
+    const perDevice = achievedBandwidth({ device: RTX_5090, count: 1 }, LLAMA_CPP);
+    expect(achievedBandwidth({ device: RTX_5090, count: 8 }, LLAMA_CPP)).toBeCloseTo(perDevice, -6);
+
+    const tp1 = achievedBandwidth({ device: RTX_5090, count: 1 }, VLLM);
+    expect(achievedBandwidth({ device: RTX_5090, count: 8 }, VLLM)).toBeGreaterThan(tp1 * 4);
   });
 });
