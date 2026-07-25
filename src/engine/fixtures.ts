@@ -21,11 +21,17 @@ export const LLAMA_31_8B: ModelSpec = {
   org: 'Meta',
   totalParams: 8.03e9,
   activeParams: 8.03e9,
+  // Untied lm_head (the index carries its own tensor), so decode reads a single embedding row
+  // rather than the whole 128256 x 4096 table.
+  activeDenseParams: 8.03e9 - 128256 * 4096,
+  tiedEmbeddings: false,
   expertParams: 0,
   layers: 32,
   hiddenSize: 4096,
   vocabSize: 128256,
-  attention: { core: { kind: 'gqa', kvHeads: 8, headDim: 128 } },
+  // 32 query heads x 128 = 4096, equal to hidden size. The case where the old shortcut
+  // happened to be right, which is why it kept passing.
+  attention: { core: { kind: 'gqa', kvHeads: 8, headDim: 128 }, projectionWidth: 32 * 128 },
   maxContext: 131072,
   source: 'https://huggingface.co/NousResearch/Meta-Llama-3.1-8B-Instruct/raw/main/config.json',
 };
@@ -37,11 +43,14 @@ export const QWEN3_32B: ModelSpec = {
   org: 'Alibaba',
   totalParams: 32.8e9,
   activeParams: 32.8e9,
+  activeDenseParams: 32.8e9 - 151936 * 5120,
+  tiedEmbeddings: false,
   expertParams: 0,
   layers: 64,
   hiddenSize: 5120,
   vocabSize: 151936,
-  attention: { core: { kind: 'gqa', kvHeads: 8, headDim: 128 } },
+  // 64 query heads x 128 = 8192 against a 5120 hidden size: 1.6x.
+  attention: { core: { kind: 'gqa', kvHeads: 8, headDim: 128 }, projectionWidth: 64 * 128 },
   maxContext: 40960,
   source: 'https://huggingface.co/Qwen/Qwen3-32B/raw/main/config.json',
 };
@@ -63,16 +72,63 @@ export const DEEPSEEK_V3: ModelSpec = {
   org: 'DeepSeek',
   totalParams: 671e9,
   activeParams: 37e9,
+  activeDenseParams: 671e9 - 58 * 256 * 3 * 7168 * 2048 - 129280 * 7168,
+  tiedEmbeddings: false,
   // 58 MoE layers (61 - first_k_dense_replace 3) x 256 experts x 3 matrices x 7168 x 2048.
   expertParams: 58 * 256 * 3 * 7168 * 2048,
   experts: { total: 256, perToken: 8 },
   layers: 61,
   hiddenSize: 7168,
   vocabSize: 129280,
-  attention: { core: { kind: 'mla', kvLoraRank: 512, qkRopeHeadDim: 64 } },
+  // MLA projects wider than it caches: 128 heads x (128 nope + 64 rope) = 24576 for queries
+  // against 128 x 128 = 16384 for values. The engine charges QK and AV at one rate, so this is
+  // their mean — 2.9x the 7168 hidden size.
+  attention: {
+    core: { kind: 'mla', kvLoraRank: 512, qkRopeHeadDim: 64 },
+    projectionWidth: (128 * (128 + 64) + 128 * 128) / 2,
+  },
   nativeQuant: 'fp8',
   maxContext: 163840,
   source: 'https://huggingface.co/deepseek-ai/DeepSeek-V3/raw/main/config.json',
+};
+
+/**
+ * Tied embeddings *and* a vision tower — the two corrections that pull the per-token parameter
+ * count in opposite directions, in one model.
+ *
+ * Its `config.json` omits `tie_word_embeddings` entirely, yet the safetensors index has no
+ * `lm_head.weight`: the table is shared, so decode runs it as a full 262208 x 3840 output
+ * matmul every step and it must *not* be subtracted. The 0.42B vision tower is the reverse —
+ * resident in memory, never run for a text token.
+ *
+ * Hence `activeDenseParams` (11.77B) sitting *above* the published active figure (11.18B),
+ * which is the one shape in the catalog where those two numbers invert.
+ */
+export const GEMMA_3_12B: ModelSpec = {
+  id: 'unsloth/gemma-3-12b-it',
+  name: 'Gemma 3 12B',
+  org: 'Google',
+  totalParams: 12_187_325_040,
+  // A dense model's active count is its total — the same contract the generator now applies.
+  // The embedding subtraction belongs only to the MoE published-figure convention.
+  activeParams: 12_187_325_040,
+  // The physical one subtracts the vision tower, and keeps the tied table.
+  activeDenseParams: 12_187_325_040 - 421_290_864,
+  tiedEmbeddings: true,
+  nonLanguageParams: 421_290_864,
+  expertParams: 0,
+  layers: 48,
+  hiddenSize: 3840,
+  vocabSize: 262208,
+  attention: {
+    core: { kind: 'gqa', kvHeads: 8, headDim: 256 },
+    // 16 query heads x 256 = 4096 against a 3840 hidden size: 1.07x, the narrowest gap here.
+    projectionWidth: 16 * 256,
+    // sliding_window_pattern 6: every 6th layer attends over the full context.
+    layerWindows: Array.from({ length: 48 }, (_, i) => ((i + 1) % 6 === 0 ? null : 1024)),
+  },
+  maxContext: 131072,
+  source: 'https://huggingface.co/unsloth/gemma-3-12b-it/raw/main/config.json',
 };
 
 /**
@@ -85,6 +141,8 @@ export const GPT_OSS_120B: ModelSpec = {
   org: 'OpenAI',
   totalParams: 116.8e9,
   activeParams: 5.1e9,
+  activeDenseParams: 116.8e9 - 36 * 128 * 3 * 2880 * 2880 - 201088 * 2880,
+  tiedEmbeddings: false,
   // 36 layers x 128 experts x 3 matrices x 2880 x 2880.
   expertParams: 36 * 128 * 3 * 2880 * 2880,
   experts: { total: 128, perToken: 4 },
@@ -93,6 +151,8 @@ export const GPT_OSS_120B: ModelSpec = {
   vocabSize: 201088,
   attention: {
     core: { kind: 'gqa', kvHeads: 8, headDim: 64 },
+    // 64 query heads x 64 = 4096 against a 2880 hidden size: 1.42x.
+    projectionWidth: 64 * 64,
     layerWindows: alternatingWindows(36, 128),
   },
   nativeQuant: 'mxfp4',
@@ -110,6 +170,8 @@ export const GPT_OSS_20B: ModelSpec = {
   org: 'OpenAI',
   totalParams: 20.9e9,
   activeParams: 3.6e9,
+  activeDenseParams: 20.9e9 - 24 * 32 * 3 * 2880 * 2880 - 201088 * 2880,
+  tiedEmbeddings: false,
   // 24 layers x 32 experts x 3 matrices x 2880 x 2880.
   expertParams: 24 * 32 * 3 * 2880 * 2880,
   experts: { total: 32, perToken: 4 },
@@ -118,6 +180,7 @@ export const GPT_OSS_20B: ModelSpec = {
   vocabSize: 201088,
   attention: {
     core: { kind: 'gqa', kvHeads: 8, headDim: 64 },
+    projectionWidth: 64 * 64,
     layerWindows: alternatingWindows(24, 128),
   },
   nativeQuant: 'mxfp4',
@@ -139,7 +202,9 @@ export const RTX_5090: DeviceSpec = {
   capacityBytes: 32 * GIB,
   allocatableBytes: 31 * GIB, // display and desktop compositor take a slice
   bandwidthBytesPerSec: 1792 * GB,
-  flops: { fp16: 419 * TFLOP, fp8: 838 * TFLOP },
+  // Blackwell: real FP4 tensor cores, as devices.json records. Omitting them here made every
+  // fixture-based NVFP4 estimate 4x too low and left the card's actual FP4 path untested.
+  flops: { fp16: 419 * TFLOP, fp8: 838 * TFLOP, fp4: 1676 * TFLOP },
   interconnect: 'PCIe 5.0 x16',
   tdpWatts: 575,
   msrpUsd: 1999,
@@ -160,7 +225,8 @@ export const DGX_SPARK: DeviceSpec = {
   capacityBytes: 128 * GIB,
   allocatableBytes: 120 * GIB, // coherent pool; OS still needs room
   bandwidthBytesPerSec: 273 * GB,
-  flops: { fp16: 125 * TFLOP, fp4: 1000 * TFLOP },
+  // Dense, matching devices.json. NVIDIA's headline 1 PetaFLOP for GB10 is the sparse figure.
+  flops: { fp16: 125 * TFLOP, fp8: 250 * TFLOP, fp4: 500 * TFLOP },
   interconnect: 'ConnectX-7 200GbE',
   tdpWatts: 240,
   msrpUsd: 3999,

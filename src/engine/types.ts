@@ -36,6 +36,20 @@ export type AttentionCore =
 export interface AttentionSpec {
   core: AttentionCore;
   /**
+   * Width of the query/value projection — `num_attention_heads * head_dim` — which QK^T and AV
+   * scale by.
+   *
+   * Deliberately not `hiddenSize`. A model may project into a wider or narrower attention space
+   * than its residual stream, and most current ones do: GLM-4.5-Air is 3x its hidden size and
+   * DeepSeek 2.9x, while Gemma 3 27B and Mistral Small are *narrower*. Substituting hidden size
+   * understated GLM's attention term by 67% and overstated Gemma 3 27B's by 31% — errors in
+   * opposite directions, so no single correction factor could have absorbed them.
+   *
+   * For MLA this is the mean of the query space (`heads * (qk_nope + qk_rope)`) and the value
+   * space (`heads * v_head_dim`), which differ; the engine charges QK and AV at one rate.
+   */
+  projectionWidth: number;
+  /**
    * Per-layer attention window in tokens; `null` means that layer attends over the full
    * context. Absent entirely means every layer is full attention.
    *
@@ -62,6 +76,28 @@ export interface ModelSpec {
    */
   activeParams: number;
   /**
+   * Non-expert parameters a single token actually reads. This, not `activeParams`, is what
+   * decode bytes and prefill FLOPs are built from.
+   *
+   * It differs from `totalParams - expertParams` by two subtractions that pull in opposite
+   * directions between models, which is why neither published figure can stand in for it:
+   *   - the input embedding, when the model does *not* tie it to the output projection. An
+   *     untied table is a row lookup and read once per token; a tied one is a full vocab
+   *     matmul on every step and must stay.
+   *   - non-text towers. Gemma 3's vision encoder occupies memory but never runs for a text
+   *     token, so it belongs in `totalParams` and nowhere near a per-token count.
+   *
+   * Charging the whole dense half instead overstated gpt-oss-20b's decode traffic by 31%.
+   *
+   * Prefill subtracts one further term that decode does not — see `prefillComputeParams` — so
+   * this is the decode basis, not a shared one.
+   */
+  activeDenseParams: number;
+  /** Whether the output projection reuses the input embedding table. */
+  tiedEmbeddings?: boolean;
+  /** Parameters in non-text towers — resident, but not run for a text token. */
+  nonLanguageParams?: number;
+  /**
    * Parameters living in routed expert FFNs. Needed separately because native quantization
    * schemes quantize experts far harder than the rest of the network (gpt-oss ships MXFP4
    * experts with BF16 attention), so a flat params * bpw is wrong for exactly the models
@@ -86,8 +122,19 @@ export interface ModelSpec {
   nativeQuant?: string;
   maxContext: number;
 
-  popularity?: { downloads: number; likes: number };
+  popularity?: {
+    downloads: number;
+    likes: number;
+    /**
+     * Repo the figures were read from, when it differs from `id`. Gated originals are seeded
+     * via open mirrors, but a mirror's traffic is not the model's — Meta's Llama 3.1 70B has
+     * ~255x the downloads of the NousResearch copy the weights come from.
+     */
+    measuredOn?: string;
+  };
   releasedAt?: string;
+  /** Commit every figure on this row was derived from, so a suspicious number is reproducible. */
+  revision?: string;
   /** Provenance for every derived figure — this catalog is generated, never typed from memory. */
   source: string;
 }
@@ -127,9 +174,14 @@ export interface QuantSpec {
    * Deliberately explicit rather than inferred from `bpw`: storage width and compute width
    * are different things. IQ4_XS and AWQ store at ~4.3 bits but dequantize and accumulate in
    * fp16, so keying off bit width would hand them Blackwell's FP4 rate and overstate prefill
-   * by ~8x. Only formats with real low-precision kernels (MXFP4, NVFP4, FP8) claim otherwise.
+   * by ~8x. Only formats with real low-precision kernels (MXFP4, NVFP4, FP8, INT8) claim
+   * otherwise.
+   *
+   * `int8` is tracked apart from `fp8` even though the two run at the same rate on hardware
+   * that has both, because plenty of hardware doesn't: Ampere has INT8 tensor cores and no
+   * FP8 at all. Collapsing them would hand an FP8 quant a rate that card cannot reach.
    */
-  computeDtype: 'fp16' | 'fp8' | 'fp4';
+  computeDtype: 'fp16' | 'fp8' | 'fp4' | 'int8';
   /** Rough quality cost vs bf16, for UI guidance only — never fed into the math. */
   qualityNote?: string;
   source: string;

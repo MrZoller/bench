@@ -1,6 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { activeWeightBytes, effectiveActiveParams, weightBreakdown, weightBytes } from './weights';
-import { DEEPSEEK_V3, GPT_OSS_120B, LLAMA_31_8B, QWEN3_32B } from './fixtures';
+import {
+  activeWeightBytes,
+  effectiveActiveParams,
+  outputProjectionParams,
+  prefillComputeParams,
+  weightBreakdown,
+  weightBytes,
+} from './weights';
+import {
+  DEEPSEEK_V3,
+  GEMMA_3_12B,
+  GPT_OSS_120B,
+  GPT_OSS_20B,
+  LLAMA_31_8B,
+  QWEN3_32B,
+} from './fixtures';
 import { getQuant } from '@/data/quants';
 import { GIB } from './types';
 
@@ -86,28 +100,40 @@ describe('active weights govern speed, total weights govern memory', () => {
    * The guard for the split that actually matters. Active parameters for gpt-oss are roughly
    * half dense, and that dense half is BF16, read in full every step. Charging it the blended
    * whole-model rate (4.47 bpw, since 98% of parameters are 4-bit experts) understates
-   * bytes-per-token by more than 2x — and decode throughput is inversely proportional to it.
+   * bytes-per-token by ~1.8x — and decode throughput is inversely proportional to it.
+   *
+   * The dense term is `activeDenseParams`, not `totalParams - expertParams`: the latter is the
+   * residency figure and re-adds a 0.58B embedding table that an untied model reads one row of.
    *
    * Computed by hand from the fixture rather than through weightBreakdown, so a regression in
    * the split cannot quietly move the expectation with it.
    */
   it('charges gpt-oss active weights per component, not at the blended rate', () => {
-    const dense = GPT_OSS_120B.totalParams - GPT_OSS_120B.expertParams;
     const activeExperts = GPT_OSS_120B.expertParams * (4 / 128);
-    const expected = (dense * 16 + activeExperts * 4.25) / 8;
+    const expected = (GPT_OSS_120B.activeDenseParams * 16 + activeExperts * 4.25) / 8;
 
     const actual = activeWeightBytes(GPT_OSS_120B, getQuant('mxfp4'));
     expect(actual).toBeCloseTo(expected, -6);
-    expect(actual / 1e9).toBeCloseTo(6.18, 1);
+    expect(actual / 1e9).toBeCloseTo(5.02, 1);
 
     // What the blended shortcut would have claimed.
     const blended = (GPT_OSS_120B.activeParams * 4.4651) / 8;
-    expect(actual / blended).toBeGreaterThan(2);
+    expect(actual / blended).toBeGreaterThan(1.7);
   });
 
-  it('reads everything for a dense model', () => {
+  /**
+   * A dense model does *not* read every weight it stores. Llama 3.1 keeps `lm_head` as its own
+   * tensor, so the 128256 x 4096 input embedding is a row lookup at decode — 0.32 GB of the
+   * 4.87 GB file that never crosses the bus per step.
+   */
+  it('skips the untied embedding table for a dense model', () => {
     const quant = getQuant('q4_k_m');
-    expect(activeWeightBytes(LLAMA_31_8B, quant)).toBeCloseTo(weightBytes(LLAMA_31_8B, quant), 0);
+    const embeddingBytes = (LLAMA_31_8B.vocabSize * LLAMA_31_8B.hiddenSize * quant.bpw) / 8;
+
+    expect(activeWeightBytes(LLAMA_31_8B, quant)).toBeCloseTo(
+      weightBytes(LLAMA_31_8B, quant) - embeddingBytes,
+      0
+    );
   });
 
   it('grows the expert union with batch, and leaves dense models flat', () => {
@@ -129,5 +155,128 @@ describe('active weights govern speed, total weights govern memory', () => {
     expect(effectiveActiveParams(withoutCounts, 1)).toBeCloseTo(DEEPSEEK_V3.activeParams, -8);
     // No expert counts means no basis for a batch curve, so it must stay flat rather than invent one.
     expect(effectiveActiveParams(withoutCounts, 64)).toBe(effectiveActiveParams(withoutCounts, 1));
+  });
+});
+
+/**
+ * The tied-embedding and vision-tower corrections, exercised through the engine rather than
+ * asserted as catalog data.
+ *
+ * These are the guards that fail if `activeDenseParams` is ever rederived from
+ * `tie_word_embeddings` — a key Gemma 3 does not set — or if a vision tower is folded back
+ * into the per-token count.
+ */
+describe('per-token basis excludes what a text token does not read', () => {
+  const quant = getQuant('q4_k_m');
+
+  it('keeps a tied embedding table in the decode read', () => {
+    // Tied means the table *is* the output projection: a full vocab matmul every step.
+    const embedding = GEMMA_3_12B.vocabSize * GEMMA_3_12B.hiddenSize;
+    const withoutTable = activeWeightBytes(GEMMA_3_12B, quant) - (embedding * quant.bpw) / 8;
+
+    expect(activeWeightBytes(GEMMA_3_12B, quant)).toBeCloseTo(
+      ((GEMMA_3_12B.totalParams - GEMMA_3_12B.nonLanguageParams!) * quant.bpw) / 8,
+      0
+    );
+    // Subtracting it, as the untied case correctly does, would drop ~0.6 GB of real traffic.
+    expect(activeWeightBytes(GEMMA_3_12B, quant) - withoutTable).toBeGreaterThan(0.5e9);
+  });
+
+  it('excludes the vision tower from the decode read but not from memory', () => {
+    const towerBytes = (GEMMA_3_12B.nonLanguageParams! * quant.bpw) / 8;
+
+    expect(weightBytes(GEMMA_3_12B, quant) - activeWeightBytes(GEMMA_3_12B, quant)).toBeCloseTo(
+      towerBytes,
+      0
+    );
+  });
+
+  /**
+   * The distinction stated directly, rather than through a comparison with `activeParams`.
+   *
+   * That comparison used to show an inversion — a tied model reading *above* its published
+   * figure — and stopped meaning anything once dense models began reporting `activeParams`
+   * equal to `totalParams`. Asserting against the published convention made the test hostage
+   * to a convention; asserting the physical rule does not.
+   */
+  it('keeps the embedding in the per-token basis exactly when it is tied', () => {
+    const embedding = (m: typeof LLAMA_31_8B) => m.vocabSize * m.hiddenSize;
+
+    // Tied: the table is the output projection, so it stays — only the vision tower comes out.
+    expect(GEMMA_3_12B.activeDenseParams).toBe(
+      GEMMA_3_12B.totalParams - GEMMA_3_12B.nonLanguageParams!
+    );
+    expect(GEMMA_3_12B.activeDenseParams).toBeGreaterThan(embedding(GEMMA_3_12B));
+
+    // Untied: `lm_head` is its own tensor, so the input table is a row lookup and comes out.
+    expect(LLAMA_31_8B.activeDenseParams).toBe(LLAMA_31_8B.totalParams - embedding(LLAMA_31_8B));
+  });
+
+  /**
+   * The fallback for an MoE model missing its expert counts has to reconstruct the per-token
+   * fraction from the same dense basis `activeParams` was built on. Subtracting the full dense
+   * half instead implied 9.5% of gpt-oss-20b's experts per token where its config says 4 of 32.
+   *
+   * DeepSeek cannot show this — its round-trip is exact either way — so the assertion is on
+   * gpt-oss, where the embedding is a third of the dense half.
+   */
+  it('recovers the true per-token expert fraction without expert counts', () => {
+    const withoutCounts = { ...GPT_OSS_20B, experts: undefined };
+    const routed = effectiveActiveParams(withoutCounts, 1) - GPT_OSS_20B.activeDenseParams;
+
+    expect(routed / GPT_OSS_20B.expertParams).toBeCloseTo(4 / 32, 3);
+  });
+});
+
+/**
+ * Prefill computes logits for the positions that need them — one, for generation — not for
+ * every prompt token. The output projection therefore sits outside the prefill FLOPs basis
+ * while staying inside the decode one, which is the only place the two bases diverge.
+ */
+describe('prefill excludes the output projection', () => {
+  it.each([
+    ['untied', GPT_OSS_20B],
+    ['tied', GEMMA_3_12B],
+  ])('drops exactly one vocab x hidden matmul for a %s model', (_label, model) => {
+    const gap = effectiveActiveParams(model, 1) - prefillComputeParams(model);
+    expect(gap).toBeCloseTo(model.vocabSize * model.hiddenSize, -6);
+  });
+
+  it('is a material share of a wide-vocabulary model', () => {
+    // gpt-oss carries a 201K vocabulary against 3.6B active: 16% of the linear term.
+    const share =
+      (effectiveActiveParams(GPT_OSS_20B, 1) - prefillComputeParams(GPT_OSS_20B)) /
+      effectiveActiveParams(GPT_OSS_20B, 1);
+    expect(share).toBeGreaterThan(0.15);
+  });
+});
+
+/**
+ * The output projection is per-request work, not per-token work, and the difference only shows
+ * up at the ends: negligible on a long prompt, most of the pass on a one-token one.
+ */
+describe('output projection is charged once per prefill', () => {
+  const flops = (model: typeof GPT_OSS_20B, promptTokens: number) =>
+    2 * (prefillComputeParams(model) * promptTokens + outputProjectionParams(model));
+
+  it('is a sixth of a single-token prompt rather than vanishing from it', () => {
+    const withProjection = flops(GPT_OSS_20B, 1);
+    const withoutIt = 2 * prefillComputeParams(GPT_OSS_20B) * 1;
+
+    // 0.58B projection within a 3.60B one-token pass: omitting it loses 16% of the work. The
+    // expert term is most of the remainder, which is why this is a sixth and not a half.
+    expect(1 - withoutIt / withProjection).toBeCloseTo(0.16, 2);
+  });
+
+  it('is a rounding error on a long prompt', () => {
+    const perTokenShare =
+      outputProjectionParams(GPT_OSS_20B) / (prefillComputeParams(GPT_OSS_20B) * 4096);
+    expect(perTokenShare).toBeLessThan(0.001);
+  });
+
+  it('never charges it per token, at any prompt length', () => {
+    // Doubling the prompt must add exactly the per-token term twice over, not the projection too.
+    const delta = flops(GPT_OSS_20B, 2048) - flops(GPT_OSS_20B, 1024);
+    expect(delta).toBe(2 * prefillComputeParams(GPT_OSS_20B) * 1024);
   });
 });
