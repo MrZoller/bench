@@ -105,10 +105,12 @@ describe('calibration against published benchmarks', () => {
     // The 5090 lists 419 TFLOP fp16 and 838 TFLOP fp8.
     expect(fp8.prefillTokensPerSec / bf16.prefillTokensPerSec).toBeCloseTo(2, 1);
 
-    // NVFP4 asks for an fp4 rate the 5090 fixture does not publish, so it falls back to fp8
-    // rather than silently dropping to fp16 or producing zero.
+    // NVFP4 asks for an fp4 rate the 5090 fixture does not publish. It must drop to fp16, not
+    // borrow the fp8 rate: a card without FP4 tensor cores runs a Blackwell-native format
+    // dequantized, and lending it 2x fp16 would report an unreachable throughput.
     const nvfp4 = estimatePrefill(QWEN3_32B, getQuant('nvfp4'), usage, rig, VLLM);
-    expect(nvfp4.prefillTokensPerSec).toBeCloseTo(fp8.prefillTokensPerSec, 0);
+    expect(nvfp4.prefillTokensPerSec).toBeCloseTo(bf16.prefillTokensPerSec, 0);
+    expect(nvfp4.prefillTokensPerSec).toBeLessThan(fp8.prefillTokensPerSec * 0.75);
   });
 
   it('charges sliding-window layers linear rather than quadratic prefill attention', () => {
@@ -331,5 +333,37 @@ describe('tensor-parallel scaling by interconnect', () => {
     const [fabric, pcie, network] = links.map((l) => aggregate(l, 2));
     expect(fabric).toBeGreaterThan(pcie);
     expect(pcie).toBeGreaterThan(network);
+  });
+});
+
+/**
+ * The precision lookup must be able to miss in *both* directions, and the two rules are
+ * symmetric: a card is only ever given a rate for silicon it actually has.
+ */
+describe('precision fallbacks never invent silicon', () => {
+  const prefill = (quantId: string, flops: DeviceSpec['flops']) =>
+    estimatePrefill(
+      QWEN3_32B,
+      getQuant(quantId),
+      { contextTokens: 8192, concurrency: 1, kvPrecision: 'fp16', promptTokens: 8192 },
+      { device: { ...RTX_5090, flops }, count: 1 },
+      VLLM
+    ).prefillTokensPerSec;
+
+  it('does not lend an FP8 rate to FP4 on a card with no FP4 units', () => {
+    // The H100 shape: strong FP8, no FP4 at all.
+    const hopper = { fp16: 989 * TFLOP, fp8: 1979 * TFLOP };
+    expect(prefill('nvfp4', hopper)).toBeCloseTo(prefill('bf16', hopper), 0);
+  });
+
+  it('does not lend an INT8 rate to FP8 on a card with no FP8 units', () => {
+    // The Ampere shape: INT8 tensor cores, no FP8.
+    const ampere = { fp16: 142 * TFLOP, int8: 284 * TFLOP };
+    expect(prefill('fp8', ampere)).toBeCloseTo(prefill('bf16', ampere), 0);
+  });
+
+  it('still uses a real FP4 rate when the card publishes one', () => {
+    const blackwell = { fp16: 419 * TFLOP, fp8: 838 * TFLOP, fp4: 1676 * TFLOP };
+    expect(prefill('nvfp4', blackwell) / prefill('bf16', blackwell)).toBeCloseTo(4, 0);
   });
 });

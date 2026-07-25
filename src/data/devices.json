@@ -43,7 +43,7 @@
       "capacityGiB": 24,
       "allocatableGiB": 23,
       "bandwidthGBs": 1008,
-      "tflops": { "fp16": 330, "int8": 661 },
+      "tflops": { "fp16": 330, "fp8": 661, "int8": 661 },
       "interconnect": "PCIe 4.0 x16",
       "tdpWatts": 450,
       "msrpUsd": 1599,

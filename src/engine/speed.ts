@@ -182,7 +182,11 @@ function peakFlops(device: DeviceSpec, quant: QuantSpec, runtime: RuntimeSpec): 
 
   switch (quant.computeDtype) {
     case 'fp4':
-      return f.fp4 ?? f.fp8 ?? fp16;
+      // Deliberately does not fall back to fp8, for the same reason fp8 does not fall back to
+      // int8: an H100 has FP8 tensor cores and no FP4 ones, so an NVFP4 quant there runs
+      // dequantized, not at twice fp16. Lending it the FP8 rate reported a Blackwell-native
+      // format as usable on hardware that cannot dispatch it.
+      return f.fp4 ?? fp16;
     case 'fp8':
       // Deliberately does not fall back to int8. A card with INT8 tensor cores and no FP8 ones
       // cannot run an FP8 kernel at the INT8 rate; it runs it at fp16.
