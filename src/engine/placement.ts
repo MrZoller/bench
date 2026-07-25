@@ -71,9 +71,10 @@ export interface Placement {
    * the rest of this readout describes: `weightBytesPerDevice` and `kvBytesPerDevice` come from the
    * busiest card by *combined* load, and on a hybrid model the card holding the most cache is the
    * one a balanced scheduler gives fewer layers. Gemma 3 12B on three 4090s at 128K and 8 users is
-   * impossible because two cards need 24.6 GiB of cache against a 23 GiB ceiling, while the card
-   * this readout describes needs 19.1 — so a sentence built from `kvBytesPerDevice` printed
-   * "the cache and overhead alone need 19.1 GiB" beside a 23.0 GiB ceiling and disproved itself.
+   * impossible because two cards need 24.6 GiB of cache *and activations* against a 23 GiB ceiling,
+   * while the card this readout describes needs 19.1 — so a sentence built from `kvBytesPerDevice`
+   * printed "the cache and overhead alone need 19.1 GiB" beside a 23.0 GiB ceiling and disproved
+   * itself.
    */
   floorBytesPerDevice: number;
 
@@ -307,7 +308,13 @@ function layerSplitBins(
     kvBytes: layerKvBytes(model, i, usage.contextTokens, usage.kvPrecision, runtime) * sequences,
   })).sort((a, b) => loadOf(b) - loadOf(a));
 
-  const bins: DeviceLoad[] = Array.from({ length: Math.max(1, Math.floor(shards)) }, () => ({
+  // Capped at the layer count, because a card with no layers on it holds nothing — and the device
+  // count arrives from a hand-editable querystring, where `?n=99999999` would otherwise allocate a
+  // bin per phantom card. The cap is not merely a guard: `weightShards` already divides by
+  // `layers / ceil(layers / shards)`, which saturates at `layers` for the same reason, so capping
+  // is what keeps the packing and the divisor describing one machine.
+  const devices = Math.max(1, Math.min(Math.floor(shards), model.layers));
+  const bins: DeviceLoad[] = Array.from({ length: devices }, () => ({
     weightBytes: 0,
     kvBytes: 0,
   }));
@@ -359,17 +366,24 @@ export function planPlacement(
    * layer *count* says nothing useful about what any card ends up holding. Weights and cache come
    * from one assignment so that both figures describe the same device.
    *
-   * Tensor parallelism and the single-device case hand every rank the same load, so the rig is one
-   * description repeated. Stated as a list either way, because the spill fraction below has to sum
-   * over the devices that actually exist — and under a layer split those hold different amounts.
+   * Tensor parallelism and the single-device case hand every rank the same load, so those are one
+   * entry standing for `binsPerEntry` devices rather than `n` copies of one object. The spill
+   * fraction below has to sum over the devices that actually exist, and under a layer split those
+   * hold different amounts — but materialising a bin per rank would make the allocation, and the
+   * `Math.max` over it, proportional to a device count that arrives from a hand-editable
+   * querystring.
    */
-  const bins: DeviceLoad[] =
-    runtime.parallelism === 'layer' && shards > 1
-      ? layerSplitBins(model, totalWeightBytes, usage, shards, runtime)
-      : Array.from({ length: shards }, () => ({
+  const layerSplit = runtime.parallelism === 'layer' && shards > 1;
+  const bins: DeviceLoad[] = layerSplit
+    ? layerSplitBins(model, totalWeightBytes, usage, shards, runtime)
+    : [
+        {
           weightBytes: totalWeightBytes / weightShards(model, shards, runtime),
           kvBytes: totalKvBytes / kvShards(model, shards, runtime),
-        }));
+        },
+      ];
+  /** How many real devices each entry of `bins` describes. */
+  const binsPerEntry = layerSplit ? 1 : shards;
 
   const busiest = bins.reduce((a, b) => (loadOf(b) > loadOf(a) ? b : a));
   const weightBytesPerDevice = busiest.weightBytes;
@@ -403,7 +417,8 @@ export function planPlacement(
    * to compute.
    */
   const spilledBytes = canOffload
-    ? bins.reduce((sum, bin) => {
+    ? binsPerEntry *
+      bins.reduce((sum, bin) => {
         const over = loadOf(bin) + activations - allocatableBytesPerDevice;
         return sum + Math.min(Math.max(0, over), bin.weightBytes);
       }, 0)
@@ -416,7 +431,12 @@ export function planPlacement(
   // impossible at a device that is not the one this readout describes. Carried on the result rather
   // than recomputed by the callers, so the panels explaining the refusal quote the device that
   // caused it; a sentence built from `kvBytesPerDevice` instead contradicted its own ceiling.
-  const floorBytesPerDevice = Math.max(...bins.map((bin) => bin.kvBytes + activations));
+  // `reduce`, not `Math.max(...spread)`: the spread throws `RangeError` past ~65k arguments, and a
+  // bin list is only bounded by the model's layer count.
+  const floorBytesPerDevice = bins.reduce(
+    (max, bin) => Math.max(max, bin.kvBytes + activations),
+    0
+  );
   const impossible = !fits && (!canOffload || floorBytesPerDevice > allocatableBytesPerDevice);
 
   const drives = runtime.supports.some(

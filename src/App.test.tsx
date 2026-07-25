@@ -153,6 +153,36 @@ describe('the Bench does not overclaim', () => {
     expect(explained).toBeGreaterThan(0);
   });
 
+  /**
+   * `impossible` asks every device whether its cache and activations alone are over the ceiling,
+   * because under a layer split the busiest card by *combined* load is not necessarily the one
+   * holding the most cache. The sentence explaining the refusal has to quote the device that caused
+   * it — rebuilt from this bar's own per-device figures it named the card being drawn, which is a
+   * different card, and printed a figure comfortably *under* the ceiling it was citing as the
+   * reason. A predicate and its sentence are one claim.
+   */
+  it('quotes the card that made it impossible, and says it is not the one being drawn', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Gemma 3 12B over three 4090s at 128K and 8 users: two cards take three full-attention layers
+    // each and the third takes the remaining 42, so the card with the most cache is the one with
+    // the fewest layers.
+    await user.selectOptions(screen.getByLabelText('Model'), 'unsloth/gemma-3-12b-it');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-4090');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'llama.cpp');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
+    act(() => {
+      useConfig.getState().set('contextTokens', 131072);
+      useConfig.getState().set('concurrency', 8);
+      useConfig.getState().set('deviceCount', 3);
+    });
+
+    // The refusal names the card it belongs to rather than implying the one above it.
+    expect(screen.getByText(/busiest card by cache needs/i)).toBeInTheDocument();
+    expect(screen.queryByText(/the cache and overhead alone need/i)).not.toBeInTheDocument();
+  });
+
   it('explains a full card as a full card, not as a Mac', async () => {
     const user = userEvent.setup();
     render(<App />);

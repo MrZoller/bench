@@ -115,14 +115,22 @@ export function BudgetBar({
    * which is the same rule one level down: the figure has to come from the device the predicate
    * refused. Those two agree on every rig whose devices hold the same amount, and part company under
    * a layer split — Gemma 3 12B on three 4090s at 128K and 8 users is impossible because two cards
-   * need 24.6 GiB of cache against a 23 GiB ceiling, while the card the rest of this bar describes
-   * needs 19.1. Rebuilt here, the sentence read "the cache and overhead alone need 19.1 GiB" under a
-   * header reading 23.0 GiB, and disproved the claim it was making.
+   * need 24.6 GiB of cache and workspace against a 23 GiB ceiling, while the card the rest of this
+   * bar describes needs 19.1. Rebuilt here, the sentence read "the cache and overhead alone need
+   * 19.1 GiB" under a header reading 23.0 GiB, and disproved the claim it was making.
+   *
+   * Which leaves the figure true of a device the segments beside it are not drawing, so the sentence
+   * says whose it is. Naming the card is cheaper than the alternatives — redrawing the bar for a
+   * device the user did not ask about, or going back to a figure that reconciles with the segments
+   * by being wrong about the refusal.
    */
   const floorBytes = placement.floorBytesPerDevice;
+  /** Whether that floor belongs to some other card than the one this bar is drawing. */
+  const floorIsElsewhere =
+    floorBytes > placement.kvBytesPerDevice + placement.activationBytesPerDevice + 1;
   const overflowDetail = placement.impossible
     ? canOffload
-      ? ` — the cache and overhead alone need ${gibLabel(floorBytes)}, and neither can be offloaded, so spilling every weight would still leave it over`
+      ? ` — ${floorIsElsewhere ? 'the busiest card by cache needs' : 'the cache and overhead alone need'} ${gibLabel(floorBytes)}, and neither can be offloaded, so spilling every weight would still leave it over`
       : ' — and this memory is the machine’s own, so there is nowhere faster to spill to'
     : placement.offloadFraction > 0
       ? ` — ${percent(placement.offloadFraction)} of weights would spill to host RAM`
