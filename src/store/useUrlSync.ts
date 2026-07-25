@@ -28,12 +28,23 @@ import { configToSearch, configToShareSearch, sameScenario, searchToConfig } fro
  */
 const MIN_WRITE_INTERVAL_MS = 400;
 
+/**
+ * How many times a refused write is retried before giving up until the next change.
+ *
+ * A self-rescheduling catch retries forever, which turns a browser that is refusing writes into
+ * a timer that never stops — including after the component unmounts. Two attempts covers the
+ * case this exists for, a drag that ends on a refused write, and any change afterwards starts a
+ * fresh budget anyway.
+ */
+const MAX_RETRIES = 2;
+
 export function useUrlSync(): void {
   const config = useConfig();
   const replace = useConfig((s) => s.replace);
 
   const lastWriteAt = useRef(0);
   const pending = useRef<number | undefined>(undefined);
+  const retriesLeft = useRef(MAX_RETRIES);
 
   /**
    * Whether the page was *opened* with a scenario in the URL.
@@ -53,10 +64,24 @@ export function useUrlSync(): void {
   // Store -> URL.
   useEffect(() => {
     /**
+     * Set by this effect's cleanup, and checked before every write.
+     *
+     * `clearTimeout` alone is not enough: a retry is scheduled from inside `write`, which runs
+     * from a timer rather than from the effect, so a refusal firing in the same tick as teardown
+     * can queue work nothing will ever clear. In the test environment that surfaced as a timer
+     * running after jsdom had gone — `window is not defined`, from a suite where all 326 tests
+     * passed. In a browser it is a write against a page that has already navigated away.
+     *
+     * A flag closed over per effect run makes escape harmless rather than merely unlikely.
+     */
+    let cancelled = false;
+
+    /**
      * Reads current state rather than closing over this render's `config`, so a coalesced burst
      * writes the newest scenario instead of whichever frame happened to schedule the timer.
      */
     const write = () => {
+      if (cancelled || typeof window === 'undefined') return;
       const current = useConfig.getState() as Config;
       const search = arrivedExplicit.current
         ? configToShareSearch(current)
@@ -67,29 +92,44 @@ export function useUrlSync(): void {
       try {
         window.history.replaceState(null, '', next);
         lastWriteAt.current = Date.now();
+        retriesLeft.current = MAX_RETRIES;
       } catch {
         // A refused write is usually the rate limit, so back off as though it had succeeded and
-        // try once more after the interval. Without advancing the clock every subsequent change
+        // try again after the interval. Without advancing the clock every subsequent change
         // retries immediately and stays refused; without the retry, a drag that ends on a
-        // refused write leaves the address bar permanently stale. The app itself is unaffected
-        // either way — the URL is a convenience, and what is on screen is the scenario.
+        // refused write leaves the address bar permanently stale.
+        //
+        // Bounded, because a catch that reschedules itself is a timer that never stops if the
+        // browser keeps refusing. The app is unaffected either way — the URL is a convenience,
+        // and what is on screen is the scenario.
         lastWriteAt.current = Date.now();
-        window.clearTimeout(pending.current);
-        pending.current = window.setTimeout(write, MIN_WRITE_INTERVAL_MS);
+        if (retriesLeft.current > 0) {
+          retriesLeft.current -= 1;
+          window.clearTimeout(pending.current);
+          pending.current = window.setTimeout(write, MIN_WRITE_INTERVAL_MS);
+        }
       }
     };
+
+    // Every change gets a fresh retry budget: this is a new scenario, not the old one failing.
+    retriesLeft.current = MAX_RETRIES;
 
     const since = Date.now() - lastWriteAt.current;
     if (since >= MIN_WRITE_INTERVAL_MS) {
       write();
-      return;
+    } else {
+      // Trailing edge, so the URL still ends up matching the screen even though the frames in
+      // between are dropped.
+      window.clearTimeout(pending.current);
+      pending.current = window.setTimeout(write, MIN_WRITE_INTERVAL_MS - since);
     }
 
-    // Trailing edge, so the URL still ends up matching the screen even though the frames in
-    // between are dropped.
-    window.clearTimeout(pending.current);
-    pending.current = window.setTimeout(write, MIN_WRITE_INTERVAL_MS - since);
-    return () => window.clearTimeout(pending.current);
+    // Returned on both paths, not just the deferred one: an immediate write that *fails* also
+    // schedules a retry, and the early return left that chain running past unmount.
+    return () => {
+      cancelled = true;
+      window.clearTimeout(pending.current);
+    };
   }, [config]);
 
   // URL -> store.

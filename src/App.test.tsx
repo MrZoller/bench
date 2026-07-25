@@ -505,17 +505,29 @@ describe('sharing a scenario degrades honestly', () => {
     expect(await screen.findByLabelText('Link to this scenario')).toBeInTheDocument();
   });
 
-  it('survives a browser that refuses a history write', async () => {
+  it('survives a browser that refuses a history write, and stops retrying it', async () => {
     const replaceState = window.history.replaceState;
+    let attempts = 0;
     window.history.replaceState = () => {
+      attempts += 1;
       throw new DOMException('throttled', 'SecurityError');
     };
     try {
       const user = userEvent.setup();
       // Rendering alone writes the URL, and a throw there would take the app down.
-      render(<App />);
+      const view = render(<App />);
       await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
       expect(screen.getByRole('region', { name: 'Verdicts' })).toBeInTheDocument();
+
+      // A catch that reschedules itself is a timer that never stops while the browser keeps
+      // refusing — and the early-return path used to leave that chain running past unmount.
+      view.unmount();
+      const afterUnmount = attempts;
+      // Long enough for several retry intervals. A timer that escapes cleanup shows up here as
+      // a further attempt — and in CI showed up as `window is not defined` after teardown, from
+      // a suite where every test passed.
+      await new Promise((r) => setTimeout(r, 1500));
+      expect(attempts).toBe(afterUnmount);
     } finally {
       window.history.replaceState = replaceState;
     }
