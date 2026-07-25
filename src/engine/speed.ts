@@ -280,10 +280,17 @@ export function estimatePrefill(
   const expertLinearFlops = 2 * model.expertParams * expertFraction(model, 1) * promptTokens;
   const denseLinearFlops = Math.max(0, linearFlops - expertLinearFlops);
 
-  let ttft =
-    expertRate > 0 && denseRate > 0
-      ? expertLinearFlops / expertRate + (denseLinearFlops + attentionFlops) / denseRate
-      : Infinity;
+  const runnable = expertRate > 0 && denseRate > 0;
+  // Kept apart so the bound can be judged on time. Once the expert half runs at a different
+  // rate from everything else, FLOP counts stop being comparable: gpt-oss-20b under MXFP4 on
+  // Blackwell has attention at ~53% of linear FLOPs while taking ~1.3x the linear *time*,
+  // because most of that linear work is running at the 4x FP4 rate.
+  const linearSeconds = runnable
+    ? expertLinearFlops / expertRate + denseLinearFlops / denseRate
+    : Infinity;
+  const attentionSeconds = runnable ? attentionFlops / denseRate : Infinity;
+
+  let ttft = linearSeconds + attentionSeconds;
 
   // Offloaded weights must cross the host bus once per prefill pass before compute can start.
   // Without this the offload cliff is invisible on the number users watch first.
@@ -303,7 +310,7 @@ export function estimatePrefill(
     prefillTokensPerSec: ttft > 0 && Number.isFinite(ttft) ? promptTokens / ttft : 0,
     linearFlops,
     attentionFlops,
-    attentionBound: attentionFlops > linearFlops,
+    attentionBound: attentionSeconds > linearSeconds,
     ...(offload > 0 ? { offloadPenalty: { fraction: offload } } : {}),
   };
 }

@@ -406,3 +406,41 @@ describe('expert-only formats are timed at two rates', () => {
     }
   });
 });
+
+/**
+ * Once the expert half computes at a different rate from everything else, FLOP counts stop
+ * being comparable and the attention/linear bound has to be judged on time.
+ */
+describe('the prefill bound is judged on time, not FLOPs', () => {
+  const blackwell: DeviceSpec = {
+    ...RTX_5090,
+    flops: { fp16: 419 * TFLOP, fp8: 838 * TFLOP, fp4: 1676 * TFLOP },
+  };
+
+  it('reports attention-bound when attention costs more time than the linear layers', () => {
+    const result = estimatePrefill(
+      GPT_OSS_20B,
+      getQuant('mxfp4'),
+      { contextTokens: 32768, concurrency: 1, kvPrecision: 'fp16', promptTokens: 16384 },
+      { device: blackwell, count: 1 },
+      VLLM
+    );
+
+    // Attention is the smaller FLOP count and still the larger share of the wall clock, because
+    // most of the linear work runs at the 4x FP4 rate and attention does not.
+    expect(result.attentionFlops).toBeLessThan(result.linearFlops);
+    expect(result.attentionBound).toBe(true);
+  });
+
+  it('agrees with the FLOP comparison when both halves run at one rate', () => {
+    // bf16 is uniform, so time is proportional to FLOPs and the two tests coincide.
+    const result = estimatePrefill(
+      GPT_OSS_20B,
+      getQuant('bf16'),
+      { contextTokens: 32768, concurrency: 1, kvPrecision: 'fp16', promptTokens: 16384 },
+      { device: blackwell, count: 1 },
+      VLLM
+    );
+    expect(result.attentionBound).toBe(result.attentionFlops > result.linearFlops);
+  });
+});
