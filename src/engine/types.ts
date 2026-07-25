@@ -264,6 +264,16 @@ export interface DeviceSpec {
   flops: Partial<Record<'fp16' | 'bf16' | 'fp8' | 'fp4' | 'int8', number>>;
 
   interconnect?: string;
+  /**
+   * Bandwidth of the link to host memory, bytes/sec — the rate offloaded weights actually
+   * stream at.
+   *
+   * Distinct from `interconnect`, which is the *device-to-device* transport `tpEfficiency`
+   * models: an H100 SXM talks to its neighbours over NVLink 4.0 and to the host over PCIe 5.0,
+   * and only the second one governs spill. Absent on unified-memory and CPU machines, where
+   * there is no separate host to cross to.
+   */
+  hostLinkBytesPerSec?: number;
   tdpWatts?: number;
   msrpUsd?: number;
   releasedAt?: string;

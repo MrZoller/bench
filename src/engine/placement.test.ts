@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { allocatablePerDevice, maxContextThatFits, planPlacement } from './placement';
 import {
+  DEFAULT_HOST_BANDWIDTH,
+  allocatablePerDevice,
+  maxContextThatFits,
+  offloadBandwidth,
+  planPlacement,
+} from './placement';
+import {
+  DEEPSEEK_V3,
   DGX_SPARK,
   GPT_OSS_120B,
   LLAMA_31_8B,
@@ -8,6 +15,7 @@ import {
   MAC_STUDIO_M3_ULTRA_256,
   MLX,
   QWEN3_32B,
+  RTX_4090,
   RTX_5090,
   STRIX_HALO_395,
   VLLM,
@@ -238,5 +246,59 @@ describe('memory breakdown', () => {
     expect(long.weightBytesPerDevice).toBe(short.weightBytesPerDevice);
     expect(long.kvBytesPerDevice).toBeCloseTo(short.kvBytesPerDevice * 4, -6);
     expect(long.kvBytesPerDevice / GIB).toBeGreaterThan(3);
+  });
+});
+
+/**
+ * KV does not shard the way weights do, and assuming it does is optimistic in the one direction
+ * that matters — it reports a rig fitting when the layout it would really produce does not.
+ */
+describe('the KV cache shards only as far as the model allows', () => {
+  const plan = (model: typeof QWEN3_32B, count: number) =>
+    planPlacement(
+      model,
+      getQuant('q4_k_m'),
+      { contextTokens: 32768, concurrency: 16, kvPrecision: 'fp16' },
+      { device: RTX_5090, count },
+      VLLM
+    );
+
+  it('stops dividing once every rank holds a whole KV head', () => {
+    // Qwen3-32B has 8 KV heads. Up to 8 cards each rank gets at least one head and the cache
+    // divides; past that the heads are replicated and per-card KV stops falling.
+    const at8 = plan(QWEN3_32B, 8);
+    const at16 = plan(QWEN3_32B, 16);
+
+    expect(at8.kvBytesPerDevice).toBeCloseTo(at8.totalKvBytes / 8, -3);
+    expect(at16.kvBytesPerDevice).toBeCloseTo(at8.kvBytesPerDevice, -3);
+    // Weights keep sharding — it is only KV that has a floor.
+    expect(at16.weightBytesPerDevice).toBeCloseTo(at8.weightBytesPerDevice / 2, -3);
+  });
+
+  it('never divides an MLA latent cache at all', () => {
+    // One latent per token per layer, with no head axis to split along, so vLLM replicates it
+    // on every rank. The old code divided by the full device count — off by 8x on 8 cards.
+    for (const count of [1, 2, 4, 8]) {
+      const p = plan(DEEPSEEK_V3, count);
+      expect(p.kvBytesPerDevice).toBeCloseTo(p.totalKvBytes, -3);
+    }
+  });
+});
+
+/**
+ * Spilled weights read at the slower of host RAM and the bus to it. Modelling only host RAM
+ * made every offloaded configuration 2.5x too fast on a PCIe 4.0 card.
+ */
+describe('offload crosses a real bus', () => {
+  it('takes the device host link when it is slower than host RAM', () => {
+    // 80 GB/s of DDR5 behind a 31.5 GB/s PCIe 4.0 link.
+    expect(offloadBandwidth(RTX_4090, DEFAULT_HOST_BANDWIDTH)).toBeCloseTo(31.5e9, -6);
+    // And behind a 63 GB/s PCIe 5.0 link, still the link.
+    expect(offloadBandwidth(RTX_5090, DEFAULT_HOST_BANDWIDTH)).toBeCloseTo(63e9, -6);
+  });
+
+  it('falls back to host RAM where there is no host to cross to', () => {
+    // Unified memory has no separate host: the pool in question already is system memory.
+    expect(offloadBandwidth(DGX_SPARK, DEFAULT_HOST_BANDWIDTH)).toBe(DEFAULT_HOST_BANDWIDTH);
   });
 });
