@@ -22,21 +22,28 @@ Three things are the moat, in order:
 2. **The catalog is derived, never typed.** Architectures come from each repo's `config.json`,
    parameter counts from its safetensors index.
 3. **The answer is a decision, not a number.** "3.2 tok/s" means nothing; "unusable for a coding
-   agent, fine for overnight batch" is what people want. Not built yet — see phase 5, Verdict +
-   explain layers.
+   agent, fine for overnight batch" is what people want. Built: seven workload archetypes, each
+   graded at the prompt it really sends. The hard part turned out not to be the thresholds but
+   making every verdict state the bar it missed — see **Verdicts**, below.
 
 ## Status
 
-| Phase                              | State                                                | Notes                                                                                                   |
-| ---------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| 1. Scaffold                        | **done**                                             | React 19 + TS strict + Vite + Tailwind v4 + Zustand. CI: lint → format:check → test → build             |
-| 2. Engine                          | **done**                                             | `src/engine/`, pure, no React. Pinned to published measurements at both ends of the hardware range      |
-| 3. Catalogs                        | on [PR #1](https://github.com/MrZoller/bench/pull/1) | Complete, not yet on `main` — 17 models derived from HF, 25 devices curated. `npm run catalog` needs it |
-| 4. Design tokens + the Bench       | **next**                                             | Hero surface. Load the `dataviz` skill before any chart/meter/palette code                              |
-| 5. Verdict + explain layers        | pending                                              | Workload archetypes; the total-vs-active-params teaching moment                                         |
-| 6. Envelope + Matrix surfaces      | pending                                              | Context × concurrency feasibility field; model × device heatmap                                         |
-| 7. URL state, responsive, a11y     | pending                                              | Full config in the querystring so a link reproduces a scenario                                          |
-| 8. Weekly catalog refresh + deploy | pending                                              | Scheduled `build-catalog` → PR on diff; static deploy to a zoller.ai subdomain                          |
+Seven of eight phases are on `main` as of 25 July 2026. What remains is the weekly refresh job,
+deployment, and the follow-up list in [issues #9–#20](https://github.com/MrZoller/bench/issues).
+
+| Phase                              | State             | Notes                                                                                              |
+| ---------------------------------- | ----------------- | -------------------------------------------------------------------------------------------------- |
+| 1. Scaffold                        | **done**          | React 19 + TS strict + Vite + Tailwind v4 + Zustand. CI: lint → format:check → test → build        |
+| 2. Engine                          | **done**          | `src/engine/`, pure, no React. Pinned to published measurements at both ends of the hardware range |
+| 3. Catalogs                        | **done** (#1)     | 17 models derived from HF, 25 devices curated. `npm run catalog` regenerates it.                   |
+| 4. Design tokens + the Bench       | **done** (#5)     | Hero surface. Load the `dataviz` skill before any chart/meter/palette code                         |
+| 5. Verdict + explain layers        | **done** (#4)     | Seven workload archetypes. See **Verdicts**, below                                                 |
+| 6. Envelope + Matrix surfaces      | **done** (#7, #8) | Context × concurrency feasibility field; model × device heatmap                                    |
+| 7. URL state, responsive, a11y     | **mostly** (#6)   | Querystring round-trips a scenario. No browser-level test pass — #19; URL defects in #15, #16      |
+| 8. Weekly catalog refresh + deploy | **next**          | Scheduled `build-catalog` → PR on diff; static deploy to a zoller.ai subdomain                     |
+
+**Correctness debt is tracked as issues, not here.** Twelve are open. #9 and #10 are the ones to
+clear before deploying: both grade a configuration as working when it is not.
 
 ## Decisions already made
 
@@ -52,6 +59,24 @@ Settled, with reasons. Reopen only with new information.
   sharding and an interconnect penalty. Heterogeneous mixes are out of scope.
 - **Pricing is out of scope for v1.** Cloud $/Mtok versus local amortised cost is a different
   tool wearing the same chassis.
+- **A PR merges on green CI, with outstanding review findings triaged, replied to, and filed as
+  issues — not fixed first.** Set on 25 July 2026, after 74 resolved findings and no end in sight;
+  the stack finished on 97. Every push drew a fresh review, including on the fixes from minutes
+  earlier, so under "merge only when the reviewer comes back clean" there is no reachable fixed
+  point. This is not a decision to ignore reviews: fix root causes, then merge, then file the rest.
+  See #9–#20 for what that produced in practice. **This overrides the global "a PR is unfinished
+  until the latest review is clean" rule, for this repo.**
+- **Expect a review to name a subset of a class.** Twice in one session the finding named N
+  instances and the same defect was live in N+2 places — a missing-cause audit raised for three
+  verdict tiers was also true of chat and rag; an Envelope fix had a mirror-image omission one
+  branch over. Fixing only what is named is the most common way a round here fails to converge.
+- **The seven archetypes are not a ladder, and completion may outrank chat.** The ordering is real
+  but it is _only_ about latency budgets, and it does not survive contact with capacity. Completion
+  sends 512 tokens where chat sends 1,024, so at 128 users on a small card the chat cache spills
+  while completion's stays resident — serving 128 autocompletes genuinely is easier than 128
+  conversations. Capping
+  completion at chat's grade would restore the appearance of a ladder by reporting a failure that
+  is not happening. The claim was dropped instead; the thresholds stay independent.
 
 ## Things that took real work to get right
 
@@ -88,6 +113,35 @@ reading the test that guards them.
   `tpEfficiency` models and is not this: an H100 SXM talks to its neighbours over NVLink and to
   the host over PCIe 5.0. Modelling only host RAM made every spilled configuration on a PCIe 4.0
   card 2.5× too fast, on both decode and TTFT.
+- **Prefill scales with concurrency; decode amortises it.** `estimateDecode` batched from the
+  start and `estimatePrefill` ignored `usage.concurrency` entirely, so a 32-user configuration was
+  graded on one user's time-to-first-token. The asymmetry is the whole point and is easy to get
+  backwards: decode is memory-bound, so the weights are read once per step however many users are
+  waiting and the tenth is nearly free. Prefill is compute-bound and one long prompt already
+  saturates the units — serving `n` prompts is `n` times the arithmetic and the scheduler only
+  chooses who waits for it. Two consequences worth stating: attention is evaluated at one
+  sequence's length and _then_ scaled (sixteen users sending 2K each is sixteen quadratics over 2K,
+  not one over 32K), and the offload streaming term is charged **once** — sized at the batch-wide
+  expert union, but not multiplied by it, because the batch shares the weights it pulls across the
+  bus. `prefillTokensPerSec` is machine-wide as a result, which is what keeps the published
+  single-prompt anchors comparable with a concurrent estimate. (#11 is the one place still printing
+  it as though it were per document.)
+- **A rule the UI enforces is not a rule the engine has.** `quantApplies` kept unloadable
+  model/runtime pairings out of the picker, so the app looked correct while `planPlacement`
+  returned capacity and throughput for checkpoints that cannot be opened — AWQ under llama.cpp, a
+  GGUF K-quant under vLLM. Every caller reaching the engine directly (Matrix, Envelope, anything
+  importing `evaluate`) walked past it. The same gap produced the Matrix's P1: its quant
+  substitution asked `quantApplies` without the runtime _and_ fell back to a hardcoded Q4_K_M, so
+  under vLLM every dense row that fell back was scored at a format vLLM cannot read. Validate at
+  the boundary.
+- **Sharding needs a link, and refusing a rig means refusing its arithmetic too.** `canShard` keys
+  on `interconnect`, not device class — a DGX Spark is `unified-soc` with a real ConnectX, a Mac
+  Studio is the same class with nothing between chassis. Every divisor and multiplier that read
+  `rig.count` now goes through `effectiveDeviceCount`, because the first attempt at this set the
+  `unsupported` message and left the split running: eight Mac Studios were still reported as
+  holding an eighth of the model each, and `achievedBandwidth` still summed eight cards over an
+  interconnect that does not exist. A refusal that returns arithmetic for the impossible
+  configuration is not a refusal.
 - **Prefill attention is causal and respects sliding windows.** These are decoder-only models, so
   a full-attention layer computes `N * (N + 1) / 2` query-key pairs, not `N^2` — charging the
   square nearly doubles the attention term at long prompts and moves the point where the tile
@@ -106,6 +160,31 @@ reading the test that guards them.
   to ~10% over, while EPYC stayed within 1% — proof the old fit was partly absorbing those errors.
   The knobs were left alone deliberately. Re-centring right after removing what a fudge factor was
   masking is how the next error gets hidden. All three sit inside the ±30% band the tests assert.
+
+**Verdicts**
+
+- **Grade a tier on the measurement its own sentence quotes.** The long-context tight tier admits
+  a machine holding 64K and was timing it on the archetype's full 128K request — a prompt that rig
+  has nowhere to put, and prefill is quadratic, so the impossible request routinely failed the tier
+  that had just admitted it on capacity. The half-fix was worse than the bug: pointing the
+  _reasons_ at the window the machine holds while the _predicate_ still read the reduced job meant
+  a rig holding 160K was graded on its 64K measurement while the sentence beside it reported 1046s
+  against a 600s bar. One value in both.
+- **A tight verdict must name the bar it missed.** Once the fail-level branches are exhausted it is
+  easy to fall through to a positive fallback, which prints healthy figures beside a downgrade and
+  explains nothing — "139 tok/s over 40K of context, 4.0s per turn" is three good numbers and no
+  reason. The five tiers with more than one `good` bar now state whichever they miss, through one
+  shared builder; five hand-written copies of that sentence is how two of them came to disagree.
+  Completion's 0.4s bar is described rather than printed — at sub-second scale a limit and a near
+  miss are a tenth apart and read as the same magnitude side by side. Chat's 2s and rag's 5s are
+  far enough from their measurements to state plainly, and do.
+- **`impossible` and `headroomBytes <= 0` are different claims.** The second means the fully
+  resident placement is over budget; only the first means capacity is genuinely gone. Conflating
+  them told users that one more concurrent user had "nowhere to go" when a partial offload still
+  admits another, more slowly — and told a Mac to spill weights on a machine with no tier to spill
+  to. `impossible` is computed once in `planPlacement`; the budget bar and Telemetry both take
+  `canOffload` from the Bench, so two panels a few pixels apart cannot describe one placement
+  differently — which they did.
 
 **Catalog**
 
@@ -140,10 +219,21 @@ reading the test that guards them.
 
 ## Open questions
 
-- ~~Codex connector coverage is unconfirmed.~~ **Confirmed working.** Both PRs were reviewed by
-  `chatgpt-codex-connector`; PR #1 drew four P2 findings, all valid, all fixed in `6ffa766`. The
-  reviews arrived roughly 40 minutes after the pushes, which is long enough to look like absence —
-  don't conclude the connector is missing from a quiet first half-hour.
+Correctness follow-ups live in [issues #9–#20](https://github.com/MrZoller/bench/issues). This
+section is for the questions those issues cannot settle.
+
+- **MLX has no native quantization entries** ([#18](https://github.com/MrZoller/bench/issues/18)).
+  GGUF K-quants stand in _by width_ — Q4_K_M's 4.83 bpw against MLX's ~4.5 — so every figure for an
+  Apple-silicon configuration derives from a format MLX does not load. Invented data, documented as
+  a modelling choice. The alternative, BF16 and INT8 only, makes Apple silicon unusable in a tool
+  where it is a headline case. Now entangled with the `weightFormats` check, whose MLX list
+  includes those K-quants precisely so the substitution keeps working.
+- ~~Codex connector coverage is unconfirmed.~~ **Confirmed working**, and now well characterised.
+  Reviews arrive roughly 40 minutes after a push, which is long enough to look like absence — don't
+  conclude the connector is missing from a quiet first half-hour. Two further traps: it signals
+  "no findings" with a 👍 _reaction_ rather than a comment, and that reaction survives later pushes,
+  so merge-readiness needs the reaction's `created_at` to postdate the head commit. Zero unresolved
+  threads right after a push usually means the review has not posted yet.
 - **`main` is unprotected.** Rulesets need GitHub Pro on a private repo, so the "PRs only, all
   threads resolved" rule is convention rather than enforcement. Re-run the ruleset POST if the
   repo goes public.
