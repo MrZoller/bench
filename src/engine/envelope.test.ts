@@ -296,3 +296,43 @@ describe('the feasibility region', () => {
     expect(grid.cells.flat().some((c) => c.state === 'comfortable')).toBe(false);
   });
 });
+
+/**
+ * Every cell used to be timed for a single prompt, because `estimatePrefill` read `promptTokens`
+ * and never `concurrency`. A row at 64 users therefore inherited the one-user time-to-first-token,
+ * so it could stay Comfortable on a latency nobody in that row would actually see — the promptness
+ * half of the comfort claim was being made from a measurement of a quieter machine.
+ *
+ * The engine now prices the concurrent prefill workload, and each cell passes its own concurrency
+ * through, so these assert the property from the outside rather than trusting that it propagated.
+ */
+describe('a cell is timed for the traffic its own row carries', () => {
+  const ttftAt = (concurrency: number) => {
+    const grid = envelope({ concurrencies: [concurrency], contexts: [8192] });
+    return grid.cells.flat()[0].ttftSeconds;
+  };
+
+  it('charges a busy row for the prompts it is serving', () => {
+    // Compute-bound work does not amortize the way decode does, so sixteen prompts is sixteen
+    // times the arithmetic — not the same wait reported sixteen times over.
+    expect(ttftAt(16)).toBeGreaterThan(ttftAt(1));
+    expect(ttftAt(16) / ttftAt(1)).toBeCloseTo(16, 0);
+  });
+
+  it('withdraws the comfort claim once the wait crosses the bar', () => {
+    // A latency bar low enough that the one-user cell clears it and the sixteen-user cell cannot.
+    const bar = ttftAt(1) * 4;
+    const grid = envelope({
+      contexts: [8192],
+      concurrencies: [1, 16],
+      usableTtftSeconds: bar,
+      // Held out of the way so promptness is the only thing that can decide these two cells.
+      usableTokensPerSec: 0,
+      tightUtilization: 1,
+    });
+
+    const [one, many] = grid.cells.flat();
+    expect(one.state).toBe('comfortable');
+    expect(many.state).not.toBe('comfortable');
+  });
+});
