@@ -101,7 +101,13 @@ function capacityReading(
     detail:
       utilization > CAPACITY_TIGHT
         ? 'Fits, with little room to raise context or add a user.'
-        : `Room to grow — ${tokens(evaluation.maxContextTokens)} context would still fit at this concurrency.`,
+        : // At the model's own ceiling the spare memory is real but the growth is not: Qwen3 4B
+          // on a 5090 sits at 40,960 with plenty free, and "40K would still fit" reads as an
+          // invitation to raise a slider that has nothing left to give. Headroom is only room to
+          // *grow* while there is somewhere to grow to.
+          evaluation.maxContextTokens > evaluation.contextTokens
+          ? `Room to grow — ${tokens(evaluation.maxContextTokens)} context would still fit at this concurrency.`
+          : `Comfortable at ${tokens(evaluation.contextTokens)}, which is as far as this model goes.`,
   };
 }
 
