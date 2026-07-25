@@ -77,7 +77,13 @@ export const colors = {
   good: '#0ca30c',
   warning: '#fab219',
   serious: '#ec835a',
-  critical: '#d03b3b',
+  /**
+   * Raised from the reference palette's `#d03b3b`, which measures 3.93:1 on this surface. That
+   * clears the 3:1 bar for a *graphical* element, which is what the validator checks, but this
+   * token is used on 14px text — "Will not run", the overflow warning — where the threshold is
+   * 4.5:1. This step is the reference ramp's own red and measures 5.84:1.
+   */
+  critical: '#e66767',
 } as const;
 
 /**

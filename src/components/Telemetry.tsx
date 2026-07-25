@@ -33,7 +33,11 @@ interface Reading {
   detail: string;
 }
 
-function capacityReading(evaluation: Evaluation, canOffload: boolean): Reading {
+function capacityReading(
+  evaluation: Evaluation,
+  canOffload: boolean,
+  tunableCeiling: boolean
+): Reading {
   const { placement } = evaluation;
 
   if (placement.unsupported) {
@@ -64,7 +68,12 @@ function capacityReading(evaluation: Evaluation, canOffload: boolean): Reading {
        */
       detail: canOffload
         ? 'The cache and workspace alone overflow the card, and those cannot be offloaded. Lower the context, the concurrency, or the KV precision.'
-        : 'Past the allocatable ceiling with nowhere to spill — a shared-memory machine has no faster tier to fall back from.',
+        : tunableCeiling
+          ? // The ceiling is a default, not a hardware limit: macOS caps wired GPU memory near
+            // 75% and AMD exposes a Variable Graphics Memory setting. Reporting a flat "will
+            // not run" hides the one thing that would actually fix it.
+            'Past the default allocation ceiling — but this machine lets you raise it, and the catalog figure is the untuned default rather than a hardware limit.'
+          : 'Past the allocatable ceiling with nowhere to spill — a shared-memory machine has no faster tier to fall back from.',
     };
   }
   if (placement.offloadFraction > 0) {
@@ -134,10 +143,13 @@ function prefillReading(evaluation: Evaluation): Reading {
 export function Telemetry({
   evaluation,
   canOffload,
+  tunableCeiling,
 }: {
   evaluation: Evaluation;
   /** True for discrete GPUs, the only class with a slower tier to spill to. */
   canOffload: boolean;
+  /** True when the allocation ceiling is a user-raiseable default rather than a hard limit. */
+  tunableCeiling: boolean;
 }) {
   /**
    * A runtime that cannot drive this hardware has no throughput, so none is shown.
@@ -162,7 +174,7 @@ export function Telemetry({
 
   const readings: Reading[] = blocked
     ? [
-        capacityReading(evaluation, canOffload),
+        capacityReading(evaluation, canOffload, tunableCeiling),
         ...(['Decode', 'Time to first token'] as const).map((label, i) => ({
           key: `blocked-${i}`,
           label,
@@ -176,7 +188,7 @@ export function Telemetry({
         })),
       ]
     : [
-        capacityReading(evaluation, canOffload),
+        capacityReading(evaluation, canOffload, tunableCeiling),
         decodeReading(evaluation),
         prefillReading(evaluation),
       ];

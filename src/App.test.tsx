@@ -1,8 +1,10 @@
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
 import App from './App';
 import { useConfig, DEFAULT_CONFIG } from '@/store/config';
+import { getModel } from '@/data/catalog';
+import { tokens } from '@/lib/format';
 
 afterEach(() => {
   cleanup();
@@ -166,5 +168,55 @@ describe('the Bench does not overclaim', () => {
   it('says when the catalog was generated', () => {
     render(<App />);
     expect(screen.getByText(/Model catalog generated/i)).toBeInTheDocument();
+  });
+});
+
+describe('the Bench keeps the controls and the engine in step', () => {
+  /**
+   * The slider must offer the values the engine will actually be given. `coerce` clamps context
+   * to the model's maximum, so a fixed stop list showed 32K while the store held 40,960 — with
+   * the budget bar and throughput computed for neither.
+   */
+  it('caps the context slider at the model, not at a fixed list', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Model'), 'Qwen/Qwen3-32B');
+    const max = getModel('Qwen/Qwen3-32B').maxContext;
+
+    const slider = screen.getByLabelText('Context per sequence');
+    await user.click(slider);
+    fireEvent.change(slider, { target: { value: '99' } }); // Past the end; clamps to the last stop.
+
+    expect(useConfig.getState().contextTokens).toBe(max);
+    // The displayed value and the stored one must agree.
+    expect(screen.getByText(tokens(max))).toBeInTheDocument();
+  });
+
+  it('does not call a resident but slow configuration fast', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Fits an EPYC host with nothing offloaded, and decodes at ~10 tok/s.
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'epyc-9654');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
+
+    // Resident — nothing spilled — and still too slow to claim speed for.
+    expect(useConfig.getState().deviceId).toBe('epyc-9654');
+    expect(screen.queryByText(/runs fast/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/How DeepSeek V3 is put together/i)).toBeInTheDocument();
+  });
+
+  it('says a raiseable ceiling is raiseable instead of just refusing', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-512');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q5_k_m');
+
+    expect(screen.getByText(/raise it/i)).toBeInTheDocument();
   });
 });

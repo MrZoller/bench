@@ -42,15 +42,37 @@ export function Bench() {
   const model = getModel(config.modelId);
   const device = getDevice(config.deviceId);
 
+  /**
+   * Context stops, capped at what this model supports.
+   *
+   * Built per model rather than fixed, because `coerce` clamps the stored context to
+   * `model.maxContext` and a fixed list would then show a value the engine is not using — drag
+   * a 40,960-token Qwen to 64K and the store holds 40,960 while the slider reads 32K, with the
+   * budget bar and throughput computed for neither.
+   */
+  const contextStops = useMemo(() => {
+    const withinModel = CONTEXT_STOPS.filter((t) => t < model.maxContext);
+    return [...withinModel, model.maxContext];
+  }, [model.maxContext]);
+
+  /** The prompt is part of the context, so it cannot be offered beyond it. */
+  const promptStops = useMemo(() => {
+    const within = PROMPT_STOPS.filter((t) => t < config.contextTokens);
+    return within.length > 0 ? [...within, config.contextTokens] : [config.contextTokens];
+  }, [config.contextTokens]);
+
   /** Whether the configuration runs at all. */
   const runnable = !evaluation.placement.unsupported && !evaluation.placement.impossible;
   /**
-   * Whether a *speed* claim is defensible, which is a stricter question than whether it runs.
-   * A discrete GPU that spills most of its weights over PCIe is runnable and slow — DeepSeek V3
-   * on a 5090 offloads 93% and decodes at 3.9 tok/s — so "would still run fast" contradicts the
-   * verdict tiles directly above it.
+   * Whether a *speed* claim is defensible — a stricter question than whether it runs, and one I
+   * have now got wrong in three different ways.
+   *
+   * Offload is not the only route to slow: DeepSeek V3 at Q4 fits an EPYC 9654 with nothing
+   * spilled, and decodes at ~10 tok/s, which the tile beside this correctly calls "Slow". So the
+   * claim keys on the measured throughput rather than on any proxy for it, at the same threshold
+   * the decode tile uses. Nothing derived from placement alone can stand in for this.
    */
-  const fast = runnable && evaluation.placement.offloadFraction === 0;
+  const fast = runnable && evaluation.decode.perUserTokensPerSec >= 15;
   /** Only discrete GPUs shard a model across devices. */
   const shardable = device.class === 'discrete-gpu';
 
@@ -82,10 +104,14 @@ export function Bench() {
         value: d.id,
         label: `${d.name} — ${gibLabel(d.capacityBytes)}`,
         // Pre-release specs must stay visibly labelled, not silently mixed in with shipping ones.
+        // The tunable note matters for the same reason in reverse: the ceiling is a default, and
+        // treating it as a hardware limit turns a raiseable setting into a flat "will not run".
         note:
           d.status !== 'shipping'
             ? `${d.status === 'rumored' ? 'Rumoured' : 'Announced'} — specs may change`
-            : undefined,
+            : d.allocatableTunable
+              ? `${gibLabel(d.allocatableBytes)} allocatable by default, and raiseable`
+              : undefined,
       })),
     []
   );
@@ -153,14 +179,18 @@ export function Bench() {
 
       {/* The hero, and the three answers it does not collapse into one. */}
       <BudgetBar evaluation={evaluation} />
-      <Telemetry evaluation={evaluation} canOffload={shardable} />
+      <Telemetry
+        evaluation={evaluation}
+        canOffload={shardable}
+        tunableCeiling={device.allocatableTunable === true}
+      />
 
       {/* Usage: the half of the question that is about you, not the hardware. */}
       <section aria-label="Usage" className="panel grid gap-5 p-5 sm:grid-cols-2">
         <StopSlider
           label="Context per sequence"
-          stops={CONTEXT_STOPS}
-          value={nearestStop(CONTEXT_STOPS, config.contextTokens)}
+          stops={contextStops}
+          value={nearestStop(contextStops, config.contextTokens)}
           onChange={(v) => set('contextTokens', v)}
           format={tokens}
         />
@@ -173,8 +203,8 @@ export function Bench() {
         />
         <StopSlider
           label="Prompt length"
-          stops={PROMPT_STOPS}
-          value={nearestStop(PROMPT_STOPS, config.promptTokens)}
+          stops={promptStops}
+          value={nearestStop(promptStops, config.promptTokens)}
           onChange={(v) => set('promptTokens', v)}
           format={tokens}
         />
