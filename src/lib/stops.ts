@@ -1,3 +1,5 @@
+import type { KvPrecision, RuntimeSpec } from '@/engine/types';
+
 /**
  * The values the controls can actually produce.
  *
@@ -17,6 +19,38 @@ export const CONTEXT_STOPS = [
 export const CONCURRENCY_STOPS = [1, 2, 4, 8, 16, 32, 64, 128] as const;
 export const PROMPT_STOPS = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072] as const;
 export const DEVICE_COUNT_STOPS = [1, 2, 4, 8] as const;
+
+/**
+ * The cache precisions a control can offer, with the name to use when a runtime has none of
+ * its own.
+ */
+export const KV_PRECISIONS: readonly { value: KvPrecision; label: string }[] = [
+  { value: 'fp16', label: 'FP16' },
+  { value: 'q8', label: 'Q8' },
+  { value: 'q4', label: 'Q4' },
+];
+
+const KV_FALLBACK_LABELS = new Map(KV_PRECISIONS.map((k) => [k.value, k.label]));
+
+/**
+ * What a runtime calls a cache precision.
+ *
+ * `KvPrecision` is an internal width, not a name anyone types: vLLM's one-byte cache is FP8 with
+ * no integer-Q8 option at all, so the catalog gives it a `kvLabels` entry and the control names
+ * something the user could actually pass on a command line.
+ *
+ * One function because there were two resolutions and they disagreed about the fallback — the
+ * Bench control read this table while the Matrix heading upper-cased the raw value. They agree on
+ * all three current precisions by coincidence, and the first one whose display name is not its id
+ * in capitals (`fp8_e5m2`, `q4_0`) would have had the two surfaces printing different names for
+ * one setting. That is the failure this repo keeps hitting, and it is cheaper to remove than to
+ * remember.
+ */
+export function kvLabel(runtime: RuntimeSpec, precision: KvPrecision): string {
+  return (
+    runtime.kvLabels?.[precision] ?? KV_FALLBACK_LABELS.get(precision) ?? precision.toUpperCase()
+  );
+}
 
 /**
  * The fixed stops plus whatever is currently stored.

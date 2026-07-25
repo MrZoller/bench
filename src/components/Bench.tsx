@@ -12,15 +12,16 @@ import { Envelope } from './Envelope';
 import { DETAIL_ANCHOR_ID, Matrix } from './Matrix';
 import { Segmented, Select, StopSlider } from './Controls';
 import { compact, gibLabel, params, percent, tokens } from '@/lib/format';
-import type { KvPrecision } from '@/engine/types';
 import { canShard, maxAllocatablePerDevice, raisingCeilingWouldHelp } from '@/engine/placement';
 import { classifyDecode } from '@/lib/verdicts';
 import { quantApplies } from '@/lib/quantChoice';
 import {
   CONCURRENCY_STOPS,
   DEVICE_COUNT_STOPS,
+  KV_PRECISIONS,
   PROMPT_STOPS,
   contextStopsFor,
+  kvLabel,
   withStored,
 } from '@/lib/stops';
 
@@ -32,12 +33,6 @@ import {
  * on change; there is no submit step, because the point is to feel where the cliff is rather
  * than to query for it.
  */
-
-const KV_PRECISIONS: readonly { value: KvPrecision; label: string }[] = [
-  { value: 'fp16', label: 'FP16' },
-  { value: 'q8', label: 'Q8' },
-  { value: 'q4', label: 'Q4' },
-];
 
 export function Bench() {
   const config = useConfig();
@@ -203,8 +198,9 @@ export function Bench() {
       KV_PRECISIONS.filter((k) => runtime.kvPrecisions.includes(k.value)).map((k) => ({
         ...k,
         // A runtime's own name for the format wins, so the control names something the user
-        // could actually pass on a command line.
-        label: runtime.kvLabels?.[k.value] ?? k.label,
+        // could actually pass on a command line. Shared with the Matrix heading, which had its
+        // own resolution and a different fallback.
+        label: kvLabel(runtime, k.value),
       })),
     [runtime]
   );
