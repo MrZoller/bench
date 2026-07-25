@@ -337,19 +337,30 @@ export function Bench() {
             <strong className="text-[var(--color-text)]">{params(model.totalParams)}</strong> of
             weights, so all of them occupy memory — but routes each token through only{' '}
             <strong className="text-[var(--color-text)]">{params(model.activeParams)}</strong>
-            {fast
-              ? ', so it decodes at roughly that model size rather than its full one.'
-              : evaluation.placement.offloadFraction > 0
-                ? // Only claimed when the engine's own resident estimate agrees: a model can
-                  // spill *and* still be slow with everything resident, and blaming the spill
-                  // then sends someone to buy memory that will not fix it.
-                  classifyDecode(evaluation.decode.offloadPenalty?.withoutOffloadTokensPerSec ?? 0)
-                    .isFast
-                  ? `. That would make it fast — but not here, with ${percent(
-                      evaluation.placement.offloadFraction
-                    )} of the weights crossing the host bus every token.`
-                  : '. Even resident it would be slow here, so fitting it is not the whole story.'
-                : '. Whether that is fast depends on the memory it is reading from, which the decode figure above measures.'}{' '}
+            {/*
+              Every branch below reads a decode estimate, so all of them are gated on `runnable`
+              — not just `fast`. When the runtime cannot drive the device or the model cannot be
+              placed, `evaluate` still returns numbers, and they describe nothing: an unsupported
+              MLX-on-5090 selection blamed host-bus spill, and a vLLM-on-Mac one pointed at a
+              decode tile that reads "Unsupported". Gating the heading and the classification but
+              not the sentences left the aside asserting what the tile beside it refuses to.
+            */}
+            {!runnable
+              ? '. Whether that is fast is not a question this configuration reaches — it does not run as selected.'
+              : fast
+                ? ', so it decodes at roughly that model size rather than its full one.'
+                : evaluation.placement.offloadFraction > 0
+                  ? // Only claimed when the engine's own resident estimate agrees: a model can
+                    // spill *and* still be slow with everything resident, and blaming the spill
+                    // then sends someone to buy memory that will not fix it.
+                    classifyDecode(
+                      evaluation.decode.offloadPenalty?.withoutOffloadTokensPerSec ?? 0
+                    ).isFast
+                    ? `. That would make it fast — but not here, with ${percent(
+                        evaluation.placement.offloadFraction
+                      )} of the weights crossing the host bus every token.`
+                    : '. Even resident it would be slow here, so fitting it is not the whole story.'
+                  : '. Whether that is fast depends on the memory it is reading from, which the decode figure above measures.'}{' '}
             Total parameters set what fits; active parameters set how fast it feels.
           </p>
           {model.experts && (
@@ -377,7 +388,18 @@ export function Bench() {
 function ShareLink() {
   const config = useConfig();
   const [state, setState] = useState<'idle' | 'copied' | 'unavailable'>('idle');
-  const [href, setHref] = useState('');
+
+  /**
+   * Derived, not captured.
+   *
+   * Holding the link in state froze it at the click that revealed the field: adjusting any
+   * control afterwards left the still-visible input offering the previous scenario, so a manual
+   * copy shared something the user was no longer looking at. That is the same class of bug the
+   * full encoding exists to prevent — a link that means something other than it appears to.
+   */
+  const href = `${window.location.origin}${window.location.pathname}${configToShareSearch(
+    config as Config
+  )}`;
 
   const label =
     state === 'copied'
@@ -391,10 +413,6 @@ function ShareLink() {
       <button
         type="button"
         onClick={() => {
-          const { origin, pathname } = window.location;
-          const link = `${origin}${pathname}${configToShareSearch(config as Config)}`;
-          setHref(link);
-
           /**
            * `navigator.clipboard` is undefined on non-secure origins and in some embedded
            * browsers, and the optional chain meant the button did nothing at all there while
@@ -404,7 +422,7 @@ function ShareLink() {
            * `document.execCommand('copy')`: it is deprecated, it needs a selection in the
            * document anyway, and it fails silently in exactly the same contexts.
            */
-          const writer = navigator.clipboard?.writeText(link);
+          const writer = navigator.clipboard?.writeText(href);
           if (writer === undefined) {
             setState('unavailable');
             return;

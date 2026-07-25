@@ -1,5 +1,16 @@
-import type { AttentionSpec, KvPrecision, ModelSpec } from './types';
+import type { AttentionSpec, KvPrecision, ModelSpec, RuntimeSpec } from './types';
 import { KV_BYTES } from './types';
+
+/**
+ * Bytes one cached element really costs under this runtime.
+ *
+ * Nominal width unless the runtime declares otherwise — see `RuntimeSpec.kvBytesPerElement`.
+ * Taken through one function so placement and decode cannot end up charging different figures
+ * for the same cache.
+ */
+export function kvElementBytes(precision: KvPrecision, runtime?: RuntimeSpec): number {
+  return runtime?.kvBytesPerElement?.[precision] ?? KV_BYTES[precision];
+}
 
 /**
  * KV cache sizing.
@@ -49,9 +60,10 @@ function layerBytes(
 export function kvBytesPerSequence(
   model: ModelSpec,
   contextTokens: number,
-  precision: KvPrecision
+  precision: KvPrecision,
+  runtime?: RuntimeSpec
 ): number {
-  const elemBytes = KV_BYTES[precision];
+  const elemBytes = kvElementBytes(precision, runtime);
   let total = 0;
   for (let layer = 0; layer < model.layers; layer++) {
     total += layerBytes(model.attention, layer, contextTokens, elemBytes);
@@ -63,8 +75,12 @@ export function kvBytesPerSequence(
  * KV cost of one token when every layer is caching — the headline "bytes per token" figure
  * used to compare architectures. Constant, and correct only below the shortest window.
  */
-export function kvBytesPerToken(model: ModelSpec, precision: KvPrecision): number {
-  return kvBytesPerSequence(model, 1, precision);
+export function kvBytesPerToken(
+  model: ModelSpec,
+  precision: KvPrecision,
+  runtime?: RuntimeSpec
+): number {
+  return kvBytesPerSequence(model, 1, precision, runtime);
 }
 
 /**
@@ -79,10 +95,14 @@ export function kvBytesPerToken(model: ModelSpec, precision: KvPrecision): numbe
 export function marginalKvBytesPerToken(
   model: ModelSpec,
   contextTokens: number,
-  precision: KvPrecision
+  precision: KvPrecision,
+  runtime?: RuntimeSpec
 ): number {
   const at = Math.max(1, contextTokens);
-  return kvBytesPerSequence(model, at + 1, precision) - kvBytesPerSequence(model, at, precision);
+  return (
+    kvBytesPerSequence(model, at + 1, precision, runtime) -
+    kvBytesPerSequence(model, at, precision, runtime)
+  );
 }
 
 /** Total KV across every concurrent sequence. */
@@ -90,9 +110,10 @@ export function kvBytesTotal(
   model: ModelSpec,
   contextTokens: number,
   concurrency: number,
-  precision: KvPrecision
+  precision: KvPrecision,
+  runtime?: RuntimeSpec
 ): number {
-  return kvBytesPerSequence(model, contextTokens, precision) * concurrency;
+  return kvBytesPerSequence(model, contextTokens, precision, runtime) * concurrency;
 }
 
 /**
@@ -105,9 +126,10 @@ export function kvBytesTotal(
 export function kvReadBytesPerToken(
   model: ModelSpec,
   contextTokens: number,
-  precision: KvPrecision
+  precision: KvPrecision,
+  runtime?: RuntimeSpec
 ): number {
-  return kvBytesPerSequence(model, contextTokens, precision);
+  return kvBytesPerSequence(model, contextTokens, precision, runtime);
 }
 
 /** Whether any layer uses a bounded attention window — drives the explain layer. */
@@ -116,22 +138,39 @@ export function hasSlidingLayers(model: ModelSpec): boolean {
 }
 
 /**
- * Summed attention span across layers: how many key positions each query token attends over,
- * totalled over the network.
+ * Query-key pairs a prefill pass actually computes, summed over every layer.
  *
- * Prefill attention cost is quadratic only on full-attention layers. A sliding layer attends
- * over at most its window however long the prompt is, making its cost linear. Ignoring that
- * overstates gpt-oss prefill FLOPs by roughly 19% at a 16K prompt — the same mistake on the
- * compute side that the naive KV formula makes on the memory side.
+ * Two corrections to the naive `layers * N^2` live here, and they compound.
+ *
+ * **Causality.** These are decoder-only models: prompt token `i` attends over positions 0..i and
+ * never over later ones, so a full-attention layer computes `N * (N + 1) / 2` pairs rather than
+ * `N^2`. Charging the square nearly doubles the attention term at long prompts, which is enough
+ * on its own to make the tile claim attention dominates a pass where it does not.
+ *
+ * **Sliding windows.** A sliding layer attends over at most its window however long the prompt
+ * gets, so its cost is linear rather than quadratic — and it is causal too, so the first `W`
+ * positions are still a triangle before the band becomes uniform. Ignoring windows entirely
+ * overstates gpt-oss prefill FLOPs by roughly 19% at a 16K prompt; ignoring causality overstates
+ * every model by nearly 2x. The same mistake on the compute side that the naive KV formula makes
+ * on the memory side.
  */
-export function attentionSpanPerToken(model: ModelSpec, promptTokens: number): number {
-  const windows = model.attention.layerWindows;
-  if (!windows) return model.layers * promptTokens;
+export function attentionPairs(model: ModelSpec, promptTokens: number): number {
+  const n = Math.max(0, promptTokens);
+  /** Every position attending over itself and everything before it. */
+  const causal = (span: number) => (span * (span + 1)) / 2;
 
-  let span = 0;
+  const windows = model.attention.layerWindows;
+  if (!windows) return model.layers * causal(n);
+
+  let pairs = 0;
   for (let layer = 0; layer < model.layers; layer++) {
     const window = windows[layer];
-    span += window === null || window === undefined ? promptTokens : Math.min(promptTokens, window);
+    if (window === null || window === undefined || n <= window) {
+      pairs += causal(n);
+    } else {
+      // A triangle while the window is still filling, then a band of constant width.
+      pairs += causal(window) + (n - window) * window;
+    }
   }
-  return span;
+  return pairs;
 }

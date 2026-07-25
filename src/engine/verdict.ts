@@ -185,8 +185,24 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
     return WORKLOADS.map((w) => ({ workload: w, fitness: 'fail' as const, reason }));
   }
 
-  /** Aggregate throughput at the batch archetype's own request, not at the slider's. */
-  const batchAggregate = () => at('batch').decode.aggregateTokensPerSec;
+  /**
+   * End-to-end batch throughput: prompts read *and* answers written.
+   *
+   * Decode alone was the whole grade, and for a job with a substantial prompt it is not the
+   * total this archetype claims to measure. DeepSeek V3 Q4 on an EPYC 9654 decodes 10.4 tok/s
+   * and passed, while reading its declared 4K prompt takes about 522 seconds — so a 512-token
+   * answer completes at under 1 generated token per second end to end. The prompt pass is the
+   * job for that configuration, and it was not being counted at all.
+   *
+   * Modelled as generated tokens per second over the whole request: `RESPONSE_ALLOWANCE` tokens
+   * out, after the prefill wait, across every concurrent worker.
+   */
+  const batchAggregate = () => {
+    const { decode, prefill } = at('batch');
+    const perWorker = decode.aggregateTokensPerSec / Math.max(1, usage.concurrency);
+    const seconds = prefill.ttftSeconds + RESPONSE_ALLOWANCE / Math.max(perWorker, 1e-9);
+    return seconds > 0 ? (RESPONSE_ALLOWANCE * usage.concurrency) / seconds : 0;
+  };
 
   /**
    * What an archetype needs to hold: its prompt plus room to answer. Every fit check reads this
@@ -246,8 +262,8 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
           : rateOf('chat') < 10
             ? `${fmt(rateOf('chat'))} tok/s reads slower than most people do.`
             : chatTtft > 5
-              ? `A ${fmt(chatTtft)}s wait on a short message breaks the back-and-forth.`
-              : `${fmt(rateOf('chat'))} tok/s, ${fmt(chatTtft)}s to first token on a short message.`,
+              ? `A ${secs(chatTtft)}s wait on a short message breaks the back-and-forth.`
+              : `${fmt(rateOf('chat'))} tok/s, ${secs(chatTtft)}s to first token on a short message.`,
     }),
     judge('completion', {
       // A suggestion that arrives after you have typed the next line is worse than none.
@@ -257,14 +273,14 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
         !fits('completion')
           ? shortfall('completion', 'one suggestion')
           : completionTtft > 1
-            ? `${fmt(completionTtft)}s to first token — the suggestion arrives after you have moved on.`
+            ? `${secs(completionTtft)}s to first token — the suggestion arrives after you have moved on.`
             : rateOf('completion') < 20
               ? `${fmt(rateOf('completion'))} tok/s is too slow to finish a line while you pause.`
               : rateOf('completion') < 30
                 ? // Tight on throughput alone: the latency sentence below is entirely positive,
                   // and printing it here explained why this passed rather than why it did not.
-                  `${fmt(completionTtft)}s to first token is quick, but ${fmt(rateOf('completion'))} tok/s finishes a line slower than you type it.`
-                : `${fmt(completionTtft)}s to first token stays inside the window where a suggestion helps.`,
+                  `${secs(completionTtft)}s to first token is quick, but ${fmt(rateOf('completion'))} tok/s finishes a line slower than you type it.`
+                : `${secs(completionTtft)}s to first token stays inside the window where a suggestion helps.`,
     }),
     judge('agent', {
       // Agents need all three: speed, headroom, and a prompt pass that does not stall each turn.
@@ -282,24 +298,30 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
             runnableContextTokens < 32768
             ? `${ctx(runnableContextTokens)} of context holds a turn but not a session — an agent needs ${ctx(32768)} to keep its history across steps.`
             : agentTtft > 30
-              ? `${fmt(agentTtft)}s to re-read a 16K prompt makes every step a wait.`
+              ? `${secs(agentTtft)}s to re-read a 16K prompt makes every step a wait.`
               : rateOf('agent') < 15
                 ? `${fmt(rateOf('agent'))} tok/s makes a multi-step session take minutes per step.`
-                : `${fmt(rateOf('agent'))} tok/s over ${ctx(runnableContextTokens)} of context, ${fmt(agentTtft)}s per turn.`,
+                : `${fmt(rateOf('agent'))} tok/s over ${ctx(runnableContextTokens)} of context, ${secs(agentTtft)}s per turn.`,
     }),
     judge('rag', {
       // The answer is short; the prompt is not. This lives or dies on prefill — but speed is
       // moot if the 32K prompt has nowhere to live: prefill is estimated at the archetype's own
       // prompt length, which deliberately ignores the configured context, so the fit has to be
       // checked separately or a fast machine could be graded good for a prompt it cannot hold.
-      pass: ragFits && ragPrefill.ttftSeconds <= 5,
-      tight: ragFits && ragPrefill.ttftSeconds <= 20,
+      // Prefill dominates, but it is not the whole request: the answer still has to be written.
+      // A configuration whose RAG-sized cache decodes at 1.4 tok/s takes six minutes over a
+      // 512-token reply, and grading on TTFT alone called that usable while printing only the
+      // prefill rate — a positive number standing in for the thing that was wrong.
+      pass: ragFits && ragPrefill.ttftSeconds <= 5 && rateOf('rag') >= 10,
+      tight: ragFits && ragPrefill.ttftSeconds <= 20 && rateOf('rag') >= 5,
       why: () =>
         !ragFits
           ? shortfall('rag', 'the 32K document this assumes')
           : ragPrefill.ttftSeconds > 20
-            ? `${fmt(ragPrefill.ttftSeconds)}s to read a 32K document before answering.`
-            : `${Math.round(ragPrefill.prefillTokensPerSec)} tok/s prompt processing — ${fmt(ragPrefill.ttftSeconds)}s for a 32K document.`,
+            ? `${secs(ragPrefill.ttftSeconds)}s to read a 32K document before answering.`
+            : rateOf('rag') < 5
+              ? `Reads the document in ${secs(ragPrefill.ttftSeconds)}s, then answers at ${fmt(rateOf('rag'))} tok/s — minutes for a short reply.`
+              : `${Math.round(ragPrefill.prefillTokensPerSec)} tok/s prompt processing — ${secs(ragPrefill.ttftSeconds)}s for a 32K document.`,
     }),
     judge('long-context', {
       // Offload-aware: the resident figure is zero for any spilled configuration, which would
@@ -314,16 +336,21 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
             : `Holds ${ctx(runnableContextTokens)} at this concurrency.`,
     }),
     judge('batch', {
-      // No latency budget at all — but the request still has to fit, and the aggregate has to
+      // No latency budget at all — but the request still has to fit, and the throughput has to
       // be measured at the batch scenario rather than at whatever the slider says.
+      // Rescaled with the metric. These were 5 and 1 against decode-only throughput; end-to-end
+      // is strictly smaller for any job with a prompt, so keeping the same numbers would have
+      // silently tightened the grade rather than corrected it. An overnight run is about eight
+      // hours: 0.5 tok/s is ~28 replies of 512 tokens, which is a real batch job and not a
+      // comfortable one; 5 tok/s is ~280.
       pass: fits('batch') && batchAggregate() >= 5,
-      tight: fits('batch') && batchAggregate() >= 1,
+      tight: fits('batch') && batchAggregate() >= 0.5,
       why: () =>
         !fits('batch')
           ? shortfall('batch', 'a batch job')
           : batchAggregate() >= 5
-            ? `${fmt(batchAggregate())} tok/s aggregate — latency does not matter here, only the total.`
-            : `${fmt(batchAggregate())} tok/s aggregate makes even an overnight run small.`,
+            ? `${fmt(batchAggregate())} tok/s end to end — latency does not matter here, only the total.`
+            : `${fmt(batchAggregate())} tok/s end to end, prompts included, makes even an overnight run small.`,
     }),
     judge('serving', {
       // Every concurrent user brings their own cache, which is what actually runs out.
@@ -379,6 +406,22 @@ function fmt(value: number): string {
   if (value >= 10) return Math.floor(value).toString();
   if (value > 0 && value < 0.1) return '<0.1';
   return (Math.floor(value * 10) / 10).toFixed(1);
+}
+
+/**
+ * A latency, never rounded *down*.
+ *
+ * The mirror of `fmt`, and it took a second finding to see that the direction has to follow the
+ * *bound*, not the quantity. A rate fails by being too small, so flooring is what keeps it from
+ * looking sufficient. A latency fails by being too large, so flooring is exactly what makes it
+ * look sufficient: 0.486s against a 0.4s limit printed "0.4s to first token stays inside the
+ * window", which is the same self-contradiction one sign the other way.
+ */
+function secs(value: number): string {
+  if (!Number.isFinite(value)) return '—';
+  if (value >= 10) return Math.ceil(value).toString();
+  if (value > 0 && value < 0.1) return '<0.1';
+  return (Math.ceil(value * 10) / 10).toFixed(1);
 }
 
 /**

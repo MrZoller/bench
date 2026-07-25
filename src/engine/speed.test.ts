@@ -113,19 +113,27 @@ describe('calibration against published benchmarks', () => {
     expect(nvfp4.prefillTokensPerSec).toBeGreaterThan(fp8.prefillTokensPerSec);
   });
 
-  it('charges sliding-window layers linear rather than quadratic prefill attention', () => {
-    const usage = { ...single(32768), promptTokens: 16384 };
+  it('charges causal pairs, and sliding layers only their band', () => {
+    const n = 16384;
+    const usage = { ...single(32768), promptTokens: n };
     const rig = { device: DGX_SPARK, count: 1 };
     const result = estimatePrefill(GPT_OSS_20B, getQuant('mxfp4'), usage, rig, LLAMA_CPP);
 
-    // 12 full layers over the whole prompt, 12 sliding layers capped at 128 keys.
-    const span = 12 * 16384 + 12 * 128;
-    expect(result.attentionFlops).toBe(4 * 16384 * span * GPT_OSS_20B.attention.projectionWidth);
+    // 12 full layers, each a causal triangle; 12 sliding layers capped at a 128-key window,
+    // each a small triangle followed by a band.
+    const w = 128;
+    const pairs = 12 * ((n * (n + 1)) / 2) + 12 * ((w * (w + 1)) / 2 + (n - w) * w);
+    expect(result.attentionFlops).toBe(4 * pairs * GPT_OSS_20B.attention.projectionWidth);
 
-    // Treating every layer as full attention — the mistake kv.ts already avoids on the
-    // memory side — would overstate the attention term by nearly 2x.
-    const uniform = 4 * 16384 * (24 * 16384) * GPT_OSS_20B.attention.projectionWidth;
-    expect(uniform / result.attentionFlops).toBeGreaterThan(1.9);
+    // Two independent overstatements, and they compound. Treating every layer as full
+    // attention is the mistake kv.ts already avoids on the memory side; charging N^2 instead
+    // of the causal triangle is the one this test was added for.
+    // Two independent overstatements compounding to 3.94x: ~2x from causality, ~2x from the
+    // windows. Asserted against the engine's own output, not against a second hand-derivation
+    // of the same closed form — comparing two locally computed constants would pass with the
+    // engine deleted.
+    const uniformSquare = 4 * n * (24 * n) * GPT_OSS_20B.attention.projectionWidth;
+    expect(uniformSquare / result.attentionFlops).toBeCloseTo(3.94, 2);
   });
 
   it('puts an 8B dense model on a 5090 in the expected few-hundred tok/s range', () => {
@@ -417,13 +425,17 @@ describe('the prefill bound is judged on time, not FLOPs', () => {
     const result = estimatePrefill(
       GPT_OSS_20B,
       getQuant('mxfp4'),
-      { contextTokens: 32768, concurrency: 1, kvPrecision: 'fp16', promptTokens: 16384 },
+      { contextTokens: 65536, concurrency: 1, kvPrecision: 'fp16', promptTokens: 32768 },
       { device: blackwell, count: 1 },
       VLLM
     );
 
     // Attention is the smaller FLOP count and still the larger share of the wall clock, because
     // most of the linear work runs at the 4x FP4 rate and attention does not.
+    //
+    // At 32K rather than 16K: attention is causal, so it costs about half what a full N^2 pass
+    // would, and the crossover it used to sit just past moved out by roughly a doubling. The
+    // property under test is unchanged — only the prompt at which it holds.
     expect(result.attentionFlops).toBeLessThan(result.linearFlops);
     expect(result.attentionBound).toBe(true);
   });
