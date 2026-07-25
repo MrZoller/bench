@@ -64,11 +64,20 @@ function coerce(config: Config): Config {
   const deviceId = known(config.deviceId, getDevice, DEFAULT_CONFIG.deviceId);
   const device = getDevice(deviceId);
 
-  const contextTokens = clamp(config.contextTokens, 512, 1_048_576, DEFAULT_CONFIG.contextTokens);
+  const modelId = known(config.modelId, getModel, DEFAULT_CONFIG.modelId);
+  /**
+   * A model cannot be asked for more context than it was trained for. Every catalogued model
+   * tops out between 32K and 164K while the slider offers stops up to 1M, so without this a
+   * 40K Qwen would report fit, memory and speed for a 1M window it cannot process.
+   */
+  const contextTokens = Math.min(
+    getModel(modelId).maxContext,
+    clamp(config.contextTokens, 512, 1_048_576, DEFAULT_CONFIG.contextTokens)
+  );
 
   return {
     ...config,
-    modelId: known(config.modelId, getModel, DEFAULT_CONFIG.modelId),
+    modelId,
     quantId: known(config.quantId, getQuant, DEFAULT_CONFIG.quantId),
     runtimeId: known(config.runtimeId, getRuntime, DEFAULT_CONFIG.runtimeId),
     deviceId,

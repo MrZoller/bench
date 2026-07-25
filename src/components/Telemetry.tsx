@@ -33,7 +33,7 @@ interface Reading {
   detail: string;
 }
 
-function capacityReading(evaluation: Evaluation): Reading {
+function capacityReading(evaluation: Evaluation, canOffload: boolean): Reading {
   const { placement } = evaluation;
 
   if (placement.unsupported) {
@@ -56,8 +56,15 @@ function capacityReading(evaluation: Evaluation): Reading {
       value: gibLabel(-headroom),
       unit: 'over',
       tone: 'critical',
-      detail:
-        'Past the allocatable ceiling with nowhere to spill. Shared-memory machines have no faster tier to fall back from.',
+      /**
+       * A discrete GPU reaches `impossible` by a different route than a Mac does: not because
+       * there is nowhere to spill, but because KV and activations alone overflow the card, and
+       * those cannot be offloaded at all. Explaining that as "shared memory has no faster tier"
+       * misdiagnoses a high-context 5090 as a Mac.
+       */
+      detail: canOffload
+        ? 'The cache and workspace alone overflow the card, and those cannot be offloaded. Lower the context, the concurrency, or the KV precision.'
+        : 'Past the allocatable ceiling with nowhere to spill — a shared-memory machine has no faster tier to fall back from.',
     };
   }
   if (placement.offloadFraction > 0) {
@@ -124,7 +131,14 @@ function prefillReading(evaluation: Evaluation): Reading {
   };
 }
 
-export function Telemetry({ evaluation }: { evaluation: Evaluation }) {
+export function Telemetry({
+  evaluation,
+  canOffload,
+}: {
+  evaluation: Evaluation;
+  /** True for discrete GPUs, the only class with a slower tier to spill to. */
+  canOffload: boolean;
+}) {
   /**
    * A runtime that cannot drive this hardware has no throughput, so none is shown.
    *
@@ -148,7 +162,7 @@ export function Telemetry({ evaluation }: { evaluation: Evaluation }) {
 
   const readings: Reading[] = blocked
     ? [
-        capacityReading(evaluation),
+        capacityReading(evaluation, canOffload),
         ...(['Decode', 'Time to first token'] as const).map((label, i) => ({
           key: `blocked-${i}`,
           label,
@@ -161,7 +175,11 @@ export function Telemetry({ evaluation }: { evaluation: Evaluation }) {
             : 'No estimate — the model does not fit, so there is no speed to report.',
         })),
       ]
-    : [capacityReading(evaluation), decodeReading(evaluation), prefillReading(evaluation)];
+    : [
+        capacityReading(evaluation, canOffload),
+        decodeReading(evaluation),
+        prefillReading(evaluation),
+      ];
 
   return (
     <section aria-label="Verdicts" className="grid gap-3 sm:grid-cols-3">

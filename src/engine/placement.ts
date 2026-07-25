@@ -139,9 +139,11 @@ export function planPlacement(
   const impossible =
     !fits && (!canOffload || kvBytesPerDevice + activations > allocatableBytesPerDevice);
 
-  const unsupported = runtime.supports.includes(rig.device.class)
-    ? undefined
-    : `${runtime.label} does not run on ${DEVICE_CLASS_PROSE[rig.device.class]}.`;
+  const unsupported = !runtime.supports.includes(rig.device.class)
+    ? `${runtime.label} does not run on ${DEVICE_CLASS_PROSE[rig.device.class]}.`
+    : runtime.requiresVendor && rig.device.vendor !== runtime.requiresVendor
+      ? `${runtime.label} runs only on ${runtime.requiresVendor} hardware.`
+      : undefined;
 
   return {
     fits,
