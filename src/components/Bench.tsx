@@ -54,14 +54,22 @@ export function Bench() {
    */
   const contextStops = useMemo(() => {
     const withinModel = CONTEXT_STOPS.filter((t) => t < model.maxContext);
-    return [...withinModel, model.maxContext];
-  }, [model.maxContext]);
+    // The stored value is always a stop, even when it is not one of the fixed ones. Switching
+    // from a 40,960-token model to a larger one keeps that 40,960 — `coerce` only caps — so a
+    // list of "fixed stops plus this model's maximum" would show 32K for a context the engine
+    // is evaluating at 40,960. Including it means the control cannot display a value the
+    // engine is not using.
+    const stops = new Set([...withinModel, model.maxContext, config.contextTokens]);
+    return [...stops].filter((t) => t <= model.maxContext).sort((a, b) => a - b);
+  }, [model.maxContext, config.contextTokens]);
 
   /** The prompt is part of the context, so it cannot be offered beyond it. */
   const promptStops = useMemo(() => {
     const within = PROMPT_STOPS.filter((t) => t < config.contextTokens);
-    return within.length > 0 ? [...within, config.contextTokens] : [config.contextTokens];
-  }, [config.contextTokens]);
+    // Same rule: whatever is stored has to be selectable, or the label lies about the estimate.
+    const stops = new Set([...within, config.contextTokens, config.promptTokens]);
+    return [...stops].filter((t) => t <= config.contextTokens).sort((a, b) => a - b);
+  }, [config.contextTokens, config.promptTokens]);
 
   /** Formats that cannot run here, or would do nothing here. See `quantApplies`. */
   const quantOptions = useMemo(

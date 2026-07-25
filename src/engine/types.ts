@@ -183,13 +183,22 @@ export interface QuantSpec {
    */
   computeDtype: 'fp16' | 'fp8' | 'fp4' | 'int8';
   /**
-   * Vendor whose silicon this format needs, when it is not an open standard.
+   * Hardware this format needs to run at all, when it is not an open standard.
    *
-   * NVFP4 is Blackwell-native: AMD's MI355X publishes a 9.2 PFLOP/s FP4 rate for its *own*
-   * format, and handing that number to NVFP4 produces a plausible, impossible result. MXFP4 has
-   * no such restriction — it is the OCP microscaling standard and both vendors implement it.
+   * NVFP4 needs both halves and neither alone is sufficient. Vendor, because AMD's MI355X
+   * publishes a 9.2 PFLOP/s FP4 rate for its *own* format and handing that to NVFP4 is a
+   * plausible impossibility. Dtype, because "NVIDIA" also covers the 3090, the 4090 and the
+   * H100, none of which have FP4 tensor cores — a vendor-only rule accepted every pre-Blackwell
+   * card in the catalog.
+   *
+   * MXFP4 carries neither: it is the OCP microscaling standard, both vendors implement it, and
+   * a runtime without native support simply dequantizes it.
    */
-  requiresVendor?: string;
+  requires?: {
+    vendor?: string;
+    /** A rate the device must actually publish for this dtype. */
+    dtype?: 'fp4' | 'fp8' | 'int8';
+  };
   /** Rough quality cost vs bf16, for UI guidance only — never fed into the math. */
   qualityNote?: string;
   source: string;

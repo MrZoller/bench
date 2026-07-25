@@ -19,7 +19,9 @@ import type { DeviceSpec, ModelSpec, QuantSpec } from '@/engine/types';
  *     from selecting it.
  */
 export function quantApplies(quant: QuantSpec, model: ModelSpec, device: DeviceSpec): boolean {
-  if (quant.requiresVendor !== undefined && quant.requiresVendor !== device.vendor) return false;
+  const { vendor, dtype } = quant.requires ?? {};
+  if (vendor !== undefined && device.vendor !== vendor) return false;
+  if (dtype !== undefined && device.flops[dtype] === undefined) return false;
   if (quant.denseBpw !== undefined && model.expertParams === 0) return false;
   return true;
 }

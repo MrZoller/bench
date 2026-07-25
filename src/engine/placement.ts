@@ -82,6 +82,18 @@ export function canShard(device: DeviceSpec): boolean {
   return device.interconnect !== undefined;
 }
 
+/** Why this format cannot run on this device, or undefined when it can. */
+function unmetRequirement(quant: QuantSpec, device: DeviceSpec): string | undefined {
+  const { vendor, dtype } = quant.requires ?? {};
+  if (vendor !== undefined && device.vendor !== vendor) {
+    return `${quant.label} needs ${vendor} hardware.`;
+  }
+  if (dtype !== undefined && device.flops[dtype] === undefined) {
+    return `${quant.label} needs ${dtype.toUpperCase()} tensor cores, which ${device.name} does not have.`;
+  }
+  return undefined;
+}
+
 /** Memory a single device can actually give the model, after the runtime takes its cut. */
 export function allocatablePerDevice(rig: Rig, runtime: RuntimeSpec): number {
   const { device } = rig;
@@ -166,12 +178,10 @@ export function planPlacement(
     ? `${runtime.label} does not run on ${DEVICE_CLASS_PROSE[rig.device.class]}.`
     : runtime.requiresVendor && rig.device.vendor !== runtime.requiresVendor
       ? `${runtime.label} runs only on ${runtime.requiresVendor} hardware.`
-      : // A vendor-specific weight format is as unrunnable as a vendor-specific runtime, and
-        // was previously waved through — leaving `peakFlops` to read a rate published for a
-        // different format on the same silicon.
-        quant.requiresVendor && rig.device.vendor !== quant.requiresVendor
-        ? `${quant.label} needs ${quant.requiresVendor} hardware.`
-        : undefined;
+      : // A format tied to particular silicon is as unrunnable as a runtime that cannot drive
+        // the device, and was previously waved through — leaving `peakFlops` to read a rate
+        // published for a different format, or for hardware that has no such units at all.
+        unmetRequirement(quant, rig.device);
 
   return {
     fits,

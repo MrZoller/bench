@@ -304,3 +304,38 @@ describe('the Bench refuses impossible combinations', () => {
     else expect(word).toBe('Slow');
   });
 });
+
+describe('the slider never displays a value the engine is not using', () => {
+  it('keeps the stored context selectable after switching to a larger model', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Qwen caps at 40,960 — not one of the fixed stops.
+    await user.selectOptions(screen.getByLabelText('Model'), 'Qwen/Qwen3-32B');
+    const slider = screen.getByLabelText('Context per sequence');
+    fireEvent.change(slider, { target: { value: '99' } });
+
+    const capped = useConfig.getState().contextTokens;
+    expect(capped).toBe(getModel('Qwen/Qwen3-32B').maxContext);
+
+    // Switching to a roomier model preserves that value, so it must remain displayable.
+    await user.selectOptions(screen.getByLabelText('Model'), 'openai/gpt-oss-120b');
+    expect(useConfig.getState().contextTokens).toBe(capped);
+    expect(screen.getByText(tokens(capped))).toBeInTheDocument();
+  });
+
+  it('does not offer NVFP4 on NVIDIA cards without FP4 tensor cores', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Blackwell has them.
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    expect(screen.getByRole('option', { name: /NVFP4/i })).toBeInTheDocument();
+
+    // Ada and Hopper are NVIDIA and have none, so the vendor check alone was not enough.
+    for (const id of ['rtx-4090', 'h100-sxm', 'rtx-3090']) {
+      await user.selectOptions(screen.getByLabelText('Hardware'), id);
+      expect(screen.queryByRole('option', { name: /NVFP4/i })).not.toBeInTheDocument();
+    }
+  });
+});
