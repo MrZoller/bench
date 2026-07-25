@@ -64,10 +64,24 @@ export function useUrlSync(): void {
   // Store -> URL.
   useEffect(() => {
     /**
+     * Set by this effect's cleanup, and checked before every write.
+     *
+     * `clearTimeout` alone is not enough: a retry is scheduled from inside `write`, which runs
+     * from a timer rather than from the effect, so a refusal firing in the same tick as teardown
+     * can queue work nothing will ever clear. In the test environment that surfaced as a timer
+     * running after jsdom had gone — `window is not defined`, from a suite where all 326 tests
+     * passed. In a browser it is a write against a page that has already navigated away.
+     *
+     * A flag closed over per effect run makes escape harmless rather than merely unlikely.
+     */
+    let cancelled = false;
+
+    /**
      * Reads current state rather than closing over this render's `config`, so a coalesced burst
      * writes the newest scenario instead of whichever frame happened to schedule the timer.
      */
     const write = () => {
+      if (cancelled || typeof window === 'undefined') return;
       const current = useConfig.getState() as Config;
       const search = arrivedExplicit.current
         ? configToShareSearch(current)
@@ -112,7 +126,10 @@ export function useUrlSync(): void {
 
     // Returned on both paths, not just the deferred one: an immediate write that *fails* also
     // schedules a retry, and the early return left that chain running past unmount.
-    return () => window.clearTimeout(pending.current);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(pending.current);
+    };
   }, [config]);
 
   // URL -> store.

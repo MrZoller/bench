@@ -462,6 +462,9 @@ describe('sharing a scenario degrades honestly', () => {
       // refusing — and the early-return path used to leave that chain running past unmount.
       view.unmount();
       const afterUnmount = attempts;
+      // Long enough for several retry intervals. A timer that escapes cleanup shows up here as
+      // a further attempt — and in CI showed up as `window is not defined` after teardown, from
+      // a suite where every test passed.
       await new Promise((r) => setTimeout(r, 1500));
       expect(attempts).toBe(afterUnmount);
     } finally {
