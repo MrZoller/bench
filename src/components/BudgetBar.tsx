@@ -31,6 +31,28 @@ export function BudgetBar({ evaluation }: { evaluation: Evaluation }) {
   const { placement } = evaluation;
   const ceiling = placement.allocatableBytesPerDevice;
 
+  /**
+   * Every figure in this bar is runtime-specific — the ceiling carries vLLM's 90% pre-allocation
+   * and the overhead band is its 1.5 GiB of framework state. For a pair the runtime cannot
+   * drive, those are not merely unknown, they are assumptions about software that will never
+   * load. Drawing a confident stack from them beside three tiles reading "Unsupported" is the
+   * same overclaim the tiles already refuse.
+   */
+  if (placement.unsupported) {
+    return (
+      <section className="panel p-5">
+        <h2 className="text-sm font-semibold tracking-wide">
+          Memory budget
+          <span className="ml-2 font-normal text-[var(--color-text-faint)]">per device</span>
+        </h2>
+        <p className="mt-3 text-sm text-[var(--color-text-muted)]">
+          No budget to show — {placement.unsupported} The ceiling and the overhead band are
+          properties of the runtime, so there is nothing here to measure against.
+        </p>
+      </section>
+    );
+  }
+
   const segments: Segment[] = [
     {
       key: 'weights',

@@ -3,7 +3,7 @@ import { DEVICES, MODELS, RUNTIMES, evaluateConfig, useConfig } from '@/store/co
 import { QUANTS } from '@/data/quants';
 import { CATALOG_GENERATED_AT, getDevice, getModel } from '@/data/catalog';
 import { BudgetBar } from './BudgetBar';
-import { Telemetry } from './Telemetry';
+import { DECODE_FAST, Telemetry } from './Telemetry';
 import { Segmented, Select, StopSlider } from './Controls';
 import { compact, gibLabel, params, percent, tokens } from '@/lib/format';
 import type { KvPrecision } from '@/engine/types';
@@ -85,13 +85,24 @@ export function Bench() {
    * have now got wrong in three different ways.
    *
    * Offload is not the only route to slow: DeepSeek V3 at Q4 fits an EPYC 9654 with nothing
-   * spilled, and decodes at ~10 tok/s, which the tile beside this correctly calls "Slow". So the
-   * claim keys on the measured throughput rather than on any proxy for it, at the same threshold
-   * the decode tile uses. Nothing derived from placement alone can stand in for this.
+   * spilled, and decodes at ~10 tok/s, which the tile beside this correctly calls "Slow".
+   *
+   * The threshold is imported rather than repeated. Holding a local copy is how this ended up
+   * claiming "fast" across the 15-30 band that the tile calls merely "Usable" — the fifth way
+   * this one sentence has managed to contradict the number printed beside it.
    */
-  const fast = runnable && evaluation.decode.perUserTokensPerSec >= 15;
-  /** Only discrete GPUs shard a model across devices. */
-  const shardable = device.class === 'discrete-gpu';
+  const fast = runnable && evaluation.decode.perUserTokensPerSec >= DECODE_FAST;
+  /**
+   * Sharding needs a transport between devices, which is what `interconnect` records — not the
+   * device class. Keying off the class disabled it for the DGX Spark, whose catalog row
+   * declares ConnectX-7 200GbE and which `tpEfficiency` already models as a network link; the
+   * two-Spark cluster is the case that hardware exists to serve.
+   *
+   * Deliberately separate from `canOffload` below, which really is a discrete-GPU property:
+   * spilling needs a slower *tier*, sharding needs a *link*, and only one device has one
+   * without the other.
+   */
+  const shardable = device.interconnect !== undefined;
 
   const modelOptions = useMemo(
     () =>
@@ -127,12 +138,21 @@ export function Bench() {
         // last of those was being dropped entirely — including the 3090's note that estimates
         // assume PCIe and do not model its optional NVLink bridge, which is precisely the
         // caveat an owner of a bridged pair needs.
+        // Combined rather than ranked: the Ryzen AI Max+ is both tunable *and* carries a note
+        // that the engine uses its measured 213 GB/s instead of the 256 GB/s sticker — a 17%
+        // difference in every throughput figure. Ranking these dropped the provenance.
         note:
-          d.status !== 'shipping'
-            ? `${d.status === 'rumored' ? 'Rumoured' : 'Announced'} — specs may change`
-            : d.allocatableTunable
+          [
+            d.status !== 'shipping'
+              ? `${d.status === 'rumored' ? 'Rumoured' : 'Announced'} — specs may change`
+              : undefined,
+            d.allocatableTunable
               ? `${gibLabel(d.allocatableBytes)} allocatable by default, and raiseable`
-              : d.note,
+              : undefined,
+            d.note,
+          ]
+            .filter(Boolean)
+            .join(' ') || undefined,
       })),
     []
   );
@@ -210,7 +230,7 @@ export function Bench() {
       <BudgetBar evaluation={evaluation} />
       <Telemetry
         evaluation={evaluation}
-        canOffload={shardable}
+        canOffload={device.class === 'discrete-gpu'}
         tunableCeiling={device.allocatableTunable === true}
       />
 

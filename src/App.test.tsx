@@ -220,3 +220,56 @@ describe('the Bench keeps the controls and the engine in step', () => {
     expect(screen.getByText(/raise it/i)).toBeInTheDocument();
   });
 });
+
+describe('the Bench keeps its claims consistent with its own numbers', () => {
+  /**
+   * Two places make speed claims and they must not drift. gpt-oss-20b BF16 on a Spark lands in
+   * the 15-30 band, where the tile says "Usable" — so the aside must not say "runs fast".
+   */
+  it('reserves the fast claim for the verdict that says Fast', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Model'), 'openai/gpt-oss-20b');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'bf16');
+
+    const verdicts = screen.getByRole('region', { name: 'Verdicts' });
+    const saysFast = within(verdicts).queryByText('Fast') !== null;
+    const claimsFast = screen.queryByText(/runs fast/i) !== null;
+    expect(claimsFast).toBe(saysFast);
+  });
+
+  it('shows no memory budget for a runtime that cannot drive the hardware', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'epyc-9654');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'vllm');
+
+    // The ceiling and overhead are vLLM's own numbers; drawing them here would be an assumption
+    // about software that never loads.
+    expect(screen.queryByRole('img', { name: /allocatable used/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/No budget to show/i)).toBeInTheDocument();
+  });
+
+  it('offers multi-device on a Spark, which has a real link between units', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'dgx-spark');
+    expect(screen.getByLabelText('Device count')).toBeInTheDocument();
+
+    // A Mac has no transport between chassis, so it stays single.
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
+    expect(screen.queryByLabelText('Device count')).not.toBeInTheDocument();
+  });
+
+  it('keeps a curated note alongside the tunable-ceiling warning', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'ryzen-ai-max-395');
+    expect(screen.getByText(/raiseable/i)).toBeInTheDocument();
+    expect(screen.getByText(/213/)).toBeInTheDocument();
+  });
+});

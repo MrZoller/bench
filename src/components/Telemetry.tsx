@@ -15,6 +15,17 @@ import { gibLabel, rate, seconds, tokens } from '@/lib/format';
  * by hue alone.
  */
 
+/**
+ * Decode thresholds, in tokens per second per user.
+ *
+ * Exported because two places make claims about speed — this tile and the teaching aside — and
+ * every time they have held their own copy of the number they have drifted apart. Reading speed
+ * and patience, not benchmarks: below ~10 you watch a cursor, ~15 keeps pace with reading, past
+ * ~30 it outruns most people.
+ */
+export const DECODE_FAST = 30;
+export const DECODE_USABLE = 15;
+
 const TONE_STYLE: Record<StatusTone, { color: string; icon: string; word: string }> = {
   good: { color: 'var(--color-good)', icon: '●', word: 'Comfortable' },
   warning: { color: 'var(--color-warning)', icon: '◐', word: 'Tight' },
@@ -109,14 +120,15 @@ function decodeReading(evaluation: Evaluation): Reading {
 
   // Thresholds are reading speed, not benchmarks: below ~10 tok/s a chat feels like waiting,
   // and above ~30 it outruns most people.
-  const tone: StatusTone = perUser >= 30 ? 'good' : perUser >= 15 ? 'warning' : 'serious';
+  const tone: StatusTone =
+    perUser >= DECODE_FAST ? 'good' : perUser >= DECODE_USABLE ? 'warning' : 'serious';
   return {
     key: 'decode',
     label: 'Decode',
     value: rate(perUser),
     unit: 'tok/s per user',
     tone,
-    verdict: perUser >= 30 ? 'Fast' : perUser >= 15 ? 'Usable' : 'Slow',
+    verdict: perUser >= DECODE_FAST ? 'Fast' : perUser >= DECODE_USABLE ? 'Usable' : 'Slow',
     detail: evaluation.decode.kvBound
       ? 'KV traffic now outweighs weight traffic — at this context the cache, not the model, sets the speed.'
       : 'Bound by weight bandwidth. Lower quantization or faster memory is what moves this.',
