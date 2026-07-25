@@ -40,7 +40,8 @@ describe('the Bench', () => {
     render(<App />);
 
     await user.click(screen.getByRole('button', { name: /figures as a table/i }));
-    const table = screen.getByRole('table');
+    // Named explicitly: the Envelope and the Matrix have tables of their own now.
+    const table = screen.getByRole('table', { name: /Memory budget breakdown/i });
     expect(
       within(table).getByRole('rowheader', { name: 'Allocatable ceiling' })
     ).toBeInTheDocument();
@@ -425,5 +426,62 @@ describe('the Envelope agrees with the verdicts beside it', () => {
     await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
 
     expect(screen.getByRole('img', { name: /will not run at all/i })).toBeInTheDocument();
+  });
+});
+
+/**
+ * The Matrix is the "what are my options" surface, so its job is to stay informative at every
+ * configuration — and to keep the three measures independent, since their disagreement is the
+ * argument the whole surface makes.
+ */
+describe('the Matrix stays informative', () => {
+  const matrix = () => screen.getByRole('region', { name: /Every model on every machine/i });
+
+  it('does not blank half the catalog when the format is expert-only', () => {
+    render(<App />);
+    // The default quant is MXFP4, which applies to no dense model. Forcing it across the grid
+    // reported "does not apply" for a majority of rows — a quantization fact standing in for a
+    // hardware comparison, on the surface whose only job is comparing hardware.
+    // The phrase appears in the header and again in the table caption; either will do.
+    const [, ran, total] = within(matrix())
+      .getAllByText(/combinations run/)[0]
+      .textContent!.match(/(\d+)\D+(\d+)/)!;
+
+    expect(Number(ran) / Number(total)).toBeGreaterThan(0.8);
+    expect(within(matrix()).getByText(/where it does not apply/i)).toBeInTheDocument();
+  });
+
+  it('says what every cell means without relying on its colour', () => {
+    render(<App />);
+    const cells = within(matrix()).getAllByRole('button', { name: / on / });
+    expect(cells.length).toBeGreaterThan(100);
+    // Each carries model, device and the measured figure.
+    expect(cells[0]).toHaveAccessibleName(/ on .+:/);
+  });
+
+  it('loads a cell into the Bench when clicked', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const before = useConfig.getState().modelId;
+    const cells = within(matrix()).getAllByRole('button', { name: / on / });
+    await user.click(cells[cells.length - 1]);
+
+    const after = useConfig.getState();
+    expect(`${after.modelId}/${after.deviceId}`).not.toBe(`${before}/${DEFAULT_CONFIG.deviceId}`);
+  });
+
+  it('rearranges when the measure changes, which is the point of having three', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const fills = () =>
+      within(matrix())
+        .getAllByRole('button', { name: / on / })
+        .map((b) => b.getAttribute('style'));
+
+    const byFit = fills();
+    await user.click(within(matrix()).getByRole('button', { name: 'How fast' }));
+    expect(fills()).not.toEqual(byFit);
   });
 });
