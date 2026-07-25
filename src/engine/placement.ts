@@ -1,4 +1,4 @@
-import type { ModelSpec, QuantSpec, Rig, RuntimeSpec, UsageSpec } from './types';
+import type { DeviceClass, ModelSpec, QuantSpec, Rig, RuntimeSpec, UsageSpec } from './types';
 import { activationBytes } from './activations';
 import { kvBytesTotal } from './kv';
 import { weightBytes } from './weights';
@@ -20,6 +20,13 @@ import { weightBytes } from './weights';
 
 /** Typical dual-channel DDR5 desktop bandwidth — the speed offloaded weights read at. */
 export const DEFAULT_HOST_BANDWIDTH = 80e9;
+
+/** Device classes as prose. The enum reads fine in code and badly in a sentence. */
+const DEVICE_CLASS_PROSE: Record<DeviceClass, string> = {
+  'discrete-gpu': 'discrete GPUs',
+  'unified-soc': 'unified-memory hardware',
+  'cpu-ram': 'CPU and system RAM',
+};
 
 export interface Placement {
   fits: boolean;
@@ -134,7 +141,7 @@ export function planPlacement(
 
   const unsupported = runtime.supports.includes(rig.device.class)
     ? undefined
-    : `${runtime.label} does not run on ${rig.device.class.replace('-', ' ')} hardware`;
+    : `${runtime.label} does not run on ${DEVICE_CLASS_PROSE[rig.device.class]}.`;
 
   return {
     fits,

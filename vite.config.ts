@@ -20,8 +20,10 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],
-      // The engine is the part that has to be right; that's what coverage tracks.
-      include: ['src/engine/**'],
+      // The engine is the part that has to be right, but the store and the formatters sit
+      // between it and the screen: a wrong clamp or a mis-scaled unit reaches a user exactly as
+      // a wrong roofline would, and neither was measured while this listed only the engine.
+      include: ['src/engine/**', 'src/store/**', 'src/lib/**', 'src/data/**'],
     },
     // Playwright specs live in e2e/ and run via `npm run screenshots`.
     exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**'],
