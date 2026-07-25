@@ -41,7 +41,7 @@ export function offloadBandwidth(rig: Rig, hostBandwidth: number, runtime?: Runt
   // a layer split the cards run one after another, so a single token's transfer is limited by
   // whichever card is currently working: one link, however many are installed. Aggregating there
   // was the same mistake as aggregating its bandwidth, one function over.
-  const links = runtime?.parallelism === 'layer' ? 1 : Math.max(1, rig.count);
+  const links = runtime?.parallelism === 'layer' ? 1 : effectiveDeviceCount(rig);
   return Math.min(hostBandwidth, link * links);
 }
 
@@ -89,6 +89,22 @@ export interface Placement {
  */
 export function canShard(device: DeviceSpec): boolean {
   return device.interconnect !== undefined;
+}
+
+/**
+ * Devices that actually cooperate on one request — one, unless there is a link between them.
+ *
+ * Every divisor and every multiplier keyed off `rig.count` directly, so eight Mac Studios divided
+ * a model eight ways and summed eight cards' bandwidth over an interconnect the catalog says they
+ * do not have. `planPlacement` now refuses that rig outright, but a refusal that still returns
+ * arithmetic for the impossible split is half a fix: the figures have to describe the machine that
+ * exists, which is one of them.
+ *
+ * Shared by placement and speed so the memory panel and the throughput panel cannot disagree about
+ * how many devices are in play — the failure mode this file has hit repeatedly.
+ */
+export function effectiveDeviceCount(rig: Rig): number {
+  return canShard(rig.device) ? Math.max(1, rig.count) : 1;
 }
 
 /** Why this format cannot run on this device, or undefined when it can. */
@@ -304,7 +320,7 @@ export function planPlacement(
   // evenly while rounding KV up was the half-fix — 61 DeepSeek layers over two B200s is 31/30,
   // and the even split reported 175.4 GiB under a 178 GiB ceiling for a card really holding
   // 178.3.
-  const shards = rig.count;
+  const shards = effectiveDeviceCount(rig);
   /**
    * Layer splits are packed rather than divided, because layers are not interchangeable: a
    * full-attention layer of a hybrid model holds up to 128x the cache a sliding one does, so the
@@ -344,20 +360,28 @@ export function planPlacement(
 
   const unsupported = !drives
     ? `${runtime.label} does not run on ${rig.device.name}.`
-    : !runtime.kvPrecisions.includes(usage.kvPrecision)
-      ? `${runtime.label} cannot store a ${usage.kvPrecision.toUpperCase()} KV cache.`
-      : // The same guarantee `kvPrecisions` gives the cache, for the weights. llama.cpp loads
-        // GGUF and not AWQ; vLLM reads neither GGUF K-quant. `quantApplies` enforced this for
-        // the picker and the store, but every caller that reaches the engine directly — the
-        // Matrix, the Envelope, anything importing `evaluate` — bypassed it and got capacity and
-        // throughput figures for a checkpoint the runtime cannot open. A rule that only the UI
-        // applies is not a rule the engine has.
-        !runtime.weightFormats.includes(quant.id)
-        ? `${runtime.label} cannot load ${quant.label} weights.`
-        : // A format tied to particular silicon is as unrunnable as a runtime that cannot drive
-          // the device, and was previously waved through — leaving `peakFlops` to read a rate
-          // published for a different format, or for hardware that has no such units at all.
-          unmetRequirement(quant, rig.device);
+    : // Sharding needs a link, and `canShard` is the one place that knows which devices have one.
+      // Without this the split above ran anyway: eight Mac Studios came back as a supported
+      // placement holding an eighth of the model each, over an interconnect that does not exist.
+      // The Bench hides its device-count control for these rows, but that is the store protecting
+      // one surface — the Matrix, the Envelope and any direct `evaluate` caller went straight past
+      // it, which is the same UI-enforced-rule gap the weight-format check below was added for.
+      rig.count > 1 && !canShard(rig.device)
+      ? `${rig.device.name} has no interconnect, so a model cannot be split across ${rig.count} of them.`
+      : !runtime.kvPrecisions.includes(usage.kvPrecision)
+        ? `${runtime.label} cannot store a ${usage.kvPrecision.toUpperCase()} KV cache.`
+        : // The same guarantee `kvPrecisions` gives the cache, for the weights. llama.cpp loads
+          // GGUF and not AWQ; vLLM reads neither GGUF K-quant. `quantApplies` enforced this for
+          // the picker and the store, but every caller that reaches the engine directly — the
+          // Matrix, the Envelope, anything importing `evaluate` — bypassed it and got capacity and
+          // throughput figures for a checkpoint the runtime cannot open. A rule that only the UI
+          // applies is not a rule the engine has.
+          !runtime.weightFormats.includes(quant.id)
+          ? `${runtime.label} cannot load ${quant.label} weights.`
+          : // A format tied to particular silicon is as unrunnable as a runtime that cannot drive
+            // the device, and was previously waved through — leaving `peakFlops` to read a rate
+            // published for a different format, or for hardware that has no such units at all.
+            unmetRequirement(quant, rig.device);
 
   return {
     fits,
