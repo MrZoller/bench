@@ -179,6 +179,39 @@ describe('fit', () => {
     );
     expect(plan.unsupported).toMatch(/vLLM/);
   });
+
+  /**
+   * `quantApplies` enforced this for the picker and the store, so the app never showed one of
+   * these pairings — but every caller reaching the engine directly walked straight past it and
+   * got capacity and throughput for a checkpoint the runtime cannot open. A rule the UI applies
+   * on the engine's behalf is a rule the engine does not have.
+   */
+  it('flags a weight format the runtime cannot load', () => {
+    const rig = { device: RTX_5090, count: 1 };
+
+    // AWQ is a vLLM format; llama.cpp reads GGUF. Nothing about the hardware rejects it, which is
+    // why the vendor/dtype check alone let it through.
+    const awqOnLlamaCpp = planPlacement(
+      LLAMA_31_8B,
+      getQuant('awq_4bit'),
+      usage(4096),
+      rig,
+      LLAMA_CPP
+    );
+    expect(awqOnLlamaCpp.unsupported).toMatch(/llama\.cpp/);
+
+    // And the reverse, so the check cannot be satisfied by a list that happens to be one-sided.
+    const ggufOnVllm = planPlacement(LLAMA_31_8B, getQuant('q4_k_m'), usage(4096), rig, VLLM);
+    expect(ggufOnVllm.unsupported).toMatch(/vLLM/);
+
+    // The pairing each runtime *can* load stays clean, so the check is not simply refusing work.
+    expect(
+      planPlacement(LLAMA_31_8B, getQuant('q4_k_m'), usage(4096), rig, LLAMA_CPP).unsupported
+    ).toBeUndefined();
+    expect(
+      planPlacement(LLAMA_31_8B, getQuant('awq_4bit'), usage(4096), rig, VLLM).unsupported
+    ).toBeUndefined();
+  });
 });
 
 describe('maximum context', () => {

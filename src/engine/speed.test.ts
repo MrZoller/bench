@@ -454,6 +454,117 @@ describe('the prefill bound is judged on time, not FLOPs', () => {
 });
 
 /**
+ * Prefill is the half of the roofline concurrency makes *worse*, and it used to be the half that
+ * ignored it. `estimateDecode` batched from the start, so a 32-user configuration was graded on
+ * one user's time-to-first-token — the verdicts called it good while the device had 32 prompts to
+ * get through. Decode amortizes because it is memory-bound; prefill cannot, because it is not.
+ */
+describe('concurrent prompts are priced into prefill', () => {
+  const at = (concurrency: number, promptTokens = 2048) =>
+    estimatePrefill(
+      LLAMA_31_8B,
+      getQuant('bf16'),
+      { contextTokens: 32768, concurrency, promptTokens, kvPrecision: 'fp16' },
+      { device: RTX_5090, count: 1 },
+      VLLM
+    );
+
+  it('charges every concurrent prompt for the whole batch of compute', () => {
+    // Resident, so streaming is zero and the compute terms are the entire wait: eight prompts is
+    // exactly eight times the arithmetic, and one batched pass has all eight waiting for it.
+    expect(at(8).ttftSeconds / at(1).ttftSeconds).toBeCloseTo(8, 5);
+  });
+
+  it('holds prompt throughput steady while latency grows', () => {
+    // The device processes prompt tokens at the same rate however they are divided among users —
+    // compute-bound work does not amortize. Reporting the drop on the rate instead of the wait
+    // would make a concurrent estimate incomparable with the published single-prompt anchors.
+    expect(at(8).prefillTokensPerSec).toBeCloseTo(at(1).prefillTokensPerSec, 5);
+    expect(at(8).ttftSeconds).toBeGreaterThan(at(1).ttftSeconds);
+  });
+
+  it('keeps each sequence’s attention quadratic in its own length', () => {
+    // Sixteen users sending 2K each is sixteen quadratics over 2K, not one over 32K. Folding the
+    // batch into the prompt length would have made them equal and overstated the concurrent chat
+    // case by the batch factor on the term that already dominates long prompts.
+    const concurrent = at(16, 2048);
+    const single = at(1, 32768);
+
+    expect(concurrent.attentionFlops).toBeLessThan(single.attentionFlops);
+    expect(single.attentionFlops / concurrent.attentionFlops).toBeCloseTo(16, 0);
+    expect(concurrent.ttftSeconds).toBeLessThan(single.ttftSeconds);
+  });
+
+  it('reports what the queue costs, and says nothing when there is no queue', () => {
+    expect(at(1).concurrencyPenalty).toBeUndefined();
+
+    const penalty = at(8).concurrencyPenalty;
+    expect(penalty?.prompts).toBe(8);
+    // The counterfactual is the same estimate with the queue removed, so a caller can attribute
+    // the wait rather than only report it. Resident, so it coincides exactly with a real
+    // concurrency-1 call — see below for the case where it deliberately does not.
+    expect(penalty?.singlePromptTtftSeconds).toBeCloseTo(at(1).ttftSeconds, 6);
+  });
+
+  it('removes the queue at the placement it was given, not at a re-planned one', () => {
+    const rig: Rig = { device: RTX_5090, count: 1 };
+    const usage: UsageSpec = {
+      contextTokens: 32768,
+      concurrency: 8,
+      promptTokens: 2048,
+      kvPrecision: 'fp16',
+    };
+    const placement = planPlacement(QWEN3_32B, getQuant('bf16'), usage, rig, VLLM);
+    expect(placement.offloadFraction).toBeGreaterThan(0);
+
+    const penalty = estimatePrefill(
+      QWEN3_32B,
+      getQuant('bf16'),
+      usage,
+      rig,
+      VLLM,
+      placement
+    ).concurrencyPenalty;
+
+    // Concurrency sizes the KV cache too, so one user would be planned onto a smaller spill and
+    // really would start sooner than this says. The field isolates the queue and leaves the
+    // placement alone — the same contract `offloadPenalty` keeps — so it reads pessimistic here
+    // by design rather than by oversight.
+    const replanned = estimatePrefill(
+      QWEN3_32B,
+      getQuant('bf16'),
+      { ...usage, concurrency: 1 },
+      rig,
+      VLLM,
+      planPlacement(QWEN3_32B, getQuant('bf16'), { ...usage, concurrency: 1 }, rig, VLLM)
+    );
+
+    expect(penalty?.singlePromptTtftSeconds).toBeGreaterThan(replanned.ttftSeconds);
+  });
+
+  it('streams offloaded weights once for the batch, not once per prompt', () => {
+    const usage = (concurrency: number): UsageSpec => ({
+      contextTokens: 8192,
+      concurrency,
+      promptTokens: 2048,
+      kvPrecision: 'fp16',
+    });
+    const rig: Rig = { device: RTX_5090, count: 1 };
+    const spilled = (concurrency: number) => {
+      const u = usage(concurrency);
+      const placement = planPlacement(QWEN3_32B, getQuant('bf16'), u, rig, VLLM);
+      expect(placement.offloadFraction).toBeGreaterThan(0);
+      return estimatePrefill(QWEN3_32B, getQuant('bf16'), u, rig, VLLM, placement);
+    };
+
+    // The batch shares the weights it pulls across the bus, so four prompts cost strictly less
+    // than four separate passes would. Charging the stream per prompt would have made the offload
+    // cliff scale with users and buried the compute term it is supposed to be weighed against.
+    expect(spilled(4).ttftSeconds).toBeLessThan(4 * spilled(1).ttftSeconds);
+  });
+});
+
+/**
  * A bottleneck claim is an instruction: it tells someone which component to spend money on.
  * Both of these named a term that was not the largest, which sends them to fix the wrong thing.
  */

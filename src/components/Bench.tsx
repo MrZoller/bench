@@ -261,8 +261,10 @@ export function Bench() {
         />
       </section>
 
-      {/* The hero, the three answers it does not collapse into one, and what they add up to. */}
-      <BudgetBar evaluation={evaluation} />
+      {/* The hero, the three answers it does not collapse into one, and what they add up to.
+          The bar and the tiles read `canOffload` from the same expression, so they cannot describe
+          one placement two different ways — which they did, over exactly this distinction. */}
+      <BudgetBar evaluation={evaluation} canOffload={device.class === 'discrete-gpu'} />
       <Telemetry
         evaluation={evaluation}
         canOffload={device.class === 'discrete-gpu'}
