@@ -448,6 +448,19 @@ describe('a verdict counts the whole request, not half of it', () => {
     expect(batch.reason).toMatch(/end to end/);
   });
 
+  it('charges every worker its own prompt', () => {
+    // `estimatePrefill` times one pass — it never multiplies FLOPs by concurrency — so scaling
+    // the generated-token numerator by the worker count amortised one prompt across all of them.
+    // On one device the prompts queue; more workers cannot make a prompt-bound job faster than
+    // the device can read prompts.
+    const one = judge(DEEPSEEK_V3, 'q8_0', { device: EPYC_9654, concurrency: 1 }).get('batch')!;
+    const many = judge(DEEPSEEK_V3, 'q8_0', { device: EPYC_9654, concurrency: 32 }).get('batch')!;
+
+    // A prompt-bound job does not improve its grade by adding workers.
+    const rank = { good: 2, tight: 1, fail: 0 };
+    expect(rank[many.fitness]).toBeLessThanOrEqual(rank[one.fitness]);
+  });
+
   it('will not call RAG usable when the answer takes minutes', () => {
     // Prefill is only half the request: a RAG-sized cache that decodes at a crawl still has to
     // write the reply, and grading on TTFT alone printed the prefill rate as though that were
@@ -497,6 +510,17 @@ describe('the reason names the constraint that actually bound', () => {
 
     expect(completion.fitness).toBe('tight');
     expect(completion.reason).toMatch(/28 tok\/s/);
+  });
+
+  it('names the answer rate when the answer is what downgraded RAG', () => {
+    // Between 5 and 10 tok/s with a quick prefill, the row is tight solely on the answer — and
+    // reported only how fast it read the document, which is the pass-shaped half.
+    const verdicts = judged(400_000, 7, 1);
+    const rag = verdicts.get('rag')!;
+
+    if (rag.fitness === 'tight') {
+      expect(rag.reason).toMatch(/7\.0 tok\/s/);
+    }
   });
 
   it('never floors a missed latency onto the limit it missed', () => {

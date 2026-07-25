@@ -199,9 +199,18 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
    */
   const batchAggregate = () => {
     const { decode, prefill } = at('batch');
-    const perWorker = decode.aggregateTokensPerSec / Math.max(1, usage.concurrency);
-    const seconds = prefill.ttftSeconds + RESPONSE_ALLOWANCE / Math.max(perWorker, 1e-9);
-    return seconds > 0 ? (RESPONSE_ALLOWANCE * usage.concurrency) / seconds : 0;
+    const workers = Math.max(1, usage.concurrency);
+
+    // Every worker brings its own prompt, and `estimatePrefill` times *one* pass — it computes
+    // FLOPs from `promptTokens` alone and never multiplies by concurrency. Charging a single
+    // prefill against a numerator scaled by the worker count amortised one prompt across all of
+    // them, which flatters a prompt-bound job by up to that factor. They share one device, so
+    // the prompts queue rather than overlapping.
+    const prefillSeconds = prefill.ttftSeconds * workers;
+    const decodeSeconds =
+      (RESPONSE_ALLOWANCE * workers) / Math.max(decode.aggregateTokensPerSec, 1e-9);
+    const seconds = prefillSeconds + decodeSeconds;
+    return seconds > 0 ? (RESPONSE_ALLOWANCE * workers) / seconds : 0;
   };
 
   /**
@@ -321,7 +330,11 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
             ? `${secs(ragPrefill.ttftSeconds)}s to read a 32K document before answering.`
             : rateOf('rag') < 5
               ? `Reads the document in ${secs(ragPrefill.ttftSeconds)}s, then answers at ${fmt(rateOf('rag'))} tok/s — minutes for a short reply.`
-              : `${Math.round(ragPrefill.prefillTokensPerSec)} tok/s prompt processing — ${secs(ragPrefill.ttftSeconds)}s for a 32K document.`,
+              : rateOf('rag') < 10
+                ? // Tight on the answer alone, so the prompt figure alone would read as a pass.
+                  // Same branch completion needed, for the same reason, one archetype over.
+                  `Reads the document in ${secs(ragPrefill.ttftSeconds)}s, but answers at only ${fmt(rateOf('rag'))} tok/s.`
+                : `${Math.round(ragPrefill.prefillTokensPerSec)} tok/s prompt processing — ${secs(ragPrefill.ttftSeconds)}s for a 32K document.`,
     }),
     judge('long-context', {
       // Offload-aware: the resident figure is zero for any spilled configuration, which would

@@ -195,6 +195,20 @@ export function normalizeRig(rig: Rig): Rig {
  * separate opinions is how the memory panel came to say every card holds the whole MLA latent
  * while the speed panel charged one eighth of it.
  */
+/**
+ * How many ways the *weights* divide.
+ *
+ * Tensor parallelism splits every tensor, so any degree works. A layer split hands out whole
+ * layers, so the busiest card holds `ceil(layers / shards)` of them — the same ceiling `kvShards`
+ * applies, because under a layer split the two quantities travel together and rounding only one
+ * of them up describes a machine that does not exist.
+ */
+export function weightShards(model: ModelSpec, shards: number, runtime?: RuntimeSpec): number {
+  if (shards <= 1) return 1;
+  if (runtime?.parallelism !== 'layer') return shards;
+  return model.layers / Math.ceil(model.layers / shards);
+}
+
 export function kvShards(model: ModelSpec, shards: number, runtime?: RuntimeSpec): number {
   if (shards <= 1) return 1;
   // A layer split replicates nothing — a card that holds layer 7 holds all of layer 7's cache
@@ -202,9 +216,7 @@ export function kvShards(model: ModelSpec, shards: number, runtime?: RuntimeSpec
   // model on 8 cards puts 5 layers on some and 4 on others, so the busiest card holds a ninth
   // more than an even split would suggest. Same ceiling as the head axis below, on a different
   // quantity: assuming it divides cleanly is optimistic in the direction that reports a fit.
-  if (runtime?.parallelism === 'layer') {
-    return model.layers / Math.ceil(model.layers / shards);
-  }
+  if (runtime?.parallelism === 'layer') return weightShards(model, shards, runtime);
 
   const core = model.attention.core;
   if (core.kind === 'mla') return 1;
@@ -234,10 +246,14 @@ export function planPlacement(
   );
   const activations = activationBytes(model, usage, runtime);
 
-  // Tensor parallelism shards weights evenly; activations are per-device, not shared. KV is the
-  // exception and gets its own divisor — see `kvShards`.
+  // Activations are per-device rather than shared. Weights and KV each get a divisor, and under
+  // a layer split it is the *same* divisor: a card that owns a layer owns both its parameters
+  // and its cache, so an indivisible layer count rounds them up together. Dividing weights
+  // evenly while rounding KV up was the half-fix — 61 DeepSeek layers over two B200s is 31/30,
+  // and the even split reported 175.4 GiB under a 178 GiB ceiling for a card really holding
+  // 178.3.
   const shards = rig.count;
-  const weightBytesPerDevice = totalWeightBytes / shards;
+  const weightBytesPerDevice = totalWeightBytes / weightShards(model, shards, runtime);
   const kvBytesPerDevice = totalKvBytes / kvShards(model, shards, runtime);
   const usedBytesPerDevice = weightBytesPerDevice + kvBytesPerDevice + activations;
 
