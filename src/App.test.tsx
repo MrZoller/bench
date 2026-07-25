@@ -485,3 +485,25 @@ describe('the Matrix stays informative', () => {
     expect(fills()).not.toEqual(byFit);
   });
 });
+
+describe('clicking a Matrix cell loads what that cell was scored under', () => {
+  it('carries the quantization the cell was evaluated at, not the one selected', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Default is MXFP4, which the Matrix substitutes for dense rows — so the grid and the Bench
+    // would otherwise disagree about the square that was just clicked.
+    expect(useConfig.getState().quantId).toBe('mxfp4');
+
+    const matrix = screen.getByRole('region', { name: /Every model on every machine/i });
+    const dense = within(matrix)
+      .getAllByRole('button', { name: /Qwen3 32B on / })
+      .at(0)!;
+    await user.click(dense);
+
+    const after = useConfig.getState();
+    expect(after.modelId).toBe('Qwen/Qwen3-32B');
+    expect(after.quantId).not.toBe('mxfp4');
+    expect(after.deviceCount).toBe(1);
+  });
+});

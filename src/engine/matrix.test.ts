@@ -139,3 +139,41 @@ describe('the model-by-device grid', () => {
     }
   });
 });
+
+/**
+ * A row must be scored at a context its own model can accept. `maxContext` differs across the
+ * grid and neither placement nor decode knows about it, so an unclamped request produced fit
+ * and speed figures for something the model would refuse.
+ */
+describe('per-row context limits', () => {
+  it('caps each row at its own model, not at the request', () => {
+    const cells = computeMatrix({
+      models: [LLAMA_31_8B, DEEPSEEK_V3],
+      devices: [RTX_5090],
+      quantFor: () => getQuant('q4_k_m'),
+      runtime: LLAMA_CPP,
+      usage: { ...USAGE, contextTokens: 1_000_000, promptTokens: 900_000 },
+      deviceCount: 1,
+    });
+
+    for (const row of cells) {
+      for (const cell of row) {
+        const model = [LLAMA_31_8B, DEEPSEEK_V3].find((m) => m.id === cell.modelId)!;
+        expect(cell.contextTokens).toBe(model.maxContext);
+        expect(cell.contextTokens).toBeLessThan(1_000_000);
+      }
+    }
+  });
+
+  it('leaves a request inside every model limit untouched', () => {
+    const cells = computeMatrix({
+      models: [LLAMA_31_8B],
+      devices: [RTX_5090],
+      quantFor: () => getQuant('q4_k_m'),
+      runtime: LLAMA_CPP,
+      usage: { ...USAGE, contextTokens: 8192 },
+      deviceCount: 1,
+    });
+    expect(cells[0][0].contextTokens).toBe(8192);
+  });
+});

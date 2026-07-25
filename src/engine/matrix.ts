@@ -22,6 +22,8 @@ export interface MatrixCell {
   deviceId: string;
   /** Which format this cell was actually evaluated at — not always the one selected. */
   quantId: string;
+  /** The context it was evaluated at, capped at this model's own limit. */
+  contextTokens: number;
   /** False when the pair cannot run at all — no measure is meaningful then. */
   runs: boolean;
   /** Why not, when it does not. */
@@ -56,9 +58,27 @@ export function computeMatrix(request: MatrixRequest): MatrixCell[][] {
   return models.map((model) =>
     devices.map((device) => {
       const quant = quantFor(model, device);
-      const base = { modelId: model.id, deviceId: device.id, quantId: quant.id };
+      /**
+       * Clamped per row, because `maxContext` differs across the grid — 32K on some models,
+       * 164K on others — and neither `planPlacement` nor `estimateDecode` knows about it. Left
+       * unclamped, a 40K model was scored for a 128K request it cannot accept, and clicking
+       * that cell then produced different numbers in the Bench, where `coerce` does clamp.
+       */
+      const contextTokens = Math.min(usage.contextTokens, model.maxContext);
+      const cellUsage: UsageSpec = {
+        ...usage,
+        contextTokens,
+        promptTokens: Math.min(usage.promptTokens ?? contextTokens, contextTokens),
+      };
+
+      const base = {
+        modelId: model.id,
+        deviceId: device.id,
+        quantId: quant.id,
+        contextTokens,
+      };
       const rig = { device, count: deviceCount };
-      const placement = planPlacement(model, quant, usage, rig, runtime);
+      const placement = planPlacement(model, quant, cellUsage, rig, runtime);
 
       if (placement.unsupported || placement.impossible) {
         return {
@@ -72,8 +92,8 @@ export function computeMatrix(request: MatrixRequest): MatrixCell[][] {
         };
       }
 
-      const decode = estimateDecode(model, quant, usage, rig, runtime, placement);
-      const prefill = estimatePrefill(model, quant, usage, rig, runtime, placement);
+      const decode = estimateDecode(model, quant, cellUsage, rig, runtime, placement);
+      const prefill = estimatePrefill(model, quant, cellUsage, rig, runtime, placement);
 
       return {
         ...base,

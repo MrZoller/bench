@@ -199,10 +199,21 @@ export function Matrix({ config }: { config: Config }) {
                   <td key={devices[c].id} className="p-0">
                     <button
                       type="button"
-                      // Clicking loads the pair into the Bench, which is where the detail lives.
+                      /**
+                       * Loads the *whole* scenario the cell was scored under, not just the pair.
+                       *
+                       * Setting only model and device meant a dense-model cell scored at the
+                       * Q4_K_M substitute landed in a Bench still holding MXFP4 — which `coerce`
+                       * then replaced with BF16, so the grid and the detail view disagreed about
+                       * the same square. The context and the single-device count matter for the
+                       * same reason.
+                       */
                       onClick={() => {
                         set('modelId', cell.modelId);
                         set('deviceId', cell.deviceId);
+                        set('quantId', cell.quantId);
+                        set('deviceCount', 1);
+                        set('contextTokens', cell.contextTokens);
                       }}
                       title={tooltip(cell, measure, quant.id)}
                       aria-label={tooltip(cell, measure, quant.id)}
