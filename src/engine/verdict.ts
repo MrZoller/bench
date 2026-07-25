@@ -21,6 +21,15 @@ import type { Placement } from './placement';
 
 export type Fitness = 'good' | 'tight' | 'fail';
 
+/**
+ * Room a workload needs for its answer, on top of its prompt.
+ *
+ * `UsageSpec.contextTokens` covers prompt *and* generation, so a 32,768-token document on a
+ * model capped at 32,768 leaves nowhere to reply from. Small, because these archetypes ask
+ * short questions of long inputs — but not zero, which is what the fit checks assumed.
+ */
+const RESPONSE_ALLOWANCE = 512;
+
 export interface Workload {
   id: string;
   label: string;
@@ -145,7 +154,7 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
   const completionTtft = ttftFor('completion');
   const agentTtft = ttftFor('agent');
   const ragPrefill = prefillAt(workload('rag').typicalPromptTokens);
-  const ragFits = runnableContextTokens >= workload('rag').typicalPromptTokens;
+  const ragFits = runnableContextTokens >= workload('rag').typicalPromptTokens + RESPONSE_ALLOWANCE;
 
   return [
     judge('chat', {
@@ -201,8 +210,8 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
     judge('long-context', {
       // Offload-aware: the resident figure is zero for any spilled configuration, which would
       // fail a card that holds 128K of KV perfectly well once its weights are on the host.
-      pass: runnableContextTokens >= 131072,
-      tight: runnableContextTokens >= 65536,
+      pass: runnableContextTokens >= 131072 + RESPONSE_ALLOWANCE,
+      tight: runnableContextTokens >= 65536 + RESPONSE_ALLOWANCE,
       why: () =>
         runnableContextTokens < 65536
           ? `Caps out at ${ctx(runnableContextTokens)} — short of the 128K these jobs assume.`
@@ -249,8 +258,20 @@ function fmt(value: number): string {
   return value >= 10 ? Math.round(value).toString() : value.toFixed(1);
 }
 
+/**
+ * A context length, never rounded *up*.
+ *
+ * These figures come from a token-by-token binary search, so they land anywhere — and rounding
+ * 32,700 to "32K" produced the self-contradiction "Only 32K of context fits — not enough for
+ * the 32K document". Exact multiples read as whole units; anything else keeps a decimal, floored,
+ * so a shortfall always looks like one.
+ */
 function ctx(tokens: number): string {
-  if (tokens >= 1e6) return `${(tokens / 1e6).toFixed(1)}M`;
-  if (tokens >= 1024) return `${Math.round(tokens / 1024)}K`;
-  return String(tokens);
+  const unit = tokens >= 1e6 ? 1e6 : 1024;
+  const suffix = unit === 1e6 ? 'M' : 'K';
+  if (tokens < 1024) return String(tokens);
+
+  const scaled = tokens / unit;
+  if (Number.isInteger(scaled)) return `${scaled}${suffix}`;
+  return `${(Math.floor(scaled * 10) / 10).toFixed(1)}${suffix}`;
 }

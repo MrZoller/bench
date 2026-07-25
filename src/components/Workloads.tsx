@@ -36,12 +36,34 @@ export function Workloads({ evaluation, config }: { evaluation: Evaluation; conf
     },
     maxContextTokens: evaluation.maxContextTokens,
     runnableContextTokens: evaluation.runnableContextTokens,
-    // Graded at each archetype's own prompt, so this strip does not move when the prompt
-    // slider does — a completion popup sends what it sends regardless of the current setting.
-    prefillAt: (promptTokens) => evaluateConfig({ ...config, promptTokens }).prefill,
+    /**
+     * Graded at each archetype's own prompt, so this strip does not move when the prompt slider
+     * does — a completion popup sends what it sends regardless of the current setting.
+     *
+     * The context is raised with it. Changing only the prompt left placement planned for the
+     * smaller slider context while prefill was estimated for a 32K RAG request: if that larger
+     * request would spill weights, its TTFT omitted the offload penalty entirely and could be
+     * graded usable on resident performance it cannot reach.
+     */
+    prefillAt: (promptTokens) =>
+      evaluateConfig({
+        ...config,
+        promptTokens,
+        contextTokens: Math.max(config.contextTokens, promptTokens),
+      }).prefill,
   });
 
   const usable = verdicts.filter((v) => v.fitness !== 'fail').length;
+
+  /**
+   * When nothing can run, every row carries the same sentence — so it is said once, above the
+   * list, and the rows keep only their status. Seven identical explanations read as seven
+   * separate problems.
+   */
+  const sharedReason =
+    verdicts.every((v) => v.fitness === 'fail') && new Set(verdicts.map((v) => v.reason)).size === 1
+      ? verdicts[0].reason
+      : undefined;
 
   return (
     <section aria-labelledby={headingId} className="panel p-5">
@@ -54,6 +76,13 @@ export function Workloads({ evaluation, config }: { evaluation: Evaluation; conf
           workloads
         </p>
       </header>
+
+      {sharedReason && (
+        <p className="mt-3 text-sm text-[var(--color-critical)]">
+          <span aria-hidden="true">▲ </span>
+          {sharedReason}
+        </p>
+      )}
 
       <ul className="mt-4 flex flex-col gap-2">
         {verdicts.map(({ workload, fitness, reason }) => {
@@ -77,7 +106,13 @@ export function Workloads({ evaluation, config }: { evaluation: Evaluation; conf
               </span>
 
               <span className="order-3 col-span-2 text-xs leading-relaxed text-[var(--color-text-muted)] sm:order-none sm:col-span-1">
-                {expanded ? `${workload.description} ${reason}` : reason}
+                {sharedReason
+                  ? expanded
+                    ? workload.description
+                    : ''
+                  : expanded
+                    ? `${workload.description} ${reason}`
+                    : reason}
               </span>
             </li>
           );
