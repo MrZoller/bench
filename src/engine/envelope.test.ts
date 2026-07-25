@@ -9,12 +9,14 @@ import {
   DGX_SPARK,
   EPYC_9654,
   GPT_OSS_20B,
+  GPT_OSS_120B,
   DEEPSEEK_V3,
   LLAMA_31_8B,
   LLAMA_CPP,
   MAC_STUDIO_M3_ULTRA_512,
   MLX,
   RTX_5090,
+  STRIX_HALO_395,
 } from './fixtures';
 import { getQuant } from '@/data/quants';
 
@@ -184,6 +186,22 @@ describe('the feasibility region', () => {
     expect(Math.max(...allocation.map((c) => c.utilization))).toBeLessThan(
       Math.min(...capacity.map((c) => c.utilization))
     );
+  });
+
+  it('will not offer to raise a ceiling that is already at its maximum', () => {
+    // The Ryzen has 128 GiB physically and Variable Graphics Memory exposes 96 — which is its
+    // catalogued default too, so nothing can be raised. Comparing against physical capacity
+    // instead of the platform maximum told the user to change a setting that will not move.
+    const grid = envelope({
+      model: GPT_OSS_120B,
+      quant: getQuant('q8_0'),
+      rig: { device: STRIX_HALO_395, count: 1 },
+      runtime: LLAMA_CPP,
+    });
+
+    const closed = grid.cells.flat().filter((c) => c.state === 'over');
+    expect(closed.length).toBeGreaterThan(0);
+    expect(closed.every((c) => c.overBecause === 'capacity')).toBe(true);
   });
 
   it('still blames the hardware when the ceiling is not the thing in the way', () => {

@@ -760,3 +760,29 @@ describe('the capacity tile does not promise context a model cannot take', () =>
     expect(within(verdicts).getByText(/Room to grow/i)).toBeInTheDocument();
   });
 });
+
+/**
+ * "Comfortable" promises the answer starts promptly, and the tile beside it calls anything past
+ * two seconds "Noticeable" in amber. A ten-second threshold here left the two disagreeing.
+ */
+describe('the region and the latency tile agree about promptness', () => {
+  it('does not paint a cell green while the tile warns about its wait', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'epyc-9654');
+
+    const verdicts = screen.getByRole('region', { name: 'Verdicts' });
+    const warned =
+      within(verdicts).queryByText('Noticeable') !== null ||
+      within(verdicts).queryByText('Slow start') !== null;
+
+    if (warned) {
+      const region = screen.getByRole('region', { name: /how much room/i });
+      await user.click(within(region).getByRole('button', { name: /region as a table/i }));
+      const marked = within(region).getByText(/▸/).closest('td')?.textContent ?? '';
+      expect(marked).not.toMatch(/^\s*▸?\s*Comfortable/);
+    }
+  });
+});
