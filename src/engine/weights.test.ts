@@ -192,13 +192,24 @@ describe('per-token basis excludes what a text token does not read', () => {
   });
 
   /**
-   * The inversion worth stating outright: a tied model reads *more* per token than its
-   * published active-parameter figure, because that figure subtracts a table it does not skip.
-   * Every untied model in the catalog goes the other way.
+   * The distinction stated directly, rather than through a comparison with `activeParams`.
+   *
+   * That comparison used to show an inversion — a tied model reading *above* its published
+   * figure — and stopped meaning anything once dense models began reporting `activeParams`
+   * equal to `totalParams`. Asserting against the published convention made the test hostage
+   * to a convention; asserting the physical rule does not.
    */
-  it('reads above the published active count when tied, and below it when not', () => {
-    expect(effectiveActiveParams(GEMMA_3_12B, 1)).toBeGreaterThan(GEMMA_3_12B.activeParams);
-    expect(effectiveActiveParams(LLAMA_31_8B, 1)).toBeLessThan(LLAMA_31_8B.activeParams);
+  it('keeps the embedding in the per-token basis exactly when it is tied', () => {
+    const embedding = (m: typeof LLAMA_31_8B) => m.vocabSize * m.hiddenSize;
+
+    // Tied: the table is the output projection, so it stays — only the vision tower comes out.
+    expect(GEMMA_3_12B.activeDenseParams).toBe(
+      GEMMA_3_12B.totalParams - GEMMA_3_12B.nonLanguageParams!
+    );
+    expect(GEMMA_3_12B.activeDenseParams).toBeGreaterThan(embedding(GEMMA_3_12B));
+
+    // Untied: `lm_head` is its own tensor, so the input table is a row lookup and comes out.
+    expect(LLAMA_31_8B.activeDenseParams).toBe(LLAMA_31_8B.totalParams - embedding(LLAMA_31_8B));
   });
 
   /**

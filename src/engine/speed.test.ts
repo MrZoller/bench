@@ -105,12 +105,11 @@ describe('calibration against published benchmarks', () => {
     // The 5090 lists 419 TFLOP fp16 and 838 TFLOP fp8.
     expect(fp8.prefillTokensPerSec / bf16.prefillTokensPerSec).toBeCloseTo(2, 1);
 
-    // NVFP4 asks for an fp4 rate the 5090 fixture does not publish. It must drop to fp16, not
-    // borrow the fp8 rate: a card without FP4 tensor cores runs a Blackwell-native format
-    // dequantized, and lending it 2x fp16 would report an unreachable throughput.
+    // The 5090 has real FP4 tensor cores at 4x fp16, so NVFP4 — a uniform format — gets them.
+    // The no-fallback rule is asserted separately, against cards that genuinely lack the units.
     const nvfp4 = estimatePrefill(QWEN3_32B, getQuant('nvfp4'), usage, rig, VLLM);
-    expect(nvfp4.prefillTokensPerSec).toBeCloseTo(bf16.prefillTokensPerSec, 0);
-    expect(nvfp4.prefillTokensPerSec).toBeLessThan(fp8.prefillTokensPerSec * 0.75);
+    expect(nvfp4.prefillTokensPerSec / bf16.prefillTokensPerSec).toBeCloseTo(4, 0);
+    expect(nvfp4.prefillTokensPerSec).toBeGreaterThan(fp8.prefillTokensPerSec);
   });
 
   it('charges sliding-window layers linear rather than quadratic prefill attention', () => {
@@ -374,10 +373,8 @@ describe('precision fallbacks never invent silicon', () => {
  */
 describe('expert-only formats are timed at two rates', () => {
   // A real Blackwell shape: FP4 units present at 4x fp16.
-  const blackwell: DeviceSpec = {
-    ...RTX_5090,
-    flops: { fp16: 419 * TFLOP, fp8: 838 * TFLOP, fp4: 1676 * TFLOP },
-  };
+  // The 5090 fixture already carries real FP4 rates; named for what the test is about.
+  const blackwell = RTX_5090;
   const rate = (model: typeof QWEN3_32B, quantId: string) =>
     estimatePrefill(
       model,
@@ -412,10 +409,8 @@ describe('expert-only formats are timed at two rates', () => {
  * being comparable and the attention/linear bound has to be judged on time.
  */
 describe('the prefill bound is judged on time, not FLOPs', () => {
-  const blackwell: DeviceSpec = {
-    ...RTX_5090,
-    flops: { fp16: 419 * TFLOP, fp8: 838 * TFLOP, fp4: 1676 * TFLOP },
-  };
+  // The 5090 fixture already carries real FP4 rates; named for what the test is about.
+  const blackwell = RTX_5090;
 
   it('reports attention-bound when attention costs more time than the linear layers', () => {
     const result = estimatePrefill(
