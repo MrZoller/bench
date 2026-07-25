@@ -335,8 +335,31 @@ export interface RuntimeSpec {
    * Per-entry vendors are the smallest thing that expresses both.
    */
   supports: readonly { class: DeviceClass; vendor?: string }[];
+  /**
+   * How this runtime spreads a model over several devices, which decides how the cache divides.
+   *
+   * `tensor` shards every layer across every card, so KV divides by attention head and stops
+   * when each rank holds one — and an MLA latent, having no head axis, is replicated whole.
+   * `layer` gives each card entire layers and their entire KV buffers, so everything divides by
+   * the device count with no exception. vLLM defaults to the first, llama.cpp and Ollama to the
+   * second, and applying one layout to both rejects rigs that work.
+   */
+  parallelism: 'tensor' | 'layer';
   /** KV cache dtypes the runtime can actually store. */
   kvPrecisions: readonly KvPrecision[];
+  /**
+   * Bytes per cached element where this runtime's format costs more than its nominal width.
+   *
+   * `KV_BYTES` is the nominal figure and it is exact for a float format — vLLM's FP8 really is
+   * one byte. It is not exact for llama.cpp, whose `q8_0` and `q4_0` KV store 32-element blocks
+   * with a 2-byte scale attached: 34/32 and 18/32 bytes per element, the same block-metadata
+   * overhead `quants.ts` already documents on the weight side.
+   *
+   * 6% and 12% sound ignorable and are not, because the cache is what pushes a configuration
+   * over: Qwen3 4B at Q8_0 on a 4090 at 32K by eight users read 22.6 GiB against a 23 GiB
+   * ceiling and "fits", where the real layout needs 23.7 and has to offload.
+   */
+  kvBytesPerElement?: Partial<Record<KvPrecision, number>>;
   /**
    * What this runtime *calls* a precision, where its own name differs from the generic one.
    *

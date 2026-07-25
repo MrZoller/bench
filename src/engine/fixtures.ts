@@ -332,7 +332,10 @@ export const LLAMA_CPP: RuntimeSpec = {
   computeEfficiency: 0.12,
   nativeLowPrecision: false,
   supports: [{ class: 'discrete-gpu' }, { class: 'unified-soc' }, { class: 'cpu-ram' }],
+  parallelism: 'layer',
   kvPrecisions: ['fp16', 'q8', 'q4'],
+  // q8_0/q4_0 KV blocks carry a 2-byte scale per 32 elements.
+  kvBytesPerElement: { q8: 34 / 32, q4: 18 / 32 },
   source: 'https://github.com/ggml-org/llama.cpp',
 };
 
@@ -347,6 +350,7 @@ export const VLLM: RuntimeSpec = {
   // Reserves a fixed fraction of the device up front regardless of what the model needs.
   preallocFraction: 0.9,
   supports: [{ class: 'discrete-gpu' }, { class: 'unified-soc', vendor: 'NVIDIA' }],
+  parallelism: 'tensor',
   kvPrecisions: ['fp16', 'q8'],
   // One byte per element, but vLLM spells it fp8_e4m3 and has no integer option.
   kvLabels: { q8: 'FP8' },
@@ -362,6 +366,7 @@ export const MLX: RuntimeSpec = {
   nativeLowPrecision: false,
   // Class is too coarse here: `unified-soc` also covers the DGX Spark and Strix Halo.
   supports: [{ class: 'unified-soc', vendor: 'Apple' }],
+  parallelism: 'layer',
   kvPrecisions: ['fp16', 'q8'],
   source: 'https://github.com/ml-explore/mlx',
 };
