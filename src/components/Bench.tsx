@@ -1,5 +1,7 @@
-import { useMemo } from 'react';
-import { DEVICES, MODELS, RUNTIMES, evaluateConfig, useConfig } from '@/store/config';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { DEVICES, MODELS, RUNTIMES, evaluateConfig, useConfig, type Config } from '@/store/config';
+import { useUrlSync } from '@/store/useUrlSync';
+import { configToShareSearch } from '@/store/url';
 import { getRuntime, runtimeDrives } from '@/data/runtimes';
 import { QUANTS } from '@/data/quants';
 import { CATALOG_GENERATED_AT, getDevice, getModel } from '@/data/catalog';
@@ -41,6 +43,7 @@ const KV_PRECISIONS: readonly { value: KvPrecision; label: string }[] = [
 
 export function Bench() {
   const config = useConfig();
+  useUrlSync();
   const set = useConfig((s) => s.set);
 
   const evaluation = useMemo(() => evaluateConfig(config), [config]);
@@ -223,6 +226,7 @@ export function Bench() {
             What runs on your hardware, and how comfortably.
           </p>
         </div>
+        <ShareLink />
         <p className="max-w-md text-xs leading-relaxed text-[var(--color-text-faint)]">
           Estimates from a roofline model calibrated against published measurements. Treat them as a
           band, not a promise. Model catalog generated{' '}
@@ -377,6 +381,143 @@ export function Bench() {
             </p>
           )}
         </aside>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Copies a link that names the scenario in full.
+ *
+ * Not `location.href`: the address bar is deliberately bare on an untouched default page, because
+ * it claims nothing there. A copied link always claims something — it says "this is what I was
+ * looking at" — so every field is written out and the link cannot drift when a default moves.
+ * `configToShareSearch` is the same encoder the address bar uses, minus the empty case, so there
+ * is still only one place that knows the format.
+ */
+function ShareLink() {
+  const config = useConfig();
+  const [state, setState] = useState<'idle' | 'copied' | 'unavailable'>('idle');
+
+  /**
+   * Derived, not captured.
+   *
+   * Holding the link in state froze it at the click that revealed the field: adjusting any
+   * control afterwards left the still-visible input offering the previous scenario, so a manual
+   * copy shared something the user was no longer looking at. That is the same class of bug the
+   * full encoding exists to prevent — a link that means something other than it appears to.
+   */
+  const href = `${window.location.origin}${window.location.pathname}${configToShareSearch(
+    config as Config
+  )}`;
+
+  /**
+   * Cleared whenever a new attempt starts.
+   *
+   * Without that, a second click during the two-second confirmation window inherits the first
+   * click's timer: if the second write is refused, the fallback field appears and then the stale
+   * timeout resets to `idle` and removes it. A transient failure would go silent within two
+   * seconds of being reported.
+   */
+  const resetTimer = useRef<number | undefined>(undefined);
+
+  /**
+   * Which attempt the pending clipboard callbacks belong to.
+   *
+   * Clearing `resetTimer` cancels the previous attempt's *timer* and nothing else — the promise
+   * from the earlier `writeText` is still in flight and still holds its `then`. So two overlapping
+   * clicks could finish out of order: the second is refused and reveals the manual-copy field,
+   * then the first resolves and reports success, which unmounts the field on the spot — it renders
+   * only under `unavailable`. The user is told a copy succeeded, the fallback disappears, and the
+   * clipboard holds the link from whichever attempt happened to win — which after a slider move is
+   * not the one on screen. The reverse order is worse and `clearTimeout` cannot reach it at all:
+   * an earlier success schedules its reset *after* the later click cleared the timer, so a real
+   * refusal is erased two seconds later with nothing to cancel it.
+   *
+   * A counter rather than an `AbortController`: `writeText` is not abortable, so the write cannot
+   * be stopped, only disowned. That is the honest shape of it — the browser may well still copy
+   * the old link, and what this guarantees is that the UI never reports a result that a later
+   * click has superseded.
+   */
+  const attempt = useRef(0);
+
+  /**
+   * Selected once, when the field first appears.
+   *
+   * A callback ref is recreated on every render, so React re-invoked it on every configuration
+   * change and `select()` pulled focus off whatever control the user was operating. A keyboard
+   * user could press an arrow key once and then lose the control — the fallback for one
+   * accessibility problem creating a worse one.
+   */
+  const fieldRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (state === 'unavailable') fieldRef.current?.select();
+  }, [state]);
+
+  useEffect(() => () => window.clearTimeout(resetTimer.current), []);
+
+  const label =
+    state === 'copied'
+      ? 'Link copied'
+      : state === 'unavailable'
+        ? 'Copy it from here'
+        : 'Copy link to this scenario';
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        onClick={() => {
+          /**
+           * `navigator.clipboard` is undefined on non-secure origins and in some embedded
+           * browsers, and the optional chain meant the button did nothing at all there while
+           * still looking like it had worked — the worst of the three possible outcomes.
+           *
+           * The fallback is the link itself, selected and ready for a manual copy. No
+           * `document.execCommand('copy')`: it is deprecated, it needs a selection in the
+           * document anyway, and it fails silently in exactly the same contexts.
+           */
+          window.clearTimeout(resetTimer.current);
+          const id = ++attempt.current;
+          const superseded = () => attempt.current !== id;
+
+          const writer = navigator.clipboard?.writeText(href);
+          if (writer === undefined) {
+            setState('unavailable');
+            return;
+          }
+
+          void writer.then(
+            () => {
+              if (superseded()) return;
+              setState('copied');
+              resetTimer.current = window.setTimeout(() => setState('idle'), 2000);
+            },
+            // A rejected write — permission denied, document not focused — lands here, and
+            // means the same thing to the user as no API at all.
+            () => {
+              if (superseded()) return;
+              setState('unavailable');
+            }
+          );
+        }}
+        className="rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-accent)] hover:border-[var(--color-accent-dim)]"
+      >
+        {/* aria-live so the confirmation is announced, not just seen. */}
+        <span aria-live="polite">{label}</span>
+      </button>
+
+      {state === 'unavailable' && (
+        <input
+          readOnly
+          aria-label="Link to this scenario"
+          value={href}
+          // Select on focus so one keystroke copies it — the closest thing to the button
+          // working that a browser without clipboard access allows.
+          onFocus={(e) => e.currentTarget.select()}
+          ref={fieldRef}
+          className="min-w-0 flex-1 rounded-md border border-[var(--color-border)] bg-transparent px-2 py-1.5 text-xs text-[var(--color-text-muted)]"
+        />
       )}
     </div>
   );

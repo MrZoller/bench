@@ -1,8 +1,9 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 import { useConfig, DEFAULT_CONFIG } from '@/store/config';
+import { configToShareSearch } from '@/store/url';
 import { getModel } from '@/data/catalog';
 import { tokens } from '@/lib/format';
 
@@ -424,6 +425,137 @@ describe('the Bench and its tiles cannot disagree', () => {
 });
 
 /**
+ * The share button is the distribution mechanism, so its failure modes matter more than most.
+ * Both of these were silent: no clipboard meant the button did nothing while looking like it
+ * had worked, and an unthrottled history write can throw on a dragged slider.
+ */
+describe('sharing a scenario degrades honestly', () => {
+  const clipboard = navigator.clipboard;
+
+  afterEach(() => {
+    Object.defineProperty(navigator, 'clipboard', { value: clipboard, configurable: true });
+  });
+
+  it('offers the link for manual copying when there is no clipboard API', async () => {
+    const user = userEvent.setup();
+    // After `setup`, which installs its own clipboard stub. Undefined is what a non-secure
+    // origin or an embedded browser actually gives you.
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: /Copy link to this scenario/i }));
+
+    const field = screen.getByLabelText('Link to this scenario') as HTMLInputElement;
+    expect(field.value).toMatch(/\?m=/);
+    expect(screen.queryByText('Link copied')).not.toBeInTheDocument();
+  });
+
+  it('keeps the fallback link current when the scenario changes underneath it', async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: /Copy link to this scenario/i }));
+
+    const field = () => screen.getByLabelText('Link to this scenario') as HTMLInputElement;
+    expect(field().value).not.toContain('rtx-5080');
+
+    // The field stays on screen; the scenario moves. Holding the link in state left it offering
+    // whatever was selected at the click, so a manual copy shared the wrong configuration.
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5080');
+    expect(field().value).toContain('rtx-5080');
+  });
+
+  it('does not steal focus back on every later change', async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: /Copy link to this scenario/i }));
+
+    // The field is shown and selected. From here the user goes back to the controls — and a
+    // callback ref recreated each render pulled focus straight back, so a keyboard user could
+    // press an arrow key once and then lose the control they were operating.
+    const users = screen.getByLabelText('Concurrent users');
+    users.focus();
+    fireEvent.change(users, { target: { value: '4' } });
+
+    expect(document.activeElement).toBe(users);
+  });
+
+  it('says so rather than silently failing when the write is refused', async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: () => Promise.reject(new Error('denied')) },
+      configurable: true,
+    });
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: /Copy link to this scenario/i }));
+
+    expect(await screen.findByLabelText('Link to this scenario')).toBeInTheDocument();
+  });
+
+  it('survives a browser that refuses a history write, and stops retrying it', async () => {
+    const replaceState = window.history.replaceState;
+    let attempts = 0;
+    window.history.replaceState = () => {
+      attempts += 1;
+      throw new DOMException('throttled', 'SecurityError');
+    };
+    try {
+      const user = userEvent.setup();
+      // Rendering alone writes the URL, and a throw there would take the app down.
+      const view = render(<App />);
+      await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+      expect(screen.getByRole('region', { name: 'Verdicts' })).toBeInTheDocument();
+
+      // A catch that reschedules itself is a timer that never stops while the browser keeps
+      // refusing — and the early-return path used to leave that chain running past unmount.
+      view.unmount();
+      const afterUnmount = attempts;
+      // Long enough for several retry intervals. A timer that escapes cleanup shows up here as
+      // a further attempt — and in CI showed up as `window is not defined` after teardown, from
+      // a suite where every test passed.
+      await new Promise((r) => setTimeout(r, 1500));
+      expect(attempts).toBe(afterUnmount);
+    } finally {
+      window.history.replaceState = replaceState;
+    }
+  });
+});
+
+/**
+ * A link that was sent is a claim; the address bar must not retract it. Opening a fully-encoded
+ * link to the default scenario used to erase it on the first render, so the recipient's bookmark
+ * of that address resolved against whatever defaults shipped later — the exact failure the full
+ * encoding exists to prevent, reintroduced by the synchroniser.
+ */
+describe('an explicitly shared scenario survives being opened', () => {
+  const original = window.location.search;
+
+  afterEach(() => {
+    window.history.replaceState(null, '', `${window.location.pathname}${original}`);
+  });
+
+  it('keeps the querystring when the page was opened with one', async () => {
+    const shared = configToShareSearch(DEFAULT_CONFIG);
+    window.history.replaceState(null, '', `${window.location.pathname}${shared}`);
+
+    render(<App />);
+    // The write is throttled, so wait for the address bar to settle rather than reading it now.
+    await waitFor(() => {
+      expect(window.location.search).not.toBe('');
+    });
+    expect(new URLSearchParams(window.location.search).get('m')).toBe(DEFAULT_CONFIG.modelId);
+  });
+
+  it('leaves a bare address bare, because it claimed nothing', async () => {
+    window.history.replaceState(null, '', window.location.pathname);
+    render(<App />);
+    await waitFor(() => {
+      expect(window.location.search).toBe('');
+    });
+  });
+});
+
+/**
  * A control that names a flag the runtime does not accept is wrong even when the arithmetic
  * behind it is right. vLLM's one-byte cache is `fp8_e4m3`; there is no integer option at all.
  */
@@ -504,5 +636,107 @@ describe('the capacity tile does not promise context a model cannot take', () =>
 
     const verdicts = screen.getByRole('region', { name: 'Verdicts' });
     expect(within(verdicts).getByText(/Room to grow/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * Copying a link makes a claim — "this is what I was looking at" — so a confirmation that belongs
+ * to a superseded attempt is worse than no confirmation. Clearing the reset timer cancels the
+ * previous attempt's timer and nothing else: `writeText` is not abortable, so an earlier promise
+ * is still in flight and still holds its callbacks.
+ */
+describe('the share link never reports a result a later click has superseded', () => {
+  // Restored for the same reason the block above restores it: this stub's promises are never
+  // settled, so leaving it in place hangs any later test that clicks the button and clobbers the
+  // one `userEvent.setup()` installs for `user.copy()`. Vitest isolates per file, so the blast
+  // radius is this file — but "nothing runs after it today" is a property of the file's ordering,
+  // not of the test.
+  const clipboard = navigator.clipboard;
+
+  afterEach(() => {
+    Object.defineProperty(navigator, 'clipboard', { value: clipboard, configurable: true });
+  });
+
+  const stubClipboard = () => {
+    const settlers: { resolve: () => void; reject: () => void }[] = [];
+    const writeText = vi.fn(
+      () =>
+        new Promise<void>((resolve, reject) =>
+          settlers.push({ resolve, reject: () => reject(new Error('denied')) })
+        )
+    );
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+      writable: true,
+    });
+    return settlers;
+  };
+
+  it('ignores a late success from an attempt the user has already replaced', async () => {
+    const user = userEvent.setup();
+    const settlers = stubClipboard();
+    render(<App />);
+
+    const button = screen.getByRole('button', { name: /copy link to this scenario/i });
+    await user.click(button);
+    await user.click(button);
+    expect(settlers).toHaveLength(2);
+
+    // The second attempt is refused, so the manual-copy field appears.
+    await act(async () => settlers[1].reject());
+    expect(screen.getByLabelText('Link to this scenario')).toBeInTheDocument();
+
+    // The first now resolves, late. Before the attempt counter this hid the field and announced a
+    // success for a link the user had already moved past.
+    await act(async () => settlers[0].resolve());
+
+    expect(screen.getByLabelText('Link to this scenario')).toBeInTheDocument();
+    expect(screen.queryByText(/link copied/i)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The half of the race `clearTimeout` provably cannot reach, and the one with the worse symptom.
+   *
+   * When the *earlier* attempt succeeds, its reset timer is scheduled after the second click has
+   * already cleared `resetTimer` — so there is nothing left to cancel it. Unfixed, a genuine
+   * refusal shows the fallback field and then a stale timer silently erases it two seconds later,
+   * leaving no trace that anything failed.
+   */
+  it('does not let a superseded success erase a real failure two seconds later', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      const settlers = stubClipboard();
+      render(<App />);
+
+      const button = screen.getByRole('button', { name: /copy link to this scenario/i });
+      await user.click(button);
+      await user.click(button);
+
+      // The superseded attempt succeeds first, then the live one is refused.
+      await act(async () => settlers[0].resolve());
+      await act(async () => settlers[1].reject());
+      expect(screen.getByLabelText('Link to this scenario')).toBeInTheDocument();
+
+      // Past the 2s confirmation window: the failure notice has to survive it.
+      await act(async () => {
+        vi.advanceTimersByTime(2500);
+      });
+      expect(screen.getByLabelText('Link to this scenario')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still confirms the attempt that did win', async () => {
+    const user = userEvent.setup();
+    const settlers = stubClipboard();
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: /copy link to this scenario/i }));
+    await act(async () => settlers[0].resolve());
+
+    expect(screen.getByText(/link copied/i)).toBeInTheDocument();
   });
 });
