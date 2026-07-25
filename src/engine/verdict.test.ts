@@ -432,6 +432,59 @@ describe('a shortfall always reads as a shortfall', () => {
   });
 });
 
+/**
+ * A reason has to name the thing that decided the grade. Each of these named something else —
+ * a requirement that was met, a measurement that was fine, or a latency of zero.
+ */
+describe('the reason names the constraint that actually bound', () => {
+  const judged = (runnableContextTokens: number, perUser: number, ttft: number) =>
+    new Map(
+      judgeWorkloads({
+        selectedPlacement: RESIDENT,
+        usage: { contextTokens: 512, concurrency: 1, promptTokens: 512, kvPrecision: 'fp16' },
+        maxContextTokens: runnableContextTokens,
+        runnableContextTokens,
+        evaluateAt: () => ({
+          placement: RESIDENT,
+          decode: {
+            ...STUB_SPEED.decode,
+            perUserTokensPerSec: perUser,
+            aggregateTokensPerSec: perUser,
+          },
+          prefill: { ...STUB_SPEED.prefill, ttftSeconds: ttft },
+        }),
+      }).map((v) => [v.workload.id, v])
+    );
+
+  it('names the session floor, not the turn, when the turn already fits', () => {
+    // 27K runnable: past the 16.5K a turn needs, short of the 32K a session needs. Reporting
+    // the turn requirement quoted a figure the configuration meets.
+    const agent = judged(27_000, 60, 1).get('agent')!;
+
+    expect(agent.fitness).toBe('fail');
+    expect(agent.reason).not.toMatch(/16\.5K/);
+    expect(agent.reason).toMatch(/32K/);
+  });
+
+  it('names the rate when the rate is the only thing holding completion back', () => {
+    // 28 tok/s against a 30 threshold, with latency well inside its budget — so the latency
+    // sentence was entirely positive while the grade was Tight.
+    const completion = judged(400_000, 28, 0.089).get('completion')!;
+
+    expect(completion.fitness).toBe('tight');
+    expect(completion.reason).toMatch(/28 tok\/s/);
+  });
+
+  it('never reports a positive latency as zero', () => {
+    // Flooring is right for thresholds and wrong at the bottom: 0.089 floored to "0.0" claimed
+    // no latency at all.
+    const completion = judged(400_000, 60, 0.089).get('completion')!;
+
+    expect(completion.reason).not.toMatch(/\b0\.0s/);
+    expect(completion.reason).toMatch(/<0\.1s/);
+  });
+});
+
 describe('no archetype escapes its own scenario', () => {
   const stub = (perUser: number) => ({
     placement: RESIDENT,

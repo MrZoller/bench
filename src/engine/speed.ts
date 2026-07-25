@@ -134,7 +134,13 @@ export interface DecodeEstimate {
   kvSeconds: number;
   /** True when the cache costs more time per step than the weights — the long-context regime. */
   kvBound: boolean;
-  /** Set when weights spill to host RAM, which is usually the whole explanation. */
+  /**
+   * Set when weights spill to host RAM, which is usually the whole explanation.
+   *
+   * `withoutOffloadTokensPerSec` is per user, like `perUserTokensPerSec`, and is built from the
+   * same weight and cache time terms as the real estimate with only the spill removed — so it
+   * answers "what would clearing this buy" rather than "what would a different machine do".
+   */
   offloadPenalty?: { fraction: number; withoutOffloadTokensPerSec: number };
 }
 
@@ -171,7 +177,7 @@ export function estimateDecode(
   const offloadedBytes = weightReadBytes * offload;
   // The slower of host RAM and the bus to it — a 4090's PCIe 4.0 link caps this at 31.5 GB/s
   // however fast the DIMMs are.
-  const spillBandwidth = offloadBandwidth(rig.device, hostBandwidth);
+  const spillBandwidth = offloadBandwidth(rig, hostBandwidth);
 
   const kvSeconds = kvReadBytes / kvBandwidth;
   const weightSeconds =
@@ -194,9 +200,15 @@ export function estimateDecode(
   };
 
   if (offload > 0) {
-    const resident = (weightReadBytes + kvReadBytes) / deviceBandwidth;
+    // The counterfactual has to be built from the same two time terms as the estimate above,
+    // with only the spill removed. Dividing both byte counts by the aggregate bandwidth quietly
+    // reverted the KV replication as well, so the Bench promised that clearing the spill "would
+    // make it fast" for a rig where the cache alone holds it to merely usable — 44 tok/s claimed
+    // against 27 actually available on 8x RTX 5090 with a four-KV-head model.
+    const resident = weightReadBytes / deviceBandwidth + kvReadBytes / kvBandwidth;
     estimate.offloadPenalty = {
       fraction: offload,
+      // Per user, matching `perUserTokensPerSec` — the byte counts already carry the batch.
       withoutOffloadTokensPerSec: resident > 0 ? 1 / resident : 0,
     };
   }
@@ -350,7 +362,7 @@ export function estimatePrefill(
   let streamingSeconds = 0;
   if (offload > 0) {
     const streamedBytes = activeWeightBytes(model, quant, promptTokens) * offload;
-    streamingSeconds = streamedBytes / offloadBandwidth(rig.device, hostBandwidth);
+    streamingSeconds = streamedBytes / offloadBandwidth(rig, hostBandwidth);
     ttft += streamingSeconds;
   }
 
