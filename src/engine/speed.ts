@@ -300,6 +300,18 @@ export interface PrefillEstimate {
    * error next to a long prompt.
    */
   offloadPenalty?: { fraction: number; streamingSeconds: number };
+  /**
+   * Set when more than one prompt is in flight, which is usually most of the wait.
+   *
+   * `singlePromptTtftSeconds` removes the queue *at this placement*, holding the spill where it
+   * is. It is not what a concurrency-1 evaluation would return: concurrency also sizes the KV
+   * cache, so one user would often be planned onto a smaller — or no — offload, and this figure
+   * would then be pessimistic. Same convention as `DecodeEstimate.offloadPenalty`, which prices
+   * clearing the spill without re-planning the machine around its absence: each isolates one
+   * term, and answering "what would a different configuration do" is the caller's job, not a
+   * counterfactual's.
+   */
+  concurrencyPenalty?: { prompts: number; singlePromptTtftSeconds: number };
 }
 
 export function estimatePrefill(
@@ -313,6 +325,22 @@ export function estimatePrefill(
 ): PrefillEstimate {
   const contextTokens = Math.max(1, usage.contextTokens);
   const promptTokens = Math.max(1, usage.promptTokens ?? Math.floor(contextTokens * 0.9));
+  /**
+   * Concurrent prompts multiply prefill in a way they do not multiply decode.
+   *
+   * `estimateDecode` batches because decode is memory-bound: the weights are read once per step
+   * whoever is waiting on them, so the tenth user is nearly free. Prefill is compute-bound and a
+   * single long prompt already saturates the units — there is no second user's work to hide
+   * under the first's. Serving `n` prompts is `n` times the arithmetic, and the scheduler can
+   * only choose who waits for it.
+   *
+   * Modelled as one batched pass, so every prompt in the interval pays the whole batch's compute.
+   * Continuous batching with chunked prefill behaves this way: the scheduler admits chunks from
+   * all admitted sequences, so they progress together and finish together. A strict FIFO queue
+   * would instead give a mean of `(n + 1) / 2` passes and a worst case of `n`; this reports the
+   * figure every user sees rather than the one only the first-served user does.
+   */
+  const batch = Math.max(1, usage.concurrency);
 
   // Two FLOPs per parameter per token for the linear layers. MoE routes each token through
   // only its selected experts, so this uses active rather than total parameters — FLOPs scale
@@ -326,14 +354,24 @@ export function estimatePrefill(
   // position that needs them. Per-token it would be 16% of a gpt-oss-20b prompt pass; dropped
   // entirely it understates a *short* prompt by the same margin, since at one token the
   // projection is most of the work.
+  //
+  // Scaled by the batch because every sequence brings its own prompt and its own final position
+  // to project. The exposed FLOP counts describe the whole pass the device performs, which is
+  // what `linearSeconds` and `attentionSeconds` are priced from.
   const linearFlops =
-    2 * (prefillComputeParams(model) * promptTokens + outputProjectionParams(model));
+    2 * (prefillComputeParams(model) * promptTokens + outputProjectionParams(model)) * batch;
   // QK^T and AV. Quadratic on full-attention layers, but only linear on sliding-window ones,
   // which attend over their window however long the prompt gets. Overtakes the linear term on
   // long prompts — why time-to-first-token degrades faster than people expect at big contexts.
   // Scaled by the attention projection width, not the hidden size: a model is free to project
   // into a wider or narrower query space than its residual stream, and most current ones do.
-  const attentionFlops = 4 * attentionPairs(model, promptTokens) * model.attention.projectionWidth;
+  //
+  // `attentionPairs` is evaluated at one sequence's length and then multiplied, never at
+  // `promptTokens * batch`: sixteen users sending 2K each is sixteen quadratics over 2K, not one
+  // over 32K. Folding the batch into the length would overstate a concurrent chat workload by
+  // the batch factor again on the term that already dominates long prompts.
+  const attentionFlops =
+    4 * attentionPairs(model, promptTokens) * model.attention.projectionWidth * batch;
 
   /**
    * Expert-only schemes compute at two rates, not one.
@@ -363,7 +401,11 @@ export function estimatePrefill(
 
   // The experts one token routes through. Zero for a dense model, which is what makes the whole
   // pass fall to the dense rate there rather than claiming a 4x it cannot use on any tensor.
-  const expertLinearFlops = 2 * model.expertParams * expertFraction(model, 1) * promptTokens;
+  // Still the batch-1 expert fraction, scaled by the batch: FLOPs follow the experts each token
+  // routes through, however many tokens are in flight. It is *bytes* that follow the batch-wide
+  // union, which is why the streaming term below sizes itself differently.
+  const expertLinearFlops =
+    2 * model.expertParams * expertFraction(model, 1) * promptTokens * batch;
   const denseLinearFlops = Math.max(0, linearFlops - expertLinearFlops);
 
   const runnable = expertRate > 0 && denseRate > 0;
@@ -386,21 +428,41 @@ export function estimatePrefill(
   // offloaded weight set. Charging the batch-1 union understated MoE TTFT by up to 5x, and
   // dense models could never reveal it because for them the two are identical.
   const offload = placement?.offloadFraction ?? 0;
-  let streamingSeconds = 0;
-  if (offload > 0) {
-    const streamedBytes = activeWeightBytes(model, quant, promptTokens) * offload;
-    streamingSeconds = streamedBytes / offloadBandwidth(rig, hostBandwidth, runtime);
-    ttft += streamingSeconds;
-  }
+  const streamedSecondsFor = (tokens: number) =>
+    offload > 0
+      ? (activeWeightBytes(model, quant, tokens) * offload) /
+        offloadBandwidth(rig, hostBandwidth, runtime)
+      : 0;
+
+  // Charged once for the pass rather than once per prompt: the batch shares the weights it pulls
+  // across the bus. This is the one term concurrency does *not* multiply, and on a heavily
+  // offloaded rig it is why the tenth concurrent prompt costs less than the first did.
+  const streamingSeconds = streamedSecondsFor(promptTokens * batch);
+  ttft += streamingSeconds;
 
   return {
     ttftSeconds: ttft,
-    prefillTokensPerSec: ttft > 0 && Number.isFinite(ttft) ? promptTokens / ttft : 0,
+    // The machine's prompt-processing rate across every prompt in the pass. Compute-bound work
+    // does not get cheaper per token for being divided among more users, so this holds steady as
+    // concurrency rises while `ttftSeconds` grows — which is the honest way round, and keeps the
+    // published single-prompt anchors comparable with a concurrent estimate.
+    prefillTokensPerSec: ttft > 0 && Number.isFinite(ttft) ? (promptTokens * batch) / ttft : 0,
     linearFlops,
     attentionFlops,
     linearSeconds,
     attentionSeconds,
     attentionBound: attentionSeconds > linearSeconds,
     ...(offload > 0 ? { offloadPenalty: { fraction: offload, streamingSeconds } } : {}),
+    ...(batch > 1
+      ? {
+          concurrencyPenalty: {
+            prompts: batch,
+            // Compute divides out exactly; streaming is re-sized at one prompt's expert union
+            // rather than divided, because it was never multiplied in the first place.
+            singlePromptTtftSeconds:
+              (linearSeconds + attentionSeconds) / batch + streamedSecondsFor(promptTokens),
+          },
+        }
+      : {}),
   };
 }
