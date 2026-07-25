@@ -16,7 +16,7 @@ import {
   prefillComputeParams,
 } from './weights';
 import type { Placement } from './placement';
-import { DEFAULT_HOST_BANDWIDTH } from './placement';
+import { DEFAULT_HOST_BANDWIDTH, kvShards, offloadBandwidth } from './placement';
 
 /**
  * Throughput and latency, as a roofline.
@@ -123,7 +123,16 @@ export interface DecodeEstimate {
   /** Bytes moved per decode step, split so the UI can show what dominates. */
   weightReadBytes: number;
   kvReadBytes: number;
-  /** True when KV traffic outweighs weight traffic — the long-context regime. */
+  /**
+   * Seconds per step attributable to each, so a caller can name the bottleneck honestly.
+   *
+   * Bytes are not enough once anything spills: offloaded weights cross the host bus at a
+   * fraction of device bandwidth, so a configuration can move fewer weight *bytes* than cache
+   * bytes while spending seventy times longer on them.
+   */
+  weightSeconds: number;
+  kvSeconds: number;
+  /** True when the cache costs more time per step than the weights — the long-context regime. */
   kvBound: boolean;
   /** Set when weights spill to host RAM, which is usually the whole explanation. */
   offloadPenalty?: { fraction: number; withoutOffloadTokensPerSec: number };
@@ -146,12 +155,30 @@ export function estimateDecode(
   const kvReadBytes = kvReadBytesPerToken(model, contextTokens, usage.kvPrecision) * batch;
 
   const deviceBandwidth = achievedBandwidth(rig, runtime);
+  /**
+   * The cache reads at the bandwidth of the ranks that actually hold a copy, which is not the
+   * whole rig's whenever KV replicates — `achievedBandwidth` sums every device, and dividing the
+   * rig-wide cache by that assumes a perfect split the model may not permit.
+   *
+   * `placement` stopped assuming it; this had to stop too, or the memory panel says each card
+   * holds the entire DeepSeek latent cache while the speed panel prices one eighth of it. Same
+   * divisor, from the same function, so the two cannot drift.
+   */
+  const shards = Math.max(1, rig.count);
+  const kvBandwidth = (deviceBandwidth / shards) * kvShards(model, shards);
 
   const offload = placement.offloadFraction;
-  const onDeviceBytes = weightReadBytes * (1 - offload) + kvReadBytes;
   const offloadedBytes = weightReadBytes * offload;
+  // The slower of host RAM and the bus to it — a 4090's PCIe 4.0 link caps this at 31.5 GB/s
+  // however fast the DIMMs are.
+  const spillBandwidth = offloadBandwidth(rig.device, hostBandwidth);
 
-  const secondsPerStep = onDeviceBytes / deviceBandwidth + offloadedBytes / hostBandwidth;
+  const kvSeconds = kvReadBytes / kvBandwidth;
+  const weightSeconds =
+    (weightReadBytes * (1 - offload)) / deviceBandwidth + offloadedBytes / spillBandwidth;
+
+  // Weights and cache are read in the same step, so the step costs both.
+  const secondsPerStep = weightSeconds + kvSeconds;
   const aggregateTokensPerSec = secondsPerStep > 0 ? batch / secondsPerStep : 0;
 
   const estimate: DecodeEstimate = {
@@ -159,7 +186,11 @@ export function estimateDecode(
     aggregateTokensPerSec,
     weightReadBytes,
     kvReadBytes,
-    kvBound: kvReadBytes > weightReadBytes,
+    weightSeconds,
+    kvSeconds,
+    // Compared as time, not as bytes: the two diverge by orders of magnitude the moment
+    // anything spills to the host bus.
+    kvBound: kvSeconds > weightSeconds,
   };
 
   if (offload > 0) {
@@ -212,6 +243,16 @@ export interface PrefillEstimate {
   /** FLOPs split, so the UI can show when quadratic attention takes over. */
   linearFlops: number;
   attentionFlops: number;
+  /**
+   * The same split in *seconds*, which is what a bottleneck claim has to be made on.
+   *
+   * FLOPs are not comparable once the expert half runs at a different rate from everything
+   * else — gpt-oss-20b under MXFP4 has attention at ~53% of linear FLOPs while taking ~1.3x the
+   * linear time. Exposed rather than kept internal because the caller has a third term to weigh
+   * these against, `offloadPenalty.streamingSeconds`, and comparing three things needs all three.
+   */
+  linearSeconds: number;
+  attentionSeconds: number;
   /** True when attention outweighs the linear layers — the long-prompt regime. */
   attentionBound: boolean;
   /**
@@ -309,7 +350,7 @@ export function estimatePrefill(
   let streamingSeconds = 0;
   if (offload > 0) {
     const streamedBytes = activeWeightBytes(model, quant, promptTokens) * offload;
-    streamingSeconds = streamedBytes / hostBandwidth;
+    streamingSeconds = streamedBytes / offloadBandwidth(rig.device, hostBandwidth);
     ttft += streamingSeconds;
   }
 
@@ -318,6 +359,8 @@ export function estimatePrefill(
     prefillTokensPerSec: ttft > 0 && Number.isFinite(ttft) ? promptTokens / ttft : 0,
     linearFlops,
     attentionFlops,
+    linearSeconds,
+    attentionSeconds,
     attentionBound: attentionSeconds > linearSeconds,
     ...(offload > 0 ? { offloadPenalty: { fraction: offload, streamingSeconds } } : {}),
   };

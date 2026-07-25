@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react';
-import { DEVICES, MODELS, RUNTIMES, evaluateConfig, useConfig } from '@/store/config';
+import { DEVICES, MODELS, RUNTIMES, evaluateConfig, useConfig, type Config } from '@/store/config';
 import { useUrlSync } from '@/store/useUrlSync';
+import { configToShareSearch } from '@/store/url';
 import { getRuntime, runtimeDrives } from '@/data/runtimes';
 import { QUANTS } from '@/data/quants';
 import { CATALOG_GENERATED_AT, getDevice, getModel } from '@/data/catalog';
 import { BudgetBar } from './BudgetBar';
-import { DECODE_FAST, Telemetry } from './Telemetry';
+import { Telemetry } from './Telemetry';
 import { Workloads } from './Workloads';
 import { Envelope } from './Envelope';
 import { Matrix } from './Matrix';
@@ -13,7 +14,15 @@ import { Segmented, Select, StopSlider } from './Controls';
 import { compact, gibLabel, params, percent, tokens } from '@/lib/format';
 import type { KvPrecision } from '@/engine/types';
 import { canShard } from '@/engine/placement';
+import { classifyDecode } from '@/lib/verdicts';
 import { quantApplies } from '@/lib/quantChoice';
+import {
+  CONCURRENCY_STOPS,
+  DEVICE_COUNT_STOPS,
+  PROMPT_STOPS,
+  contextStopsFor,
+  withStored,
+} from '@/lib/stops';
 
 /**
  * The Bench — the hero surface.
@@ -23,17 +32,6 @@ import { quantApplies } from '@/lib/quantChoice';
  * on change; there is no submit step, because the point is to feel where the cliff is rather
  * than to query for it.
  */
-
-/**
- * Log-spaced stops. The interesting jumps in context are 4K -> 32K -> 128K, so a linear range
- * would spend most of its travel in a region nobody is deciding between.
- */
-const CONTEXT_STOPS = [
-  2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576,
-] as const;
-const CONCURRENCY_STOPS = [1, 2, 4, 8, 16, 32, 64, 128] as const;
-const PROMPT_STOPS = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072] as const;
-const DEVICE_COUNT_STOPS = [1, 2, 4, 8] as const;
 
 const KV_PRECISIONS: readonly { value: KvPrecision; label: string }[] = [
   { value: 'fp16', label: 'FP16' },
@@ -59,16 +57,10 @@ export function Bench() {
    * a 40,960-token Qwen to 64K and the store holds 40,960 while the slider reads 32K, with the
    * budget bar and throughput computed for neither.
    */
-  const contextStops = useMemo(() => {
-    const withinModel = CONTEXT_STOPS.filter((t) => t < model.maxContext);
-    // The stored value is always a stop, even when it is not one of the fixed ones. Switching
-    // from a 40,960-token model to a larger one keeps that 40,960 — `coerce` only caps — so a
-    // list of "fixed stops plus this model's maximum" would show 32K for a context the engine
-    // is evaluating at 40,960. Including it means the control cannot display a value the
-    // engine is not using.
-    const stops = new Set([...withinModel, model.maxContext, config.contextTokens]);
-    return [...stops].filter((t) => t <= model.maxContext).sort((a, b) => a - b);
-  }, [model.maxContext, config.contextTokens]);
+  const contextStops = useMemo(
+    () => contextStopsFor(model.maxContext, config.contextTokens),
+    [model.maxContext, config.contextTokens]
+  );
 
   /**
    * Every discrete control includes whatever is stored, for the same reason the context slider
@@ -116,7 +108,7 @@ export function Bench() {
    * claiming "fast" across the 15-30 band that the tile calls merely "Usable" — the fifth way
    * this one sentence has managed to contradict the number printed beside it.
    */
-  const fast = runnable && evaluation.decode.perUserTokensPerSec >= DECODE_FAST;
+  const fast = runnable && classifyDecode(evaluation.decode.perUserTokensPerSec).isFast;
   /**
    * Sharding needs a transport between devices, which is what `interconnect` records — not the
    * device class. Keying off the class disabled it for the DGX Spark, whose catalog row
@@ -345,9 +337,15 @@ export function Bench() {
             {fast
               ? ', so it decodes at roughly that model size rather than its full one.'
               : evaluation.placement.offloadFraction > 0
-                ? `. That would make it fast — but not here, with ${percent(
-                    evaluation.placement.offloadFraction
-                  )} of the weights crossing the host bus every token.`
+                ? // Only claimed when the engine's own resident estimate agrees: a model can
+                  // spill *and* still be slow with everything resident, and blaming the spill
+                  // then sends someone to buy memory that will not fix it.
+                  classifyDecode(evaluation.decode.offloadPenalty?.withoutOffloadTokensPerSec ?? 0)
+                    .isFast
+                  ? `. That would make it fast — but not here, with ${percent(
+                      evaluation.placement.offloadFraction
+                    )} of the weights crossing the host bus every token.`
+                  : '. Even resident it would be slow here, so fitting it is not the whole story.'
                 : '. Whether that is fast depends on the memory it is reading from, which the decode figure above measures.'}{' '}
             Total parameters set what fits; active parameters set how fast it feels.
           </p>
@@ -365,38 +363,80 @@ export function Bench() {
 }
 
 /**
- * Copies the current address, which already encodes the scenario.
+ * Copies a link that names the scenario in full.
  *
- * Deliberately reads `location.href` at click time rather than rebuilding the URL: the address
- * bar is kept in sync by `useUrlSync`, and rebuilding here would be a second encoder to drift
- * from the first.
+ * Not `location.href`: the address bar is deliberately bare on an untouched default page, because
+ * it claims nothing there. A copied link always claims something — it says "this is what I was
+ * looking at" — so every field is written out and the link cannot drift when a default moves.
+ * `configToShareSearch` is the same encoder the address bar uses, minus the empty case, so there
+ * is still only one place that knows the format.
  */
 function ShareLink() {
-  const [copied, setCopied] = useState(false);
+  const config = useConfig();
+  const [state, setState] = useState<'idle' | 'copied' | 'unavailable'>('idle');
+  const [href, setHref] = useState('');
+
+  const label =
+    state === 'copied'
+      ? 'Link copied'
+      : state === 'unavailable'
+        ? 'Copy it from here'
+        : 'Copy link to this scenario';
 
   return (
-    <button
-      type="button"
-      onClick={() => {
-        void navigator.clipboard?.writeText(window.location.href).then(
-          () => {
-            setCopied(true);
-            window.setTimeout(() => setCopied(false), 2000);
-          },
-          () => setCopied(false)
-        );
-      }}
-      className="rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-accent)] hover:border-[var(--color-accent-dim)]"
-    >
-      {/* aria-live so the confirmation is announced, not just seen. */}
-      <span aria-live="polite">{copied ? 'Link copied' : 'Copy link to this scenario'}</span>
-    </button>
-  );
-}
+    <div className="flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        onClick={() => {
+          const { origin, pathname } = window.location;
+          const link = `${origin}${pathname}${configToShareSearch(config as Config)}`;
+          setHref(link);
 
-/** The fixed stops plus whatever is currently stored, so the control can always show it. */
-function withStored(stops: readonly number[], stored: number): number[] {
-  return [...new Set([...stops, stored])].sort((a, b) => a - b);
+          /**
+           * `navigator.clipboard` is undefined on non-secure origins and in some embedded
+           * browsers, and the optional chain meant the button did nothing at all there while
+           * still looking like it had worked — the worst of the three possible outcomes.
+           *
+           * The fallback is the link itself, selected and ready for a manual copy. No
+           * `document.execCommand('copy')`: it is deprecated, it needs a selection in the
+           * document anyway, and it fails silently in exactly the same contexts.
+           */
+          const writer = navigator.clipboard?.writeText(link);
+          if (writer === undefined) {
+            setState('unavailable');
+            return;
+          }
+
+          void writer.then(
+            () => {
+              setState('copied');
+              window.setTimeout(() => setState('idle'), 2000);
+            },
+            // A rejected write — permission denied, document not focused — lands here, and
+            // means the same thing to the user as no API at all.
+            () => setState('unavailable')
+          );
+        }}
+        className="rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-accent)] hover:border-[var(--color-accent-dim)]"
+      >
+        {/* aria-live so the confirmation is announced, not just seen. */}
+        <span aria-live="polite">{label}</span>
+      </button>
+
+      {state === 'unavailable' && (
+        <input
+          readOnly
+          aria-label="Link to this scenario"
+          value={href}
+          // Select on focus so one keystroke copies it — the closest thing to the button
+          // working that a browser without clipboard access allows.
+          onFocus={(e) => e.currentTarget.select()}
+          ref={(el) => el?.select()}
+          className="min-w-0 flex-1 rounded-md border border-[var(--color-border)] bg-transparent px-2 py-1.5 text-xs text-[var(--color-text-muted)]"
+        />
+      )}
+    </div>
+  );
 }
 
 /** Snap an arbitrary value (from a URL, say) to the nearest slider stop. */

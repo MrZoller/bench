@@ -8,9 +8,15 @@ import {
 import { getDevice, getModel } from '@/data/catalog';
 import { getQuant } from '@/data/quants';
 import { getRuntime } from '@/data/runtimes';
+import { CONCURRENCY_STOPS, contextStopsFor, withStored } from '@/lib/stops';
 import { colors, marks, withAlpha } from '@/design/tokens';
-import { CAPACITY_TIGHT, DECODE_USABLE } from './Telemetry';
-import { rate, tokens } from '@/lib/format';
+import {
+  CAPACITY_TIGHT,
+  DECODE_USABLE,
+  TTFT_TOLERABLE,
+  parseDisplayedSeconds,
+} from '@/lib/verdicts';
+import { rate, seconds, tokens, uniqueLabels } from '@/lib/format';
 import type { Config } from '@/store/scenario';
 
 /**
@@ -37,12 +43,12 @@ const STATE_STYLE: Record<CellState, { fill: string; label: string; hint: string
   comfortable: {
     fill: colors.good,
     label: 'Comfortable',
-    hint: 'Fits with room, and fast enough to use interactively.',
+    hint: 'Fits with room, types fast enough to read along, and starts answering promptly.',
   },
   tight: {
     fill: colors.warning,
     label: 'Tight',
-    hint: 'Runs, but near the ceiling or slow enough to notice — the table says which.',
+    hint: 'Runs, but near the ceiling, slow to type, or slow to start — the table says which.',
   },
   offloaded: {
     fill: colors.serious,
@@ -50,10 +56,23 @@ const STATE_STYLE: Record<CellState, { fill: string; label: string; hint: string
     hint: 'Loads only because weights cross the host bus every token.',
   },
   over: { fill: colors.critical, label: 'Will not run', hint: 'Past what this hardware can hold.' },
+  unsupported: {
+    fill: colors.critical,
+    label: 'Runtime cannot drive it',
+    // Same colour as `over` — both mean "no" — but a different sentence, because the two need
+    // opposite advice and the legend previously gave the memory one to both.
+    hint: 'This runtime does not support this hardware, at any size.',
+  },
 };
 
-const CONTEXTS = [2048, 4096, 8192, 16384, 32768, 65536, 131072] as const;
-const CONCURRENCIES = [1, 2, 4, 8, 16, 32, 64] as const;
+/**
+ * Narrowest a column may be, in CSS pixels.
+ *
+ * Set by the widest label the axis can produce: `uniqueLabels` falls back to an exact count like
+ * "131,072" when two columns would otherwise share a header, and that needs about 50px at 10px
+ * type. Below this the container scrolls rather than the labels overlapping.
+ */
+const MIN_COLUMN_PX = 52;
 
 export function Envelope({ config }: { config: Config }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -79,22 +98,30 @@ export function Envelope({ config }: { config: Config }) {
         // evaluation the model cannot perform — *and* always the one currently selected, so the
         // ring below marks a cell that was really computed. Snapping it to the nearest axis
         // value instead put a green marker under three "Will not run" tiles at 128 users.
-        contexts: axisWith(
-          CONTEXTS.filter((c) => c <= model.maxContext),
-          Math.min(config.contextTokens, model.maxContext)
-        ),
-        concurrencies: axisWith(CONCURRENCIES, config.concurrency),
+        contexts: contextStopsFor(model.maxContext, config.contextTokens),
+        concurrencies: withStored(CONCURRENCY_STOPS, config.concurrency),
         usableTokensPerSec: DECODE_USABLE,
         tightUtilization: CAPACITY_TIGHT,
+        usableTtftSeconds: TTFT_TOLERABLE,
         // Classified on the printed figure, so a cell never reads "Tight · 15 tok/s" against a
         // threshold of 15 while the Telemetry tile calls the same number "Usable".
         displayedRate: (n) => Number(rate(n)),
+        // Same reason, for latency: a cell must not be painted green on 10.3s while the tile
+        // beside it prints "10 s" and calls it the edge of tolerable.
+        displayedTtft: (n) => parseDisplayedSeconds(seconds(n), n),
       }),
     [config, model]
   );
 
   // Bumped by a ResizeObserver so the effect below redraws at the new size. Without it the
   // bitmap is stretched until the next config change — sharpness, and a distorted ring.
+  /**
+   * Column headers, disambiguated against each other rather than formatted one at a time — a
+   * hand-edited `?ctx=131073` sits beside 131,072 and both round to "128K" otherwise, and the
+   * colliding column is the one the "you are here" marker is meant to identify.
+   */
+  const contextLabels = useMemo(() => uniqueLabels(grid.contexts), [grid.contexts]);
+
   const [resizeTick, setResizeTick] = useState(0);
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -157,6 +184,15 @@ export function Envelope({ config }: { config: Config }) {
     }
   }, [grid, config.contextTokens, config.concurrency, model.maxContext, resizeTick]);
 
+  /**
+   * Whether the closed cells are closed by a ceiling rather than by the hardware. A grid is one
+   * device, so this is a property of the whole picture — and the Telemetry tile beside it already
+   * tells the user they can raise it.
+   */
+  const closed = grid.cells.flat().filter((c) => c.state === 'over');
+  const raiseable = closed.some((c) => c.overBecause === 'allocation');
+  const beyondHardware = closed.some((c) => c.overBecause === 'capacity');
+
   const counts = grid.cells.flat().reduce<Record<string, number>>((acc, cell) => {
     acc[cell.state] = (acc[cell.state] ?? 0) + 1;
     return acc;
@@ -197,44 +233,88 @@ export function Envelope({ config }: { config: Config }) {
           ))}
         </ol>
 
-        <div className="flex-1">
-          <canvas
-            ref={canvasRef}
-            role="img"
-            aria-label={describe(grid, counts, total, currentCell)}
-            className="h-48 w-full rounded"
-          />
-          <ol
-            aria-hidden="true"
-            className="tabular mt-1 grid text-[10px] text-[var(--color-text-faint)]"
-            style={{ gridTemplateColumns: `repeat(${grid.contexts.length}, 1fr)` }}
-          >
-            {grid.contexts.map((c) => (
-              <li key={c} className="text-center">
-                {tokens(c)}
-              </li>
-            ))}
-          </ol>
+        {/*
+          The plot and its axis scroll together as one unit rather than being squeezed.
+
+          Truncating the labels instead would undo the disambiguation they exist for — "131,072"
+          and "131,073" clipped to the same width are indistinguishable again, which is the bug
+          `uniqueLabels` was written to fix. An equal-width grid on a phone gives each column
+          about 25px, and an exact count needs roughly 50, so the columns get a floor and the
+          container scrolls when they do not fit. The canvas shares the floor so the cells stay
+          aligned with their headers.
+        */}
+        <div className="min-w-0 flex-1 overflow-x-auto">
+          <div style={{ minWidth: `${grid.contexts.length * MIN_COLUMN_PX}px` }}>
+            <canvas
+              ref={canvasRef}
+              role="img"
+              aria-label={describe(grid, counts, total, currentCell)}
+              className="h-48 w-full rounded"
+            />
+            <ol
+              aria-hidden="true"
+              className="tabular mt-1 grid text-[10px] text-[var(--color-text-faint)]"
+              style={{ gridTemplateColumns: `repeat(${grid.contexts.length}, 1fr)` }}
+            >
+              {grid.contexts.map((c, i) => (
+                <li key={c} className="text-center">
+                  {contextLabels[i]}
+                </li>
+              ))}
+            </ol>
+          </div>
         </div>
       </div>
 
-      {/* The hint carries what the colour cannot: "Tight" means two unrelated things. */}
+      {/*
+        The hint carries what the colour cannot: "Tight" means three unrelated things.
+
+        Only the states actually on screen. A legend is a key to this picture, not a catalogue of
+        everything the engine can return — and `unsupported` deliberately shares `over`'s red, so
+        listing both unconditionally would put two identical swatches under different sentences.
+        They never co-occur: an unsupported runtime closes the whole grid.
+      */}
       <ul className="mt-4 grid gap-x-5 gap-y-2 sm:grid-cols-2">
-        {(Object.keys(STATE_STYLE) as CellState[]).map((state) => (
-          <li key={state} className="flex items-baseline gap-2 text-sm">
-            <span
-              aria-hidden="true"
-              className="mt-1 inline-block h-3 w-3 shrink-0 rounded-sm"
-              style={{ background: STATE_STYLE[state].fill }}
-            />
-            <span>
-              <span className="text-[var(--color-text)]">{STATE_STYLE[state].label}</span>{' '}
-              <span className="text-xs text-[var(--color-text-muted)]">
-                {STATE_STYLE[state].hint}
-              </span>
-            </span>
-          </li>
-        ))}
+        {(Object.keys(STATE_STYLE) as CellState[])
+          .filter((state) => counts[state])
+          .map((state) => {
+            /**
+             * The red cells can be closed for two reasons at once, and one grid routinely holds
+             * both: on a 512 GiB Mac the small-context corner is a raiseable ceiling away from
+             * running while the far corner is past the machine however it is tuned. Picking the
+             * legend from whether *any* cell is raiseable told the reader the far corner was
+             * fixable too.
+             *
+             * Said as one entry naming both, exactly as `tight` handles its three causes — the
+             * table is where a specific cell is identified.
+             */
+            const { label, hint } =
+              state === 'over' && raiseable
+                ? beyondHardware
+                  ? {
+                      label: 'Will not run',
+                      hint: 'Some of these are past what this machine holds; the rest are only past the ceiling it hands out by default, which you can raise. The table says which.',
+                    }
+                  : {
+                      label: 'Past the default allocation',
+                      hint: 'Within the memory this machine has, but past the ceiling it hands out by default — which you can raise.',
+                    }
+                : STATE_STYLE[state];
+
+            return (
+              <li key={state} className="flex items-baseline gap-2 text-sm">
+                <span
+                  aria-hidden="true"
+                  className="mt-1 inline-block h-3 w-3 shrink-0 rounded-sm"
+                  style={{ background: STATE_STYLE[state].fill }}
+                />
+                <span>
+                  <span className="text-[var(--color-text)]">{label}</span>{' '}
+                  <span className="text-xs text-[var(--color-text-muted)]">{hint}</span>
+                </span>
+              </li>
+            );
+          })}
       </ul>
 
       <button
@@ -257,9 +337,9 @@ export function Envelope({ config }: { config: Config }) {
                 <th scope="col" className="py-1 pr-3 font-normal">
                   Users
                 </th>
-                {grid.contexts.map((c) => (
+                {grid.contexts.map((c, i) => (
                   <th key={c} scope="col" className="py-1 pr-3 text-right font-normal">
-                    {tokens(c)}
+                    {contextLabels[i]}
                   </th>
                 ))}
               </tr>
@@ -303,6 +383,24 @@ function describe(
   total: number,
   current: EnvelopeCell | undefined
 ): string {
+  /**
+   * The closed cells, split the way the legend splits them.
+   *
+   * This summary is the *only* form the picture takes for a screen reader, so a distinction the
+   * legend draws and this does not is a distinction that reader never gets. It went on saying
+   * every closed combination "will not run at all" after the visible legend learned to say some
+   * of them are one setting away.
+   */
+  const closed = grid.cells.flat().filter((c) => c.state === 'over');
+  const raiseable = closed.filter((c) => c.overBecause === 'allocation').length;
+  const beyond = closed.length - raiseable;
+
+  const whyClosed =
+    raiseable > 0 && beyond > 0
+      ? `${beyond} of ${total} will not run at all, and ${raiseable} more exceed only the default allocation ceiling, which you can raise.`
+      : raiseable > 0
+        ? `${raiseable} of ${total} exceed the default allocation ceiling, which you can raise.`
+        : `${closed.length} of ${total} combinations will not run at all.`;
   // The ring is the only mark on this panel with no textual equivalent, so it goes first.
   const here = current
     ? `Currently at ${tokens(current.contextTokens)} context and ${current.concurrency} ${
@@ -312,7 +410,11 @@ function describe(
 
   const comfortable = counts.comfortable ?? 0;
   if (comfortable === 0) {
-    return `${here}No comfortable configuration in this range. ${counts.over ?? 0} of ${total} combinations will not run at all.`;
+    // Two different sentences, because the two failures need opposite advice.
+    if (counts.unsupported) {
+      return `${here}This runtime cannot drive this hardware, so none of the ${total} combinations run.`;
+    }
+    return `${here}No comfortable configuration in this range. ${whyClosed}`;
   }
   const widest = grid.cells[0].filter((c) => c.state === 'comfortable').at(-1);
   return (
@@ -321,21 +423,25 @@ function describe(
   );
 }
 
-/** The fixed axis plus whatever is selected, so the current scenario is always a real cell. */
-function axisWith(values: readonly number[], selected: number): number[] {
-  return [...new Set([...values, selected])].sort((a, b) => a - b);
-}
-
 /** What a cell says in the table: its state, why, and what it costs. */
 function describeCell(cell: EnvelopeCell): string {
-  if (cell.state === 'over') return STATE_STYLE.over.label;
+  if (cell.state === 'over') {
+    return cell.overBecause === 'allocation'
+      ? 'Past the default allocation'
+      : STATE_STYLE.over.label;
+  }
+  if (cell.state === 'unsupported') return STATE_STYLE.unsupported.label;
   const why =
     cell.tightBecause === 'capacity'
       ? ' (near the ceiling)'
       : cell.tightBecause === 'speed'
         ? ' (slow)'
-        : '';
-  return `${STATE_STYLE[cell.state].label}${why} · ${rate(cell.tokensPerSec)} tok/s`;
+        : cell.tightBecause === 'latency'
+          ? ' (slow to start)'
+          : '';
+  return `${STATE_STYLE[cell.state].label}${why} · ${rate(cell.tokensPerSec)} tok/s, ${seconds(
+    cell.ttftSeconds
+  )} to first token`;
 }
 
 /** Whether this cell is the scenario the Bench is currently showing. */

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { computeEnvelope, comfortableFrontier, type EnvelopeRequest } from './envelope';
+import {
+  computeEnvelope,
+  comfortableFrontier,
+  type CellState,
+  type EnvelopeRequest,
+} from './envelope';
 import {
   DGX_SPARK,
   EPYC_9654,
@@ -7,6 +12,7 @@ import {
   DEEPSEEK_V3,
   LLAMA_31_8B,
   LLAMA_CPP,
+  MAC_STUDIO_M3_ULTRA_512,
   MLX,
   RTX_5090,
 } from './fixtures';
@@ -32,11 +38,22 @@ function envelope(over: Partial<EnvelopeRequest> = {}) {
     concurrencies: CONCURRENCIES,
     usableTokensPerSec: 15,
     tightUtilization: 0.9,
+    usableTtftSeconds: 10,
     ...over,
   });
 }
 
-const RANK = { comfortable: 3, tight: 2, offloaded: 1, over: 0 } as const;
+/**
+ * Worse is lower. `unsupported` sits alongside `over` because both mean the configuration does
+ * not run — they differ in what to do about it, not in how bad they are.
+ */
+const RANK: Record<CellState, number> = {
+  comfortable: 3,
+  tight: 2,
+  offloaded: 1,
+  over: 0,
+  unsupported: 0,
+};
 
 describe('the feasibility region', () => {
   it('covers every combination asked for', () => {
@@ -76,14 +93,110 @@ describe('the feasibility region', () => {
   /**
    * A runtime that cannot drive the hardware has no envelope at all. Shading a comfortable
    * region for it would be the same overclaim the Bench's verdict tiles already refuse.
+   *
+   * `unsupported` rather than `over`, because the two carry opposite advice: `over` means find
+   * more memory, `unsupported` means pick another runtime. Collapsing them told an MLX-on-5090
+   * user their hardware was too small, which is both wrong and unactionable — no amount of VRAM
+   * makes MLX drive an NVIDIA card.
    */
-  it('is entirely closed when the runtime cannot drive the device', () => {
+  it('is entirely closed, and says why, when the runtime cannot drive the device', () => {
     const grid = envelope({ runtime: MLX, rig: { device: RTX_5090, count: 1 } });
 
     for (const row of grid.cells) {
-      for (const cell of row) expect(cell.state).toBe('over');
+      for (const cell of row) expect(cell.state).toBe('unsupported');
     }
     expect(comfortableFrontier(grid).every((f) => f === undefined)).toBe(true);
+  });
+
+  /**
+   * Latency is half of what "usable" means, and only decode was being tested — so a resident
+   * configuration with a long prompt was painted comfortable while the tile beside it read
+   * "Slow start" in red about the same scenario.
+   */
+  /**
+   * The prompt is part of the context, so a cell cannot be timed for a prompt it could not hold.
+   * `coerce` enforces this for the selected scenario; the grid has to enforce it per column, or
+   * every column is timed for the longest one. Carrying the slider's prompt through painted all
+   * seven columns amber at an identical 41s — a latency impossible in six of them.
+   */
+  it('times each column for a prompt that column could actually hold', () => {
+    const grid = envelope({
+      usage: { contextTokens: 131072, concurrency: 1, promptTokens: 131072, kvPrecision: 'fp16' },
+    });
+
+    const row = grid.cells[0];
+    const runnable = row.filter((c) => c.state !== 'over' && c.state !== 'unsupported');
+    expect(runnable.length).toBeGreaterThan(1);
+
+    // Strictly increasing: a bigger window admits a bigger prompt, which takes longer to read.
+    for (let i = 1; i < runnable.length; i++) {
+      expect(runnable[i].ttftSeconds).toBeGreaterThan(runnable[i - 1].ttftSeconds);
+    }
+  });
+
+  it('refuses to call a cell comfortable when the first token is minutes away', () => {
+    const grid = envelope({
+      // A 128K prompt on a device with modest compute: fits, decodes acceptably, takes an age
+      // to get going.
+      usage: { contextTokens: 131072, concurrency: 1, promptTokens: 131072, kvPrecision: 'fp16' },
+      usableTtftSeconds: 0.001,
+    });
+
+    for (const row of grid.cells) {
+      for (const cell of row) {
+        if (cell.state === 'comfortable') {
+          throw new Error(`comfortable at ${cell.ttftSeconds}s to first token`);
+        }
+      }
+    }
+
+    // And the reason is carried, so the table can say which of the three it was.
+    const tight = grid.cells.flat().filter((c) => c.state === 'tight');
+    expect(tight.length).toBeGreaterThan(0);
+    expect(tight.some((c) => c.tightBecause === 'latency')).toBe(true);
+  });
+
+  /**
+   * A raiseable ceiling is not a hardware limit, and the Telemetry tile already says so. The grid
+   * painting the same cells "past what this hardware can hold" contradicted it, and hid the one
+   * change that would fix it.
+   */
+  it('separates a raiseable ceiling from the hardware itself', () => {
+    // 512 GiB of physical memory, 384 GiB handed out by default. DeepSeek V3 at Q5 needs about
+    // 444 GiB — inside the machine, outside the default. One `sysctl` away from running.
+    const grid = envelope({
+      model: DEEPSEEK_V3,
+      quant: getQuant('q5_k_m'),
+      rig: { device: MAC_STUDIO_M3_ULTRA_512, count: 1 },
+      runtime: MLX,
+    });
+
+    const closed = grid.cells.flat().filter((c) => c.state === 'over');
+    expect(closed.length).toBeGreaterThan(0);
+    // Both kinds appear in one grid, which is the point: the small-context corner is a raiseable
+    // ceiling away from running, and the far corner is past the machine however it is tuned.
+    expect(closed.some((c) => c.overBecause === 'allocation')).toBe(true);
+    expect(closed.some((c) => c.overBecause === 'capacity')).toBe(true);
+    // And the distinction tracks the physical pool rather than being cosmetic: raising the
+    // ceiling can only ever help the cells that fit inside the machine.
+    const allocation = closed.filter((c) => c.overBecause === 'allocation');
+    const capacity = closed.filter((c) => c.overBecause === 'capacity');
+    expect(Math.max(...allocation.map((c) => c.utilization))).toBeLessThan(
+      Math.min(...capacity.map((c) => c.utilization))
+    );
+  });
+
+  it('still blames the hardware when the ceiling is not the thing in the way', () => {
+    // A 32 GiB card with a fixed ceiling: raising a setting cannot help.
+    const grid = envelope({
+      model: DEEPSEEK_V3,
+      quant: getQuant('q8_0'),
+      rig: { device: RTX_5090, count: 1 },
+    });
+
+    const closed = grid.cells.flat().filter((c) => c.state === 'over');
+    expect(closed.length).toBeGreaterThan(0);
+    expect(closed.every((c) => c.overBecause === 'capacity')).toBe(true);
   });
 
   it('calls out offload separately from merely being tight', () => {

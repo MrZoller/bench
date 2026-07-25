@@ -9,9 +9,18 @@ import { DEFAULT_CONFIG, type Config } from './scenario';
  *
  * Two properties the encoding has to hold:
  *
- *   - **Only what differs from the default is written.** A fresh page has a clean URL, and a
- *     shared one shows at a glance what was changed. It also keeps links short enough to paste
- *     into a chat message without wrapping.
+ *   - **A querystring is complete or absent.** Either the scenario is exactly the default and
+ *     the URL is bare, or every one of the nine fields is written out. Nothing in between.
+ *
+ *     The tempting version writes only what differs, which is shorter and reads nicely. It is
+ *     also wrong the first time a default changes: a link shared today as `?d=rtx-5090` would
+ *     silently pick up tomorrow's default model, and the scenario the sender was looking at is
+ *     gone. These links are meant to survive in forum threads for months, so the querystring
+ *     cannot depend on a deployment constant. Nine short fields is roughly 90 characters —
+ *     cheap insurance against a link that quietly means something else later.
+ *
+ *     A bare URL is exempt because it makes no claim: it means "however the app opens", which
+ *     stays true whatever the defaults become.
  *   - **Reading is total.** Every value arrives from a URL a stranger may have edited by hand,
  *     so nothing here throws or trusts; the store's `coerce` is the single validation point and
  *     this layer's job is only to hand it strings.
@@ -37,18 +46,43 @@ const NUMERIC: readonly (keyof Config)[] = [
   'promptTokens',
 ];
 
-/** Serialise the parts that differ from the default. */
-export function configToSearch(config: Config): string {
+/**
+ * The whole scenario, every field written out. The one encoder; the two exports below differ
+ * only in whether they are allowed to return nothing instead.
+ */
+function encodeAll(config: Config): string {
   const params = new URLSearchParams();
-
   for (const key of Object.keys(KEYS) as (keyof Config)[]) {
-    const value = config[key];
-    if (value === DEFAULT_CONFIG[key]) continue;
-    params.set(KEYS[key], String(value));
+    params.set(KEYS[key], String(config[key]));
   }
+  return `?${params.toString()}`;
+}
 
-  const search = params.toString();
-  return search ? `?${search}` : '';
+/**
+ * The address bar: all of the scenario, or none of it.
+ *
+ * Nothing is omitted for matching the default, because the reader has no way to tell an omitted
+ * field from one the sender never touched — and the default it would fall back to is whatever
+ * ships on the day the link is opened, not the day it was written.
+ */
+export function configToSearch(config: Config): string {
+  const isDefault = (Object.keys(KEYS) as (keyof Config)[]).every(
+    (key) => config[key] === DEFAULT_CONFIG[key]
+  );
+  return isDefault ? '' : encodeAll(config);
+}
+
+/**
+ * A link someone asked for, which is always a claim about a specific scenario — so it is always
+ * written in full, including the untouched default one.
+ *
+ * The address bar can stay bare on a fresh page because it asserts nothing: it means "however
+ * the app opens", which stays true whatever the defaults become. The moment a share button hands
+ * that URL to someone, it stops being true — it now names the configuration the sender was
+ * looking at, and that has to survive the next time a default moves.
+ */
+export function configToShareSearch(config: Config): string {
+  return encodeAll(config);
 }
 
 /**

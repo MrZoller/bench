@@ -1,6 +1,6 @@
 import type { ModelSpec, QuantSpec, Rig, RuntimeSpec, UsageSpec } from './types';
 import { planPlacement } from './placement';
-import { estimateDecode } from './speed';
+import { estimateDecode, estimatePrefill } from './speed';
 
 /**
  * The feasibility field: how a configuration behaves across the whole usage plane.
@@ -16,26 +16,47 @@ import { estimateDecode } from './speed';
 
 /** Why a cell is not comfortable, in the order a reader would want to hear it. */
 export type CellState =
-  /** Fits with room, and fast enough to use interactively. */
+  /** Fits with room, fast enough to use interactively, and starts answering promptly. */
   | 'comfortable'
-  /** Fits, but either close to the ceiling or slow enough to notice. */
+  /** Fits, but close to the ceiling, slow to type, or slow to start. */
   | 'tight'
   /** Runs only because weights spill to host RAM. */
   | 'offloaded'
-  /** Does not run at all. */
-  | 'over';
+  /** Over what the hardware can hold. */
+  | 'over'
+  /**
+   * The runtime cannot drive this hardware at all.
+   *
+   * Its own state rather than folded into `over`, because the two need opposite advice: `over`
+   * says buy more memory or quantize harder, `unsupported` says pick a different runtime. The
+   * grid is uniformly one or the other, so a legend that called both "past what this hardware
+   * can hold" was telling an MLX-on-RTX-5090 user to go shopping.
+   */
+  | 'unsupported';
 
 export interface EnvelopeCell {
   contextTokens: number;
   concurrency: number;
   state: CellState;
   /**
-   * Why a cell is tight, since it means two unrelated things — nearly full, or too slow — and
-   * a reader looking at one amber square cannot tell which without being told.
+   * Why a cell is tight, since it means three unrelated things — nearly full, slow to type, or
+   * slow to start — and a reader looking at one amber square cannot tell which without being
+   * told.
    */
-  tightBecause?: 'capacity' | 'speed';
+  tightBecause?: 'capacity' | 'speed' | 'latency';
+  /**
+   * Why a cell does not run: past the hardware, or merely past a ceiling that can be raised.
+   *
+   * macOS caps wired GPU memory near 75% of RAM and AMD exposes a Variable Graphics Memory
+   * setting, so on those machines the catalog figure is an untuned default rather than a limit.
+   * The Telemetry tile already says so; the grid painted the same cells "past what this hardware
+   * can hold", which contradicts the tile and hides the one change that would fix it.
+   */
+  overBecause?: 'capacity' | 'allocation';
   /** Per-user decode, so the table can say what "tight" costs. */
   tokensPerSec: number;
+  /** Time to first token, for the same reason: it is half of what "usable" means. */
+  ttftSeconds: number;
   utilization: number;
 }
 
@@ -59,6 +80,19 @@ export interface EnvelopeRequest {
   /** Above this share of the ceiling, a cell is tight even when it is fast. */
   tightUtilization: number;
   /**
+   * Above this first-token latency, a cell is tight however fast it then types.
+   *
+   * Decode speed alone was the whole test, so a resident configuration with a long prompt could
+   * be painted green here while the Telemetry tile beside it read "Slow start" in red — the two
+   * surfaces contradicting each other about one scenario. A minute of waiting is not comfortable
+   * at any tokens per second.
+   */
+  usableTtftSeconds: number;
+  /**
+   * First-token latency as the UI will print it, for the same reason `displayedRate` exists.
+   */
+  displayedTtft?: (ttftSeconds: number) => number;
+  /**
    * The rate as the UI will *print* it.
    *
    * Injected rather than assumed, in the same shape as `prefillAt` in the verdict layer. The
@@ -80,47 +114,103 @@ export function computeEnvelope(request: EnvelopeRequest): EnvelopeGrid {
     concurrencies,
     usableTokensPerSec,
     tightUtilization,
+    usableTtftSeconds,
     displayedRate = (n) => n,
+    displayedTtft = (n) => n,
   } = request;
 
   const cells = concurrencies.map((concurrency) =>
     contexts.map((contextTokens) => {
-      const cellUsage: UsageSpec = { ...usage, contextTokens, concurrency };
+      /**
+       * The prompt is clamped to the cell's own context, not carried across from the slider.
+       *
+       * `coerce` already enforces this for the selected scenario, and for the same reason: the
+       * prompt is *part* of the context, so a 32K prompt in a 2K column describes a request that
+       * cannot be made. Decode never read `promptTokens`, so carrying it through was harmless
+       * until prefill was added here — at which point every column was timed for a prompt six of
+       * seven of them cannot hold, and the whole region went amber at 41 s the moment the prompt
+       * slider passed 16K.
+       */
+      const cellUsage: UsageSpec = {
+        ...usage,
+        contextTokens,
+        concurrency,
+        ...(usage.promptTokens === undefined
+          ? {}
+          : { promptTokens: Math.min(usage.promptTokens, contextTokens) }),
+      };
       const placement = planPlacement(model, quant, cellUsage, rig, runtime);
 
-      // A runtime that cannot drive this hardware makes every cell impossible, not merely
-      // over budget — there is no configuration of context and concurrency that rescues it.
-      if (placement.unsupported || placement.impossible) {
+      // A runtime that cannot drive this hardware is a different failure from running out of
+      // room, and the fix is different too — neither is rescued by any context or concurrency,
+      // but only one of them is about memory.
+      if (placement.unsupported) {
+        return {
+          contextTokens,
+          concurrency,
+          state: 'unsupported' as const,
+          tokensPerSec: 0,
+          ttftSeconds: 0,
+          utilization: placement.utilization,
+        };
+      }
+
+      if (placement.impossible) {
+        // Within the physical pool but past a raiseable default is a different sentence from
+        // past the hardware — and a different action.
+        const raiseable =
+          rig.device.allocatableTunable === true &&
+          placement.usedBytesPerDevice <= rig.device.capacityBytes;
+
         return {
           contextTokens,
           concurrency,
           state: 'over' as const,
+          overBecause: raiseable ? ('allocation' as const) : ('capacity' as const),
           tokensPerSec: 0,
+          ttftSeconds: 0,
           utilization: placement.utilization,
         };
       }
 
       const decode = estimateDecode(model, quant, cellUsage, rig, runtime, placement);
+      const prefill = estimatePrefill(model, quant, cellUsage, rig, runtime, placement);
       const tokensPerSec = decode.perUserTokensPerSec;
+      const ttftSeconds = prefill.ttftSeconds;
       const slow = displayedRate(tokensPerSec) < usableTokensPerSec;
       const full = placement.utilization > tightUtilization;
+      // Latency is half of usable. A cell that decodes at 40 tok/s after a 90-second wait is
+      // not comfortable, and the tile next to this panel already says so.
+      const slowStart = displayedTtft(ttftSeconds) > usableTtftSeconds;
 
       // Offload is called out separately rather than folded into "tight": it runs, but for a
       // structural reason a user can act on, and it is the single most common explanation for
       // a setup being mysteriously slow.
       const state: CellState =
-        placement.offloadFraction > 0 ? 'offloaded' : slow || full ? 'tight' : 'comfortable';
+        placement.offloadFraction > 0
+          ? 'offloaded'
+          : slow || full || slowStart
+            ? 'tight'
+            : 'comfortable';
 
       return {
         contextTokens,
         concurrency,
         state,
-        // Capacity named first when both apply: running out of memory is the harder wall, and
-        // the one a user cannot trade away by accepting a slower answer.
+        // Capacity named first when several apply: running out of memory is the harder wall,
+        // and the one a user cannot trade away by accepting a slower answer. Then decode, which
+        // costs you every token, before first-token latency, which costs you once per turn.
         ...(state === 'tight'
-          ? { tightBecause: full ? ('capacity' as const) : ('speed' as const) }
+          ? {
+              tightBecause: full
+                ? ('capacity' as const)
+                : slow
+                  ? ('speed' as const)
+                  : ('latency' as const),
+            }
           : {}),
         tokensPerSec,
+        ttftSeconds,
         utilization: placement.utilization,
       };
     })

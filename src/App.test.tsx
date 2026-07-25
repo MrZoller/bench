@@ -1,8 +1,9 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
 import App from './App';
 import { useConfig, DEFAULT_CONFIG } from '@/store/config';
+import { configToShareSearch } from '@/store/url';
 import { getModel } from '@/data/catalog';
 import { tokens } from '@/lib/format';
 
@@ -144,7 +145,12 @@ describe('the Bench does not overclaim', () => {
     await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
 
     expect(screen.queryByText(/runs fast/i)).not.toBeInTheDocument();
-    expect(screen.getByText(/crossing the host bus/i)).toBeInTheDocument();
+    // Either explanation is honest; what must never appear is a claim of speed. Which one shows
+    // depends on whether the engine's resident estimate would itself have been fast.
+    const explained =
+      screen.queryAllByText(/crossing the host bus/i).length +
+      screen.queryAllByText(/Even resident it would be slow/i).length;
+    expect(explained).toBeGreaterThan(0);
   });
 
   it('explains a full card as a full card, not as a Mac', async () => {
@@ -355,12 +361,13 @@ describe('the Bench offers only what the runtime can do', () => {
 
     await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
     await user.selectOptions(screen.getByLabelText('Runtime'), 'llama.cpp');
-    expect(screen.getByRole('button', { name: 'Q4' })).toBeInTheDocument();
+    // A radio now, not a toggle button: these are mutually exclusive alternatives.
+    expect(screen.getByRole('radio', { name: 'Q4' })).toBeInTheDocument();
 
     // vLLM's --kv-cache-dtype has no 4-bit option; offering one charges 0.5 bytes per element
     // for something it cannot allocate, turning a long-context OOM into a reported fit.
     await user.selectOptions(screen.getByLabelText('Runtime'), 'vllm');
-    expect(screen.queryByRole('button', { name: 'Q4' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: 'Q4' })).not.toBeInTheDocument();
     expect(useConfig.getState().kvPrecision).not.toBe('q4');
   });
 
@@ -417,7 +424,7 @@ describe('the Envelope agrees with the verdicts beside it', () => {
     expect(field).toHaveAccessibleName(/Currently at .* context and 1 user/i);
   });
 
-  it('closes the whole region when the runtime cannot drive the hardware', async () => {
+  it('closes the whole region and blames the runtime, not the memory', async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -425,7 +432,194 @@ describe('the Envelope agrees with the verdicts beside it', () => {
     await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
     await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
 
-    expect(screen.getByRole('img', { name: /will not run at all/i })).toBeInTheDocument();
+    // MLX cannot drive an NVIDIA card at any size, so telling the user their hardware is too
+    // small is both wrong and unactionable — no amount of VRAM fixes it.
+    expect(
+      screen.getByRole('img', { name: /runtime cannot drive this hardware/i })
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Past what this hardware can hold/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('the Bench and its tiles cannot disagree', () => {
+  it('makes the aside and the decode tile use the same classification', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Sweep a range of configurations; wherever the tile says "Fast", the aside must agree, and
+    // wherever it does not, the aside must not claim speed. Sharing the thresholds was not
+    // enough — the tile classified its rounded figure and the aside the raw one.
+    for (const device of ['rtx-5090', 'rtx-5080', 'dgx-spark', 'mac-studio-m3-ultra-256']) {
+      await user.selectOptions(screen.getByLabelText('Hardware'), device);
+
+      const verdicts = screen.getByRole('region', { name: 'Verdicts' });
+      const tileSaysFast = within(verdicts).queryByText('Fast') !== null;
+      const asideClaimsFast = screen.queryByText(/runs fast/i) !== null;
+      expect(asideClaimsFast).toBe(tileSaysFast);
+    }
+  });
+
+  it('exposes mutually exclusive choices as radios, not independent toggles', () => {
+    render(<App />);
+    const group = screen.getByRole('group', { name: /KV precision/i });
+    const radios = within(group).getAllByRole('radio');
+
+    expect(radios.length).toBeGreaterThan(1);
+    expect(radios.filter((r) => (r as HTMLInputElement).checked)).toHaveLength(1);
+  });
+});
+
+/**
+ * The share button is the distribution mechanism, so its failure modes matter more than most.
+ * Both of these were silent: no clipboard meant the button did nothing while looking like it
+ * had worked, and an unthrottled history write can throw on a dragged slider.
+ */
+describe('sharing a scenario degrades honestly', () => {
+  const clipboard = navigator.clipboard;
+
+  afterEach(() => {
+    Object.defineProperty(navigator, 'clipboard', { value: clipboard, configurable: true });
+  });
+
+  it('offers the link for manual copying when there is no clipboard API', async () => {
+    const user = userEvent.setup();
+    // After `setup`, which installs its own clipboard stub. Undefined is what a non-secure
+    // origin or an embedded browser actually gives you.
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: /Copy link to this scenario/i }));
+
+    const field = screen.getByLabelText('Link to this scenario') as HTMLInputElement;
+    expect(field.value).toMatch(/\?m=/);
+    expect(screen.queryByText('Link copied')).not.toBeInTheDocument();
+  });
+
+  it('says so rather than silently failing when the write is refused', async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: () => Promise.reject(new Error('denied')) },
+      configurable: true,
+    });
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: /Copy link to this scenario/i }));
+
+    expect(await screen.findByLabelText('Link to this scenario')).toBeInTheDocument();
+  });
+
+  it('survives a browser that refuses a history write, and stops retrying it', async () => {
+    const replaceState = window.history.replaceState;
+    let attempts = 0;
+    window.history.replaceState = () => {
+      attempts += 1;
+      throw new DOMException('throttled', 'SecurityError');
+    };
+    try {
+      const user = userEvent.setup();
+      // Rendering alone writes the URL, and a throw there would take the app down.
+      const view = render(<App />);
+      await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+      expect(screen.getByRole('region', { name: 'Verdicts' })).toBeInTheDocument();
+
+      // A catch that reschedules itself is a timer that never stops while the browser keeps
+      // refusing — and the early-return path used to leave that chain running past unmount.
+      view.unmount();
+      const afterUnmount = attempts;
+      // Long enough for several retry intervals. A timer that escapes cleanup shows up here as
+      // a further attempt — and in CI showed up as `window is not defined` after teardown, from
+      // a suite where every test passed.
+      await new Promise((r) => setTimeout(r, 1500));
+      expect(attempts).toBe(afterUnmount);
+    } finally {
+      window.history.replaceState = replaceState;
+    }
+  });
+});
+
+/**
+ * A link that was sent is a claim; the address bar must not retract it. Opening a fully-encoded
+ * link to the default scenario used to erase it on the first render, so the recipient's bookmark
+ * of that address resolved against whatever defaults shipped later — the exact failure the full
+ * encoding exists to prevent, reintroduced by the synchroniser.
+ */
+describe('an explicitly shared scenario survives being opened', () => {
+  const original = window.location.search;
+
+  afterEach(() => {
+    window.history.replaceState(null, '', `${window.location.pathname}${original}`);
+  });
+
+  it('keeps the querystring when the page was opened with one', async () => {
+    const shared = configToShareSearch(DEFAULT_CONFIG);
+    window.history.replaceState(null, '', `${window.location.pathname}${shared}`);
+
+    render(<App />);
+    // The write is throttled, so wait for the address bar to settle rather than reading it now.
+    await waitFor(() => {
+      expect(window.location.search).not.toBe('');
+    });
+    expect(new URLSearchParams(window.location.search).get('m')).toBe(DEFAULT_CONFIG.modelId);
+  });
+
+  it('leaves a bare address bare, because it claimed nothing', async () => {
+    window.history.replaceState(null, '', window.location.pathname);
+    render(<App />);
+    await waitFor(() => {
+      expect(window.location.search).toBe('');
+    });
+  });
+});
+
+/**
+ * A grid can hold both kinds of closed cell at once, and the legend used to pick one explanation
+ * from whether *any* cell was raiseable — telling the reader that cells past the machine itself
+ * could be fixed with a setting.
+ */
+describe('the Envelope legend covers every reason its cells are closed', () => {
+  it('names both causes when both are on screen', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-512');
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+
+    const region = screen.getByRole('region', { name: /how much room/i });
+    const legend = within(region).queryByText(/past the ceiling it hands out by default/i);
+
+    // Whenever the legend offers the raiseable explanation, it must not offer it alone if any
+    // cell is genuinely past the hardware.
+    if (legend) {
+      const table = within(region).queryByText(/Some of these are past what this machine holds/i);
+      const onlyRaiseable = within(region).queryByText(/^Within the memory this machine has/i);
+      expect(table !== null || onlyRaiseable !== null).toBe(true);
+    }
+  });
+});
+
+/**
+ * The canvas summary is the only form the picture takes for a screen reader, so any distinction
+ * the legend draws and it does not is one that reader never receives.
+ */
+describe('the spoken summary says everything the legend says', () => {
+  it('mentions the raiseable ceiling, not just "will not run"', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-512');
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+
+    const region = screen.getByRole('region', { name: /how much room/i });
+    const plot = within(region).getByRole('img');
+    const spoken = plot.getAttribute('aria-label') ?? '';
+
+    // Whenever the visible legend offers the raiseable explanation, the spoken one must too.
+    const legendSaysRaiseable =
+      within(region).queryByText(/which you can raise/i) !== null ||
+      within(region).queryByText(/past the ceiling it hands out by default/i) !== null;
+    if (legendSaysRaiseable) {
+      expect(spoken).toMatch(/allocation ceiling, which you can raise/i);
+    }
   });
 });
 
