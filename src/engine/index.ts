@@ -24,6 +24,7 @@ export * from './activations';
 export * from './placement';
 export * from './speed';
 export * from './verdict';
+export * from './envelope';
 
 /** Everything the UI needs to answer "can I run this, and how comfortably". */
 export interface Scenario {

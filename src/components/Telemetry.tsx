@@ -25,6 +25,8 @@ import { gibLabel, percent, rate, seconds, tokens } from '@/lib/format';
  */
 export const DECODE_FAST = 30;
 export const DECODE_USABLE = 15;
+/** Share of the allocatable ceiling past which a fit counts as tight rather than comfortable. */
+export const CAPACITY_TIGHT = 0.9;
 
 const TONE_STYLE: Record<StatusTone, { color: string; icon: string; word: string }> = {
   good: { color: 'var(--color-good)', icon: '●', word: 'Comfortable' },
@@ -106,10 +108,10 @@ function capacityReading(
     label: 'Capacity',
     value: gibLabel(headroom),
     unit: 'free',
-    tone: utilization > 0.9 ? 'warning' : 'good',
-    verdict: utilization > 0.9 ? 'Tight' : 'Fits',
+    tone: utilization > CAPACITY_TIGHT ? 'warning' : 'good',
+    verdict: utilization > CAPACITY_TIGHT ? 'Tight' : 'Fits',
     detail:
-      utilization > 0.9
+      utilization > CAPACITY_TIGHT
         ? 'Fits, with little room to raise context or add a user.'
         : `Room to grow — ${tokens(evaluation.maxContextTokens)} context would still fit at this concurrency.`,
   };

@@ -7,6 +7,7 @@ import { CATALOG_GENERATED_AT, getDevice, getModel } from '@/data/catalog';
 import { BudgetBar } from './BudgetBar';
 import { DECODE_FAST, Telemetry } from './Telemetry';
 import { Workloads } from './Workloads';
+import { Envelope } from './Envelope';
 import { Segmented, Select, StopSlider } from './Controls';
 import { compact, gibLabel, params, percent, tokens } from '@/lib/format';
 import type { KvPrecision } from '@/engine/types';
@@ -266,6 +267,7 @@ export function Bench() {
         }
       />
       <Workloads evaluation={evaluation} config={config} />
+      <Envelope config={config} />
 
       {/* Usage: the half of the question that is about you, not the hardware. */}
       <section aria-label="Usage" className="panel grid gap-5 p-5 sm:grid-cols-2">

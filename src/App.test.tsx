@@ -189,8 +189,12 @@ describe('the Bench keeps the controls and the engine in step', () => {
     fireEvent.change(slider, { target: { value: '99' } }); // Past the end; clamps to the last stop.
 
     expect(useConfig.getState().contextTokens).toBe(max);
-    // The displayed value and the stored one must agree.
-    expect(screen.getByText(tokens(max))).toBeInTheDocument();
+    // The displayed value and the stored one must agree. Scoped to the control's own output:
+    // the Envelope's axis legitimately prints the same figure.
+    expect(screen.getByLabelText('Context per sequence')).toHaveAttribute(
+      'aria-valuetext',
+      tokens(max)
+    );
   });
 
   it('does not call a resident but slow configuration fast', async () => {
@@ -321,7 +325,10 @@ describe('the slider never displays a value the engine is not using', () => {
     // Switching to a roomier model preserves that value, so it must remain displayable.
     await user.selectOptions(screen.getByLabelText('Model'), 'openai/gpt-oss-120b');
     expect(useConfig.getState().contextTokens).toBe(capped);
-    expect(screen.getByText(tokens(capped))).toBeInTheDocument();
+    expect(screen.getByLabelText('Context per sequence')).toHaveAttribute(
+      'aria-valuetext',
+      tokens(capped)
+    );
   });
 
   it('does not offer NVFP4 on NVIDIA cards without FP4 tensor cores', async () => {
@@ -369,5 +376,54 @@ describe('the Bench offers only what the runtime can do', () => {
     // Apple unified memory is still refused — the class alone was never the rule.
     await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
     expect(within(verdicts).getAllByText('Unsupported').length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The Envelope sits on screen beside the verdict tiles, so the two must agree about the same
+ * configuration. Before the axes included the selected values, the "you are here" ring snapped
+ * to the nearest cell — putting a green marker under three "Will not run" tiles at 128 users.
+ */
+describe('the Envelope agrees with the verdicts beside it', () => {
+  /** The table cell carrying the "you are here" marker, as text. */
+  const currentCell = () => {
+    const table = screen.getByRole('table', { name: /Feasibility by context/i });
+    // The marker is its own span, so read the cell it sits in rather than the span itself.
+    return within(table).getByText(/▸/).closest('td')?.textContent ?? '';
+  };
+
+  it('marks a cell that matches the tiles when the configuration will not run', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(
+      screen.getByLabelText('Model'),
+      'NousResearch/Meta-Llama-3.1-8B-Instruct'
+    );
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    fireEvent.change(screen.getByLabelText('Concurrent users'), { target: { value: '99' } });
+
+    const verdicts = screen.getByRole('region', { name: 'Verdicts' });
+    const willNotRun = within(verdicts).queryAllByText('Will not run').length > 0;
+
+    await user.click(screen.getByRole('button', { name: /region as a table/i }));
+    if (willNotRun) expect(currentCell()).toMatch(/Will not run/);
+  });
+
+  it('locates the current scenario for a screen reader, not only as a ring', () => {
+    render(<App />);
+    const field = screen.getByRole('img', { name: /Currently at/i });
+    expect(field).toHaveAccessibleName(/Currently at .* context and 1 user/i);
+  });
+
+  it('closes the whole region when the runtime cannot drive the hardware', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+
+    expect(screen.getByRole('img', { name: /will not run at all/i })).toBeInTheDocument();
   });
 });
