@@ -1,5 +1,5 @@
 import type { ModelSpec, QuantSpec, Rig, RuntimeSpec, UsageSpec } from './types';
-import { planPlacement } from './placement';
+import { planPlacement, raisingCeilingWouldHelp } from './placement';
 import { estimateDecode, estimatePrefill } from './speed';
 
 /**
@@ -156,11 +156,12 @@ export function computeEnvelope(request: EnvelopeRequest): EnvelopeGrid {
       }
 
       if (placement.impossible) {
-        // Within the physical pool but past a raiseable default is a different sentence from
-        // past the hardware — and a different action.
-        const raiseable =
-          rig.device.allocatableTunable === true &&
-          placement.usedBytesPerDevice <= rig.device.capacityBytes;
+        // Within what the platform will actually hand out is a different sentence from past the
+        // hardware — and a different action. Physical capacity is the wrong bound: AMD's
+        // Variable Graphics Memory stops at 96 of the Ryzen's 128 GiB, so a cell between those
+        // two is past the machine as far as any setting is concerned. `raisingCeilingWouldHelp`
+        // already knew that; this branch was re-deriving a weaker version of it.
+        const raiseable = raisingCeilingWouldHelp(rig.device, placement.usedBytesPerDevice);
 
         return {
           contextTokens,

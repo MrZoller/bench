@@ -13,7 +13,7 @@ import { colors, marks, withAlpha } from '@/design/tokens';
 import {
   CAPACITY_TIGHT,
   DECODE_USABLE,
-  TTFT_TOLERABLE,
+  TTFT_RESPONSIVE,
   parseDisplayedSeconds,
 } from '@/lib/verdicts';
 import { rate, seconds, tokens, uniqueLabels } from '@/lib/format';
@@ -102,7 +102,13 @@ export function Envelope({ config }: { config: Config }) {
         concurrencies: withStored(CONCURRENCY_STOPS, config.concurrency),
         usableTokensPerSec: DECODE_USABLE,
         tightUtilization: CAPACITY_TIGHT,
-        usableTtftSeconds: TTFT_TOLERABLE,
+        // The *responsive* boundary, not the tolerable one. "Comfortable" promises the answer
+        // starts promptly, and the Telemetry tile calls anything past two seconds "Noticeable"
+        // in amber — so a 10-second threshold here painted green over a scenario the tile beside
+        // it was already warning about. Adding latency to this classification and then judging
+        // it more leniently than the surface it was meant to agree with left the disagreement
+        // in place with an extra step.
+        usableTtftSeconds: TTFT_RESPONSIVE,
         // Classified on the printed figure, so a cell never reads "Tight · 15 tok/s" against a
         // threshold of 15 while the Telemetry tile calls the same number "Usable".
         displayedRate: (n) => Number(rate(n)),

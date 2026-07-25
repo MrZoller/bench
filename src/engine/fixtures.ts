@@ -310,6 +310,9 @@ export const STRIX_HALO_395: DeviceSpec = {
   capacityBytes: 128 * GIB,
   allocatableBytes: 96 * GIB, // Variable Graphics Memory ceiling
   allocatableTunable: true,
+  // ...and that ceiling is also the maximum: VGM exposes 96 of the 128 GB, so the setting is
+  // already as high as it goes. The comment above said this and the data did not.
+  maxAllocatableBytes: 96 * GIB,
   bandwidthBytesPerSec: 256 * GB,
   measuredBandwidthBytesPerSec: 213 * GB,
   flops: { fp16: 59 * TFLOP },
