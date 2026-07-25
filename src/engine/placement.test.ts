@@ -355,3 +355,43 @@ describe('a ceiling is only raiseable as far as the platform allows', () => {
     expect(maxAllocatablePerDevice(RTX_5090)).toBe(RTX_5090.allocatableBytes);
   });
 });
+
+/**
+ * Under a layer split, weights and cache travel together: a card that owns a layer owns both.
+ * Rounding only one of them up describes a machine that does not exist.
+ */
+describe('an indivisible layer count rounds weights up too', () => {
+  it('charges the busiest card, not the average one', () => {
+    // DeepSeek V3 has 61 layers. Over two cards that is 31 and 30, so the busy one holds 31/61
+    // of the model — not half of it.
+    const plan = (count: number) =>
+      planPlacement(
+        DEEPSEEK_V3,
+        getQuant('iq4_xs'),
+        { contextTokens: 16384, concurrency: 1, kvPrecision: 'fp16' },
+        { device: RTX_5090, count },
+        LLAMA_CPP
+      );
+
+    const two = plan(2);
+    const one = plan(1);
+    expect(two.weightBytesPerDevice).toBeCloseTo((one.weightBytesPerDevice * 31) / 61, -3);
+    // And the same divisor as the cache, which is the property that was broken.
+    expect(two.weightBytesPerDevice / one.weightBytesPerDevice).toBeCloseTo(
+      two.kvBytesPerDevice / one.kvBytesPerDevice,
+      6
+    );
+  });
+
+  it('leaves tensor-parallel rigs dividing evenly, because they do', () => {
+    const plan = (count: number) =>
+      planPlacement(
+        DEEPSEEK_V3,
+        getQuant('iq4_xs'),
+        { contextTokens: 16384, concurrency: 1, kvPrecision: 'fp16' },
+        { device: RTX_5090, count },
+        VLLM
+      );
+    expect(plan(2).weightBytesPerDevice).toBeCloseTo(plan(1).weightBytesPerDevice / 2, -3);
+  });
+});
