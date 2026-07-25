@@ -20,7 +20,9 @@ import type { DeviceSpec, ModelSpec, QuantSpec, RuntimeSpec } from '@/engine/typ
  *   - **The runtime cannot read it.** llama.cpp loads GGUF and not AWQ; MLX reads neither. This
  *     is the same guarantee `kvPrecisions` gives the cache, and its absence let AWQ be selected
  *     under llama.cpp and a GGUF K-quant under MLX, after which every figure on screen described
- *     a pairing that cannot be loaded.
+ *     a pairing that cannot be loaded. `planPlacement` now refuses it too — this predicate keeps
+ *     it out of the picker, but callers reaching the engine directly need the engine to hold the
+ *     line, and for a while it did not.
  */
 export function quantApplies(
   quant: QuantSpec,
