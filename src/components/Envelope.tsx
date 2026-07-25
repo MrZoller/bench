@@ -53,7 +53,13 @@ const STATE_STYLE: Record<CellState, { fill: string; label: string; hint: string
   offloaded: {
     fill: colors.serious,
     label: 'Spilling to RAM',
-    hint: 'Loads only because weights cross the host bus every token.',
+    /**
+     * Conditional, because the engine cannot check the condition. `planPlacement` sizes the spill
+     * but has no host-RAM input at all, so a cell needing hundreds of GiB of it is coloured
+     * exactly like one needing two. "Loads" stated flatly promised something never verified —
+     * the same caveat `Telemetry` already carries, which this panel was quietly dropping.
+     */
+    hint: 'Loads only if the host has RAM for the spilled weights, which is not checked here — and they cross the bus every token.',
   },
   over: { fill: colors.critical, label: 'Will not run', hint: 'Past what this hardware can hold.' },
   unsupported: {
@@ -426,19 +432,50 @@ function describe(
       }: ${describeCell(current).toLowerCase()}. `
     : '';
 
+  /**
+   * What the rest of the grid is doing, said the same way whether or not anything is comfortable.
+   *
+   * Both branches used to omit this, in opposite directions. With no comfortable cell the closed
+   * count was appended unconditionally, so an entirely runnable region announced "0 of N
+   * combinations will not run at all" — true, and it reads as though nothing works. With some
+   * comfortable cells nothing else was mentioned at all, so a grid of 3 comfortable and 6 spilling
+   * was described only by its 3.
+   *
+   * This is the canvas's only textual equivalent and the data table is hidden by default, so
+   * whatever this sentence leaves out is simply not available to a screen-reader user. Built once
+   * rather than per branch: fixing the branch a review named and leaving its neighbour is how the
+   * two came to disagree in the first place.
+   */
+  const runnable = [
+    (counts.tight ?? 0) > 0 && `${counts.tight} run but sit near a limit`,
+    (counts.offloaded ?? 0) > 0 &&
+      `${counts.offloaded} run only by spilling weights to host RAM, if the host has room for them`,
+  ].filter((s): s is string => typeof s === 'string');
+  // Suppressed only when it would print a zero — `closed.length > 0` is exactly the condition
+  // under which `whyClosed` has something non-empty to report, in all three of its forms.
+  const rest = [
+    runnable.length > 0 ? `${runnable.join(', and ')}.` : '',
+    closed.length > 0 ? whyClosed : '',
+  ];
+
   const comfortable = counts.comfortable ?? 0;
   if (comfortable === 0) {
     // Two different sentences, because the two failures need opposite advice.
     if (counts.unsupported) {
       return `${here}This runtime cannot drive this hardware, so none of the ${total} combinations run.`;
     }
-    return `${here}No comfortable configuration in this range. ${whyClosed}`;
+    return [`${here}No comfortable configuration in this range.`, ...rest]
+      .filter(Boolean)
+      .join(' ');
   }
   const widest = grid.cells[0].filter((c) => c.state === 'comfortable').at(-1);
-  return (
-    `${here}${comfortable} of ${total} combinations of context and concurrency are comfortable. ` +
-    `At ${grid.concurrencies[0]} user, up to ${tokens(widest?.contextTokens ?? 0)} of context stays comfortable.`
-  );
+  return [
+    `${here}${comfortable} of ${total} combinations of context and concurrency are comfortable.`,
+    `At ${grid.concurrencies[0]} user, up to ${tokens(widest?.contextTokens ?? 0)} of context stays comfortable.`,
+    ...rest,
+  ]
+    .filter(Boolean)
+    .join(' ');
 }
 
 /** What a cell says in the table: its state, why, and what it costs. */

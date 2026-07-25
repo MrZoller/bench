@@ -908,3 +908,62 @@ describe('the share link never reports a result a later click has superseded', (
     expect(screen.getByText(/link copied/i)).toBeInTheDocument();
   });
 });
+
+/**
+ * The Envelope's canvas has exactly one textual equivalent and its table is hidden by default, so
+ * whatever that sentence omits is simply not available to a screen-reader user. Both branches
+ * omitted something, in opposite directions.
+ */
+describe('the Envelope says what a region does, not only what it fails', () => {
+  const altText = () => {
+    const region = screen.getByRole('region', { name: /how much room/i });
+    return within(region).getByRole('img').getAttribute('aria-label') ?? '';
+  };
+
+  it('names the runnable states when nothing in range is closed', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Qwen3 4B on an EPYC 9755: every cell runs, none comfortably, and none closed. The fixture
+    // matters — DeepSeek on the 9654 leaves 20 of 64 cells over the ceiling, so `whyClosed` fires
+    // there and the guard under test is never reached.
+    await user.selectOptions(screen.getByLabelText('Model'), 'Qwen/Qwen3-4B');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'epyc-9755');
+
+    const alt = altText();
+    expect(alt).toMatch(/No comfortable configuration/i);
+    expect(alt).toMatch(/run but sit near a limit/i);
+    // The finding itself: "0 of N combinations will not run at all" for a region where all of
+    // them do.
+    expect(alt).not.toMatch(/will not run at all/i);
+  });
+
+  it('says how many cells are spilling, not only how many are comfortable', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // A grid with both comfortable and offloaded cells — the branch that mentioned neither the
+    // spill nor the closed count, one over from the one the review named.
+    await user.selectOptions(screen.getByLabelText('Model'), 'Qwen/Qwen3-4B');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5080');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'bf16');
+
+    const alt = altText();
+    expect(alt).toMatch(/are comfortable/i);
+    expect(alt).toMatch(/spilling weights to host RAM/i);
+  });
+
+  it('does not promise an offloaded cell loads, when host RAM is never checked', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
+
+    const region = screen.getByRole('region', { name: /how much room/i });
+    // The legend's own words. `planPlacement` sizes the spill and has no host-RAM input at all,
+    // so the caveat Telemetry already carries has to be here too.
+    expect(within(region).getByText(/not checked here/i)).toBeInTheDocument();
+  });
+});
