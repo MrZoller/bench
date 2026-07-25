@@ -78,7 +78,7 @@ reading the test that guards them.
   call it; when only `placement` knew, the memory panel said each card held the entire DeepSeek
   cache while the speed panel priced one eighth of it.
 - **Offloaded weights read at the slower of host RAM and the bus to the host** —
-  `min(hostBandwidth, device.hostLinkBytesPerSec)`. `interconnect` is the *device-to-device* link
+  `min(hostBandwidth, device.hostLinkBytesPerSec)`. `interconnect` is the _device-to-device_ link
   `tpEfficiency` models and is not this: an H100 SXM talks to its neighbours over NVLink and to
   the host over PCIe 5.0. Modelling only host RAM made every spilled configuration on a PCIe 4.0
   card 2.5× too fast, on both decode and TTFT.
