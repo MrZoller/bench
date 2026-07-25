@@ -23,6 +23,7 @@ export * from './weights';
 export * from './activations';
 export * from './placement';
 export * from './speed';
+export * from './verdict';
 
 /** Everything the UI needs to answer "can I run this, and how comfortably". */
 export interface Scenario {
@@ -45,8 +46,13 @@ export interface Evaluation {
   kvBytesPerToken: number;
   /** KV cost of one more token at the current context. Lower for hybrid models past their window. */
   marginalKvBytesPerToken: number;
-  /** Largest context this rig can hold at the current concurrency. */
+  /** Largest context this rig can hold with every weight resident. */
   maxContextTokens: number;
+  /**
+   * Largest context that can actually be run, allowing weights to spill to host RAM. Equal to
+   * `maxContextTokens` whenever nothing is offloaded, and far larger when something is.
+   */
+  runnableContextTokens: number;
   /**
    * The context actually selected, after normalization.
    *
@@ -90,6 +96,9 @@ export function evaluate(scenario: Scenario): Evaluation {
       runtime
     ),
     maxContextTokens: maxContextThatFits(model, quant, usage, rig, runtime),
+    runnableContextTokens: maxContextThatFits(model, quant, usage, rig, runtime, {
+      allowOffload: true,
+    }),
     contextTokens: usage.contextTokens,
     hasSlidingLayers: hasSlidingLayers(model),
   };
