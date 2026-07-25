@@ -154,7 +154,7 @@
       "capacityGiB": 80,
       "allocatableGiB": 79,
       "bandwidthGBs": 2039,
-      "tflops": { "fp16": 312 },
+      "tflops": { "fp16": 312, "int8": 624 },
       "interconnect": "NVLink 3.0",
       "tdpWatts": 400,
       "releasedAt": "2020-11-16",

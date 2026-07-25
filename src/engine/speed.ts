@@ -9,7 +9,7 @@ import type {
 } from './types';
 import { effectiveBandwidth } from './types';
 import { attentionSpanPerToken, kvReadBytesPerToken } from './kv';
-import { activeWeightBytes, prefillComputeParams } from './weights';
+import { activeWeightBytes, outputProjectionParams, prefillComputeParams } from './weights';
 import type { Placement } from './placement';
 import { DEFAULT_HOST_BANDWIDTH } from './placement';
 
@@ -228,7 +228,13 @@ export function estimatePrefill(
   // Not `model.activeParams`: that is the published figure, which subtracts the embedding table
   // even when it is tied and therefore run as a full output matmul, and which counts a vision
   // tower that a text-only prompt never touches.
-  const linearFlops = 2 * prefillComputeParams(model) * promptTokens;
+  //
+  // The output projection is charged once, not per token: logits are produced only for the
+  // position that needs them. Per-token it would be 16% of a gpt-oss-20b prompt pass; dropped
+  // entirely it understates a *short* prompt by the same margin, since at one token the
+  // projection is most of the work.
+  const linearFlops =
+    2 * (prefillComputeParams(model) * promptTokens + outputProjectionParams(model));
   // QK^T and AV. Quadratic on full-attention layers, but only linear on sliding-window ones,
   // which attend over their window however long the prompt gets. Overtakes the linear term on
   // long prompts — why time-to-first-token degrades faster than people expect at big contexts.

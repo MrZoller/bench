@@ -104,13 +104,24 @@ export function effectiveActiveParams(model: ModelSpec, batch: number): number {
  *     the hidden states before it. Charging it anyway overstated prefill by 16% on gpt-oss-20b
  *     and 9% on Gemma 3 12B, the models with the largest vocabularies relative to their depth.
  *
- * The single output position that *is* computed is left out as noise: one token against a
- * prompt of hundreds.
+ * That one output position still has to be paid for — see {@link outputProjectionParams}, which
+ * the caller adds once per request rather than per token.
  */
 export function prefillComputeParams(model: ModelSpec): number {
-  const outputProjection = model.vocabSize * model.hiddenSize;
   const perToken = model.activeDenseParams + model.expertParams * expertFraction(model, 1);
-  return Math.max(0, perToken - outputProjection);
+  return Math.max(0, perToken - outputProjectionParams(model));
+}
+
+/**
+ * The `vocab x hidden` output projection, charged **once per prefill request**.
+ *
+ * Excluding it per-token and never adding it back is right in the limit and wrong for short
+ * prompts, where it is not a rounding error: on a one-token gpt-oss-20b prompt the projection is
+ * 0.58B of a 3.60B pass, so dropping it understates that pass by 16%. Per-token minus,
+ * once-per-request plus, is exact at every prompt length rather than only at long ones.
+ */
+export function outputProjectionParams(model: ModelSpec): number {
+  return model.vocabSize * model.hiddenSize;
 }
 
 /**

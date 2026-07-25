@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   activeWeightBytes,
   effectiveActiveParams,
+  outputProjectionParams,
   prefillComputeParams,
   weightBreakdown,
   weightBytes,
@@ -236,5 +237,35 @@ describe('prefill excludes the output projection', () => {
       (effectiveActiveParams(GPT_OSS_20B, 1) - prefillComputeParams(GPT_OSS_20B)) /
       effectiveActiveParams(GPT_OSS_20B, 1);
     expect(share).toBeGreaterThan(0.15);
+  });
+});
+
+/**
+ * The output projection is per-request work, not per-token work, and the difference only shows
+ * up at the ends: negligible on a long prompt, most of the pass on a one-token one.
+ */
+describe('output projection is charged once per prefill', () => {
+  const flops = (model: typeof GPT_OSS_20B, promptTokens: number) =>
+    2 * (prefillComputeParams(model) * promptTokens + outputProjectionParams(model));
+
+  it('is a sixth of a single-token prompt rather than vanishing from it', () => {
+    const withProjection = flops(GPT_OSS_20B, 1);
+    const withoutIt = 2 * prefillComputeParams(GPT_OSS_20B) * 1;
+
+    // 0.58B projection within a 3.60B one-token pass: omitting it loses 16% of the work. The
+    // expert term is most of the remainder, which is why this is a sixth and not a half.
+    expect(1 - withoutIt / withProjection).toBeCloseTo(0.16, 2);
+  });
+
+  it('is a rounding error on a long prompt', () => {
+    const perTokenShare =
+      outputProjectionParams(GPT_OSS_20B) / (prefillComputeParams(GPT_OSS_20B) * 4096);
+    expect(perTokenShare).toBeLessThan(0.001);
+  });
+
+  it('never charges it per token, at any prompt length', () => {
+    // Doubling the prompt must add exactly the per-token term twice over, not the projection too.
+    const delta = flops(GPT_OSS_20B, 2048) - flops(GPT_OSS_20B, 1024);
+    expect(delta).toBe(2 * prefillComputeParams(GPT_OSS_20B) * 1024);
   });
 });
