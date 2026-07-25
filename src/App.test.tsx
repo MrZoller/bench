@@ -1007,6 +1007,93 @@ describe('the share link never reports a result a later click has superseded', (
 
     expect(screen.getByText(/link copied/i)).toBeInTheDocument();
   });
+
+  /**
+   * And clears itself when the scenario *doesn't* move, which is the case the derived comparison
+   * cannot cover — nothing about `copiedHref === href` ever becomes false on its own. The timer was
+   * reachable by no test at all: the only one that advanced the clock got there superseded, so the
+   * success handler early-returned before scheduling anything. Deleting the line left the suite
+   * green and "Link copied" on screen indefinitely.
+   */
+  it('returns to its resting label two seconds later', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      const settlers = stubClipboard();
+      render(<App />);
+
+      await user.click(screen.getByRole('button', { name: /copy link to this scenario/i }));
+      await act(async () => settlers[0].resolve());
+      expect(screen.getByText(/link copied/i)).toBeInTheDocument();
+
+      await act(async () => {
+        vi.advanceTimersByTime(2500);
+      });
+      expect(screen.queryByText(/link copied/i)).not.toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: /copy link to this scenario/i })
+      ).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * The same race a click causes, arrived at from the other direction. The counter only advanced on
+   * a *click*, so a scenario change left the earlier write's callbacks live: the button beside the
+   * new scenario announced a success for a link the clipboard no longer holds.
+   */
+  it('does not confirm a write the user has moved the scenario out from under', async () => {
+    const user = userEvent.setup();
+    const settlers = stubClipboard();
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: /copy link to this scenario/i }));
+    expect(settlers).toHaveLength(1);
+
+    // The scenario moves while the write is still in flight.
+    act(() => useConfig.getState().set('concurrency', 4));
+
+    await act(async () => settlers[0].resolve());
+    expect(screen.queryByText(/link copied/i)).not.toBeInTheDocument();
+  });
+
+  /**
+   * A confirmation already on screen is stale for the same reason: it describes what the clipboard
+   * holds, and what the clipboard holds has stopped matching what is on screen.
+   */
+  it('withdraws a confirmation once the scenario it described has changed', async () => {
+    const user = userEvent.setup();
+    const settlers = stubClipboard();
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: /copy link to this scenario/i }));
+    await act(async () => settlers[0].resolve());
+    expect(screen.getByText(/link copied/i)).toBeInTheDocument();
+
+    act(() => useConfig.getState().set('concurrency', 4));
+    expect(screen.queryByText(/link copied/i)).not.toBeInTheDocument();
+  });
+
+  /**
+   * But the manual-copy fallback is not a stale claim — the clipboard is still unavailable, and the
+   * field renders `href`, so it is already offering the new link. Clearing it on every slider frame
+   * would snatch the fallback away mid-copy, which is a worse failure than the one above.
+   */
+  it('keeps the manual-copy field through a scenario change, and updates it', async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: /copy link to this scenario/i }));
+    const before = (screen.getByLabelText('Link to this scenario') as HTMLInputElement).value;
+
+    act(() => useConfig.getState().set('concurrency', 4));
+
+    const after = screen.getByLabelText('Link to this scenario') as HTMLInputElement;
+    expect(after).toBeInTheDocument();
+    expect(after.value).not.toBe(before);
+  });
 });
 
 /**
