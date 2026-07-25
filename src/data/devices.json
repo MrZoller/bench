@@ -64,7 +64,8 @@
       "tdpWatts": 350,
       "msrpUsd": 1499,
       "releasedAt": "2020-09-24",
-      "source": "https://www.techpowerup.com/gpu-specs/geforce-rtx-3090.c3622"
+      "source": "https://www.techpowerup.com/gpu-specs/geforce-rtx-3090.c3622",
+      "note": "The last GeForce card with an NVLink bridge, but only two-way and only with the accessory fitted. The interconnect field records the configuration as shipped, so a bridged pair is modelled at PCIe rates here; the 40-series dropped NVLink entirely."
     },
 
     {
