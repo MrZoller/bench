@@ -4,6 +4,7 @@ import { QUANTS } from '@/data/quants';
 import { getDevice, getModel } from '@/data/catalog';
 import { BudgetBar } from './BudgetBar';
 import { Telemetry } from './Telemetry';
+import { Workloads } from './Workloads';
 import { Segmented, Select, StopSlider } from './Controls';
 import { compact, gibLabel, params, tokens } from '@/lib/format';
 import type { KvPrecision } from '@/engine/types';
@@ -137,9 +138,10 @@ export function Bench() {
         />
       </section>
 
-      {/* The hero, and the three answers it does not collapse into one. */}
+      {/* The hero, the three answers it does not collapse into one, and what they add up to. */}
       <BudgetBar evaluation={evaluation} />
       <Telemetry evaluation={evaluation} />
+      <Workloads evaluation={evaluation} config={config} />
 
       {/* Usage: the half of the question that is about you, not the hardware. */}
       <section aria-label="Usage" className="panel grid gap-5 p-5 sm:grid-cols-2">
