@@ -43,6 +43,7 @@ function judge(model: Parameters<typeof evaluate>[0]['model'], quantId: string, 
     decode: evaluation.decode,
     usage,
     maxContextTokens: evaluation.maxContextTokens,
+    runnableContextTokens: evaluation.runnableContextTokens,
     // Each archetype is graded at its own prompt length, so this re-runs prefill per call.
     prefillAt: (promptTokens) =>
       evaluate({
@@ -187,5 +188,66 @@ describe('workload verdicts', () => {
   it('asks for concurrency before judging multi-user serving', () => {
     const verdicts = judge(LLAMA_31_8B, 'q4_k_m', { device: RTX_5090, concurrency: 1 });
     expect(verdicts.get('serving')?.reason).toMatch(/concurrency above 1/i);
+  });
+});
+
+/**
+ * Two ways the context limit can mislead a verdict, both found in review.
+ */
+describe('context limits and workload fit', () => {
+  it('refuses RAG when its own 32K prompt has nowhere to live', () => {
+    // Built directly rather than through a scenario: the case is a rig that *runs* while having
+    // room for only a small context, and a real configuration tight enough to produce it is
+    // usually `impossible` outright, which the top-level gate catches first for a different
+    // reason. Prefill here is deliberately fast, so only the fit can be what fails it.
+    const base = evaluate({
+      model: LLAMA_31_8B,
+      quant: getQuant('q4_k_m'),
+      usage: { contextTokens: 8192, concurrency: 1, promptTokens: 2048, kvPrecision: 'fp16' },
+      rig: { device: RTX_5090, count: 1 },
+      runtime: LLAMA_CPP,
+    });
+
+    const verdicts = new Map(
+      judgeWorkloads({
+        placement: base.placement,
+        decode: base.decode,
+        usage: { contextTokens: 4096, concurrency: 1, promptTokens: 2048, kvPrecision: 'fp16' },
+        maxContextTokens: 4096,
+        runnableContextTokens: 4096, // Far short of the 32K a RAG query sends.
+        prefillAt: (promptTokens) =>
+          evaluate({
+            model: LLAMA_31_8B,
+            quant: getQuant('q4_k_m'),
+            usage: { contextTokens: 8192, concurrency: 1, promptTokens, kvPrecision: 'fp16' },
+            rig: { device: RTX_5090, count: 1 },
+            runtime: LLAMA_CPP,
+          }).prefill,
+      }).map((v) => [v.workload.id, v])
+    );
+
+    expect(verdicts.get('rag')!.fitness).toBe('fail');
+    expect(verdicts.get('rag')!.reason).toMatch(/not enough for the 32K/i);
+  });
+
+  /**
+   * `maxContextThatFits` requires a fully resident placement, so it is zero for *any* offloaded
+   * configuration — even one whose KV would comfortably hold 128K once the weights are on the
+   * host. Grading long-context on that figure reported "caps out at 0" for a working rig.
+   */
+  it('grades long-context on what can run, not only on what stays resident', () => {
+    const evaluation = evaluate({
+      model: DEEPSEEK_V3,
+      quant: getQuant('q4_k_m'),
+      usage: { contextTokens: 8192, concurrency: 1, promptTokens: 2048, kvPrecision: 'fp16' },
+      rig: { device: RTX_5090, count: 1 },
+      runtime: LLAMA_CPP,
+    });
+
+    // Weights spill, so the resident limit collapses...
+    expect(evaluation.placement.offloadFraction).toBeGreaterThan(0);
+    expect(evaluation.maxContextTokens).toBe(0);
+    // ...while the runnable one reflects the KV that genuinely fits.
+    expect(evaluation.runnableContextTokens).toBeGreaterThan(0);
   });
 });

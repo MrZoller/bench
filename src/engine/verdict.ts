@@ -102,8 +102,14 @@ export interface VerdictInputs {
   placement: Placement;
   decode: DecodeEstimate;
   usage: UsageSpec;
-  /** Largest context the rig can hold at this concurrency. */
+  /** Largest context the rig can hold with every weight resident. */
   maxContextTokens: number;
+  /**
+   * Largest context that can actually be run, allowing offload. Used for the archetypes that
+   * only need the configuration to work, as opposed to work comfortably — the resident figure
+   * is zero for any offloaded rig, which would fail long-context on a card that would hold it.
+   */
+  runnableContextTokens: number;
   /**
    * Prefill re-estimated at an arbitrary prompt length.
    *
@@ -121,7 +127,7 @@ export interface VerdictInputs {
  * completion passes, everything below it does too.
  */
 export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
-  const { placement, decode, usage, maxContextTokens, prefillAt } = inputs;
+  const { placement, decode, usage, maxContextTokens, runnableContextTokens, prefillAt } = inputs;
 
   // Nothing else is meaningful if it cannot load. Said once, rather than seven times.
   if (placement.unsupported || placement.impossible) {
@@ -139,6 +145,7 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
   const completionTtft = ttftFor('completion');
   const agentTtft = ttftFor('agent');
   const ragPrefill = prefillAt(workload('rag').typicalPromptTokens);
+  const ragFits = runnableContextTokens >= workload('rag').typicalPromptTokens;
 
   return [
     judge('chat', {
@@ -166,33 +173,42 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
       // Agents need all three: speed, headroom, and a prompt pass that does not stall each turn.
       // Omitting the latency term is what let a machine fail chat while "passing" this, which is
       // backwards — an agent does everything chat does, over a far larger prompt.
-      pass: perUser >= 25 && maxContextTokens >= 65536 && agentTtft <= 10,
-      tight: perUser >= 15 && maxContextTokens >= 32768 && agentTtft <= 30,
+      pass: perUser >= 25 && runnableContextTokens >= 65536 && agentTtft <= 10,
+      tight: perUser >= 15 && runnableContextTokens >= 32768 && agentTtft <= 30,
       why: () =>
-        maxContextTokens < 32768
-          ? `Only ${ctx(maxContextTokens)} of context fits — an agent fills that within a few turns.`
+        runnableContextTokens < 32768
+          ? `Only ${ctx(runnableContextTokens)} of context fits — an agent fills that within a few turns.`
           : agentTtft > 30
             ? `${fmt(agentTtft)}s to re-read a 16K prompt makes every step a wait.`
             : perUser < 15
               ? `${fmt(perUser)} tok/s makes a multi-step session take minutes per step.`
-              : `${fmt(perUser)} tok/s over ${ctx(maxContextTokens)} of context, ${fmt(agentTtft)}s per turn.`,
+              : `${fmt(perUser)} tok/s over ${ctx(runnableContextTokens)} of context, ${fmt(agentTtft)}s per turn.`,
     }),
     judge('rag', {
-      // The answer is short; the prompt is not. This lives or dies on prefill.
-      pass: ragPrefill.ttftSeconds <= 5,
-      tight: ragPrefill.ttftSeconds <= 20,
+      // The answer is short; the prompt is not. This lives or dies on prefill — but speed is
+      // moot if the 32K prompt has nowhere to live: prefill is estimated at the archetype's own
+      // prompt length, which deliberately ignores the configured context, so the fit has to be
+      // checked separately or a fast machine could be graded good for a prompt it cannot hold.
+      pass: ragFits && ragPrefill.ttftSeconds <= 5,
+      tight: ragFits && ragPrefill.ttftSeconds <= 20,
       why: () =>
-        ragPrefill.ttftSeconds > 20
-          ? `${fmt(ragPrefill.ttftSeconds)}s to read a 32K document before answering.`
-          : `${Math.round(ragPrefill.prefillTokensPerSec)} tok/s prompt processing — ${fmt(ragPrefill.ttftSeconds)}s for a 32K document.`,
+        !ragFits
+          ? `Only ${ctx(runnableContextTokens)} of context fits — not enough for the 32K document this assumes.`
+          : ragPrefill.ttftSeconds > 20
+            ? `${fmt(ragPrefill.ttftSeconds)}s to read a 32K document before answering.`
+            : `${Math.round(ragPrefill.prefillTokensPerSec)} tok/s prompt processing — ${fmt(ragPrefill.ttftSeconds)}s for a 32K document.`,
     }),
     judge('long-context', {
-      pass: maxContextTokens >= 131072,
-      tight: maxContextTokens >= 65536,
+      // Offload-aware: the resident figure is zero for any spilled configuration, which would
+      // fail a card that holds 128K of KV perfectly well once its weights are on the host.
+      pass: runnableContextTokens >= 131072,
+      tight: runnableContextTokens >= 65536,
       why: () =>
-        maxContextTokens >= 131072
-          ? `Holds ${ctx(maxContextTokens)} at this concurrency.`
-          : `Caps out at ${ctx(maxContextTokens)} — short of the 128K these jobs assume.`,
+        runnableContextTokens < 65536
+          ? `Caps out at ${ctx(runnableContextTokens)} — short of the 128K these jobs assume.`
+          : runnableContextTokens > maxContextTokens
+            ? `Reaches ${ctx(runnableContextTokens)}, though only with weights offloaded.`
+            : `Holds ${ctx(runnableContextTokens)} at this concurrency.`,
     }),
     judge('batch', {
       // No latency budget at all. The only question is whether it runs and finishes.

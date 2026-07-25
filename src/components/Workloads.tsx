@@ -35,6 +35,7 @@ export function Workloads({ evaluation, config }: { evaluation: Evaluation; conf
       kvPrecision: config.kvPrecision,
     },
     maxContextTokens: evaluation.maxContextTokens,
+    runnableContextTokens: evaluation.runnableContextTokens,
     // Graded at each archetype's own prompt, so this strip does not move when the prompt
     // slider does — a completion popup sends what it sends regardless of the current setting.
     prefillAt: (promptTokens) => evaluateConfig({ ...config, promptTokens }).prefill,

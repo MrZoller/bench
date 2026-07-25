@@ -167,15 +167,33 @@ export function planPlacement(
  * inverted formula, because hybrid sliding-window models make KV a non-linear function of
  * context — the closed form would be wrong for exactly the models it matters most for.
  */
+export interface ContextLimitOptions {
+  /**
+   * Count a context as reachable when the weights spill to host RAM, rather than requiring a
+   * fully resident placement.
+   *
+   * The distinction is not cosmetic. `fits` is false for *any* offloaded configuration, even at
+   * a one-token context, so the resident limit collapses to zero the moment a model is too big
+   * for the card — reporting "caps out at 0" for a rig that would happily hold 128K of KV once
+   * the weights are offloaded. Ask for the resident figure when saying what fits comfortably,
+   * and the offload-aware one when saying what can actually be run.
+   */
+  allowOffload?: boolean;
+}
+
 export function maxContextThatFits(
   model: ModelSpec,
   quant: QuantSpec,
   usage: UsageSpec,
   rig: Rig,
-  runtime: RuntimeSpec
+  runtime: RuntimeSpec,
+  { allowOffload = false }: ContextLimitOptions = {}
 ): number {
-  const attempt = (contextTokens: number) =>
-    planPlacement(model, quant, { ...usage, contextTokens }, rig, runtime).fits;
+  const attempt = (contextTokens: number) => {
+    const placement = planPlacement(model, quant, { ...usage, contextTokens }, rig, runtime);
+    if (placement.unsupported) return false;
+    return allowOffload ? !placement.impossible : placement.fits;
+  };
 
   if (!attempt(1)) return 0;
 

@@ -46,8 +46,13 @@ export interface Evaluation {
   kvBytesPerToken: number;
   /** KV cost of one more token at the current context. Lower for hybrid models past their window. */
   marginalKvBytesPerToken: number;
-  /** Largest context this rig can hold at the current concurrency. */
+  /** Largest context this rig can hold with every weight resident. */
   maxContextTokens: number;
+  /**
+   * Largest context that can actually be run, allowing weights to spill to host RAM. Equal to
+   * `maxContextTokens` whenever nothing is offloaded, and far larger when something is.
+   */
+  runnableContextTokens: number;
   hasSlidingLayers: boolean;
 }
 
@@ -75,6 +80,9 @@ export function evaluate(scenario: Scenario): Evaluation {
     kvBytesPerToken: kvBytesPerToken(model, usage.kvPrecision),
     marginalKvBytesPerToken: marginalKvBytesPerToken(model, usage.contextTokens, usage.kvPrecision),
     maxContextTokens: maxContextThatFits(model, quant, usage, rig, runtime),
+    runnableContextTokens: maxContextThatFits(model, quant, usage, rig, runtime, {
+      allowOffload: true,
+    }),
     hasSlidingLayers: hasSlidingLayers(model),
   };
 }
