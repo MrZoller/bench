@@ -23,7 +23,14 @@ interface Segment {
   hint: string;
 }
 
-export function BudgetBar({ evaluation }: { evaluation: Evaluation }) {
+export function BudgetBar({
+  evaluation,
+  canOffload,
+}: {
+  evaluation: Evaluation;
+  /** Whether this device has a slower tier to spill weights to at all — discrete GPUs only. */
+  canOffload: boolean;
+}) {
   const [hovered, setHovered] = useState<string | null>(null);
   const tableId = useId();
   const [showTable, setShowTable] = useState(false);
@@ -85,6 +92,33 @@ export function BudgetBar({ evaluation }: { evaluation: Evaluation }) {
   // legible as a proportion rather than clipped at the edge.
   const scale = Math.max(used, ceiling) || 1;
   const overflows = used > ceiling;
+
+  /**
+   * What the overflow line should say, which is not always "spill the weights".
+   *
+   * `offloadFraction` is capped at 1, so a placement where the cache and overhead *alone* pass
+   * the ceiling reported "100% of weights would spill" — an instruction that reads like a remedy
+   * and contradicts the capacity verdict a few pixels away. Removing every weight still leaves
+   * this configuration over, and the bar has the figures to say so.
+   *
+   * Split on `canOffload`, for the same reason `capacityReading` in Telemetry does: a discrete GPU
+   * and a Mac both reach `impossible`, by different routes. Testing the non-offloadable floor
+   * instead read that Mac as an overflowing 5090 and told it to spill, on a machine with no tier
+   * to spill to — the two panels sit one above the other and described the same placement two
+   * different ways.
+   *
+   * This says what the overflow *is* and stops there. Whether the ceiling can be raised is a
+   * remedy, and Telemetry states it a few pixels below; saying it twice in adjacent panels is how
+   * one of the two copies later drifts.
+   */
+  const floorBytes = placement.kvBytesPerDevice + placement.activationBytesPerDevice;
+  const overflowDetail = placement.impossible
+    ? canOffload
+      ? ` — the cache and overhead alone need ${gibLabel(floorBytes)}, and neither can be offloaded, so spilling every weight would still leave it over`
+      : ' — and this memory is the machine’s own, so there is nowhere faster to spill to'
+    : placement.offloadFraction > 0
+      ? ` — ${percent(placement.offloadFraction)} of weights would spill to host RAM`
+      : '';
 
   return (
     <section aria-labelledby={`${tableId}-title`} className="panel p-5">
@@ -153,9 +187,7 @@ export function BudgetBar({ evaluation }: { evaluation: Evaluation }) {
         <p className="mt-2 text-sm text-[var(--color-critical)]">
           <span aria-hidden="true">▲ </span>
           Over the ceiling by {gibLabel(used - ceiling)}
-          {placement.offloadFraction > 0 &&
-            ` — ${percent(placement.offloadFraction)} of weights would spill to host RAM`}
-          .
+          {overflowDetail}.
         </p>
       )}
 
