@@ -86,8 +86,26 @@ export function useUrlSync(): void {
       const search = arrivedExplicit.current
         ? configToShareSearch(current)
         : configToSearch(current);
-      const next = `${window.location.pathname}${search}`;
-      if (next === `${window.location.pathname}${window.location.search}`) return;
+      /**
+       * The fragment is carried through, not rebuilt.
+       *
+       * This effect owns the *query*, and `replaceState` takes a whole URL — so building one from
+       * the pathname and the scenario alone silently dropped `#anything` on the first slider move.
+       * The person who loses it is whoever arrived by an anchor link: their address bar, and the
+       * history entry behind it, quietly stop pointing at the section they came for.
+       *
+       * Not hypothetical since the Matrix's click-to-scroll landed — `DETAIL_ANCHOR_ID` is a real
+       * id on this page that someone can link to.
+       *
+       * The share link deliberately does *not* do this. It is constructed rather than preserved,
+       * and it claims a scenario rather than a position; carrying the sender's scroll anchor into
+       * someone else's link would be a different overclaim.
+       */
+      // The guard compares the one part this effect produces. Interpolating the fragment into both
+      // sides would cancel out and read as though it participated — and would stop guarding the
+      // moment `next` took its fragment from anywhere but the current location.
+      if (search === window.location.search) return;
+      const next = `${window.location.pathname}${search}${window.location.hash}`;
 
       try {
         window.history.replaceState(null, '', next);

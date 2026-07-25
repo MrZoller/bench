@@ -6,6 +6,7 @@ import { useConfig, DEFAULT_CONFIG } from '@/store/config';
 import { configToShareSearch } from '@/store/url';
 import { getModel } from '@/data/catalog';
 import { tokens } from '@/lib/format';
+import { DETAIL_ANCHOR_ID } from '@/components/Matrix';
 
 afterEach(() => {
   cleanup();
@@ -614,6 +615,25 @@ describe('an explicitly shared scenario survives being opened', () => {
     await waitFor(() => {
       expect(window.location.search).toBe('');
     });
+  });
+
+  /**
+   * The synchroniser owns the query and was rebuilding the whole URL, so the first configuration
+   * change dropped whatever fragment the page was opened with — and with it the anchor a bookmark
+   * or a shared section link was pointing at. `DETAIL_ANCHOR_ID` makes that a real id on this page
+   * rather than a hypothetical one.
+   */
+  it('keeps a fragment the page was opened with', async () => {
+    window.history.replaceState(null, '', `${window.location.pathname}#${DETAIL_ANCHOR_ID}`);
+    render(<App />);
+
+    // Any configuration change triggers the rewrite that used to lose it.
+    act(() => useConfig.getState().set('concurrency', 4));
+
+    await waitFor(() => {
+      expect(window.location.search).not.toBe('');
+    });
+    expect(window.location.hash).toBe(`#${DETAIL_ANCHOR_ID}`);
   });
 });
 
