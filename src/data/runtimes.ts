@@ -55,6 +55,8 @@ export const RUNTIMES: readonly RuntimeSpec[] = [
     computeEfficiency: 0.15,
     nativeLowPrecision: false,
     supports: ['unified-soc'],
+    // Class is too coarse here: `unified-soc` also covers the DGX Spark and Strix Halo.
+    requiresVendor: 'Apple',
     source: 'https://github.com/ml-explore/mlx',
   },
 ] as const;

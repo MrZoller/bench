@@ -112,3 +112,59 @@ describe('the Bench', () => {
     expect(screen.getByText(/specs may change/i)).toBeInTheDocument();
   });
 });
+
+/**
+ * Guards for the review round on the Bench. Every one of these is the same failure in a
+ * different costume: something confident asserted for a state where it is not true.
+ */
+describe('the Bench does not overclaim', () => {
+  it('refuses MLX on unified memory that is not Apple', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // `unified-soc` covers the Spark, Strix Halo and Apple silicon; MLX drives only the last.
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'dgx-spark');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+
+    const verdicts = screen.getByRole('region', { name: 'Verdicts' });
+    expect(within(verdicts).getAllByText('Unsupported').length).toBeGreaterThan(0);
+    expect(within(verdicts).queryByText(/tok\/s per user/)).not.toBeInTheDocument();
+  });
+
+  it('does not call an offloaded configuration fast', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // 671B on a 32 GB card: runnable via offload, and slow because of it.
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
+
+    expect(screen.queryByText(/runs fast/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/crossing the host bus/i)).toBeInTheDocument();
+  });
+
+  it('explains a full card as a full card, not as a Mac', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+
+    // The shared-memory explanation must not appear for a discrete GPU.
+    expect(screen.queryByText(/no faster tier/i)).not.toBeInTheDocument();
+  });
+
+  it('shows why a hand-entered parameter count differs from the index', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
+    expect(screen.getByText(/Multi-Token Prediction/i)).toBeInTheDocument();
+  });
+
+  it('says when the catalog was generated', () => {
+    render(<App />);
+    expect(screen.getByText(/Model catalog generated/i)).toBeInTheDocument();
+  });
+});

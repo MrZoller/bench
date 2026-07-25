@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { DEVICES, MODELS, RUNTIMES, evaluateConfig, useConfig } from '@/store/config';
 import { QUANTS } from '@/data/quants';
-import { getDevice, getModel } from '@/data/catalog';
+import { CATALOG_GENERATED_AT, getDevice, getModel } from '@/data/catalog';
 import { BudgetBar } from './BudgetBar';
 import { Telemetry } from './Telemetry';
 import { Workloads } from './Workloads';
@@ -43,8 +43,15 @@ export function Bench() {
   const model = getModel(config.modelId);
   const device = getDevice(config.deviceId);
 
-  /** Whether any speed claim is meaningful for this configuration at all. */
+  /** Whether the configuration runs at all. */
   const runnable = !evaluation.placement.unsupported && !evaluation.placement.impossible;
+  /**
+   * Whether a *speed* claim is defensible, which is a stricter question than whether it runs.
+   * A discrete GPU that spills most of its weights over PCIe is runnable and slow — DeepSeek V3
+   * on a 5090 offloads 93% and decodes at 3.9 tok/s — so "would still run fast" contradicts the
+   * verdict tiles directly above it.
+   */
+  const fast = runnable && evaluation.placement.offloadFraction === 0;
   /** Only discrete GPUs shard a model across devices. */
   const shardable = device.class === 'discrete-gpu';
 
@@ -57,12 +64,15 @@ export function Bench() {
           label: `${m.name} — ${params(m.totalParams)}${
             m.expertParams > 0 ? ` (${params(m.activeParams)} active)` : ''
           }`,
+          // The override note takes precedence: three models carry a hand-entered totalParams,
+          // and every figure on screen derives from it. That provenance outranks a download count.
           note:
-            m.popularity && m.popularity.downloads > 0
+            m.overrideNote ??
+            (m.popularity && m.popularity.downloads > 0
               ? `${compact(m.popularity.downloads)} downloads/mo${
                   m.popularity.measuredOn ? ` on ${m.popularity.measuredOn}` : ''
                 }`
-              : undefined,
+              : undefined),
         })),
     []
   );
@@ -106,7 +116,11 @@ export function Bench() {
         </div>
         <p className="max-w-md text-xs leading-relaxed text-[var(--color-text-faint)]">
           Estimates from a roofline model calibrated against published measurements. Treat them as a
-          band, not a promise.
+          band, not a promise. Model catalog generated{' '}
+          <time dateTime={CATALOG_GENERATED_AT}>
+            {new Date(CATALOG_GENERATED_AT).toISOString().slice(0, 10)}
+          </time>
+          .
         </p>
       </header>
 
@@ -140,7 +154,7 @@ export function Bench() {
 
       {/* The hero, the three answers it does not collapse into one, and what they add up to. */}
       <BudgetBar evaluation={evaluation} />
-      <Telemetry evaluation={evaluation} />
+      <Telemetry evaluation={evaluation} canOffload={shardable} />
       <Workloads evaluation={evaluation} config={config} />
 
       {/* Usage: the half of the question that is about you, not the hardware. */}
@@ -203,7 +217,7 @@ export function Bench() {
               configuration cannot run, the architecture lesson still stands — the speed claim
               does not, so the heading drops it.
             */}
-            {runnable
+            {fast
               ? evaluation.placement.fits
                 ? 'Why this fits but still runs fast'
                 : 'Why this is heavy but would still run fast'
@@ -214,9 +228,11 @@ export function Bench() {
             <strong className="text-[var(--color-text)]">{params(model.totalParams)}</strong> of
             weights, so all of them occupy memory — but routes each token through only{' '}
             <strong className="text-[var(--color-text)]">{params(model.activeParams)}</strong>
-            {runnable
+            {fast
               ? ', so it decodes at roughly that model size rather than its full one.'
-              : '. That is why a model this size can be fast anywhere it does fit.'}{' '}
+              : evaluation.placement.offloadFraction > 0
+                ? '. That would make it fast — but not here, with most of the weights crossing the host bus every token.'
+                : '. That is why a model this size can be fast anywhere it does fit.'}{' '}
             Total parameters set what fits; active parameters set how fast it feels.
           </p>
           {model.experts && (

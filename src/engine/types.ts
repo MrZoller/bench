@@ -288,6 +288,14 @@ export interface RuntimeSpec {
   preallocFraction?: number;
   /** Device classes this runtime can drive at all. */
   supports: readonly DeviceClass[];
+  /**
+   * Vendor this runtime is additionally restricted to, when class alone is too coarse.
+   *
+   * `unified-soc` covers Apple silicon, NVIDIA's GB10 and AMD's Strix Halo, which share a
+   * memory topology and nothing else. MLX drives only the first, so without this it reported
+   * plausible throughput for a DGX Spark it cannot run on at all.
+   */
+  requiresVendor?: string;
   source: string;
 }
 

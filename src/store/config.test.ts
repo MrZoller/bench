@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_CONFIG, evaluateConfig, useConfig, type Config } from './config';
+import { getModel } from '@/data/catalog';
 
 /**
  * The store is the boundary between untrusted input and the engine.
@@ -37,7 +38,26 @@ describe('config coercion', () => {
 
   it('clamps out-of-range numbers into the range', () => {
     expect(set('concurrency', -5).concurrency).toBe(1);
-    expect(set('contextTokens', 99_000_000).contextTokens).toBe(1_048_576);
+  });
+
+  /**
+   * A model cannot be asked for more context than it was trained for. The slider offers stops
+   * up to 1M while every catalogued model tops out between 32K and 164K, so an uncapped value
+   * would produce fit, memory and speed estimates for a window the model cannot process.
+   */
+  it('caps context at the selected model, not at the slider maximum', () => {
+    const state = set('contextTokens', 99_000_000);
+    expect(state.contextTokens).toBe(getModel(state.modelId).maxContext);
+    expect(state.contextTokens).toBeLessThan(1_048_576);
+  });
+
+  it('re-caps context when the model changes beneath it', () => {
+    useConfig.setState(DEFAULT_CONFIG);
+    const store = useConfig.getState();
+
+    store.set('contextTokens', 131072);
+    store.set('modelId', 'Qwen/Qwen3-32B'); // 40960 max
+    expect(useConfig.getState().contextTokens).toBe(getModel('Qwen/Qwen3-32B').maxContext);
   });
 
   /**
