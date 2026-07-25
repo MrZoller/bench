@@ -1,8 +1,10 @@
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
 import App from './App';
 import { useConfig, DEFAULT_CONFIG } from '@/store/config';
+import { getModel } from '@/data/catalog';
+import { tokens } from '@/lib/format';
 
 afterEach(() => {
   cleanup();
@@ -166,5 +168,206 @@ describe('the Bench does not overclaim', () => {
   it('says when the catalog was generated', () => {
     render(<App />);
     expect(screen.getByText(/Model catalog generated/i)).toBeInTheDocument();
+  });
+});
+
+describe('the Bench keeps the controls and the engine in step', () => {
+  /**
+   * The slider must offer the values the engine will actually be given. `coerce` clamps context
+   * to the model's maximum, so a fixed stop list showed 32K while the store held 40,960 — with
+   * the budget bar and throughput computed for neither.
+   */
+  it('caps the context slider at the model, not at a fixed list', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Model'), 'Qwen/Qwen3-32B');
+    const max = getModel('Qwen/Qwen3-32B').maxContext;
+
+    const slider = screen.getByLabelText('Context per sequence');
+    await user.click(slider);
+    fireEvent.change(slider, { target: { value: '99' } }); // Past the end; clamps to the last stop.
+
+    expect(useConfig.getState().contextTokens).toBe(max);
+    // The displayed value and the stored one must agree.
+    expect(screen.getByText(tokens(max))).toBeInTheDocument();
+  });
+
+  it('does not call a resident but slow configuration fast', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Fits an EPYC host with nothing offloaded, and decodes at ~10 tok/s.
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'epyc-9654');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
+
+    // Resident — nothing spilled — and still too slow to claim speed for.
+    expect(useConfig.getState().deviceId).toBe('epyc-9654');
+    expect(screen.queryByText(/runs fast/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/How DeepSeek V3 is put together/i)).toBeInTheDocument();
+  });
+
+  it('says a raiseable ceiling is raiseable instead of just refusing', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-512');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q5_k_m');
+
+    expect(screen.getByText(/raise it/i)).toBeInTheDocument();
+  });
+});
+
+describe('the Bench keeps its claims consistent with its own numbers', () => {
+  /**
+   * Two places make speed claims and they must not drift. gpt-oss-20b BF16 on a Spark lands in
+   * the 15-30 band, where the tile says "Usable" — so the aside must not say "runs fast".
+   */
+  it('reserves the fast claim for the verdict that says Fast', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Model'), 'openai/gpt-oss-20b');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'bf16');
+
+    const verdicts = screen.getByRole('region', { name: 'Verdicts' });
+    const saysFast = within(verdicts).queryByText('Fast') !== null;
+    const claimsFast = screen.queryByText(/runs fast/i) !== null;
+    expect(claimsFast).toBe(saysFast);
+  });
+
+  it('shows no memory budget for a runtime that cannot drive the hardware', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'epyc-9654');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'vllm');
+
+    // The ceiling and overhead are vLLM's own numbers; drawing them here would be an assumption
+    // about software that never loads.
+    expect(screen.queryByRole('img', { name: /allocatable used/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/No budget to show/i)).toBeInTheDocument();
+  });
+
+  it('offers multi-device on a Spark, which has a real link between units', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'dgx-spark');
+    expect(screen.getByLabelText('Device count')).toBeInTheDocument();
+
+    // A Mac has no transport between chassis, so it stays single.
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
+    expect(screen.queryByLabelText('Device count')).not.toBeInTheDocument();
+  });
+
+  it('keeps a curated note alongside the tunable-ceiling warning', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'ryzen-ai-max-395');
+    expect(screen.getByText(/raiseable/i)).toBeInTheDocument();
+    expect(screen.getByText(/213/)).toBeInTheDocument();
+  });
+});
+
+describe('the Bench refuses impossible combinations', () => {
+  it('does not offer NVFP4 on hardware that cannot run it', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    expect(screen.getByRole('option', { name: /NVFP4/i })).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mi355x');
+    expect(screen.queryByRole('option', { name: /NVFP4/i })).not.toBeInTheDocument();
+  });
+
+  /**
+   * `rate()` rounds, so classifying the raw estimate could print "15 tok/s · Slow" against a
+   * threshold of 15. The verdict is read off the displayed number instead.
+   */
+  it('never labels a displayed rate against a threshold it has already crossed', () => {
+    render(<App />);
+    const verdicts = screen.getByRole('region', { name: 'Verdicts' });
+    const shown = Number(
+      within(verdicts).getByText(/tok\/s per user/).previousSibling?.textContent
+    );
+
+    if (!Number.isFinite(shown)) return;
+    const word = ['Fast', 'Usable', 'Slow'].find((w) => within(verdicts).queryByText(w) !== null);
+    if (shown >= 30) expect(word).toBe('Fast');
+    else if (shown >= 15) expect(word).toBe('Usable');
+    else expect(word).toBe('Slow');
+  });
+});
+
+describe('the slider never displays a value the engine is not using', () => {
+  it('keeps the stored context selectable after switching to a larger model', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Qwen caps at 40,960 — not one of the fixed stops.
+    await user.selectOptions(screen.getByLabelText('Model'), 'Qwen/Qwen3-32B');
+    const slider = screen.getByLabelText('Context per sequence');
+    fireEvent.change(slider, { target: { value: '99' } });
+
+    const capped = useConfig.getState().contextTokens;
+    expect(capped).toBe(getModel('Qwen/Qwen3-32B').maxContext);
+
+    // Switching to a roomier model preserves that value, so it must remain displayable.
+    await user.selectOptions(screen.getByLabelText('Model'), 'openai/gpt-oss-120b');
+    expect(useConfig.getState().contextTokens).toBe(capped);
+    expect(screen.getByText(tokens(capped))).toBeInTheDocument();
+  });
+
+  it('does not offer NVFP4 on NVIDIA cards without FP4 tensor cores', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Blackwell has them.
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    expect(screen.getByRole('option', { name: /NVFP4/i })).toBeInTheDocument();
+
+    // Ada and Hopper are NVIDIA and have none, so the vendor check alone was not enough.
+    for (const id of ['rtx-4090', 'h100-sxm', 'rtx-3090']) {
+      await user.selectOptions(screen.getByLabelText('Hardware'), id);
+      expect(screen.queryByRole('option', { name: /NVFP4/i })).not.toBeInTheDocument();
+    }
+  });
+});
+
+describe('the Bench offers only what the runtime can do', () => {
+  it('drops a 4-bit KV cache when the runtime has no such flag', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'llama.cpp');
+    expect(screen.getByRole('button', { name: 'Q4' })).toBeInTheDocument();
+
+    // vLLM's --kv-cache-dtype has no 4-bit option; offering one charges 0.5 bytes per element
+    // for something it cannot allocate, turning a long-context OOM into a reported fit.
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'vllm');
+    expect(screen.queryByRole('button', { name: 'Q4' })).not.toBeInTheDocument();
+    expect(useConfig.getState().kvPrecision).not.toBe('q4');
+  });
+
+  it('runs vLLM on a Spark, which is a CUDA target', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'dgx-spark');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'vllm');
+
+    const verdicts = screen.getByRole('region', { name: 'Verdicts' });
+    expect(within(verdicts).queryByText('Unsupported')).not.toBeInTheDocument();
+
+    // Apple unified memory is still refused — the class alone was never the rule.
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
+    expect(within(verdicts).getAllByText('Unsupported').length).toBeGreaterThan(0);
   });
 });

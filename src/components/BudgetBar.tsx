@@ -31,6 +31,28 @@ export function BudgetBar({ evaluation }: { evaluation: Evaluation }) {
   const { placement } = evaluation;
   const ceiling = placement.allocatableBytesPerDevice;
 
+  /**
+   * Every figure in this bar is runtime-specific — the ceiling carries vLLM's 90% pre-allocation
+   * and the overhead band is its 1.5 GiB of framework state. For a pair the runtime cannot
+   * drive, those are not merely unknown, they are assumptions about software that will never
+   * load. Drawing a confident stack from them beside three tiles reading "Unsupported" is the
+   * same overclaim the tiles already refuse.
+   */
+  if (placement.unsupported) {
+    return (
+      <section className="panel p-5">
+        <h2 className="text-sm font-semibold tracking-wide">
+          Memory budget
+          <span className="ml-2 font-normal text-[var(--color-text-faint)]">per device</span>
+        </h2>
+        <p className="mt-3 text-sm text-[var(--color-text-muted)]">
+          No budget to show — {placement.unsupported} The ceiling and the overhead band are
+          properties of the runtime, so there is nothing here to measure against.
+        </p>
+      </section>
+    );
+  }
+
   const segments: Segment[] = [
     {
       key: 'weights',
@@ -54,6 +76,9 @@ export function BudgetBar({ evaluation }: { evaluation: Evaluation }) {
       hint: 'Runtime context, kernels and activation workspace. Small, but it is why 100% of nominal is never available.',
     },
   ];
+
+  // Total spacer width the segments have to give back, so the row still measures 100%.
+  const gapTotal = marks.gap * (segments.length - 1);
 
   const used = placement.usedBytesPerDevice;
   // Scale to whichever is larger, so an over-budget stack stays on screen and its overflow is
@@ -94,11 +119,15 @@ export function BudgetBar({ evaluation }: { evaluation: Evaluation }) {
                 key={segment.key}
                 className="h-full transition-[width] duration-200 ease-out"
                 style={{
-                  width: `${width}%`,
+                  /**
+                   * The gap is taken *out* of each width rather than added beside it. When the
+                   * stack overflows, `scale` equals `used`, so the percentages already sum to
+                   * 100 — adding fixed margins on top then pushes the row past its container,
+                   * and `overflow-hidden` silently clips the trailing segment. A small overhead
+                   * band could disappear entirely while still being listed in the legend.
+                   */
+                  width: `calc(${width}% - ${(gapTotal * width) / 100}px)`,
                   background: segment.color,
-                  // The spacer between fills, so adjacent segments never bleed together. Not on
-                  // the last one: three trailing margins push the flex line past the container,
-                  // which shrinks the stack away from the absolutely-positioned ceiling marker.
                   marginRight: index < segments.length - 1 ? marks.gap : 0,
                   flexShrink: 0,
                 }}

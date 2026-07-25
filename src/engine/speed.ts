@@ -9,7 +9,12 @@ import type {
 } from './types';
 import { effectiveBandwidth } from './types';
 import { attentionSpanPerToken, kvReadBytesPerToken } from './kv';
-import { activeWeightBytes, outputProjectionParams, prefillComputeParams } from './weights';
+import {
+  activeWeightBytes,
+  expertFraction,
+  outputProjectionParams,
+  prefillComputeParams,
+} from './weights';
 import type { Placement } from './placement';
 import { DEFAULT_HOST_BANDWIDTH } from './placement';
 
@@ -182,7 +187,11 @@ function peakFlops(device: DeviceSpec, quant: QuantSpec, runtime: RuntimeSpec): 
 
   switch (quant.computeDtype) {
     case 'fp4':
-      return f.fp4 ?? f.fp8 ?? fp16;
+      // Deliberately does not fall back to fp8, for the same reason fp8 does not fall back to
+      // int8: an H100 has FP8 tensor cores and no FP4 ones, so an NVFP4 quant there runs
+      // dequantized, not at twice fp16. Lending it the FP8 rate reported a Blackwell-native
+      // format as usable on hardware that cannot dispatch it.
+      return f.fp4 ?? fp16;
     case 'fp8':
       // Deliberately does not fall back to int8. A card with INT8 tensor cores and no FP8 ones
       // cannot run an FP8 kernel at the INT8 rate; it runs it at fp16.
@@ -205,8 +214,14 @@ export interface PrefillEstimate {
   attentionFlops: number;
   /** True when attention outweighs the linear layers — the long-prompt regime. */
   attentionBound: boolean;
-  /** Set when offloaded weights have to be streamed in before the prompt can be processed. */
-  offloadPenalty?: { fraction: number };
+  /**
+   * Set when offloaded weights have to be streamed in before the prompt can be processed.
+   *
+   * Carries the seconds, not just the fraction: whether streaming is *the* bottleneck depends on
+   * how it compares with the compute terms, and a small spill over a fast bus is a rounding
+   * error next to a long prompt.
+   */
+  offloadPenalty?: { fraction: number; streamingSeconds: number };
 }
 
 export function estimatePrefill(
@@ -243,10 +258,45 @@ export function estimatePrefill(
   const attentionFlops =
     4 * promptTokens * attentionSpanPerToken(model, promptTokens) * model.attention.projectionWidth;
 
-  const peak = peakFlops(rig.device, quant, runtime);
-  const achieved = peak * runtime.computeEfficiency * Math.max(1, rig.count) * tpEfficiency(rig);
+  /**
+   * Expert-only schemes compute at two rates, not one.
+   *
+   * MXFP4 sets `denseBpw: 16` because attention, routing, embeddings and the output head stay
+   * BF16 — only the routed experts are 4-bit. Crediting the whole pass at the FP4 peak
+   * overstates every model with a substantial dense half, and is completely wrong for a dense
+   * model, where `weightBreakdown` charges 100% of parameters at 16 bits while prefill claims a
+   * 4x rate on all of them.
+   *
+   * So the expert FLOPs are timed at the quant's compute dtype and everything else — dense
+   * linear layers, the output projection, and all of attention — at fp16.
+   */
+  const throughput = (dtype: QuantSpec['computeDtype']) =>
+    peakFlops(rig.device, { ...quant, computeDtype: dtype }, runtime) *
+    runtime.computeEfficiency *
+    Math.max(1, rig.count) *
+    tpEfficiency(rig);
 
-  let ttftSeconds = achieved > 0 ? (linearFlops + attentionFlops) / achieved : Infinity;
+  const expertRate = throughput(quant.computeDtype);
+  // `denseBpw` present means the scheme deliberately spares the non-expert tensors; absent
+  // means it is uniform and the dense half computes at the same rate as everything else.
+  const denseRate = quant.denseBpw === undefined ? expertRate : throughput('fp16');
+
+  // The experts one token routes through. Zero for a dense model, which is what makes the whole
+  // pass fall to the dense rate there rather than claiming a 4x it cannot use on any tensor.
+  const expertLinearFlops = 2 * model.expertParams * expertFraction(model, 1) * promptTokens;
+  const denseLinearFlops = Math.max(0, linearFlops - expertLinearFlops);
+
+  const runnable = expertRate > 0 && denseRate > 0;
+  // Kept apart so the bound can be judged on time. Once the expert half runs at a different
+  // rate from everything else, FLOP counts stop being comparable: gpt-oss-20b under MXFP4 on
+  // Blackwell has attention at ~53% of linear FLOPs while taking ~1.3x the linear *time*,
+  // because most of that linear work is running at the 4x FP4 rate.
+  const linearSeconds = runnable
+    ? expertLinearFlops / expertRate + denseLinearFlops / denseRate
+    : Infinity;
+  const attentionSeconds = runnable ? attentionFlops / denseRate : Infinity;
+
+  let ttft = linearSeconds + attentionSeconds;
 
   // Offloaded weights must cross the host bus once per prefill pass before compute can start.
   // Without this the offload cliff is invisible on the number users watch first.
@@ -256,18 +306,19 @@ export function estimatePrefill(
   // offloaded weight set. Charging the batch-1 union understated MoE TTFT by up to 5x, and
   // dense models could never reveal it because for them the two are identical.
   const offload = placement?.offloadFraction ?? 0;
+  let streamingSeconds = 0;
   if (offload > 0) {
     const streamedBytes = activeWeightBytes(model, quant, promptTokens) * offload;
-    ttftSeconds += streamedBytes / hostBandwidth;
+    streamingSeconds = streamedBytes / hostBandwidth;
+    ttft += streamingSeconds;
   }
 
   return {
-    ttftSeconds,
-    prefillTokensPerSec:
-      ttftSeconds > 0 && Number.isFinite(ttftSeconds) ? promptTokens / ttftSeconds : 0,
+    ttftSeconds: ttft,
+    prefillTokensPerSec: ttft > 0 && Number.isFinite(ttft) ? promptTokens / ttft : 0,
     linearFlops,
     attentionFlops,
-    attentionBound: attentionFlops > linearFlops,
-    ...(offload > 0 ? { offloadPenalty: { fraction: offload } } : {}),
+    attentionBound: attentionSeconds > linearSeconds,
+    ...(offload > 0 ? { offloadPenalty: { fraction: offload, streamingSeconds } } : {}),
   };
 }

@@ -3,6 +3,10 @@
 Work out which open-weight LLMs run on your hardware, and how comfortably — across discrete
 GPUs, unified-memory machines, and CPU+RAM.
 
+**Read [docs/ROADMAP.md](docs/ROADMAP.md) first.** It carries the current phase, the settled
+decisions, and the handful of derivations that were wrong on the first attempt and are silent
+when they break. It is the handoff document between sessions.
+
 ## Commands
 
 - Test: `npm test` (`test:watch`, `test:coverage` also exist)

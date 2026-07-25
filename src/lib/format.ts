@@ -34,9 +34,16 @@ export function params(count: number): string {
 /** Context lengths, as people say them: 4K, 32K, 128K, 1M. */
 export function tokens(count: number): string {
   if (!Number.isFinite(count)) return '—';
-  if (count >= 1e6) return `${(count / 1e6).toFixed(count % 1e6 === 0 ? 0 : 1)}M`;
+  // Trailing zeros dropped: 1,048,576 is "1M", not "1.0M". The modulo test that used to guard
+  // this only caught exact multiples of a million, which a binary context length never is.
+  if (count >= 1e6) return `${trim((count / 1e6).toFixed(1))}M`;
   if (count >= 1024) return `${Math.round(count / 1024)}K`;
   return String(count);
+}
+
+/** Drop a trailing `.0`, so a rounded figure does not imply precision it lacks. */
+function trim(value: string): string {
+  return value.replace(/\.0$/, '');
 }
 
 /** Throughput. Sub-10 keeps a decimal, because 3.2 and 4.0 tok/s are different lives. */
@@ -56,8 +63,15 @@ export function seconds(value: number): string {
   return `${Math.round(value * 1000)} ms`;
 }
 
+/**
+ * A percentage, with a floor so a real quantity never reads as nothing.
+ *
+ * Rounding alone printed "0% of weights would spill" for a configuration that is over budget and
+ * genuinely spilling — 0.43% on a two-card MI355X rig. Zero has to stay reserved for zero.
+ */
 export function percent(fraction: number): string {
   if (!Number.isFinite(fraction)) return '—';
+  if (fraction > 0 && fraction < 0.005) return '<1%';
   return `${Math.round(fraction * 100)}%`;
 }
 

@@ -48,6 +48,8 @@ prefill.ttftSeconds; // how long before the first token
 - Test: `npm test`
 - Lint/format: `npm run lint` / `npm run format`
 
+Current status and what's next: [docs/ROADMAP.md](docs/ROADMAP.md).
+
 The engine under `src/engine/` is pure — no React imports — so it can be pinned to published
 reference values. Those tests are the point: `src/engine/*.test.ts` asserts against llama.cpp's
 own published file sizes, DeepSeek's stated KV footprint, and measured throughput on a DGX Spark

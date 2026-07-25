@@ -40,7 +40,7 @@ export function Select<T extends string>({
         // The note carries load-bearing warnings ("Does not run on ..."), so it has to be part
         // of the control's accessible description rather than adjacent text.
         aria-describedby={note ? `${id}-note` : undefined}
-        className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-raised)] px-3 py-2 text-sm text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none"
+        className="w-full rounded-md border border-[var(--color-control-border)] bg-[var(--color-surface-raised)] px-3 py-2 text-sm text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none"
       >
         {options.map((option) => (
           <option key={option.value} value={option.value} disabled={option.disabled}>
@@ -126,7 +126,7 @@ export function Segmented<T extends string>({
       <legend className="text-xs font-medium tracking-wide text-[var(--color-text-faint)] uppercase">
         {label}
       </legend>
-      <div className="flex gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-raised)] p-1">
+      <div className="flex gap-1 rounded-md border border-[var(--color-control-border)] bg-[var(--color-surface-raised)] p-1">
         {options.map((option) => {
           const active = option.value === value;
           return (

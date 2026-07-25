@@ -109,8 +109,9 @@ export const GEMMA_3_12B: ModelSpec = {
   name: 'Gemma 3 12B',
   org: 'Google',
   totalParams: 12_187_325_040,
-  // The published convention subtracts the embedding whether or not it is tied.
-  activeParams: 12_187_325_040 - 262208 * 3840,
+  // A dense model's active count is its total — the same contract the generator now applies.
+  // The embedding subtraction belongs only to the MoE published-figure convention.
+  activeParams: 12_187_325_040,
   // The physical one subtracts the vision tower, and keeps the tied table.
   activeDenseParams: 12_187_325_040 - 421_290_864,
   tiedEmbeddings: true,
@@ -201,7 +202,9 @@ export const RTX_5090: DeviceSpec = {
   capacityBytes: 32 * GIB,
   allocatableBytes: 31 * GIB, // display and desktop compositor take a slice
   bandwidthBytesPerSec: 1792 * GB,
-  flops: { fp16: 419 * TFLOP, fp8: 838 * TFLOP },
+  // Blackwell: real FP4 tensor cores, as devices.json records. Omitting them here made every
+  // fixture-based NVFP4 estimate 4x too low and left the card's actual FP4 path untested.
+  flops: { fp16: 419 * TFLOP, fp8: 838 * TFLOP, fp4: 1676 * TFLOP },
   interconnect: 'PCIe 5.0 x16',
   tdpWatts: 575,
   msrpUsd: 1999,
@@ -305,7 +308,8 @@ export const LLAMA_CPP: RuntimeSpec = {
   bandwidthEfficiency: 0.82,
   computeEfficiency: 0.12,
   nativeLowPrecision: false,
-  supports: ['discrete-gpu', 'unified-soc', 'cpu-ram'],
+  supports: [{ class: 'discrete-gpu' }, { class: 'unified-soc' }, { class: 'cpu-ram' }],
+  kvPrecisions: ['fp16', 'q8', 'q4'],
   source: 'https://github.com/ggml-org/llama.cpp',
 };
 
@@ -319,7 +323,8 @@ export const VLLM: RuntimeSpec = {
   nativeLowPrecision: true,
   // Reserves a fixed fraction of the device up front regardless of what the model needs.
   preallocFraction: 0.9,
-  supports: ['discrete-gpu'],
+  supports: [{ class: 'discrete-gpu' }, { class: 'unified-soc', vendor: 'NVIDIA' }],
+  kvPrecisions: ['fp16', 'q8'],
   source: 'https://docs.vllm.ai/',
 };
 
@@ -330,8 +335,8 @@ export const MLX: RuntimeSpec = {
   bandwidthEfficiency: 0.8,
   computeEfficiency: 0.15,
   nativeLowPrecision: false,
-  supports: ['unified-soc'],
   // Class is too coarse here: `unified-soc` also covers the DGX Spark and Strix Halo.
-  requiresVendor: 'Apple',
+  supports: [{ class: 'unified-soc', vendor: 'Apple' }],
+  kvPrecisions: ['fp16', 'q8'],
   source: 'https://github.com/ml-explore/mlx',
 };
