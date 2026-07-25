@@ -256,8 +256,10 @@ export function Bench() {
         />
       </section>
 
-      {/* The hero, the three answers it does not collapse into one, and what they add up to. */}
-      <BudgetBar evaluation={evaluation} />
+      {/* The hero, the three answers it does not collapse into one, and what they add up to.
+          The bar and the tiles read `canOffload` from the same expression, so they cannot describe
+          one placement two different ways — which they did, over exactly this distinction. */}
+      <BudgetBar evaluation={evaluation} canOffload={device.class === 'discrete-gpu'} />
       <Telemetry
         evaluation={evaluation}
         canOffload={device.class === 'discrete-gpu'}
@@ -412,6 +414,26 @@ function ShareLink() {
   const resetTimer = useRef<number | undefined>(undefined);
 
   /**
+   * Which attempt the pending clipboard callbacks belong to.
+   *
+   * Clearing `resetTimer` cancels the previous attempt's *timer* and nothing else — the promise
+   * from the earlier `writeText` is still in flight and still holds its `then`. So two overlapping
+   * clicks could finish out of order: the second is refused and reveals the manual-copy field,
+   * then the first resolves and reports success, which unmounts the field on the spot — it renders
+   * only under `unavailable`. The user is told a copy succeeded, the fallback disappears, and the
+   * clipboard holds the link from whichever attempt happened to win — which after a slider move is
+   * not the one on screen. The reverse order is worse and `clearTimeout` cannot reach it at all:
+   * an earlier success schedules its reset *after* the later click cleared the timer, so a real
+   * refusal is erased two seconds later with nothing to cancel it.
+   *
+   * A counter rather than an `AbortController`: `writeText` is not abortable, so the write cannot
+   * be stopped, only disowned. That is the honest shape of it — the browser may well still copy
+   * the old link, and what this guarantees is that the UI never reports a result that a later
+   * click has superseded.
+   */
+  const attempt = useRef(0);
+
+  /**
    * Selected once, when the field first appears.
    *
    * A callback ref is recreated on every render, so React re-invoked it on every configuration
@@ -448,6 +470,8 @@ function ShareLink() {
            * document anyway, and it fails silently in exactly the same contexts.
            */
           window.clearTimeout(resetTimer.current);
+          const id = ++attempt.current;
+          const superseded = () => attempt.current !== id;
 
           const writer = navigator.clipboard?.writeText(href);
           if (writer === undefined) {
@@ -457,12 +481,16 @@ function ShareLink() {
 
           void writer.then(
             () => {
+              if (superseded()) return;
               setState('copied');
               resetTimer.current = window.setTimeout(() => setState('idle'), 2000);
             },
             // A rejected write — permission denied, document not focused — lands here, and
             // means the same thing to the user as no API at all.
-            () => setState('unavailable')
+            () => {
+              if (superseded()) return;
+              setState('unavailable');
+            }
           );
         }}
         className="rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-accent)] hover:border-[var(--color-accent-dim)]"

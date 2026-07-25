@@ -30,6 +30,20 @@ export type Fitness = 'good' | 'tight' | 'fail';
  */
 const RESPONSE_ALLOWANCE = 512;
 
+/**
+ * The working size the long-context *tight* tier is graded at.
+ *
+ * The archetype sends 131,072 tokens, and its tight tier accepts a machine that holds only half
+ * that. Those cannot be the same measurement: a rig with 80K of runnable context was accepted on
+ * its 64K capacity and then timed reading a 128K prompt it has nowhere to put, and prefill is
+ * quadratic, so the impossible request routinely failed the tier that had just admitted it. The
+ * reason then quoted that impossible timing as the time to read the window the machine holds.
+ *
+ * A tier that admits a smaller job has to measure the smaller job.
+ */
+const LONG_CONTEXT_TIGHT_PROMPT = 65536;
+const LONG_CONTEXT_TIGHT_NEEDS = LONG_CONTEXT_TIGHT_PROMPT + RESPONSE_ALLOWANCE;
+
 export interface Workload {
   id: string;
   label: string;
@@ -201,12 +215,12 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
     const { decode, prefill } = at('batch');
     const workers = Math.max(1, usage.concurrency);
 
-    // Every worker brings its own prompt, and `estimatePrefill` times *one* pass — it computes
-    // FLOPs from `promptTokens` alone and never multiplies by concurrency. Charging a single
-    // prefill against a numerator scaled by the worker count amortised one prompt across all of
-    // them, which flatters a prompt-bound job by up to that factor. They share one device, so
-    // the prompts queue rather than overlapping.
-    const prefillSeconds = prefill.ttftSeconds * workers;
+    // Every worker brings its own prompt, and `estimatePrefill` now prices the whole batch of
+    // them in one figure. This used to multiply by the worker count to compensate for an estimate
+    // that read `promptTokens` and never `concurrency`; doing that on top of the engine's own
+    // scaling would charge every prompt `workers` times over. The compensation moved to where the
+    // arithmetic is, and this reads the result rather than re-deriving it.
+    const prefillSeconds = prefill.ttftSeconds;
     const decodeSeconds =
       (RESPONSE_ALLOWANCE * workers) / Math.max(decode.aggregateTokensPerSec, 1e-9);
     const seconds = prefillSeconds + decodeSeconds;
@@ -235,18 +249,22 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
     `Only ${ctx(runnableContextTokens)} of context fits — ${sends} needs ${ctx(needs(id))} with room to answer in.`;
 
   /**
-   * Every archetype measured at its own scenario, decode included. Memoised per id because the
-   * conditions and their reasons each read it.
+   * Every archetype measured at its own scenario, decode included. Memoised on the scenario
+   * rather than on the archetype id, because a tier can be graded at a working size its archetype
+   * does not name — see the long-context tight tier, which is a smaller job and not the same job
+   * judged leniently.
    */
   const cache = new Map<string, ReturnType<typeof evaluateAt>>();
-  const at = (id: string) => {
-    const existing = cache.get(id);
+  const evaluateOnce = (promptTokens: number, contextTokens: number) => {
+    const key = `${promptTokens}:${contextTokens}`;
+    const existing = cache.get(key);
     if (existing) return existing;
-    const w = workload(id);
-    const fresh = evaluateAt(w.typicalPromptTokens, Math.max(usage.contextTokens, needs(id)));
-    cache.set(id, fresh);
+    const fresh = evaluateAt(promptTokens, contextTokens);
+    cache.set(key, fresh);
     return fresh;
   };
+  const at = (id: string) =>
+    evaluateOnce(workload(id).typicalPromptTokens, Math.max(usage.contextTokens, needs(id)));
 
   const rateOf = (id: string) => at(id).decode.perUserTokensPerSec;
   const ttftOf = (id: string) => at(id).prefill.ttftSeconds;
@@ -258,6 +276,23 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
   const agentTtft = ttftOf('agent');
   const ragPrefill = at('rag').prefill;
   const ragFits = fits('rag');
+
+  /**
+   * Long-context, measured twice: once at the archetype's full request and once at the reduced
+   * window its tight tier admits.
+   *
+   * `longMeasured` is whichever of those this machine can actually hold, and every long-context
+   * *reason* reads it. Quoting the 128K timing to a rig that tops out at 80K described a request
+   * it cannot make — and the figure was not merely unattainable but wrong for the job it does do,
+   * since prefill is quadratic and the two differ by about fourfold rather than twofold.
+   */
+  const longTight = evaluateOnce(
+    LONG_CONTEXT_TIGHT_PROMPT,
+    Math.max(usage.contextTokens, LONG_CONTEXT_TIGHT_NEEDS)
+  );
+  const holdsFullWindow = runnableContextTokens >= 131072 + RESPONSE_ALLOWANCE;
+  const longMeasured = holdsFullWindow ? at('long-context') : longTight;
+  const longPrompt = holdsFullWindow ? 131072 : LONG_CONTEXT_TIGHT_PROMPT;
 
   return [
     judge('chat', {
@@ -350,24 +385,44 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
       // and nobody expects it to be, so two minutes to first token is comfortable here where it
       // would be catastrophic for chat. Ten minutes and 2 tok/s is the edge of a thing you would
       // still start and walk away from.
+      //
+      // Each tier is timed at the job it admits. The tight tier accepts a machine holding 64K, so
+      // it is measured on a 64K prompt; timing it on the archetype's full 128K request charged it
+      // for a prompt it cannot hold, and quadratic prefill made that gap large rather than
+      // academic.
       pass:
         runnableContextTokens >= 131072 + RESPONSE_ALLOWANCE &&
         ttftOf('long-context') <= 120 &&
         rateOf('long-context') >= 5,
+      //
+      // `longMeasured`, not `longTight`: the grade has to come from the measurement the reason
+      // quotes. Reading `longTight` here graded a rig that holds 160K on its 64K job while the
+      // sentence beside it reported 1046s against a 600s bar — the same contradiction this whole
+      // file exists to prevent, reintroduced by a fix aimed at rigs that cannot hold 128K at all.
+      // With one measurement in both, `pass` implies `tight` by construction rather than by the
+      // incidental monotonicity of prefill in prompt length.
       tight:
-        runnableContextTokens >= 65536 + RESPONSE_ALLOWANCE &&
-        ttftOf('long-context') <= 600 &&
-        rateOf('long-context') >= 2,
+        runnableContextTokens >= LONG_CONTEXT_TIGHT_NEEDS &&
+        longMeasured.prefill.ttftSeconds <= 600 &&
+        longMeasured.decode.perUserTokensPerSec >= 2,
       why: () =>
-        runnableContextTokens < 65536 + RESPONSE_ALLOWANCE
-          ? shortfall('long-context', 'the 128K window these jobs assume')
-          : ttftOf('long-context') > 600
-            ? `Holds ${ctx(runnableContextTokens)}, but takes ${secs(ttftOf('long-context'))}s to read it before saying anything.`
-            : rateOf('long-context') < 2
-              ? `Holds ${ctx(runnableContextTokens)} and answers at ${fmt(rateOf('long-context'))} tok/s — the window fits, the work does not.`
-              : runnableContextTokens > maxContextTokens
-                ? `Reaches ${ctx(runnableContextTokens)}, though only with weights offloaded — ${secs(ttftOf('long-context'))}s to read a full window.`
-                : `Holds ${ctx(runnableContextTokens)} at this concurrency, ${secs(ttftOf('long-context'))}s to read a full window.`,
+        // Reports the bar that actually rejected it. `shortfall` would name the archetype's
+        // 131,584, so a rig holding 65K was told it needed 128.5K when roughly another 1K would
+        // have made it `tight` — an upgrade requirement twice the size of the real one.
+        runnableContextTokens < LONG_CONTEXT_TIGHT_NEEDS
+          ? `Only ${ctx(runnableContextTokens)} of context fits — these jobs assume a 128K window, and even the reduced bar needs ${ctx(LONG_CONTEXT_TIGHT_NEEDS)} with room to answer in.`
+          : longMeasured.prefill.ttftSeconds > 600
+            ? `Holds ${ctx(runnableContextTokens)}, but takes ${secs(longMeasured.prefill.ttftSeconds)}s to read ${ctx(longPrompt)} of it before saying anything.`
+            : longMeasured.decode.perUserTokensPerSec < 2
+              ? `Holds ${ctx(runnableContextTokens)} and answers at ${fmt(longMeasured.decode.perUserTokensPerSec)} tok/s — the window fits, the work does not.`
+              : // Tight on capacity alone: everything measured here is comfortable, and without
+                // this the row was marked down while reporting only good news. The same missing
+                // cause the serving tier had, in the tier this change introduced.
+                !holdsFullWindow
+                ? `Reads ${ctx(longPrompt)} in ${secs(longMeasured.prefill.ttftSeconds)}s comfortably, but holds ${ctx(runnableContextTokens)} — short of the ${ctx(131072)} these jobs assume.`
+                : runnableContextTokens > maxContextTokens
+                  ? `Reaches ${ctx(runnableContextTokens)}, though only with weights offloaded — ${secs(longMeasured.prefill.ttftSeconds)}s to read ${ctx(longPrompt)}.`
+                  : `Holds ${ctx(runnableContextTokens)} at this concurrency, ${secs(longMeasured.prefill.ttftSeconds)}s to read ${ctx(longPrompt)}.`,
     }),
     judge('batch', {
       // No latency budget at all — but the request still has to fit, and the throughput has to
@@ -405,8 +460,21 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
                 // figure looks healthy — the rate is fine, the fit is fine, and the reason said
                 // so, leaving the actual constraint invisible.
                 headroomOf('serving') <= 0
-                ? `${usage.concurrency} users at ${fmt(rateOf('serving'))} tok/s each, but no headroom left — weights spill to host RAM, and one more user has nowhere to go.`
-                : `${usage.concurrency} users at ${fmt(rateOf('serving'))} tok/s each, ${fmt(at('serving').decode.aggregateTokensPerSec)} aggregate.`,
+                ? `${usage.concurrency} users at ${fmt(rateOf('serving'))} tok/s each, but the weights are spilling to host RAM — every additional user makes that worse rather than simply not fitting.`
+                : // Everything printed above this point is healthy, so whatever downgraded the
+                  // verdict has to be named or the row reads as a pass that was marked down for
+                  // no reason. Two things can reach here: too few users to be a serving test at
+                  // all, and a rate below what a served user expects.
+                  usage.concurrency < 4
+                  ? // Reaching here only guarantees 5 tok/s, so calling the rate healthy on the
+                    // way to naming the user count asserted something the very next branch calls
+                    // insufficient. Both causes are live between 5 and 10, and both get said.
+                    rateOf('serving') >= 10
+                    ? `${usage.concurrency} users at ${fmt(rateOf('serving'))} tok/s each is healthy, but a serving deployment is graded from 4 concurrent users up — this is measuring a quieter machine than the archetype describes.`
+                    : `${usage.concurrency} users at ${fmt(rateOf('serving'))} tok/s each falls short twice over — this archetype is graded from 4 concurrent users, at 10 tok/s apiece.`
+                  : rateOf('serving') < 10
+                    ? `${usage.concurrency} users share the device at ${fmt(rateOf('serving'))} tok/s each, under the 10 tok/s a served user expects.`
+                    : `${usage.concurrency} users at ${fmt(rateOf('serving'))} tok/s each, ${fmt(at('serving').decode.aggregateTokensPerSec)} aggregate.`,
     }),
   ];
 }

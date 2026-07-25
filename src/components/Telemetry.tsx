@@ -135,8 +135,28 @@ function decodeReading(evaluation: Evaluation): Reading {
 }
 
 function prefillReading(evaluation: Evaluation): Reading {
-  const { ttftSeconds, prefillTokensPerSec, linearSeconds, attentionSeconds, offloadPenalty } =
-    evaluation.prefill;
+  const {
+    ttftSeconds,
+    prefillTokensPerSec,
+    linearSeconds,
+    attentionSeconds,
+    offloadPenalty,
+    concurrencyPenalty,
+  } = evaluation.prefill;
+
+  /**
+   * The rate is machine-wide; the wait is per user. Both have to be labelled or neither can be
+   * checked against the other.
+   *
+   * `prefillTokensPerSec` covers every prompt in the pass, so at 32 users it stays put while
+   * `ttftSeconds` grows 32x — divide one into the other and the arithmetic is off by the batch.
+   * The decode tile immediately to the left says "per user" in as many words, which primes exactly
+   * the wrong reading of this one.
+   */
+  const across =
+    concurrencyPenalty === undefined
+      ? ''
+      : ` across all ${concurrencyPenalty.prompts} prompts in flight`;
 
   /**
    * Classified on the displayed figure, exactly as decode is. `seconds()` rounds, so 10.27s
@@ -166,12 +186,12 @@ function prefillReading(evaluation: Evaluation): Reading {
     verdict: word,
     detail:
       largest === streaming && offloadPenalty !== undefined
-        ? `${rate(prefillTokensPerSec)} tok/s prompt processing, dominated by streaming ${percent(
+        ? `${rate(prefillTokensPerSec)} tok/s prompt processing${across}, dominated by streaming ${percent(
             offloadPenalty.fraction
           )} of the weights across the host bus before the prompt can start.`
         : largest === attentionSeconds
-          ? `${rate(prefillTokensPerSec)} tok/s prompt processing. Quadratic attention now dominates the pass, so this degrades faster than linearly as the prompt grows.`
-          : `${rate(prefillTokensPerSec)} tok/s prompt processing, bound by compute on the linear layers.`,
+          ? `${rate(prefillTokensPerSec)} tok/s prompt processing${across}. Quadratic attention now dominates the pass, so this degrades faster than linearly as the prompt grows.`
+          : `${rate(prefillTokensPerSec)} tok/s prompt processing${across}, bound by compute on the linear layers.`,
   };
 }
 
