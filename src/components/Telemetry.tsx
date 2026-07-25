@@ -1,7 +1,7 @@
 import type { Evaluation } from '@/engine';
 import type { StatusTone } from '@/design/tokens';
-import { CAPACITY_TIGHT, classifyDecode } from '@/lib/verdicts';
-import { gibLabel, percent, rate, seconds, tokens } from '@/lib/format';
+import { CAPACITY_TIGHT, classifyDecode, classifyTtft } from '@/lib/verdicts';
+import { gibLabel, percent, rate, tokens } from '@/lib/format';
 
 /**
  * Three readouts, deliberately not one.
@@ -135,10 +135,7 @@ function prefillReading(evaluation: Evaluation): Reading {
    * 10 — the same disagreement the decode tile had, in the function next door. Fixing one and
    * not the other is how it survived a round.
    */
-  const shown = seconds(ttftSeconds);
-  const displayed = parseDisplayedSeconds(shown, ttftSeconds);
-
-  const tone: StatusTone = displayed <= 2 ? 'good' : displayed <= 10 ? 'warning' : 'critical';
+  const { shown, word, tone } = classifyTtft(ttftSeconds);
 
   /**
    * Streaming is named as the bottleneck only when it outweighs the rest of the pass. An 8%
@@ -155,7 +152,7 @@ function prefillReading(evaluation: Evaluation): Reading {
     value: shown,
     unit: '',
     tone,
-    verdict: displayed <= 2 ? 'Responsive' : displayed <= 10 ? 'Noticeable' : 'Slow start',
+    verdict: word,
     detail: streamingDominates
       ? `${rate(prefillTokensPerSec)} tok/s prompt processing, dominated by streaming ${percent(
           offloadPenalty!.fraction
@@ -254,19 +251,4 @@ export function Telemetry({
       })}
     </section>
   );
-}
-
-/**
- * The number a reader takes from a formatted duration.
- *
- * `seconds()` switches units, so the printed figure is not always in seconds — "450 ms" reads as
- * 0.45. Parsing it back is what keeps the verdict tied to what is on screen, and it falls back
- * to the raw value if the format ever changes shape.
- */
-function parseDisplayedSeconds(shown: string, raw: number): number {
-  const value = Number.parseFloat(shown);
-  if (!Number.isFinite(value)) return raw;
-  if (shown.endsWith('ms')) return value / 1000;
-  if (shown.endsWith('min')) return value * 60;
-  return value;
 }

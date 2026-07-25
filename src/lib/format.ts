@@ -31,13 +31,33 @@ export function params(count: number): string {
   return `${b.toFixed(2).replace(/\.?0+$/, '')}B`;
 }
 
-/** Context lengths, as people say them: 4K, 32K, 128K, 1M. */
+/**
+ * Context lengths, as people say them: 4K, 32K, 128K, 1M.
+ *
+ * Rounds only where rounding is lossless. The round figures people name are exact multiples of
+ * 1,024, so those print clean; a value that is not a whole K keeps a decimal, so 33,000 reads
+ * "32.2K" rather than colliding with 32,768's "32K".
+ *
+ * That narrows collisions but cannot close them — 131,073 still prints as "128K", and no fixed
+ * precision survives an arbitrary integer from a URL. Uniqueness is not a property this function
+ * can promise, because it sees one number at a time. Where it actually matters — an axis, whose
+ * labels sit side by side and must each identify one column — the caller holds the whole set and
+ * disambiguates against it. See `uniqueLabels`.
+ */
 export function tokens(count: number): string {
   if (!Number.isFinite(count)) return '—';
   // Trailing zeros dropped: 1,048,576 is "1M", not "1.0M". The modulo test that used to guard
   // this only caught exact multiples of a million, which a binary context length never is.
-  if (count >= 1e6) return `${trim((count / 1e6).toFixed(1))}M`;
-  if (count >= 1024) return `${Math.round(count / 1024)}K`;
+  // Threshold in mebibytes, not decimal millions: dividing a 1e6 cutoff by 1,048,576 printed
+  // 1,000,000 tokens as "0.95M".
+  if (count >= 1048576) {
+    const m = count / 1048576;
+    return Number.isInteger(m) ? `${m}M` : `${trim(m.toFixed(1))}M`;
+  }
+  if (count >= 1024) {
+    const k = count / 1024;
+    return Number.isInteger(k) ? `${k}K` : `${trim(k.toFixed(1))}K`;
+  }
   return String(count);
 }
 
@@ -81,4 +101,21 @@ export function compact(count: number): string {
   if (count >= 1e6) return `${(count / 1e6).toFixed(1)}M`;
   if (count >= 1e3) return `${Math.round(count / 1e3)}K`;
   return String(count);
+}
+
+/**
+ * Axis labels that each identify exactly one value.
+ *
+ * `tokens()` sees one number at a time and so cannot guarantee this: 131,072 and 131,073 both
+ * round to "128K", and the second is reachable from a hand-edited URL. An axis does hold the
+ * whole set, so the guarantee belongs here — any value whose short label is shared falls back to
+ * its exact count, which is long but unambiguous, and only for the columns that actually clash.
+ */
+export function uniqueLabels(values: readonly number[]): string[] {
+  const short = values.map(tokens);
+  const seen = new Map<string, number>();
+  for (const label of short) seen.set(label, (seen.get(label) ?? 0) + 1);
+  return short.map((label, i) =>
+    seen.get(label)! > 1 ? values[i].toLocaleString('en-US') : label
+  );
 }

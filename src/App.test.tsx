@@ -422,7 +422,7 @@ describe('the Envelope agrees with the verdicts beside it', () => {
     expect(field).toHaveAccessibleName(/Currently at .* context and 1 user/i);
   });
 
-  it('closes the whole region when the runtime cannot drive the hardware', async () => {
+  it('closes the whole region and blames the runtime, not the memory', async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -430,7 +430,12 @@ describe('the Envelope agrees with the verdicts beside it', () => {
     await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
     await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
 
-    expect(screen.getByRole('img', { name: /will not run at all/i })).toBeInTheDocument();
+    // MLX cannot drive an NVIDIA card at any size, so telling the user their hardware is too
+    // small is both wrong and unactionable — no amount of VRAM fixes it.
+    expect(
+      screen.getByRole('img', { name: /runtime cannot drive this hardware/i })
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Past what this hardware can hold/i)).not.toBeInTheDocument();
   });
 });
 
