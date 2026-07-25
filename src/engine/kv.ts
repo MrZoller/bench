@@ -175,41 +175,13 @@ export function attentionPairs(model: ModelSpec, promptTokens: number): number {
   return pairs;
 }
 
-/**
- * KV held by the busiest device once whole layers are handed out.
- *
- * A layer count is not a KV divisor on a hybrid model. Gemma 3 27B has ten full-attention layers
- * among 62, and at 128K context each of those caches about 128 times what a sliding layer does —
- * so a card that lands two of them holds far more than 2/62 of the total. Dividing by the layer
- * count reported roughly 13.4 GiB per card on an eight-way split where the busiest really needs
- * about 18.6, which is the difference between fitting a 15 GiB card and not.
- *
- * Assignment is longest-processing-time first: sort the layers by size and give each to the
- * lightest device so far. That is the best balance a scheduler could reasonably achieve, so the
- * figure it returns is a *lower* bound on what the busiest card holds — llama.cpp's default
- * contiguous split can be worse. Erring toward the optimistic side of a bound is acceptable;
- * erring toward it by 128x, as a flat divisor does, is not.
- */
-export function kvBytesBusiestDevice(
+/** KV bytes one layer caches for one sequence — the unit a layer split hands out. */
+export function layerKvBytes(
   model: ModelSpec,
+  layerIndex: number,
   contextTokens: number,
-  concurrency: number,
   precision: KvPrecision,
-  shards: number,
   runtime?: RuntimeSpec
 ): number {
-  const elemBytes = kvElementBytes(precision, runtime);
-  const sizes = Array.from({ length: model.layers }, (_, i) =>
-    layerBytes(model.attention, i, contextTokens, elemBytes)
-  ).sort((a, b) => b - a);
-
-  const devices = new Array(Math.max(1, Math.floor(shards))).fill(0) as number[];
-  for (const size of sizes) {
-    let lightest = 0;
-    for (let d = 1; d < devices.length; d++) {
-      if (devices[d] < devices[lightest]) lightest = d;
-    }
-    devices[lightest] += size;
-  }
-  return Math.max(...devices) * Math.max(1, concurrency);
+  return layerBytes(model.attention, layerIndex, contextTokens, kvElementBytes(precision, runtime));
 }

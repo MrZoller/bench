@@ -428,6 +428,23 @@ describe('layer splits are sized, not divided', () => {
     expect(eight.kvBytesPerDevice).toBeCloseTo(gemma(1).kvBytesPerDevice / 8, -3);
   });
 
+  it('takes both figures from the same device', () => {
+    // The card carrying the big full-attention caches is the one a balanced scheduler gives
+    // fewer layers, so the heaviest-KV card and the heaviest-weight card are different cards.
+    // Adding those two maxima describes a device that does not exist — and reported spill for
+    // a rig that fits.
+    const p = gemma(4);
+    const perLayerWeight = gemma(1).weightBytesPerDevice / GEMMA_3_12B.layers;
+
+    // Whatever share of the weights the busiest card holds, it must be a whole number of layers.
+    const layersHeld = p.weightBytesPerDevice / perLayerWeight;
+    expect(layersHeld).toBeCloseTo(Math.round(layersHeld), 6);
+
+    // And the two together must never exceed what one device could hold of each.
+    expect(p.weightBytesPerDevice).toBeLessThanOrEqual(gemma(1).weightBytesPerDevice + 1);
+    expect(p.kvBytesPerDevice).toBeLessThanOrEqual(gemma(1).kvBytesPerDevice + 1);
+  });
+
   it('never claims a card holds more than the whole cache', () => {
     for (const count of [1, 2, 4, 8]) {
       const p = gemma(count);

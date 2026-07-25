@@ -1,4 +1,4 @@
-import type { DeviceSpec, ModelSpec, QuantSpec } from '@/engine/types';
+import type { DeviceSpec, ModelSpec, QuantSpec, RuntimeSpec } from '@/engine/types';
 
 /**
  * Whether a quantization is worth offering for a given model and device.
@@ -17,12 +17,22 @@ import type { DeviceSpec, ModelSpec, QuantSpec } from '@/engine/types';
  *     a routed expert, so on a dense model it computes exactly BF16 while the label goes on
  *     claiming 4-bit. Not an error — just a no-op with a misleading name, and nothing to learn
  *     from selecting it.
+ *   - **The runtime cannot read it.** llama.cpp loads GGUF and not AWQ; MLX reads neither. This
+ *     is the same guarantee `kvPrecisions` gives the cache, and its absence let AWQ be selected
+ *     under llama.cpp and a GGUF K-quant under MLX, after which every figure on screen described
+ *     a pairing that cannot be loaded.
  */
-export function quantApplies(quant: QuantSpec, model: ModelSpec, device: DeviceSpec): boolean {
+export function quantApplies(
+  quant: QuantSpec,
+  model: ModelSpec,
+  device: DeviceSpec,
+  runtime?: RuntimeSpec
+): boolean {
   const { vendor, dtype } = quant.requires ?? {};
   if (vendor !== undefined && device.vendor !== vendor) return false;
   if (dtype !== undefined && device.flops[dtype] === undefined) return false;
   if (quant.denseBpw !== undefined && model.expertParams === 0) return false;
+  if (runtime !== undefined && !runtime.weightFormats.includes(quant.id)) return false;
   return true;
 }
 
