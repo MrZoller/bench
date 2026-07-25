@@ -47,6 +47,14 @@ export interface Evaluation {
   marginalKvBytesPerToken: number;
   /** Largest context this rig can hold at the current concurrency. */
   maxContextTokens: number;
+  /**
+   * The context actually selected, after normalization.
+   *
+   * Carried so a caller can tell "the hardware would hold more" from "the hardware would hold
+   * more and the model would not accept it" — `maxContextThatFits` already caps at the model's
+   * own limit, so at that limit the two figures coincide and headroom stops meaning growth.
+   */
+  contextTokens: number;
   hasSlidingLayers: boolean;
 }
 
@@ -82,6 +90,7 @@ export function evaluate(scenario: Scenario): Evaluation {
       runtime
     ),
     maxContextTokens: maxContextThatFits(model, quant, usage, rig, runtime),
+    contextTokens: usage.contextTokens,
     hasSlidingLayers: hasSlidingLayers(model),
   };
 }
