@@ -436,6 +436,30 @@ describe('a shortfall always reads as a shortfall', () => {
  * A reason has to name the thing that decided the grade. Each of these named something else —
  * a requirement that was met, a measurement that was fine, or a latency of zero.
  */
+describe('a verdict counts the whole request, not half of it', () => {
+  it('charges batch for reading its prompt, not only for writing its answer', () => {
+    // DeepSeek V3 on an EPYC: 6 tok/s of decode, and about eight minutes to read the 4K prompt
+    // this archetype declares. Grading on decode alone called that comfortable while a 512-token
+    // reply actually completes at under 1 token per second end to end.
+    const verdicts = judge(DEEPSEEK_V3, 'q8_0', { device: EPYC_9654 });
+    const batch = verdicts.get('batch')!;
+
+    expect(batch.fitness).toBe('tight');
+    expect(batch.reason).toMatch(/end to end/);
+  });
+
+  it('will not call RAG usable when the answer takes minutes', () => {
+    // Prefill is only half the request: a RAG-sized cache that decodes at a crawl still has to
+    // write the reply, and grading on TTFT alone printed the prefill rate as though that were
+    // the whole story.
+    const fast = judge(LLAMA_31_8B, 'q4_k_m', { device: RTX_5090 }).get('rag')!;
+    expect(fast.fitness).not.toBe('fail');
+
+    const crawling = judge(DEEPSEEK_V3, 'q8_0', { device: EPYC_9654 }).get('rag')!;
+    expect(crawling.fitness).toBe('fail');
+  });
+});
+
 describe('the reason names the constraint that actually bound', () => {
   const judged = (runnableContextTokens: number, perUser: number, ttft: number) =>
     new Map(
@@ -473,6 +497,18 @@ describe('the reason names the constraint that actually bound', () => {
 
     expect(completion.fitness).toBe('tight');
     expect(completion.reason).toMatch(/28 tok\/s/);
+  });
+
+  it('never floors a missed latency onto the limit it missed', () => {
+    // The mirror of the rate rule, and the direction has to follow the *bound*: a rate fails by
+    // being too small so flooring protects it, a latency fails by being too large so flooring is
+    // exactly what makes it look sufficient. 0.486s against a 0.4s limit printed "0.4s ... stays
+    // inside the window" beside the word Tight.
+    const completion = judged(400_000, 60, 0.486).get('completion')!;
+
+    expect(completion.fitness).not.toBe('good');
+    expect(completion.reason).not.toMatch(/\b0\.4s/);
+    expect(completion.reason).toMatch(/0\.5s/);
   });
 
   it('never reports a positive latency as zero', () => {

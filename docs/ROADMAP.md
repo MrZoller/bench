@@ -82,8 +82,16 @@ reading the test that guards them.
   `tpEfficiency` models and is not this: an H100 SXM talks to its neighbours over NVLink and to
   the host over PCIe 5.0. Modelling only host RAM made every spilled configuration on a PCIe 4.0
   card 2.5× too fast, on both decode and TTFT.
-- **Prefill attention respects sliding windows** too, not just KV. Treating every gpt-oss layer as
-  full attention overstates the attention term ~2× at long prompts.
+- **Prefill attention is causal and respects sliding windows.** These are decoder-only models, so
+  a full-attention layer computes `N * (N + 1) / 2` query-key pairs, not `N^2` — charging the
+  square nearly doubles the attention term at long prompts and moves the point where the tile
+  claims attention dominates. Sliding layers are causal too: a triangle while the window fills,
+  then a band. The two corrections compound to about 3.7x on gpt-oss at a 16K prompt.
+
+  Correcting this moved the DGX Spark prefill anchor from ~10% over to ~19% over. Per the rule
+  below, the constants were **not** retuned to pull it back — a roofline that matches an anchor
+  because it was fitted to it has stopped being evidence of anything.
+
 - The two calibration anchors are **DGX Spark on gpt-oss-20b** (2,053 tok/s prefill, 49.7 tok/s
   decode) and **EPYC 9654 on DeepSeek-671B Q8** (~6 tok/s). They pin opposite ends of the roofline;
   a model calibrated only for discrete GPUs fails one of them.
