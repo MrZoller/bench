@@ -123,7 +123,16 @@ export interface DecodeEstimate {
   /** Bytes moved per decode step, split so the UI can show what dominates. */
   weightReadBytes: number;
   kvReadBytes: number;
-  /** True when KV traffic outweighs weight traffic — the long-context regime. */
+  /**
+   * Seconds per step attributable to each, so a caller can name the bottleneck honestly.
+   *
+   * Bytes are not enough once anything spills: offloaded weights cross the host bus at a
+   * fraction of device bandwidth, so a configuration can move fewer weight *bytes* than cache
+   * bytes while spending seventy times longer on them.
+   */
+  weightSeconds: number;
+  kvSeconds: number;
+  /** True when the cache costs more time per step than the weights — the long-context regime. */
   kvBound: boolean;
   /** Set when weights spill to host RAM, which is usually the whole explanation. */
   offloadPenalty?: { fraction: number; withoutOffloadTokensPerSec: number };
@@ -151,6 +160,10 @@ export function estimateDecode(
   const onDeviceBytes = weightReadBytes * (1 - offload) + kvReadBytes;
   const offloadedBytes = weightReadBytes * offload;
 
+  const kvSeconds = kvReadBytes / deviceBandwidth;
+  const weightSeconds =
+    (weightReadBytes * (1 - offload)) / deviceBandwidth + offloadedBytes / hostBandwidth;
+
   const secondsPerStep = onDeviceBytes / deviceBandwidth + offloadedBytes / hostBandwidth;
   const aggregateTokensPerSec = secondsPerStep > 0 ? batch / secondsPerStep : 0;
 
@@ -159,7 +172,11 @@ export function estimateDecode(
     aggregateTokensPerSec,
     weightReadBytes,
     kvReadBytes,
-    kvBound: kvReadBytes > weightReadBytes,
+    weightSeconds,
+    kvSeconds,
+    // Compared as time, not as bytes: the two diverge by orders of magnitude the moment
+    // anything spills to the host bus.
+    kvBound: kvSeconds > weightSeconds,
   };
 
   if (offload > 0) {

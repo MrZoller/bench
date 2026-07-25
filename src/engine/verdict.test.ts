@@ -265,6 +265,8 @@ describe('a verdict never contradicts the numbers behind it', () => {
       aggregateTokensPerSec: perUserTokensPerSec,
       weightReadBytes: 1,
       kvReadBytes: 1,
+      weightSeconds: 1,
+      kvSeconds: 0.1,
       kvBound: false,
     },
     prefill: {
