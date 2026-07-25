@@ -40,8 +40,9 @@ export const QUANTS: readonly QuantSpec[] = [
     id: 'int8',
     label: 'INT8',
     bpw: 8,
-    // INT8 tensor cores run at roughly the FP8 rate on hardware that has both.
-    computeDtype: 'fp8',
+    // Its own dtype, not an alias for fp8: Ampere reaches 2x fp16 on INT8 while having no FP8
+    // tensor cores whatsoever, so the two rates have to be looked up separately.
+    computeDtype: 'int8',
     qualityNote: 'Near-lossless with good calibration.',
     source: 'https://arxiv.org/abs/2208.07339',
   },

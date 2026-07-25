@@ -21,6 +21,10 @@ export const LLAMA_31_8B: ModelSpec = {
   org: 'Meta',
   totalParams: 8.03e9,
   activeParams: 8.03e9,
+  // Untied lm_head (the index carries its own tensor), so decode reads a single embedding row
+  // rather than the whole 128256 x 4096 table.
+  activeDenseParams: 8.03e9 - 128256 * 4096,
+  tiedEmbeddings: false,
   expertParams: 0,
   layers: 32,
   hiddenSize: 4096,
@@ -37,6 +41,8 @@ export const QWEN3_32B: ModelSpec = {
   org: 'Alibaba',
   totalParams: 32.8e9,
   activeParams: 32.8e9,
+  activeDenseParams: 32.8e9 - 151936 * 5120,
+  tiedEmbeddings: false,
   expertParams: 0,
   layers: 64,
   hiddenSize: 5120,
@@ -63,6 +69,8 @@ export const DEEPSEEK_V3: ModelSpec = {
   org: 'DeepSeek',
   totalParams: 671e9,
   activeParams: 37e9,
+  activeDenseParams: 671e9 - 58 * 256 * 3 * 7168 * 2048 - 129280 * 7168,
+  tiedEmbeddings: false,
   // 58 MoE layers (61 - first_k_dense_replace 3) x 256 experts x 3 matrices x 7168 x 2048.
   expertParams: 58 * 256 * 3 * 7168 * 2048,
   experts: { total: 256, perToken: 8 },
@@ -76,6 +84,42 @@ export const DEEPSEEK_V3: ModelSpec = {
 };
 
 /**
+ * Tied embeddings *and* a vision tower — the two corrections that pull the per-token parameter
+ * count in opposite directions, in one model.
+ *
+ * Its `config.json` omits `tie_word_embeddings` entirely, yet the safetensors index has no
+ * `lm_head.weight`: the table is shared, so decode runs it as a full 262208 x 3840 output
+ * matmul every step and it must *not* be subtracted. The 0.42B vision tower is the reverse —
+ * resident in memory, never run for a text token.
+ *
+ * Hence `activeDenseParams` (11.77B) sitting *above* the published active figure (11.18B),
+ * which is the one shape in the catalog where those two numbers invert.
+ */
+export const GEMMA_3_12B: ModelSpec = {
+  id: 'unsloth/gemma-3-12b-it',
+  name: 'Gemma 3 12B',
+  org: 'Google',
+  totalParams: 12_187_325_040,
+  // The published convention subtracts the embedding whether or not it is tied.
+  activeParams: 12_187_325_040 - 262208 * 3840,
+  // The physical one subtracts the vision tower, and keeps the tied table.
+  activeDenseParams: 12_187_325_040 - 421_290_864,
+  tiedEmbeddings: true,
+  nonLanguageParams: 421_290_864,
+  expertParams: 0,
+  layers: 48,
+  hiddenSize: 3840,
+  vocabSize: 262208,
+  attention: {
+    core: { kind: 'gqa', kvHeads: 8, headDim: 256 },
+    // sliding_window_pattern 6: every 6th layer attends over the full context.
+    layerWindows: Array.from({ length: 48 }, (_, i) => ((i + 1) % 6 === 0 ? null : 1024)),
+  },
+  maxContext: 131072,
+  source: 'https://huggingface.co/unsloth/gemma-3-12b-it/raw/main/config.json',
+};
+
+/**
  * Hybrid sliding-window MoE with expert-only MXFP4 quantization — the model that breaks
  * both of the simplifying assumptions other calculators make, which is why it's a fixture.
  */
@@ -85,6 +129,8 @@ export const GPT_OSS_120B: ModelSpec = {
   org: 'OpenAI',
   totalParams: 116.8e9,
   activeParams: 5.1e9,
+  activeDenseParams: 116.8e9 - 36 * 128 * 3 * 2880 * 2880 - 201088 * 2880,
+  tiedEmbeddings: false,
   // 36 layers x 128 experts x 3 matrices x 2880 x 2880.
   expertParams: 36 * 128 * 3 * 2880 * 2880,
   experts: { total: 128, perToken: 4 },
@@ -110,6 +156,8 @@ export const GPT_OSS_20B: ModelSpec = {
   org: 'OpenAI',
   totalParams: 20.9e9,
   activeParams: 3.6e9,
+  activeDenseParams: 20.9e9 - 24 * 32 * 3 * 2880 * 2880 - 201088 * 2880,
+  tiedEmbeddings: false,
   // 24 layers x 32 experts x 3 matrices x 2880 x 2880.
   expertParams: 24 * 32 * 3 * 2880 * 2880,
   experts: { total: 32, perToken: 4 },

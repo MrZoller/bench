@@ -15,8 +15,9 @@
  * to a page people trust.
  *
  * Usage:
- *   npm run catalog             # write the catalog
- *   npm run catalog -- --dry-run  # fetch and report, write nothing
+ *   npm run catalog                    # write the catalog; any seed failure blocks the write
+ *   npm run catalog -- --dry-run       # fetch and report, write nothing
+ *   npm run catalog -- --allow-partial # write even though some seeds failed
  *
  * Set HF_TOKEN to include gated repos (meta-llama in particular returns 401 without one).
  */
@@ -383,6 +384,161 @@ async function fetchJson<T>(url: string, what: string): Promise<T> {
   return (await response.json()) as T;
 }
 
+/**
+ * Tensors belonging to the language stack. Everything a text token's forward pass touches
+ * lives under one of these; `lm_head` is listed because untied models keep it at the root.
+ */
+const LANGUAGE_PREFIXES = ['model.', 'language_model.', 'transformer.', 'lm_head.'];
+
+/**
+ * Tensors belonging to a non-text tower. These occupy memory when the model loads — so they
+ * stay in `totalParams` — but a text-only request never runs them, so they must not be charged
+ * per token. For Gemma 3 that is ~0.42B, which is a few percent of prefill.
+ */
+const NON_LANGUAGE_PREFIXES = [
+  'vision_tower.',
+  'vision_model.',
+  'multi_modal_projector.',
+  'audio_tower.',
+  'audio_projector.',
+];
+
+/**
+ * Non-language prefixes are tested first, and against the name with any leading `model.`
+ * removed.
+ *
+ * Order matters here in a way that fails silently if reversed. `model.` is a language prefix,
+ * and newer transformers multimodal exports nest the whole model under it —
+ * `model.vision_tower.*` alongside `model.language_model.*`. Matching language first would
+ * classify every vision tensor as language, report zero non-language parameters, and fold the
+ * tower straight into the per-token count with no error anywhere. The seeded Gemma 3 mirrors
+ * use the flat layout today, so this guards the next multimodal repo rather than a current one.
+ */
+function classifyTensor(name: string): 'language' | 'other' | 'unknown' {
+  const unwrapped = name.startsWith('model.') ? name.slice('model.'.length) : name;
+  if (NON_LANGUAGE_PREFIXES.some((p) => unwrapped.startsWith(p))) return 'other';
+  if (LANGUAGE_PREFIXES.some((p) => name.startsWith(p) || unwrapped.startsWith(p))) {
+    return 'language';
+  }
+  return 'unknown';
+}
+
+/**
+ * A safetensors file opens with a little-endian u64 header length followed by that many bytes
+ * of JSON describing every tensor's dtype and shape. Two range requests get it without pulling
+ * the weights themselves, which for these repos would be hundreds of gigabytes.
+ */
+async function fetchSafetensorsHeader(
+  id: string,
+  shard: string
+): Promise<Record<string, { dtype?: string; shape?: number[] }>> {
+  const url = `https://huggingface.co/${id}/resolve/main/${shard}`;
+
+  const lengthResponse = await fetch(url, { headers: { ...headers, Range: 'bytes=0-7' } });
+  // 206 specifically, not merely ok: a mirror that ignores Range answers 200 with the whole
+  // shard, which on the unsharded path means buffering an entire model into memory.
+  if (lengthResponse.status !== 206) {
+    throw new DerivationError(
+      `${id}: ${shard} answered ${lengthResponse.status} to a range request, expected 206. ` +
+        'Refusing to download a full shard to read its header.'
+    );
+  }
+  const lengthBytes = Buffer.from(await lengthResponse.arrayBuffer());
+  if (lengthBytes.length < 8) {
+    throw new DerivationError(`${id}: ${shard} returned a short range, so shapes are unreadable`);
+  }
+
+  // The length is whatever the first eight bytes happen to say, so cap it: a file that is not
+  // safetensors at all would otherwise become a multi-gigabyte allocation.
+  const headerLength = Number(lengthBytes.readBigUInt64LE(0));
+  const MAX_HEADER_BYTES = 100 * 1024 * 1024;
+  if (!Number.isFinite(headerLength) || headerLength <= 0 || headerLength > MAX_HEADER_BYTES) {
+    throw new DerivationError(
+      `${id}: ${shard} declares a ${headerLength}-byte header, which is not a safetensors file`
+    );
+  }
+
+  const headerResponse = await fetch(url, {
+    headers: { ...headers, Range: `bytes=8-${8 + headerLength - 1}` },
+  });
+  if (!headerResponse.ok) {
+    throw new DerivationError(`${id}: HTTP ${headerResponse.status} reading ${shard} header`);
+  }
+  const header = JSON.parse(Buffer.from(await headerResponse.arrayBuffer()).toString('utf8'));
+  delete header.__metadata__;
+  return header as Record<string, { dtype?: string; shape?: number[] }>;
+}
+
+/** Tensor names in a repo, and which shard each lives in. */
+async function fetchTensorMap(id: string): Promise<Record<string, string>> {
+  const url = `https://huggingface.co/${id}/raw/main/model.safetensors.index.json`;
+  const response = await fetch(url, { headers });
+
+  if (response.ok) {
+    const index = (await response.json()) as { weight_map?: Record<string, string> };
+    if (!index.weight_map) {
+      throw new DerivationError(`${id}: safetensors index has no weight_map`);
+    }
+    return index.weight_map;
+  }
+  if (response.status !== 404) {
+    throw new DerivationError(`${id}: HTTP ${response.status} fetching the safetensors index`);
+  }
+
+  // Unsharded repo — the single file's own header is the index.
+  const header = await fetchSafetensorsHeader(id, 'model.safetensors');
+  return Object.fromEntries(Object.keys(header).map((name) => [name, 'model.safetensors']));
+}
+
+interface StackShape {
+  /**
+   * True when the output projection reuses the input embedding table. Read from the tensor
+   * list rather than `config.tie_word_embeddings`, which is absent on both Gemma 3 repos even
+   * though they are tied — trusting it would wrongly subtract a 1B-parameter table that decode
+   * reads in full on every step.
+   */
+  tiedEmbeddings: boolean;
+  /** Parameters in non-text towers, excluded from the per-token count but kept in the total. */
+  nonLanguageParams: number;
+}
+
+async function deriveStackShape(id: string): Promise<StackShape> {
+  const weightMap = await fetchTensorMap(id);
+  const names = Object.keys(weightMap);
+
+  const unknown = names.filter((name) => classifyTensor(name) === 'unknown');
+  if (unknown.length > 0) {
+    throw new DerivationError(
+      `${id}: ${unknown.length} tensors match no known prefix (e.g. ${unknown[0]}). ` +
+        'Classify them before shipping, rather than silently charging them per token.'
+    );
+  }
+
+  const tiedEmbeddings = !names.some((name) => name.endsWith('lm_head.weight'));
+
+  const otherShards = [
+    ...new Set(names.filter((n) => classifyTensor(n) === 'other').map((n) => weightMap[n])),
+  ];
+  if (otherShards.length === 0) return { tiedEmbeddings, nonLanguageParams: 0 };
+
+  let nonLanguageParams = 0;
+  for (const shard of otherShards) {
+    const header = await fetchSafetensorsHeader(id, shard);
+    for (const [name, tensor] of Object.entries(header)) {
+      if (classifyTensor(name) !== 'other') continue;
+      if (tensor.dtype && PACKED_DTYPES.has(tensor.dtype.toUpperCase())) {
+        throw new DerivationError(
+          `${id}: non-language tensor ${name} is packed (${tensor.dtype}), so its element ` +
+            'count is not a parameter count. Add an override rather than subtracting it.'
+        );
+      }
+      nonLanguageParams += (tensor.shape ?? []).reduce((a, b) => a * b, 1);
+    }
+  }
+
+  return { tiedEmbeddings, nonLanguageParams };
+}
+
 async function buildModel(seed: Seed) {
   const api = await fetchJson<HfApiModel>(
     `https://huggingface.co/api/models/${seed.id}?expand[]=safetensors&expand[]=downloads&expand[]=likes&expand[]=createdAt`,
@@ -439,6 +595,25 @@ async function buildModel(seed: Seed) {
     ? activeDense + (moe.experts.perToken / moe.experts.total) * expertParams
     : activeDense;
 
+  /**
+   * `activeParams` above is the *published* convention, and it is not what a decode step reads.
+   * Two corrections separate them, and both were wrong in the direction of a slower machine:
+   *
+   *   - **Tied embeddings.** When a model reuses the embedding table as its output projection,
+   *     that table is a full vocab matmul on every step. Subtracting it is right for untied
+   *     models like gpt-oss and wrong for tied ones like Gemma 3 and Qwen3-4B.
+   *   - **Non-text towers.** Gemma 3's vision encoder occupies memory but does not run for a
+   *     text token, so it belongs in `totalParams` and not in the per-token count.
+   *
+   * Kept as its own field rather than folded into `activeParams`, because the published figure
+   * is what the catalog tests check against vendors and what users recognise on a model card.
+   */
+  const stack = await deriveStackShape(seed.id);
+  const activeDenseParams = Math.max(
+    0,
+    denseParams - stack.nonLanguageParams - (stack.tiedEmbeddings ? 0 : embeddingParams)
+  );
+
   const layerWindows = deriveLayerWindows(config, layers);
   const quantMethod = (config.quantization_config as Record<string, unknown> | undefined)
     ?.quant_method;
@@ -449,8 +624,11 @@ async function buildModel(seed: Seed) {
     org: seed.org,
     totalParams,
     activeParams,
+    activeDenseParams,
     expertParams,
     ...(moe ? { experts: moe.experts } : {}),
+    tiedEmbeddings: stack.tiedEmbeddings,
+    ...(stack.nonLanguageParams > 0 ? { nonLanguageParams: stack.nonLanguageParams } : {}),
     layers,
     hiddenSize,
     vocabSize,
@@ -473,6 +651,7 @@ async function buildModel(seed: Seed) {
 
 async function main() {
   const dryRun = process.argv.includes('--dry-run');
+  const allowPartial = process.argv.includes('--allow-partial');
   const models = [];
   const failures: string[] = [];
 
@@ -496,11 +675,27 @@ async function main() {
 
   console.log(`\n${models.length} ok, ${failures.length} failed, ${SEEDS.length} seeded`);
 
-  // A refresh that silently drops half the catalog is worse than one that fails: the site
-  // would keep building and quietly stop offering models people came to look for.
-  if (failures.length > SEEDS.length / 3) {
-    console.error('\nToo many failures — refusing to write a gutted catalog.');
+  /**
+   * Any failure blocks the write.
+   *
+   * The artifact is committed, so a partial run does not merely produce a smaller catalog — it
+   * deletes models from the product, and the loader reads only `models` and never surfaces
+   * `failures`. A tolerance threshold made that outcome reachable from a transient Hugging Face
+   * error: five of seventeen seeds could 503 and the run would still exit 0 having dropped 29%
+   * of the catalog.
+   *
+   * `--allow-partial` keeps the original escape hatch, because a single permanently-gated repo
+   * should not block every future refresh. It just has to be asked for.
+   */
+  if (failures.length > 0 && !allowPartial) {
+    console.error(
+      `\n${failures.length} seed(s) failed — refusing to overwrite the catalog with a partial ` +
+        'list. Fix the failures, or pass --allow-partial to write anyway.'
+    );
     process.exit(1);
+  }
+  if (failures.length > 0) {
+    console.warn(`\n--allow-partial: writing without ${failures.length} seed(s).`);
   }
 
   if (dryRun) {

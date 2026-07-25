@@ -15,7 +15,8 @@ import {
   VLLM,
 } from './fixtures';
 import { getQuant } from '@/data/quants';
-import type { ModelSpec, QuantSpec, Rig, RuntimeSpec, UsageSpec } from './types';
+import type { DeviceSpec, ModelSpec, QuantSpec, Rig, RuntimeSpec, UsageSpec } from './types';
+import { denseParams, TFLOP } from './types';
 
 function decode(
   model: ModelSpec,
@@ -199,9 +200,20 @@ describe('long context shifts the bottleneck to KV', () => {
 });
 
 describe('MoE experts accumulate with batch size', () => {
-  it('recovers the published active parameter count at batch 1', () => {
-    // dense 17.1B + 8/256 of 653.9B routed = 37.5B, against DeepSeek's published 37B.
-    expect(effectiveActiveParams(DEEPSEEK_V3, 1) / 1e9).toBeCloseTo(37.5, 0);
+  /**
+   * DeepSeek publishes 37B active. The decode basis sits just under it, and the gap is exactly
+   * the input embedding: 129280 x 7168 = 0.93B, which an untied model reads a single row of per
+   * token rather than in full. Counting the whole dense half instead gives 37.5B — the residency
+   * figure, not the per-token one.
+   */
+  it('lands just under the published active count, short by the embedding table', () => {
+    const basis = effectiveActiveParams(DEEPSEEK_V3, 1);
+    expect(basis / 1e9).toBeCloseTo(36.6, 0);
+
+    const embedding = DEEPSEEK_V3.vocabSize * DEEPSEEK_V3.hiddenSize;
+    const residencyBasis = denseParams(DEEPSEEK_V3) + DEEPSEEK_V3.expertParams * (8 / 256);
+    expect(residencyBasis - basis).toBeCloseTo(embedding, -6);
+    expect(basis).toBeLessThan(DEEPSEEK_V3.activeParams);
   });
 
   it('approaches total parameters as batch grows', () => {
@@ -211,7 +223,8 @@ describe('MoE experts accumulate with batch size', () => {
   });
 
   it('leaves a dense model unchanged at any batch size', () => {
-    expect(effectiveActiveParams(LLAMA_31_8B, 64)).toBe(LLAMA_31_8B.activeParams);
+    expect(effectiveActiveParams(LLAMA_31_8B, 64)).toBe(LLAMA_31_8B.activeDenseParams);
+    expect(effectiveActiveParams(LLAMA_31_8B, 64)).toBe(effectiveActiveParams(LLAMA_31_8B, 1));
   });
 
   it('gains less per-user throughput from batching than a dense model does', () => {
@@ -247,5 +260,43 @@ describe('offload is a cliff', () => {
     expect(result.perUserTokensPerSec).toBeLessThan(
       result.offloadPenalty!.withoutOffloadTokensPerSec / 2
     );
+  });
+});
+
+/**
+ * Compute precision is looked up per dtype, and the lookup has to be able to *miss*.
+ *
+ * INT8 and FP8 run at the same rate on hardware that has both, which makes aliasing them
+ * tempting. Ampere is the counterexample: 2x fp16 on INT8 tensor cores, no FP8 units at all.
+ * Aliasing in either direction invents a rate one of those cards cannot reach.
+ */
+describe('compute precision lookup', () => {
+  const ampereLike: DeviceSpec = {
+    ...RTX_5090,
+    id: 'int8-only',
+    // The Ampere shape: an INT8 rate at 2x fp16, and no FP8 entry whatsoever.
+    flops: { fp16: 142 * TFLOP, int8: 284 * TFLOP },
+  };
+  const prefill = (quantId: string, device: DeviceSpec = ampereLike) =>
+    estimatePrefill(
+      QWEN3_32B,
+      getQuant(quantId),
+      { contextTokens: 8192, concurrency: 1, kvPrecision: 'fp16', promptTokens: 8192 },
+      { device, count: 1 },
+      VLLM
+    ).prefillTokensPerSec;
+
+  it('reaches the catalogued INT8 rate on a card that publishes one', () => {
+    expect(prefill('int8') / prefill('bf16')).toBeCloseTo(2, 1);
+  });
+
+  it('refuses to lend the INT8 rate to an FP8 quant', () => {
+    // No FP8 tensor cores means FP8 falls back to fp16, not to the INT8 headline.
+    expect(prefill('fp8')).toBeCloseTo(prefill('bf16'), 1);
+  });
+
+  it('still serves INT8 from the FP8 rate when only that is published', () => {
+    const fp8Only: DeviceSpec = { ...RTX_5090, flops: { fp16: 419 * TFLOP, fp8: 838 * TFLOP } };
+    expect(prefill('int8', fp8Only) / prefill('bf16', fp8Only)).toBeCloseTo(2, 1);
   });
 });

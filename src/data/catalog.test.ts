@@ -164,6 +164,60 @@ describe('generated model catalog', () => {
     // makes this an independent check rather than a shape assertion.
     expect(model.attention.layerWindows).toEqual(fixture.attention.layerWindows);
   });
+
+  /**
+   * Tied embeddings must be read from the tensor list, never from `tie_word_embeddings`.
+   *
+   * Both Gemma 3 repos omit that config key entirely while genuinely being tied — their index
+   * has no `lm_head.weight`. Trusting the key would subtract a 262208 x 3840 table (1.0B, ~9%
+   * of active) that decode in fact runs as a full output matmul every step.
+   *
+   * The assertion is deliberately on the *derived arithmetic* rather than on the flag, so it
+   * fails if the flag is ever right for the wrong reason.
+   */
+  it.each([
+    ['Qwen/Qwen3-4B', true],
+    ['unsloth/gemma-3-12b-it', true],
+    ['openai/gpt-oss-20b', false],
+    ['Qwen/Qwen3-8B', false],
+  ])('%s keeps its embedding table per-token only when tied', (id, tied) => {
+    const model = getModel(id);
+    expect(model.tiedEmbeddings).toBe(tied);
+
+    const embedding = model.vocabSize * model.hiddenSize;
+    const dense = model.totalParams - model.expertParams - (model.nonLanguageParams ?? 0);
+    expect(model.activeDenseParams).toBeCloseTo(tied ? dense : dense - embedding, -6);
+  });
+
+  /**
+   * A vision tower occupies memory but never runs for a text token, so it belongs in
+   * `totalParams` and not in the per-token count. Gemma 3 is the only multimodal pair here;
+   * its tower is ~0.42B, which is 3.7% of prefill on the 12B.
+   */
+  it.each([
+    ['unsloth/gemma-3-12b-it', 12.19],
+    ['unsloth/gemma-3-27b-it', 27.43],
+  ])('%s excludes its vision tower from the per-token count but not from memory', (id, totalB) => {
+    const model = getModel(id);
+
+    expect(model.nonLanguageParams).toBeGreaterThan(0.4e9);
+    expect(model.nonLanguageParams).toBeLessThan(0.5e9);
+    // Still resident: the tower loads with the model even for a text-only request.
+    expect(model.totalParams / 1e9).toBeCloseTo(totalB, 1);
+    expect(model.activeDenseParams).toBe(model.totalParams - model.nonLanguageParams!);
+  });
+
+  /**
+   * The catalogued models are the ones the engine actually runs, so the invariant that keeps
+   * decode honest has to hold across all of them, not just the ones spot-checked above.
+   */
+  it('gives every model a per-token basis inside its own residency figure', () => {
+    for (const model of MODELS) {
+      const dense = model.totalParams - model.expertParams;
+      expect(model.activeDenseParams).toBeGreaterThan(0);
+      expect(model.activeDenseParams).toBeLessThanOrEqual(dense);
+    }
+  });
 });
 
 describe('every catalogued model evaluates on every catalogued device', () => {

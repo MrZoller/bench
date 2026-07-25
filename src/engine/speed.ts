@@ -9,7 +9,7 @@ import type {
 } from './types';
 import { effectiveBandwidth } from './types';
 import { attentionSpanPerToken, kvReadBytesPerToken } from './kv';
-import { activeWeightBytes } from './weights';
+import { activeWeightBytes, prefillComputeParams } from './weights';
 import type { Placement } from './placement';
 import { DEFAULT_HOST_BANDWIDTH } from './placement';
 
@@ -22,11 +22,22 @@ import { DEFAULT_HOST_BANDWIDTH } from './placement';
  * a DGX Spark prefills fast and decodes slowly, a Mac Studio does the reverse — which is
  * precisely what a single "speed" number cannot express.
  *
- * **On accuracy.** This is a roofline, not a simulator. It is calibrated against published
- * measurements at both ends of the hardware range (see speed.test.ts) and reads ~9% under the
- * DGX Spark decode anchor and ~3% under the EPYC one — both conservative. It cannot model
- * scheduler behaviour, per-model kernel quality, or thermal throttling. The app must present
- * these as estimates with a band, never as promises.
+ * **On accuracy.** This is a roofline, not a simulator. Against the three published anchors in
+ * speed.test.ts it reads ~19% over on DGX Spark decode, ~10% over on Spark prefill, and within
+ * 1% on EPYC decode. It cannot model scheduler behaviour, per-model kernel quality, or thermal
+ * throttling. The app must present these as estimates with a band, never as promises.
+ *
+ * Those first two used to read ~10% and ~6% *under*, and none of the constants below were
+ * touched to move them. What changed is that the per-token parameter basis stopped counting
+ * work the hardware does not do — the input embedding table decode never reads, and the output
+ * projection prefill computes for one position rather than every prompt token. The old
+ * calibration was partly absorbing both, which is why correcting them moved gpt-oss-20b decode
+ * by 31% while barely touching DeepSeek on EPYC, whose embedding is 2.5% of its active
+ * parameters.
+ *
+ * The knobs were deliberately left alone rather than re-centred on the Spark points: re-tuning
+ * a fudge factor immediately after removing the error it was masking is how the next error gets
+ * hidden. The residual is now honest and sits inside the +/-30% band the tests assert.
  *
  * **On the calibration constants.** `bandwidthEfficiency` and `CLASS_BANDWIDTH_UTILIZATION`
  * are two free multiplicative knobs fitted to two data points, and only their *product* is
@@ -149,7 +160,12 @@ function peakFlops(device: DeviceSpec, quant: QuantSpec, runtime: RuntimeSpec): 
     case 'fp4':
       return f.fp4 ?? f.fp8 ?? fp16;
     case 'fp8':
+      // Deliberately does not fall back to int8. A card with INT8 tensor cores and no FP8 ones
+      // cannot run an FP8 kernel at the INT8 rate; it runs it at fp16.
       return f.fp8 ?? fp16;
+    case 'int8':
+      // The reverse fallback is safe: hardware with FP8 units runs INT8 at the same rate.
+      return f.int8 ?? f.fp8 ?? fp16;
     case 'fp16':
       return fp16;
   }
@@ -184,7 +200,11 @@ export function estimatePrefill(
   // Two FLOPs per parameter per token for the linear layers. MoE routes each token through
   // only its selected experts, so this uses active rather than total parameters — FLOPs scale
   // with per-token active params, while bytes scale with the batch-wide expert union.
-  const linearFlops = 2 * model.activeParams * promptTokens;
+  //
+  // Not `model.activeParams`: that is the published figure, which subtracts the embedding table
+  // even when it is tied and therefore run as a full output matmul, and which counts a vision
+  // tower that a text-only prompt never touches.
+  const linearFlops = 2 * prefillComputeParams(model) * promptTokens;
   // QK^T and AV. Quadratic on full-attention layers, but only linear on sliding-window ones,
   // which attend over their window however long the prompt gets. Overtakes the linear term on
   // long prompts — why time-to-first-token degrades faster than people expect at big contexts.

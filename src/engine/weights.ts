@@ -13,6 +13,12 @@ import { denseParams } from './types';
  * wrong: active params are roughly half dense for gpt-oss, and charging that dense half the
  * blended whole-model rate understates bytes-read-per-token by ~1.9x — which lands directly
  * on decode throughput.
+ *
+ * Which dense parameters count is its own trap. `totalParams - expertParams` is the residency
+ * figure, not the per-token one: it includes an untied embedding table that decode reads a
+ * single row of, and any vision tower a text request never runs. Both belong to
+ * `activeDenseParams`, and using the residency figure instead cost gpt-oss-20b 31% of its
+ * decode throughput.
  */
 
 export interface WeightBreakdown {
@@ -65,17 +71,46 @@ export function expertFraction(model: ModelSpec, batch: number): number {
   // Without expert counts the union can't be modelled, so fall back to the catalog's own
   // active-parameter figure and hold it flat across batch. Better a known-conservative
   // estimate than a fabricated curve.
-  const implied = (model.activeParams - denseParams(model)) / model.expertParams;
+  //
+  // The subtrahend has to be the same dense basis `activeParams` was built from — dense params
+  // minus the embedding table — not the full dense half. Using the latter left gpt-oss-20b
+  // implying 9.5% of experts per token where its config says 4 of 32.
+  const activeDense = denseParams(model) - model.vocabSize * model.hiddenSize;
+  const implied = (model.activeParams - activeDense) / model.expertParams;
   return Math.min(1, Math.max(0, implied));
 }
 
 /**
- * Parameters actually read for a decode step at a given batch size. Recovers a model's
- * published active-parameter count at batch 1 to within the rounding the vendor applied.
+ * Parameters read for one token: the dense stack it actually runs, plus the experts a batch of
+ * `batch` tokens collectively routes through.
+ *
+ * At batch 1 this lands on the vendor's published active-parameter figure for an untied,
+ * text-only model, and deliberately above it for a tied or multimodal one — see
+ * `ModelSpec.activeDenseParams` for why those two cases pull apart.
  */
 export function effectiveActiveParams(model: ModelSpec, batch: number): number {
-  if (model.expertParams === 0) return model.activeParams;
-  return denseParams(model) + model.expertParams * expertFraction(model, batch);
+  return model.activeDenseParams + model.expertParams * expertFraction(model, batch);
+}
+
+/**
+ * Parameters a single prompt token is computed through — the FLOPs basis for prefill.
+ *
+ * Differs from the decode basis in two ways:
+ *   - the expert term uses the experts *one* token routes through, since FLOPs scale per token
+ *     while bytes scale with the union a whole batch touches;
+ *   - the output projection is excluded. Logits are produced only for the positions that need
+ *     them — one, for generation — so a `vocab x hidden` matmul on every prompt token is work
+ *     no runtime performs. llama.cpp gathers the output rows before the LM head and vLLM slices
+ *     the hidden states before it. Charging it anyway overstated prefill by 16% on gpt-oss-20b
+ *     and 9% on Gemma 3 12B, the models with the largest vocabularies relative to their depth.
+ *
+ * The single output position that *is* computed is left out as noise: one token against a
+ * prompt of hundreds.
+ */
+export function prefillComputeParams(model: ModelSpec): number {
+  const outputProjection = model.vocabSize * model.hiddenSize;
+  const perToken = model.activeDenseParams + model.expertParams * expertFraction(model, 1);
+  return Math.max(0, perToken - outputProjection);
 }
 
 /**
@@ -88,5 +123,5 @@ export function effectiveActiveParams(model: ModelSpec, batch: number): number {
 export function activeWeightBytes(model: ModelSpec, quant: QuantSpec, batch = 1): number {
   const denseBpw = quant.denseBpw ?? quant.bpw;
   const activeExpertParams = model.expertParams * expertFraction(model, batch);
-  return (denseParams(model) * denseBpw + activeExpertParams * quant.bpw) / 8;
+  return (model.activeDenseParams * denseBpw + activeExpertParams * quant.bpw) / 8;
 }
