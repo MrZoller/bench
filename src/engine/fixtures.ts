@@ -254,6 +254,27 @@ export const MAC_STUDIO_M3_ULTRA_256: DeviceSpec = {
 };
 
 /**
+ * The big one, and the clearest case of a ceiling that is not a limit: 512 GiB of memory with
+ * 384 GiB handed out by default. A configuration between those two figures does not run today
+ * and runs after one `sysctl`, which is a different answer from "will not run".
+ */
+export const MAC_STUDIO_M3_ULTRA_512: DeviceSpec = {
+  id: 'mac-studio-m3-ultra-512',
+  name: 'Mac Studio M3 Ultra (512 GB)',
+  vendor: 'Apple',
+  class: 'unified-soc',
+  status: 'shipping',
+  capacityBytes: 512 * GIB,
+  allocatableBytes: Math.floor(0.75 * 512 * GIB),
+  allocatableTunable: true,
+  bandwidthBytesPerSec: 819 * GB,
+  flops: { fp16: 54 * TFLOP },
+  tdpWatts: 270,
+  msrpUsd: 9499,
+  source: 'https://www.apple.com/mac-studio/specs/',
+};
+
+/**
  * Cheap capacity, modest everything else. Sticker bandwidth is 256 GB/s; measured lands
  * around 213 GB/s, and that 17% is the difference between a right and a wrong tok/s figure.
  */

@@ -44,6 +44,15 @@ export interface EnvelopeCell {
    * told.
    */
   tightBecause?: 'capacity' | 'speed' | 'latency';
+  /**
+   * Why a cell does not run: past the hardware, or merely past a ceiling that can be raised.
+   *
+   * macOS caps wired GPU memory near 75% of RAM and AMD exposes a Variable Graphics Memory
+   * setting, so on those machines the catalog figure is an untuned default rather than a limit.
+   * The Telemetry tile already says so; the grid painted the same cells "past what this hardware
+   * can hold", which contradicts the tile and hides the one change that would fix it.
+   */
+  overBecause?: 'capacity' | 'allocation';
   /** Per-user decode, so the table can say what "tight" costs. */
   tokensPerSec: number;
   /** Time to first token, for the same reason: it is half of what "usable" means. */
@@ -147,10 +156,17 @@ export function computeEnvelope(request: EnvelopeRequest): EnvelopeGrid {
       }
 
       if (placement.impossible) {
+        // Within the physical pool but past a raiseable default is a different sentence from
+        // past the hardware — and a different action.
+        const raiseable =
+          rig.device.allocatableTunable === true &&
+          placement.usedBytesPerDevice <= rig.device.capacityBytes;
+
         return {
           contextTokens,
           concurrency,
           state: 'over' as const,
+          overBecause: raiseable ? ('allocation' as const) : ('capacity' as const),
           tokensPerSec: 0,
           ttftSeconds: 0,
           utilization: placement.utilization,

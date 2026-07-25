@@ -12,6 +12,7 @@ import {
   DEEPSEEK_V3,
   LLAMA_31_8B,
   LLAMA_CPP,
+  MAC_STUDIO_M3_ULTRA_512,
   MLX,
   RTX_5090,
 } from './fixtures';
@@ -153,6 +154,49 @@ describe('the feasibility region', () => {
     const tight = grid.cells.flat().filter((c) => c.state === 'tight');
     expect(tight.length).toBeGreaterThan(0);
     expect(tight.some((c) => c.tightBecause === 'latency')).toBe(true);
+  });
+
+  /**
+   * A raiseable ceiling is not a hardware limit, and the Telemetry tile already says so. The grid
+   * painting the same cells "past what this hardware can hold" contradicted it, and hid the one
+   * change that would fix it.
+   */
+  it('separates a raiseable ceiling from the hardware itself', () => {
+    // 512 GiB of physical memory, 384 GiB handed out by default. DeepSeek V3 at Q5 needs about
+    // 444 GiB — inside the machine, outside the default. One `sysctl` away from running.
+    const grid = envelope({
+      model: DEEPSEEK_V3,
+      quant: getQuant('q5_k_m'),
+      rig: { device: MAC_STUDIO_M3_ULTRA_512, count: 1 },
+      runtime: MLX,
+    });
+
+    const closed = grid.cells.flat().filter((c) => c.state === 'over');
+    expect(closed.length).toBeGreaterThan(0);
+    // Both kinds appear in one grid, which is the point: the small-context corner is a raiseable
+    // ceiling away from running, and the far corner is past the machine however it is tuned.
+    expect(closed.some((c) => c.overBecause === 'allocation')).toBe(true);
+    expect(closed.some((c) => c.overBecause === 'capacity')).toBe(true);
+    // And the distinction tracks the physical pool rather than being cosmetic: raising the
+    // ceiling can only ever help the cells that fit inside the machine.
+    const allocation = closed.filter((c) => c.overBecause === 'allocation');
+    const capacity = closed.filter((c) => c.overBecause === 'capacity');
+    expect(Math.max(...allocation.map((c) => c.utilization))).toBeLessThan(
+      Math.min(...capacity.map((c) => c.utilization))
+    );
+  });
+
+  it('still blames the hardware when the ceiling is not the thing in the way', () => {
+    // A 32 GiB card with a fixed ceiling: raising a setting cannot help.
+    const grid = envelope({
+      model: DEEPSEEK_V3,
+      quant: getQuant('q8_0'),
+      rig: { device: RTX_5090, count: 1 },
+    });
+
+    const closed = grid.cells.flat().filter((c) => c.state === 'over');
+    expect(closed.length).toBeGreaterThan(0);
+    expect(closed.every((c) => c.overBecause === 'capacity')).toBe(true);
   });
 
   it('calls out offload separately from merely being tight', () => {

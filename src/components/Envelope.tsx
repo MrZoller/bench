@@ -175,6 +175,13 @@ export function Envelope({ config }: { config: Config }) {
     }
   }, [grid, config.contextTokens, config.concurrency, model.maxContext, resizeTick]);
 
+  /**
+   * Whether the closed cells are closed by a ceiling rather than by the hardware. A grid is one
+   * device, so this is a property of the whole picture — and the Telemetry tile beside it already
+   * tells the user they can raise it.
+   */
+  const raiseable = grid.cells.flat().some((c) => c.overBecause === 'allocation');
+
   const counts = grid.cells.flat().reduce<Record<string, number>>((acc, cell) => {
     acc[cell.state] = (acc[cell.state] ?? 0) + 1;
     return acc;
@@ -247,21 +254,29 @@ export function Envelope({ config }: { config: Config }) {
       <ul className="mt-4 grid gap-x-5 gap-y-2 sm:grid-cols-2">
         {(Object.keys(STATE_STYLE) as CellState[])
           .filter((state) => counts[state])
-          .map((state) => (
-            <li key={state} className="flex items-baseline gap-2 text-sm">
-              <span
-                aria-hidden="true"
-                className="mt-1 inline-block h-3 w-3 shrink-0 rounded-sm"
-                style={{ background: STATE_STYLE[state].fill }}
-              />
-              <span>
-                <span className="text-[var(--color-text)]">{STATE_STYLE[state].label}</span>{' '}
-                <span className="text-xs text-[var(--color-text-muted)]">
-                  {STATE_STYLE[state].hint}
+          .map((state) => {
+            const { label, hint } =
+              state === 'over' && raiseable
+                ? {
+                    label: 'Past the default allocation',
+                    hint: 'Within the memory this machine has, but past the ceiling it hands out by default — which you can raise.',
+                  }
+                : STATE_STYLE[state];
+
+            return (
+              <li key={state} className="flex items-baseline gap-2 text-sm">
+                <span
+                  aria-hidden="true"
+                  className="mt-1 inline-block h-3 w-3 shrink-0 rounded-sm"
+                  style={{ background: STATE_STYLE[state].fill }}
+                />
+                <span>
+                  <span className="text-[var(--color-text)]">{label}</span>{' '}
+                  <span className="text-xs text-[var(--color-text-muted)]">{hint}</span>
                 </span>
-              </span>
-            </li>
-          ))}
+              </li>
+            );
+          })}
       </ul>
 
       <button
@@ -354,7 +369,12 @@ function describe(
 
 /** What a cell says in the table: its state, why, and what it costs. */
 function describeCell(cell: EnvelopeCell): string {
-  if (cell.state === 'over' || cell.state === 'unsupported') return STATE_STYLE[cell.state].label;
+  if (cell.state === 'over') {
+    return cell.overBecause === 'allocation'
+      ? 'Past the default allocation'
+      : STATE_STYLE.over.label;
+  }
+  if (cell.state === 'unsupported') return STATE_STYLE.unsupported.label;
   const why =
     cell.tightBecause === 'capacity'
       ? ' (near the ceiling)'
