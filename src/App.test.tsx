@@ -585,3 +585,36 @@ describe('the teaching aside makes no speed claim about a configuration that can
     expect(screen.queryByText(/the decode figure above measures/i)).not.toBeInTheDocument();
   });
 });
+
+/**
+ * Headroom is only room to *grow* while there is somewhere to grow to. At a model's own ceiling
+ * the spare memory is real and the invitation is not.
+ */
+describe('the capacity tile does not promise context a model cannot take', () => {
+  it('says how far the model goes instead of offering more', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Qwen3 4B tops out at 40,960 and leaves a 5090 mostly empty.
+    await user.selectOptions(screen.getByLabelText('Model'), 'Qwen/Qwen3-4B');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+
+    const slider = screen.getByLabelText('Context per sequence') as HTMLInputElement;
+    fireEvent.change(slider, { target: { value: String(Number(slider.max)) } });
+
+    const verdicts = screen.getByRole('region', { name: 'Verdicts' });
+    expect(within(verdicts).getByText(/as far as this model goes/i)).toBeInTheDocument();
+    expect(within(verdicts).queryByText(/Room to grow/i)).not.toBeInTheDocument();
+  });
+
+  it('still offers the room when there is some', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Model'), 'Qwen/Qwen3-4B');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+
+    const verdicts = screen.getByRole('region', { name: 'Verdicts' });
+    expect(within(verdicts).getByText(/Room to grow/i)).toBeInTheDocument();
+  });
+});
