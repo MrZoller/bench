@@ -346,10 +346,18 @@ export function planPlacement(
     ? `${runtime.label} does not run on ${rig.device.name}.`
     : !runtime.kvPrecisions.includes(usage.kvPrecision)
       ? `${runtime.label} cannot store a ${usage.kvPrecision.toUpperCase()} KV cache.`
-      : // A format tied to particular silicon is as unrunnable as a runtime that cannot drive
-        // the device, and was previously waved through — leaving `peakFlops` to read a rate
-        // published for a different format, or for hardware that has no such units at all.
-        unmetRequirement(quant, rig.device);
+      : // The same guarantee `kvPrecisions` gives the cache, for the weights. llama.cpp loads
+        // GGUF and not AWQ; vLLM reads neither GGUF K-quant. `quantApplies` enforced this for
+        // the picker and the store, but every caller that reaches the engine directly — the
+        // Matrix, the Envelope, anything importing `evaluate` — bypassed it and got capacity and
+        // throughput figures for a checkpoint the runtime cannot open. A rule that only the UI
+        // applies is not a rule the engine has.
+        !runtime.weightFormats.includes(quant.id)
+        ? `${runtime.label} cannot load ${quant.label} weights.`
+        : // A format tied to particular silicon is as unrunnable as a runtime that cannot drive
+          // the device, and was previously waved through — leaving `peakFlops` to read a rate
+          // published for a different format, or for hardware that has no such units at all.
+          unmetRequirement(quant, rig.device);
 
   return {
     fits,
