@@ -78,7 +78,16 @@ function coerce(config: Config): Config {
   return {
     ...config,
     modelId,
-    quantId: known(config.quantId, getQuant, DEFAULT_CONFIG.quantId),
+    /**
+     * An expert-only scheme on a dense model is a no-op the label denies: MXFP4 spares
+     * everything that is not a routed expert, so with none present it computes exactly BF16
+     * while still calling itself 4-bit. The picker hides it there, so the *selection* has to
+     * move too — otherwise switching from gpt-oss to Qwen leaves the store holding an option
+     * the control no longer offers, and the two silently disagree about what is selected.
+     */
+    quantId: expertOnlyOnDense(config.quantId, modelId)
+      ? 'bf16'
+      : known(config.quantId, getQuant, DEFAULT_CONFIG.quantId),
     runtimeId: known(config.runtimeId, getRuntime, DEFAULT_CONFIG.runtimeId),
     deviceId,
     // Only discrete GPUs shard a model across devices; a count above 1 anywhere else describes
@@ -112,6 +121,15 @@ function coerce(config: Config): Config {
  * hand-editable querystring, where `Number(params.get('ctx'))` on nonsense yields NaN, and
  * silently pinning that to the smallest legal context is its own wrong answer.
  */
+/** True when the quant spares non-expert tensors and the model has no experts to spare. */
+function expertOnlyOnDense(quantId: string, modelId: string): boolean {
+  try {
+    return getQuant(quantId).denseBpw !== undefined && getModel(modelId).expertParams === 0;
+  } catch {
+    return false;
+  }
+}
+
 function clamp(value: number, min: number, max: number, fallback: number): number {
   if (!Number.isFinite(value)) return fallback;
   return Math.min(max, Math.max(min, Math.round(value)));

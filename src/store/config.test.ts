@@ -117,3 +117,30 @@ describe('evaluating a config', () => {
     }
   });
 });
+
+/**
+ * An expert-only quantization on a dense model is a no-op its own label denies, so the picker
+ * hides it there — which means the selection has to move with it, or the control and the store
+ * disagree about what is selected.
+ */
+describe('quantization follows the model', () => {
+  it('drops an expert-only scheme when the model has no experts', () => {
+    useConfig.setState(DEFAULT_CONFIG);
+    const store = useConfig.getState();
+
+    store.set('quantId', 'mxfp4');
+    expect(useConfig.getState().quantId).toBe('mxfp4'); // gpt-oss is MoE, so it stands.
+
+    store.set('modelId', 'Qwen/Qwen3-32B');
+    expect(useConfig.getState().quantId).not.toBe('mxfp4');
+  });
+
+  it('leaves a uniform scheme alone on any model', () => {
+    useConfig.setState(DEFAULT_CONFIG);
+    const store = useConfig.getState();
+
+    store.set('quantId', 'q4_k_m');
+    store.set('modelId', 'Qwen/Qwen3-32B');
+    expect(useConfig.getState().quantId).toBe('q4_k_m');
+  });
+});

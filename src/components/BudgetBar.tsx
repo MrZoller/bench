@@ -55,6 +55,9 @@ export function BudgetBar({ evaluation }: { evaluation: Evaluation }) {
     },
   ];
 
+  // Total spacer width the segments have to give back, so the row still measures 100%.
+  const gapTotal = marks.gap * (segments.length - 1);
+
   const used = placement.usedBytesPerDevice;
   // Scale to whichever is larger, so an over-budget stack stays on screen and its overflow is
   // legible as a proportion rather than clipped at the edge.
@@ -94,11 +97,15 @@ export function BudgetBar({ evaluation }: { evaluation: Evaluation }) {
                 key={segment.key}
                 className="h-full transition-[width] duration-200 ease-out"
                 style={{
-                  width: `${width}%`,
+                  /**
+                   * The gap is taken *out* of each width rather than added beside it. When the
+                   * stack overflows, `scale` equals `used`, so the percentages already sum to
+                   * 100 — adding fixed margins on top then pushes the row past its container,
+                   * and `overflow-hidden` silently clips the trailing segment. A small overhead
+                   * band could disappear entirely while still being listed in the legend.
+                   */
+                  width: `calc(${width}% - ${(gapTotal * width) / 100}px)`,
                   background: segment.color,
-                  // The spacer between fills, so adjacent segments never bleed together. Not on
-                  // the last one: three trailing margins push the flex line past the container,
-                  // which shrinks the stack away from the absolutely-positioned ceiling marker.
                   marginRight: index < segments.length - 1 ? marks.gap : 0,
                   flexShrink: 0,
                 }}

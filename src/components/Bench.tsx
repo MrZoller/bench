@@ -5,7 +5,7 @@ import { CATALOG_GENERATED_AT, getDevice, getModel } from '@/data/catalog';
 import { BudgetBar } from './BudgetBar';
 import { Telemetry } from './Telemetry';
 import { Segmented, Select, StopSlider } from './Controls';
-import { compact, gibLabel, params, tokens } from '@/lib/format';
+import { compact, gibLabel, params, percent, tokens } from '@/lib/format';
 import type { KvPrecision } from '@/engine/types';
 
 /**
@@ -61,6 +61,23 @@ export function Bench() {
     return within.length > 0 ? [...within, config.contextTokens] : [config.contextTokens];
   }, [config.contextTokens]);
 
+  /**
+   * Expert-only schemes are hidden for dense models.
+   *
+   * MXFP4 sets `denseBpw: 16`, so on a model with no routed experts it produces exactly a BF16
+   * footprint and decode basis while the control goes on claiming "MXFP4 (expert-only)" — the
+   * label and the arithmetic disagree, and the arithmetic is right. Hiding it is better than
+   * showing a no-op: there is nothing for the user to learn from selecting it.
+   */
+  const quantOptions = useMemo(() => {
+    const expertOnly = (q: (typeof QUANTS)[number]) => q.denseBpw !== undefined;
+    return QUANTS.filter((q) => model.expertParams > 0 || !expertOnly(q)).map((q) => ({
+      value: q.id,
+      label: q.label,
+      note: q.qualityNote,
+    }));
+  }, [model.expertParams]);
+
   /** Whether the configuration runs at all. */
   const runnable = !evaluation.placement.unsupported && !evaluation.placement.impossible;
   /**
@@ -106,23 +123,35 @@ export function Bench() {
         // Pre-release specs must stay visibly labelled, not silently mixed in with shipping ones.
         // The tunable note matters for the same reason in reverse: the ceiling is a default, and
         // treating it as a hardware limit turns a raiseable setting into a flat "will not run".
+        // Status warning first, then the tunable ceiling, then whatever the curator wrote. The
+        // last of those was being dropped entirely — including the 3090's note that estimates
+        // assume PCIe and do not model its optional NVLink bridge, which is precisely the
+        // caveat an owner of a bridged pair needs.
         note:
           d.status !== 'shipping'
             ? `${d.status === 'rumored' ? 'Rumoured' : 'Announced'} — specs may change`
             : d.allocatableTunable
               ? `${gibLabel(d.allocatableBytes)} allocatable by default, and raiseable`
-              : undefined,
+              : d.note,
       })),
     []
   );
 
   const runtimeOptions = useMemo(() => {
     const device = DEVICES.find((d) => d.id === config.deviceId);
+    // Class *and* vendor, matching `planPlacement`. Checking only the class left MLX on a DGX
+    // Spark without its accessible warning while the tiles below said "Unsupported" — the note
+    // is what a screen-reader user tabbing through the picker actually hears.
+    const drives = (r: (typeof RUNTIMES)[number]) =>
+      device !== undefined &&
+      r.supports.includes(device.class) &&
+      (r.requiresVendor === undefined || r.requiresVendor === device.vendor);
+
     return RUNTIMES.map((r) => ({
       value: r.id,
       label: r.label,
       note:
-        device && !r.supports.includes(device.class)
+        device && !drives(r)
           ? `Does not run on ${device.name}`
           : r.preallocFraction
             ? `Reserves ${Math.round(r.preallocFraction * 100)}% of the device up front`
@@ -167,7 +196,7 @@ export function Bench() {
           label="Quantization"
           value={config.quantId}
           onChange={(v) => set('quantId', v)}
-          options={QUANTS.map((q) => ({ value: q.id, label: q.label, note: q.qualityNote }))}
+          options={quantOptions}
         />
         <Select
           label="Runtime"
@@ -259,7 +288,9 @@ export function Bench() {
             {fast
               ? ', so it decodes at roughly that model size rather than its full one.'
               : evaluation.placement.offloadFraction > 0
-                ? '. That would make it fast — but not here, with most of the weights crossing the host bus every token.'
+                ? `. That would make it fast — but not here, with ${percent(
+                    evaluation.placement.offloadFraction
+                  )} of the weights crossing the host bus every token.`
                 : '. That is why a model this size can be fast anywhere it does fit.'}{' '}
             Total parameters set what fits; active parameters set how fast it feels.
           </p>

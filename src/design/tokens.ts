@@ -39,7 +39,12 @@ export const colors = {
   // series colour — a coloured mark beside it carries the identity instead.
   text: '#e8eaf2',
   textMuted: '#9aa0b5',
-  textFaint: '#6f7690',
+  /**
+   * Raised from `#6f7690` (4.20:1). This token labels every control and verdict — normal-sized
+   * load-bearing text, so the threshold is 4.5:1 rather than the 3:1 that applies to a mark.
+   * At 5.10:1 it still sits clearly below `textMuted` at 7.25:1, so the hierarchy survives.
+   */
+  textFaint: '#7d84a0',
 
   // --- Accent = live / interactive --------------------------------------------------------
   /**
