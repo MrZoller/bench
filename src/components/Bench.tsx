@@ -8,12 +8,20 @@ import { CATALOG_GENERATED_AT, getDevice, getModel } from '@/data/catalog';
 import { BudgetBar } from './BudgetBar';
 import { Telemetry } from './Telemetry';
 import { Workloads } from './Workloads';
+import { Envelope } from './Envelope';
 import { Segmented, Select, StopSlider } from './Controls';
 import { compact, gibLabel, params, percent, tokens } from '@/lib/format';
 import type { KvPrecision } from '@/engine/types';
 import { canShard, maxAllocatablePerDevice, raisingCeilingWouldHelp } from '@/engine/placement';
 import { classifyDecode } from '@/lib/verdicts';
 import { quantApplies } from '@/lib/quantChoice';
+import {
+  CONCURRENCY_STOPS,
+  DEVICE_COUNT_STOPS,
+  PROMPT_STOPS,
+  contextStopsFor,
+  withStored,
+} from '@/lib/stops';
 
 /**
  * The Bench — the hero surface.
@@ -23,17 +31,6 @@ import { quantApplies } from '@/lib/quantChoice';
  * on change; there is no submit step, because the point is to feel where the cliff is rather
  * than to query for it.
  */
-
-/**
- * Log-spaced stops. The interesting jumps in context are 4K -> 32K -> 128K, so a linear range
- * would spend most of its travel in a region nobody is deciding between.
- */
-const CONTEXT_STOPS = [
-  2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576,
-] as const;
-const CONCURRENCY_STOPS = [1, 2, 4, 8, 16, 32, 64, 128] as const;
-const PROMPT_STOPS = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072] as const;
-const DEVICE_COUNT_STOPS = [1, 2, 4, 8] as const;
 
 const KV_PRECISIONS: readonly { value: KvPrecision; label: string }[] = [
   { value: 'fp16', label: 'FP16' },
@@ -59,16 +56,10 @@ export function Bench() {
    * a 40,960-token Qwen to 64K and the store holds 40,960 while the slider reads 32K, with the
    * budget bar and throughput computed for neither.
    */
-  const contextStops = useMemo(() => {
-    const withinModel = CONTEXT_STOPS.filter((t) => t < model.maxContext);
-    // The stored value is always a stop, even when it is not one of the fixed ones. Switching
-    // from a 40,960-token model to a larger one keeps that 40,960 — `coerce` only caps — so a
-    // list of "fixed stops plus this model's maximum" would show 32K for a context the engine
-    // is evaluating at 40,960. Including it means the control cannot display a value the
-    // engine is not using.
-    const stops = new Set([...withinModel, model.maxContext, config.contextTokens]);
-    return [...stops].filter((t) => t <= model.maxContext).sort((a, b) => a - b);
-  }, [model.maxContext, config.contextTokens]);
+  const contextStops = useMemo(
+    () => contextStopsFor(model.maxContext, config.contextTokens),
+    [model.maxContext, config.contextTokens]
+  );
 
   /**
    * Every discrete control includes whatever is stored, for the same reason the context slider
@@ -275,6 +266,7 @@ export function Bench() {
         tunableCeiling={raisingCeilingWouldHelp(device, evaluation.placement.usedBytesPerDevice)}
       />
       <Workloads evaluation={evaluation} config={config} />
+      <Envelope config={config} />
 
       {/* Usage: the half of the question that is about you, not the hardware. */}
       <section aria-label="Usage" className="panel grid gap-5 p-5 sm:grid-cols-2">
@@ -521,11 +513,6 @@ function ShareLink() {
       )}
     </div>
   );
-}
-
-/** The fixed stops plus whatever is currently stored, so the control can always show it. */
-function withStored(stops: readonly number[], stored: number): number[] {
-  return [...new Set([...stops, stored])].sort((a, b) => a - b);
 }
 
 /** Snap an arbitrary value (from a URL, say) to the nearest slider stop. */

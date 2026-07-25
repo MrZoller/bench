@@ -195,8 +195,12 @@ describe('the Bench keeps the controls and the engine in step', () => {
     fireEvent.change(slider, { target: { value: '99' } }); // Past the end; clamps to the last stop.
 
     expect(useConfig.getState().contextTokens).toBe(max);
-    // The displayed value and the stored one must agree.
-    expect(screen.getByText(tokens(max))).toBeInTheDocument();
+    // The displayed value and the stored one must agree. Scoped to the control's own output:
+    // the Envelope's axis legitimately prints the same figure.
+    expect(screen.getByLabelText('Context per sequence')).toHaveAttribute(
+      'aria-valuetext',
+      tokens(max)
+    );
   });
 
   it('does not call a resident but slow configuration fast', async () => {
@@ -343,7 +347,10 @@ describe('the slider never displays a value the engine is not using', () => {
     // Switching to a roomier model preserves that value, so it must remain displayable.
     await user.selectOptions(screen.getByLabelText('Model'), 'openai/gpt-oss-120b');
     expect(useConfig.getState().contextTokens).toBe(capped);
-    expect(screen.getByText(tokens(capped))).toBeInTheDocument();
+    expect(screen.getByLabelText('Context per sequence')).toHaveAttribute(
+      'aria-valuetext',
+      tokens(capped)
+    );
   });
 
   it('does not offer NVFP4 on NVIDIA cards without FP4 tensor cores', async () => {
@@ -393,6 +400,60 @@ describe('the Bench offers only what the runtime can do', () => {
     // Apple unified memory is still refused — the class alone was never the rule.
     await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
     expect(within(verdicts).getAllByText('Unsupported').length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The Envelope sits on screen beside the verdict tiles, so the two must agree about the same
+ * configuration. Before the axes included the selected values, the "you are here" ring snapped
+ * to the nearest cell — putting a green marker under three "Will not run" tiles at 128 users.
+ */
+describe('the Envelope agrees with the verdicts beside it', () => {
+  /** The table cell carrying the "you are here" marker, as text. */
+  const currentCell = () => {
+    const table = screen.getByRole('table', { name: /Feasibility by context/i });
+    // The marker is its own span, so read the cell it sits in rather than the span itself.
+    return within(table).getByText(/▸/).closest('td')?.textContent ?? '';
+  };
+
+  it('marks a cell that matches the tiles when the configuration will not run', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(
+      screen.getByLabelText('Model'),
+      'NousResearch/Meta-Llama-3.1-8B-Instruct'
+    );
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    fireEvent.change(screen.getByLabelText('Concurrent users'), { target: { value: '99' } });
+
+    const verdicts = screen.getByRole('region', { name: 'Verdicts' });
+    const willNotRun = within(verdicts).queryAllByText('Will not run').length > 0;
+
+    await user.click(screen.getByRole('button', { name: /region as a table/i }));
+    if (willNotRun) expect(currentCell()).toMatch(/Will not run/);
+  });
+
+  it('locates the current scenario for a screen reader, not only as a ring', () => {
+    render(<App />);
+    const field = screen.getByRole('img', { name: /Currently at/i });
+    expect(field).toHaveAccessibleName(/Currently at .* context and 1 user/i);
+  });
+
+  it('closes the whole region and blames the runtime, not the memory', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+
+    // MLX cannot drive an NVIDIA card at any size, so telling the user their hardware is too
+    // small is both wrong and unactionable — no amount of VRAM fixes it.
+    expect(
+      screen.getByRole('img', { name: /runtime cannot drive this hardware/i })
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Past what this hardware can hold/i)).not.toBeInTheDocument();
   });
 });
 
@@ -556,6 +617,60 @@ describe('an explicitly shared scenario survives being opened', () => {
 });
 
 /**
+ * A grid can hold both kinds of closed cell at once, and the legend used to pick one explanation
+ * from whether *any* cell was raiseable — telling the reader that cells past the machine itself
+ * could be fixed with a setting.
+ */
+describe('the Envelope legend covers every reason its cells are closed', () => {
+  it('names both causes when both are on screen', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-512');
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+
+    const region = screen.getByRole('region', { name: /how much room/i });
+    const legend = within(region).queryByText(/past the ceiling it hands out by default/i);
+
+    // Whenever the legend offers the raiseable explanation, it must not offer it alone if any
+    // cell is genuinely past the hardware.
+    if (legend) {
+      const table = within(region).queryByText(/Some of these are past what this machine holds/i);
+      const onlyRaiseable = within(region).queryByText(/^Within the memory this machine has/i);
+      expect(table !== null || onlyRaiseable !== null).toBe(true);
+    }
+  });
+});
+
+/**
+ * The canvas summary is the only form the picture takes for a screen reader, so any distinction
+ * the legend draws and it does not is one that reader never receives.
+ */
+describe('the spoken summary says everything the legend says', () => {
+  it('mentions the raiseable ceiling, not just "will not run"', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-512');
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+
+    const region = screen.getByRole('region', { name: /how much room/i });
+    const plot = within(region).getByRole('img');
+    const spoken = plot.getAttribute('aria-label') ?? '';
+
+    // Whenever the visible legend offers the raiseable explanation, the spoken one must too.
+    const legendSaysRaiseable =
+      within(region).queryByText(/which you can raise/i) !== null ||
+      within(region).queryByText(/past the ceiling it hands out by default/i) !== null;
+    if (legendSaysRaiseable) {
+      expect(spoken).toMatch(/allocation ceiling, which you can raise/i);
+    }
+  });
+});
+
+/**
  * A control that names a flag the runtime does not accept is wrong even when the arithmetic
  * behind it is right. vLLM's one-byte cache is `fp8_e4m3`; there is no integer option at all.
  */
@@ -581,6 +696,33 @@ describe('the KV control names something the runtime accepts', () => {
 
     const group = screen.getByRole('group', { name: /KV precision/i });
     expect(within(group).getByText('Q8')).toBeInTheDocument();
+  });
+});
+
+/**
+ * The ring has no visual equivalent for a screen reader, so its sentence has to carry everything
+ * the table carries about that one cell — the same wording and the same disambiguated label.
+ */
+describe('the spoken marker describes the same cell the table does', () => {
+  it('borrows the table wording rather than re-deriving it', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-512');
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+
+    const region = screen.getByRole('region', { name: /how much room/i });
+    const spoken = within(region).getByRole('img').getAttribute('aria-label') ?? '';
+
+    // Open the table and read the marked cell, which is the same scenario the ring sits on.
+    await user.click(within(region).getByRole('button', { name: /region as a table/i }));
+    const table = within(region).getByRole('table');
+    const marked = within(table).getByText(/▸/).closest('td')?.textContent ?? '';
+
+    // Whatever the table says about that cell, the ring's sentence must say too.
+    const said = marked.replace('▸', '').trim().toLowerCase();
+    expect(spoken.toLowerCase()).toContain(said);
   });
 });
 
@@ -636,6 +778,32 @@ describe('the capacity tile does not promise context a model cannot take', () =>
 
     const verdicts = screen.getByRole('region', { name: 'Verdicts' });
     expect(within(verdicts).getByText(/Room to grow/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * "Comfortable" promises the answer starts promptly, and the tile beside it calls anything past
+ * two seconds "Noticeable" in amber. A ten-second threshold here left the two disagreeing.
+ */
+describe('the region and the latency tile agree about promptness', () => {
+  it('does not paint a cell green while the tile warns about its wait', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'epyc-9654');
+
+    const verdicts = screen.getByRole('region', { name: 'Verdicts' });
+    const warned =
+      within(verdicts).queryByText('Noticeable') !== null ||
+      within(verdicts).queryByText('Slow start') !== null;
+
+    if (warned) {
+      const region = screen.getByRole('region', { name: /how much room/i });
+      await user.click(within(region).getByRole('button', { name: /region as a table/i }));
+      const marked = within(region).getByText(/▸/).closest('td')?.textContent ?? '';
+      expect(marked).not.toMatch(/^\s*▸?\s*Comfortable/);
+    }
   });
 });
 
@@ -738,5 +906,64 @@ describe('the share link never reports a result a later click has superseded', (
     await act(async () => settlers[0].resolve());
 
     expect(screen.getByText(/link copied/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * The Envelope's canvas has exactly one textual equivalent and its table is hidden by default, so
+ * whatever that sentence omits is simply not available to a screen-reader user. Both branches
+ * omitted something, in opposite directions.
+ */
+describe('the Envelope says what a region does, not only what it fails', () => {
+  const altText = () => {
+    const region = screen.getByRole('region', { name: /how much room/i });
+    return within(region).getByRole('img').getAttribute('aria-label') ?? '';
+  };
+
+  it('names the runnable states when nothing in range is closed', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Qwen3 4B on an EPYC 9755: every cell runs, none comfortably, and none closed. The fixture
+    // matters — DeepSeek on the 9654 leaves 20 of 64 cells over the ceiling, so `whyClosed` fires
+    // there and the guard under test is never reached.
+    await user.selectOptions(screen.getByLabelText('Model'), 'Qwen/Qwen3-4B');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'epyc-9755');
+
+    const alt = altText();
+    expect(alt).toMatch(/No comfortable configuration/i);
+    expect(alt).toMatch(/run but sit near a limit/i);
+    // The finding itself: "0 of N combinations will not run at all" for a region where all of
+    // them do.
+    expect(alt).not.toMatch(/will not run at all/i);
+  });
+
+  it('says how many cells are spilling, not only how many are comfortable', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // A grid with both comfortable and offloaded cells — the branch that mentioned neither the
+    // spill nor the closed count, one over from the one the review named.
+    await user.selectOptions(screen.getByLabelText('Model'), 'Qwen/Qwen3-4B');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5080');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'bf16');
+
+    const alt = altText();
+    expect(alt).toMatch(/are comfortable/i);
+    expect(alt).toMatch(/spilling weights to host RAM/i);
+  });
+
+  it('does not promise an offloaded cell loads, when host RAM is never checked', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
+
+    const region = screen.getByRole('region', { name: /how much room/i });
+    // The legend's own words. `planPlacement` sizes the spill and has no host-RAM input at all,
+    // so the caveat Telemetry already carries has to be here too.
+    expect(within(region).getByText(/not checked here/i)).toBeInTheDocument();
   });
 });
