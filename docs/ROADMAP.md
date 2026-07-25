@@ -22,7 +22,8 @@ Three things are the moat, in order:
 2. **The catalog is derived, never typed.** Architectures come from each repo's `config.json`,
    parameter counts from its safetensors index.
 3. **The answer is a decision, not a number.** "3.2 tok/s" means nothing; "unusable for a coding
-   agent, fine for overnight batch" is what people want. Not built yet — see phase 3.
+   agent, fine for overnight batch" is what people want. Not built yet — see phase 5, Verdict +
+   explain layers.
 
 ## Status
 
