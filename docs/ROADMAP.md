@@ -46,8 +46,9 @@ deployment, and the follow-up list in [issues #12–#20](https://github.com/MrZo
 configuration as working when it is not, are fixed — together with #11, which printed a figure
 measured at a different scenario from the one its sentence described. Filed as three bugs, one
 class; written up under **Verdicts** below. What remains is labelling (#13, #20), UI state (#12,
-#15, #16), test and performance debt (#17, #19), the MLX question (#18), and two engine bugs: the
-layer-split spill fraction (#14), and prefill having no notion of a cached prefix (#23).
+#15, #16), test and performance debt (#17, #19), the MLX question (#18), and one engine bug: prefill
+having no notion of a cached prefix (#23). The layer-split spill fraction (#14) is fixed; see
+**Engine** below.
 
 ## Decisions already made
 
@@ -114,6 +115,26 @@ reading the test that guards them.
   not speed, and modelling it as aggregate credited eight cards with ~4.9x. And on a hybrid model
   the layers are not interchangeable: Gemma's full-attention layers cache ~128x what its sliding
   ones do at 128K, so the busiest card is found by _sizing_ an assignment, not by dividing.
+- **The spill fraction is the rig's, not the busiest device's.** `layerSplitBusiest` returned one
+  device's load, so `offloadFraction` was a per-device ratio — and both speed estimators multiply it
+  by the _whole model's_ active weights. Under a layer split the cards hold different amounts, so
+  the cards that are still resident were billed host-bus time for an overflow at the cards that are
+  not. Gemma 3 12B at 128K over five cards puts two of its eight full-attention layers on each of
+  three cards and one on each of the other two, and almost no weights on the heavy three — so the
+  busiest card holds 4% of the model: a 0.25 GiB overflow read as 87% of every weight streaming,
+  against a true 11%. Every bin's load is kept now and the bytes that actually spill are summed. The
+  uniform case — tensor parallelism, one device — is unchanged by construction, since `n` identical
+  overflows over `n` identical shards give back the same ratio.
+
+  `impossible` moved with it, and dragged a sentence along: it now asks _every_ device whether cache
+  and activations alone are over, because the busiest card by _combined_ load is not necessarily the
+  one holding the most cache. That broke an implication two panels were relying on — it used to be
+  true by construction that an impossible offloadable rig had the busiest device's cache over the
+  ceiling, so BudgetBar rebuilt the figure from `kvBytesPerDevice`. On Gemma 3 12B over three 4090s
+  it then read "the cache and overhead alone need 19.1 GiB" under a header reading 23.0 GiB, and
+  disproved the refusal beside it. The refusing floor is carried on `Placement` as
+  `floorBytesPerDevice` instead, so the predicate and its sentence read one value. (#14.)
+
 - **Offloaded weights read at the slower of host RAM and the bus to the host** —
   `min(hostBandwidth, device.hostLinkBytesPerSec)`. `interconnect` is the _device-to-device_ link
   `tpEfficiency` models and is not this: an H100 SXM talks to its neighbours over NVLink and to

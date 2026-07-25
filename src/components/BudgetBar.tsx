@@ -110,8 +110,16 @@ export function BudgetBar({
    * This says what the overflow *is* and stops there. Whether the ceiling can be raised is a
    * remedy, and Telemetry states it a few pixels below; saying it twice in adjacent panels is how
    * one of the two copies later drifts.
+   *
+   * `floorBytesPerDevice` rather than this panel's own `kvBytesPerDevice + activationBytesPerDevice`,
+   * which is the same rule one level down: the figure has to come from the device the predicate
+   * refused. Those two agree on every rig whose devices hold the same amount, and part company under
+   * a layer split — Gemma 3 12B on three 4090s at 128K and 8 users is impossible because two cards
+   * need 24.6 GiB of cache against a 23 GiB ceiling, while the card the rest of this bar describes
+   * needs 19.1. Rebuilt here, the sentence read "the cache and overhead alone need 19.1 GiB" under a
+   * header reading 23.0 GiB, and disproved the claim it was making.
    */
-  const floorBytes = placement.kvBytesPerDevice + placement.activationBytesPerDevice;
+  const floorBytes = placement.floorBytesPerDevice;
   const overflowDetail = placement.impossible
     ? canOffload
       ? ` — the cache and overhead alone need ${gibLabel(floorBytes)}, and neither can be offloaded, so spilling every weight would still leave it over`

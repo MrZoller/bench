@@ -64,9 +64,28 @@ export interface Placement {
   utilization: number;
 
   /**
-   * Fraction of weights that must live in host RAM. Zero when everything fits. Only
+   * The most any one device must hold that offload cannot move — its cache plus its activations.
+   *
+   * This is the quantity `impossible` tests, exposed so the panels explaining an impossible
+   * placement quote the device that caused it. Under a layer split that is not always the device
+   * the rest of this readout describes: `weightBytesPerDevice` and `kvBytesPerDevice` come from the
+   * busiest card by *combined* load, and on a hybrid model the card holding the most cache is the
+   * one a balanced scheduler gives fewer layers. Gemma 3 12B on three 4090s at 128K and 8 users is
+   * impossible because two cards need 24.6 GiB of cache against a 23 GiB ceiling, while the card
+   * this readout describes needs 19.1 — so a sentence built from `kvBytesPerDevice` printed
+   * "the cache and overhead alone need 19.1 GiB" beside a 23.0 GiB ceiling and disproved itself.
+   */
+  floorBytesPerDevice: number;
+
+  /**
+   * Fraction of the model's weights that must live in host RAM. Zero when everything fits. Only
    * meaningful for discrete GPUs — a unified-memory machine has no faster tier to fall
    * back from, so an over-budget config there simply does not run.
+   *
+   * **Rig-wide, not per-device**, and the distinction only shows up under a layer split, where the
+   * devices hold different amounts and one can be over its ceiling while the others are not. Both
+   * speed estimators multiply this by the whole model's active weights, so a per-device figure
+   * charged every serial stage for a single stage's overflow.
    */
   offloadFraction: number;
   /** True when the configuration is over budget and offload cannot rescue it. */
@@ -244,8 +263,16 @@ export function kvShards(model: ModelSpec, shards: number, runtime?: RuntimeSpec
   return core.kvHeads / headsPerRank;
 }
 
+/** What one device of a rig ends up holding, weights and cache together. */
+interface DeviceLoad {
+  weightBytes: number;
+  kvBytes: number;
+}
+
+const loadOf = (d: DeviceLoad) => d.weightBytes + d.kvBytes;
+
 /**
- * What the busiest device holds under a layer split, weights and cache together.
+ * What each device holds under a layer split, weights and cache together.
  *
  * One assignment, not two. Taking the heaviest-KV card from one packing and the heaviest-weight
  * card from another and adding them describes a device that does not exist: on a hybrid model the
@@ -257,39 +284,44 @@ export function kvShards(model: ModelSpec, shards: number, runtime?: RuntimeSpec
  *
  * Longest-processing-time again, now on the combined per-layer cost, so the balance being struck
  * is the one that actually matters to whether the rig fits.
+ *
+ * Every bin is returned rather than only the heaviest. The per-device readout needs the busiest and
+ * nothing else, but the spill fraction is a property of the *rig*: under a layer split the devices
+ * hold different amounts, so one card can be over its ceiling while the rest of the serial stages
+ * stay resident. Returning a single load left `offloadFraction` a per-device number that both speed
+ * estimators then charged against the whole model's active weights — every stage billed for host-bus
+ * time on an overflow that happened at one of them.
  */
-function layerSplitBusiest(
+function layerSplitBins(
   model: ModelSpec,
   totalWeightBytes: number,
   usage: UsageSpec,
   shards: number,
   runtime: RuntimeSpec
-): { weightBytes: number; kvBytes: number } {
+): DeviceLoad[] {
   const perLayerWeight = totalWeightBytes / model.layers;
   const sequences = Math.max(1, usage.concurrency);
 
   const layers = Array.from({ length: model.layers }, (_, i) => ({
-    weight: perLayerWeight,
-    kv: layerKvBytes(model, i, usage.contextTokens, usage.kvPrecision, runtime) * sequences,
-  })).sort((a, b) => b.weight + b.kv - (a.weight + a.kv));
+    weightBytes: perLayerWeight,
+    kvBytes: layerKvBytes(model, i, usage.contextTokens, usage.kvPrecision, runtime) * sequences,
+  })).sort((a, b) => loadOf(b) - loadOf(a));
 
-  const bins = Array.from({ length: Math.max(1, Math.floor(shards)) }, () => ({
-    weight: 0,
-    kv: 0,
+  const bins: DeviceLoad[] = Array.from({ length: Math.max(1, Math.floor(shards)) }, () => ({
+    weightBytes: 0,
+    kvBytes: 0,
   }));
-  const load = (b: { weight: number; kv: number }) => b.weight + b.kv;
 
   for (const layer of layers) {
     let lightest = 0;
     for (let d = 1; d < bins.length; d++) {
-      if (load(bins[d]) < load(bins[lightest])) lightest = d;
+      if (loadOf(bins[d]) < loadOf(bins[lightest])) lightest = d;
     }
-    bins[lightest].weight += layer.weight;
-    bins[lightest].kv += layer.kv;
+    bins[lightest].weightBytes += layer.weightBytes;
+    bins[lightest].kvBytes += layer.kvBytes;
   }
 
-  const busiest = bins.reduce((a, b) => (load(b) > load(a) ? b : a));
-  return { weightBytes: busiest.weight, kvBytes: busiest.kv };
+  return bins;
 }
 
 export function planPlacement(
@@ -326,16 +358,22 @@ export function planPlacement(
    * full-attention layer of a hybrid model holds up to 128x the cache a sliding one does, so the
    * layer *count* says nothing useful about what any card ends up holding. Weights and cache come
    * from one assignment so that both figures describe the same device.
+   *
+   * Tensor parallelism and the single-device case hand every rank the same load, so the rig is one
+   * description repeated. Stated as a list either way, because the spill fraction below has to sum
+   * over the devices that actually exist — and under a layer split those hold different amounts.
    */
-  const split =
+  const bins: DeviceLoad[] =
     runtime.parallelism === 'layer' && shards > 1
-      ? layerSplitBusiest(model, totalWeightBytes, usage, shards, runtime)
-      : {
+      ? layerSplitBins(model, totalWeightBytes, usage, shards, runtime)
+      : Array.from({ length: shards }, () => ({
           weightBytes: totalWeightBytes / weightShards(model, shards, runtime),
           kvBytes: totalKvBytes / kvShards(model, shards, runtime),
-        };
-  const weightBytesPerDevice = split.weightBytes;
-  const kvBytesPerDevice = split.kvBytes;
+        }));
+
+  const busiest = bins.reduce((a, b) => (loadOf(b) > loadOf(a) ? b : a));
+  const weightBytesPerDevice = busiest.weightBytes;
+  const kvBytesPerDevice = busiest.kvBytes;
   const usedBytesPerDevice = weightBytesPerDevice + kvBytesPerDevice + activations;
 
   const allocatableBytesPerDevice = allocatablePerDevice(rig, runtime);
@@ -345,13 +383,41 @@ export function planPlacement(
   // Only a discrete GPU has somewhere slower to spill to. On unified memory or CPU RAM the
   // pool in question *is* system memory, so over budget means it does not run.
   const canOffload = rig.device.class === 'discrete-gpu';
-  const deficit = Math.max(0, -headroomBytes);
-  const offloadFraction =
-    fits || !canOffload ? 0 : Math.min(1, deficit / Math.max(weightBytesPerDevice, 1));
 
-  // Even offloading every weight leaves KV and activations, which must sit on the device.
-  const impossible =
-    !fits && (!canOffload || kvBytesPerDevice + activations > allocatableBytesPerDevice);
+  /**
+   * The bytes that actually leave the devices, summed over the rig — not one device's overflow
+   * expressed as a fraction of one device's weights.
+   *
+   * Both speed estimators multiply `offloadFraction` by the *whole model's* active weights, so the
+   * figure they need is rig-wide. Taking it from the busiest device charged every serial stage of a
+   * layer split for an overflow at one of them: an uneven split where only the heaviest card is over
+   * its ceiling had its resident stages billed host-bus time all the same, overstating decode and
+   * TTFT together.
+   *
+   * A device can only spill what it holds, hence the per-bin clamp: past that point the KV and the
+   * activations are what is over budget, and no amount of weight movement rescues it — which is the
+   * `impossible` test below rather than a bigger fraction here.
+   *
+   * The uniform case is unchanged by construction. Every rank holds the same load, so summing `n`
+   * identical overflows over `n` identical shards gives back exactly the per-device ratio this used
+   * to compute.
+   */
+  const spilledBytes = canOffload
+    ? bins.reduce((sum, bin) => {
+        const over = loadOf(bin) + activations - allocatableBytesPerDevice;
+        return sum + Math.min(Math.max(0, over), bin.weightBytes);
+      }, 0)
+    : 0;
+  const offloadFraction = Math.min(1, spilledBytes / Math.max(totalWeightBytes, 1));
+
+  // Even offloading every weight leaves KV and activations, which must sit on the device. Taken
+  // over every device rather than the busiest one: `busiest` is heaviest by *combined* load, and on
+  // a hybrid model the card holding the most cache is the one given fewer layers — so a rig can be
+  // impossible at a device that is not the one this readout describes. Carried on the result rather
+  // than recomputed by the callers, so the panels explaining the refusal quote the device that
+  // caused it; a sentence built from `kvBytesPerDevice` instead contradicted its own ceiling.
+  const floorBytesPerDevice = Math.max(...bins.map((bin) => bin.kvBytes + activations));
+  const impossible = !fits && (!canOffload || floorBytesPerDevice > allocatableBytesPerDevice);
 
   const drives = runtime.supports.some(
     (s) =>
@@ -394,6 +460,7 @@ export function planPlacement(
     totalKvBytes,
     headroomBytes,
     utilization: usedBytesPerDevice / allocatableBytesPerDevice,
+    floorBytesPerDevice,
     offloadFraction,
     impossible,
     unsupported,

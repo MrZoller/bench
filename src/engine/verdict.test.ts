@@ -29,6 +29,8 @@ const RESIDENT: Placement = {
   totalKvBytes: 1,
   headroomBytes: 7,
   utilization: 0.3,
+  // Cache and activations, which is what `impossible` weighs against the ceiling. Well under 10.
+  floorBytesPerDevice: 2,
   offloadFraction: 0,
   impossible: false,
 };
