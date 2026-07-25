@@ -205,8 +205,14 @@ export interface PrefillEstimate {
   attentionFlops: number;
   /** True when attention outweighs the linear layers — the long-prompt regime. */
   attentionBound: boolean;
-  /** Set when offloaded weights have to be streamed in before the prompt can be processed. */
-  offloadPenalty?: { fraction: number };
+  /**
+   * Set when offloaded weights have to be streamed in before the prompt can be processed.
+   *
+   * Carries the seconds, not just the fraction: whether streaming is *the* bottleneck depends on
+   * how it compares with the compute terms, and a small spill over a fast bus is a rounding
+   * error next to a long prompt.
+   */
+  offloadPenalty?: { fraction: number; streamingSeconds: number };
 }
 
 export function estimatePrefill(
@@ -256,9 +262,11 @@ export function estimatePrefill(
   // offloaded weight set. Charging the batch-1 union understated MoE TTFT by up to 5x, and
   // dense models could never reveal it because for them the two are identical.
   const offload = placement?.offloadFraction ?? 0;
+  let streamingSeconds = 0;
   if (offload > 0) {
     const streamedBytes = activeWeightBytes(model, quant, promptTokens) * offload;
-    ttftSeconds += streamedBytes / hostBandwidth;
+    streamingSeconds = streamedBytes / hostBandwidth;
+    ttftSeconds += streamingSeconds;
   }
 
   return {
@@ -268,6 +276,6 @@ export function estimatePrefill(
     linearFlops,
     attentionFlops,
     attentionBound: attentionFlops > linearFlops,
-    ...(offload > 0 ? { offloadPenalty: { fraction: offload } } : {}),
+    ...(offload > 0 ? { offloadPenalty: { fraction: offload, streamingSeconds } } : {}),
   };
 }

@@ -235,7 +235,10 @@ export function Bench() {
       <Telemetry
         evaluation={evaluation}
         canOffload={device.class === 'discrete-gpu'}
-        tunableCeiling={device.allocatableTunable === true}
+        tunableCeiling={
+          device.allocatableTunable === true &&
+          evaluation.placement.usedBytesPerDevice <= device.capacityBytes
+        }
       />
 
       {/* Usage: the half of the question that is about you, not the hardware. */}

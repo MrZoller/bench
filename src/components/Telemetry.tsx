@@ -145,21 +145,37 @@ function decodeReading(evaluation: Evaluation): Reading {
 
 function prefillReading(evaluation: Evaluation): Reading {
   const { ttftSeconds, prefillTokensPerSec, attentionBound, offloadPenalty } = evaluation.prefill;
-  const tone: StatusTone = ttftSeconds <= 2 ? 'good' : ttftSeconds <= 10 ? 'warning' : 'critical';
+
+  /**
+   * Classified on the displayed figure, exactly as decode is. `seconds()` rounds, so 10.27s
+   * prints as "10 s" and, judged raw, is labelled "Slow start" against a visible threshold of
+   * 10 — the same disagreement the decode tile had, in the function next door. Fixing one and
+   * not the other is how it survived a round.
+   */
+  const shown = seconds(ttftSeconds);
+  const displayed = parseDisplayedSeconds(shown, ttftSeconds);
+
+  const tone: StatusTone = displayed <= 2 ? 'good' : displayed <= 10 ? 'warning' : 'critical';
+
+  /**
+   * Streaming is named as the bottleneck only when it outweighs the rest of the pass. An 8%
+   * spill over a fast bus adds ~0.01s to a ~1.15s prompt, and calling that the cause sends
+   * someone to fix the wrong thing — the mirror of the error this branch was added to correct.
+   */
+  const streamingDominates =
+    offloadPenalty !== undefined &&
+    offloadPenalty.streamingSeconds > ttftSeconds - offloadPenalty.streamingSeconds;
 
   return {
     key: 'prefill',
     label: 'Time to first token',
-    value: seconds(ttftSeconds),
+    value: shown,
     unit: '',
     tone,
-    verdict: ttftSeconds <= 2 ? 'Responsive' : ttftSeconds <= 10 ? 'Noticeable' : 'Slow start',
-    detail: offloadPenalty
-      ? // The streaming term is added to TTFT before any compute happens, so on a spilled
-        // configuration it is usually the whole answer — naming compute here sends someone
-        // looking for a faster GPU when the fix is fitting the weights on the one they have.
-        `${rate(prefillTokensPerSec)} tok/s prompt processing, dominated by streaming ${percent(
-          offloadPenalty.fraction
+    verdict: displayed <= 2 ? 'Responsive' : displayed <= 10 ? 'Noticeable' : 'Slow start',
+    detail: streamingDominates
+      ? `${rate(prefillTokensPerSec)} tok/s prompt processing, dominated by streaming ${percent(
+          offloadPenalty!.fraction
         )} of the weights across the host bus before the prompt can start.`
       : attentionBound
         ? `${rate(prefillTokensPerSec)} tok/s prompt processing. Quadratic attention now dominates the pass, so this degrades faster than linearly as the prompt grows.`
@@ -175,7 +191,11 @@ export function Telemetry({
   evaluation: Evaluation;
   /** True for discrete GPUs, the only class with a slower tier to spill to. */
   canOffload: boolean;
-  /** True when the allocation ceiling is a user-raiseable default rather than a hard limit. */
+  /**
+   * True when raising the allocation ceiling could actually make this fit: the ceiling is
+   * user-raiseable *and* the model is inside the machine's physical capacity. DeepSeek V3 at
+   * BF16 wants 1,253 GiB on a 512 GiB Mac, and no sysctl fixes that.
+   */
   tunableCeiling: boolean;
 }) {
   /**
@@ -251,4 +271,19 @@ export function Telemetry({
       })}
     </section>
   );
+}
+
+/**
+ * The number a reader takes from a formatted duration.
+ *
+ * `seconds()` switches units, so the printed figure is not always in seconds — "450 ms" reads as
+ * 0.45. Parsing it back is what keeps the verdict tied to what is on screen, and it falls back
+ * to the raw value if the format ever changes shape.
+ */
+function parseDisplayedSeconds(shown: string, raw: number): number {
+  const value = Number.parseFloat(shown);
+  if (!Number.isFinite(value)) return raw;
+  if (shown.endsWith('ms')) return value / 1000;
+  if (shown.endsWith('min')) return value * 60;
+  return value;
 }

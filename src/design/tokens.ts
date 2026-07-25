@@ -33,6 +33,15 @@ export const colors = {
   border: '#232735',
   /** Hairline grid — recessive by design; never competes with a mark. */
   grid: '#1b1f2b',
+  /**
+   * Edge of an interactive control, distinct from the panel hairline above.
+   *
+   * `border` is deliberately recessive — 1.18:1 against the raised fill — which is right for a
+   * panel edge and wrong for a select. A control's boundary is what identifies it as
+   * interactive, so it needs the 3:1 non-text minimum *before* it is focused, not after. This
+   * step measures 3.41:1 against the fill and 3.67:1 against the panel.
+   */
+  controlBorder: '#646d88',
 
   // --- Ink -------------------------------------------------------------------------------
   // Static content: labels, titles, units, axis captions, and figures. Text never wears a
