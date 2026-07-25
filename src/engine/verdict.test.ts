@@ -362,9 +362,103 @@ describe('a verdict never contradicts the numbers behind it', () => {
     // Just under the tight threshold of 65536 + allowance: must fail *and* say why.
     const verdicts = judged(65_948);
     expect(verdicts.get('long-context')!.fitness).toBe('fail');
-    expect(verdicts.get('long-context')!.reason).toMatch(
-      /the 128K window these jobs assume needs 128\.5K/
+
+    // The boundary that rejected it, not the archetype's headline. This asserted 128.5K until the
+    // rejection was traced: the predicate tests 64.5K, so quoting 128.5K told a rig sitting about
+    // 1K short that it needed to double — the exact defect this test's name is about, in the test
+    // itself. A shortfall is an upgrade instruction and has to name the bar that was missed.
+    expect(verdicts.get('long-context')!.reason).toMatch(/needs 64\.5K/);
+    expect(verdicts.get('long-context')!.reason).not.toMatch(/needs 128\.5K/);
+  });
+
+  /**
+   * A tier that admits a smaller job has to measure the smaller job. The tight tier accepts a
+   * machine holding 64K and was timing it on the archetype's 128K request — a prompt that rig has
+   * nowhere to put. Prefill is quadratic, so this was not a rounding difference: the impossible
+   * request routinely failed the tier that had just admitted it on capacity.
+   */
+  const atPrompt = (runnableContextTokens: number, ttftFor: (promptTokens: number) => number) => {
+    const seen: number[] = [];
+    const verdicts = new Map(
+      judgeWorkloads({
+        selectedPlacement: RESIDENT,
+        usage: { contextTokens: 4096, concurrency: 1, promptTokens: 2048, kvPrecision: 'fp16' },
+        maxContextTokens: runnableContextTokens,
+        runnableContextTokens,
+        evaluateAt: (promptTokens) => {
+          seen.push(promptTokens);
+          return stub(60, ttftFor(promptTokens));
+        },
+      }).map((v) => [v.workload.id, v])
     );
+    return { verdicts, seen };
+  };
+
+  it('grades the long-context tight tier at the window the machine holds', () => {
+    // 80K runnable: past the 64.5K tight bar, short of the 128.5K good one. The 128K request it
+    // cannot make reads 700s — over the 600s bar — while the 64K job it can do reads 175s.
+    const { verdicts, seen } = atPrompt(80_000, (prompt) => (prompt >= 131072 ? 700 : 175));
+
+    expect(seen).toContain(65536);
+    // Timed on the 128K prompt this failed outright, on evidence describing a request the machine
+    // has nowhere to put.
+    expect(verdicts.get('long-context')!.fitness).toBe('tight');
+    expect(verdicts.get('long-context')!.reason).toMatch(/64K/);
+    expect(verdicts.get('long-context')!.reason).not.toMatch(/700/);
+  });
+
+  it('quotes the full window only to a machine that can hold one', () => {
+    // 200K runnable, so the archetype's own 128K request is the honest measurement here.
+    const { verdicts } = atPrompt(200_000, () => 30);
+    expect(verdicts.get('long-context')!.fitness).toBe('good');
+    expect(verdicts.get('long-context')!.reason).toMatch(/128K/);
+  });
+
+  /**
+   * Every figure printed on a tight serving row was healthy, so the row read as a pass that had
+   * been marked down for no stated reason. Two conditions reach that branch and neither was named.
+   */
+  const serving = (concurrency: number, placement: Placement, perUser = 40) =>
+    new Map(
+      judgeWorkloads({
+        selectedPlacement: RESIDENT,
+        usage: { contextTokens: 8192, concurrency, promptTokens: 2048, kvPrecision: 'fp16' },
+        maxContextTokens: 200_000,
+        runnableContextTokens: 200_000,
+        evaluateAt: () => ({ ...stub(perUser, 0.2), placement }),
+      }).map((v) => [v.workload.id, v])
+    ).get('serving')!;
+
+  it('names the four-user bar when only the user count holds serving back', () => {
+    const verdict = serving(3, RESIDENT);
+
+    expect(verdict.fitness).toBe('tight');
+    expect(verdict.reason).toMatch(/4 concurrent users/);
+  });
+
+  it('names the rate when only the rate holds serving back', () => {
+    // Four users clears the count bar, so 7 tok/s is the sole remaining cause.
+    const verdict = serving(4, RESIDENT, 7);
+
+    expect(verdict.fitness).toBe('tight');
+    expect(verdict.reason).toMatch(/10 tok\/s/);
+  });
+
+  it('does not call a partial spill an exhausted serving capacity', () => {
+    // Over budget on the resident plan, but spilling — which is a performance penalty, not a wall.
+    // `impossible` is what means capacity is genuinely gone, and this is not that.
+    const spilling: Placement = {
+      ...RESIDENT,
+      fits: false,
+      headroomBytes: -1,
+      offloadFraction: 0.2,
+      impossible: false,
+    };
+    const verdict = serving(8, spilling);
+
+    expect(verdict.reason).toMatch(/spill/i);
+    // Another user can still be served, more slowly. Saying otherwise reports a false limit.
+    expect(verdict.reason).not.toMatch(/nowhere to go/i);
   });
 });
 
@@ -449,9 +543,10 @@ describe('a verdict counts the whole request, not half of it', () => {
   });
 
   it('charges every worker its own prompt', () => {
-    // `estimatePrefill` times one pass — it never multiplies FLOPs by concurrency — so scaling
-    // the generated-token numerator by the worker count amortised one prompt across all of them.
-    // On one device the prompts queue; more workers cannot make a prompt-bound job faster than
+    // `estimatePrefill` prices the whole batch of prompts, so this layer reads its figure rather
+    // than multiplying by the worker count — it used to do the multiplying itself, back when the
+    // engine computed FLOPs from `promptTokens` alone. Either way the property is the same: on
+    // one device the prompts queue, and more workers cannot make a prompt-bound job faster than
     // the device can read prompts.
     const one = judge(DEEPSEEK_V3, 'q8_0', { device: EPYC_9654, concurrency: 1 }).get('batch')!;
     const many = judge(DEEPSEEK_V3, 'q8_0', { device: EPYC_9654, concurrency: 32 }).get('batch')!;
@@ -471,6 +566,26 @@ describe('a verdict counts the whole request, not half of it', () => {
     expect(long.fitness).toBe('fail');
     expect(long.reason).toMatch(/before saying anything|the work does not/);
   });
+
+  /**
+   * Pinning only BF16 above left a hole: that row fails on its decode term as well as its prefill
+   * one, so it stayed red through a change that graded this machine on a 64K job while printing
+   * the 128K timing. Q4_K_M is the sibling that fails on prefill alone, and it is the row that
+   * flipped to `tight` while its own reason reported 1046s against a 600s bar.
+   */
+  it.each(['bf16', 'q4_k_m', 'q8_0'])(
+    'grades a machine that holds 128K on the 128K job, at %s',
+    (quantId) => {
+      const long = judge(DEEPSEEK_V3, quantId, {
+        device: RTX_5090,
+        contextTokens: 512,
+      }).get('long-context')!;
+
+      expect(long.fitness).toBe('fail');
+      // Whatever the row says, the grade has to have been decided on the same measurement.
+      expect(long.reason).toMatch(/before saying anything|the work does not/);
+    }
+  );
 
   it('still passes long-context on a machine that can actually work in the window', () => {
     const long = judge(LLAMA_31_8B, 'q4_k_m', { device: RTX_5090 }).get('long-context')!;
