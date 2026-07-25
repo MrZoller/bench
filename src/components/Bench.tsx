@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { DEVICES, MODELS, RUNTIMES, evaluateConfig, useConfig, type Config } from '@/store/config';
 import { useUrlSync } from '@/store/useUrlSync';
 import { configToShareSearch } from '@/store/url';
-import { getRuntime, runtimeDrives } from '@/data/runtimes';
+import { getRuntime, runtimeDrives, substitutionFor } from '@/data/runtimes';
 import { QUANTS } from '@/data/quants';
 import { CATALOG_GENERATED_AT, getDevice, getModel } from '@/data/catalog';
 import { BudgetBar } from './BudgetBar';
@@ -85,10 +85,31 @@ export function Bench() {
       QUANTS.filter((q) => quantApplies(q, model, device, runtime)).map((q) => ({
         value: q.id,
         label: q.label,
-        note: q.qualityNote,
+        // A short claim, not the whole derivation — the panel below carries that, and printing the
+        // same forty words twice on one screen taught people to skip both. `Select` renders only
+        // the *selected* option's note, so this was never what informs a choice between formats
+        // anyway; what it does is tag the control that caused the panel.
+        note:
+          [
+            substitutionFor(runtime, q.id) && `Stand-in for a format ${runtime.label} cannot load.`,
+            q.qualityNote,
+          ]
+            .filter(Boolean)
+            .join(' ') || undefined,
       })),
     [model, device, runtime]
   );
+
+  /**
+   * Set when the memory and speed figures on this page derive from a format the runtime cannot
+   * actually load.
+   *
+   * The engine cannot tell — a roofline consumes bits per weight, and a stand-in of the right width
+   * produces plausible arithmetic either way — which is exactly why it has to be said out loud. The
+   * same rule `devices.json` already follows for pre-release specs: an approximation that is
+   * documented is a modelling choice, and an approximation that is invisible is invented data.
+   */
+  const substitution = substitutionFor(runtime, config.quantId);
 
   /** Whether the configuration runs at all. */
   const runnable = !evaluation.placement.unsupported && !evaluation.placement.impossible;
@@ -265,6 +286,26 @@ export function Bench() {
           no-op in every real browser while jsdom, which has no scrollIntoView at all, could never
           show it. Zero height with the flex `gap-5` cancelled costs no layout. */}
       <div id={DETAIL_ANCHOR_ID} aria-hidden="true" className="h-0 -mb-5" />
+
+      {/* Above every figure it applies to, rather than tucked under the picker that caused it.
+          The picker's note tells someone choosing a format; this tells someone *reading a number*,
+          which is a different person arriving at a different moment — usually from a shared link
+          that chose the format for them. Warning tone rather than critical: the arithmetic is sound
+          for the width it was given, and what is uncertain is whether the width is right. */}
+      {substitution && (
+        <p
+          role="note"
+          className="panel border-[var(--color-warning)] p-4 text-sm leading-relaxed text-[var(--color-text-muted)]"
+        >
+          <span aria-hidden="true" className="text-[var(--color-warning)]">
+            ◐{' '}
+          </span>
+          The memory and speed figures below are derived from a format {runtime.label} cannot load.{' '}
+          {substitution} The arithmetic is sound for that width; whether the width is right is the
+          approximation.
+        </p>
+      )}
+
       <BudgetBar evaluation={evaluation} canOffload={device.class === 'discrete-gpu'} />
       <Telemetry
         evaluation={evaluation}

@@ -8,7 +8,7 @@ import {
 } from '@/engine/matrix';
 import { DEVICES, MODELS, getDevice, getModel } from '@/data/catalog';
 import { getQuant } from '@/data/quants';
-import { getRuntime } from '@/data/runtimes';
+import { getRuntime, substitutionFor } from '@/data/runtimes';
 import { FALLBACK_QUANT_ID, quantApplies } from '@/lib/quantChoice';
 import { sequential } from '@/design/tokens';
 import { kvLabel } from '@/lib/stops';
@@ -173,6 +173,23 @@ export function Matrix({ config }: { config: Config }) {
     cell.modelId === config.modelId &&
     cell.deviceId === config.deviceId &&
     config.deviceCount === 1;
+
+  /**
+   * Whether any cell on this grid was scored at a format the runtime cannot actually load.
+   *
+   * Two routes reach it: the *selected* format may itself be a stand-in (every Apple-silicon row
+   * under MLX), or a row falling back through `SUBSTITUTE_QUANT_IDS` may land on one.
+   *
+   * Only the first is reachable with today's catalog — none of MLX's formats carries a `requires`
+   * or a `denseBpw`, so `quantApplies` is true for every model and `quantFor` never falls back, and
+   * a test asserting the second would have nothing to drive it with. Scanning the cells anyway
+   * costs one pass and closes the route before a catalog change opens it, which is cheaper than
+   * noticing later that the grid was marked honestly on a Mac and silently on a fallback row.
+   */
+  const substitutedCells = useMemo(
+    () => cells.flat().some((cell) => cell.runs && substitutionFor(runtime, cell.quantId)),
+    [cells, runtime]
+  );
 
   /**
    * Tall enough for the longest label this grid actually renders.
@@ -392,6 +409,17 @@ export function Matrix({ config }: { config: Config }) {
             default and inside the 512 it can be tuned to — struck off the list over a checkbox,
             when the Envelope and Telemetry both kept the distinction. Shown only when the grid
             actually contains one, so the legend does not explain a state nobody is looking at. */}
+        {/* The same rule the "past the default allocation" note follows: a state the grid is really
+            in gets a line, and only when it is in it.
+            No glyph, unlike its two neighbours. Theirs key a swatch that literally matches a cell
+            border, so a reader scans the grid and finds it; this is about where the numbers came
+            from, and nothing on the grid can be pointed at — which is the whole problem it reports.
+            A key to a mark that appears nowhere is worse than prose. */}
+        {substitutedCells && (
+          <span className="ml-3 text-[var(--color-warning)]">
+            some rows scored at a stand-in format {runtime.label} cannot load
+          </span>
+        )}
         {cells.flat().some((c) => c.raiseCeilingWouldHelp) && (
           <span className="ml-3 flex items-center gap-1.5">
             <span

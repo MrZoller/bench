@@ -1431,3 +1431,89 @@ describe('the Envelope says what a region does, not only what it fails', () => {
     expect(within(region).getByText(/not checked here/i)).toBeInTheDocument();
   });
 });
+
+/**
+ * MLX quantizes with its own affine scheme, the catalog has no measured entry for it, and the GGUF
+ * K-quants stand in *by width*. The engine cannot tell the difference — a roofline consumes bits
+ * per weight, and a stand-in of the right width produces plausible arithmetic — so every figure for
+ * an Apple-silicon configuration derived from a format MLX does not read, with nothing on screen
+ * saying which figures those were. The same rule `devices.json` already follows for pre-release
+ * specs: an approximation that is documented is a modelling choice; one that is invisible is
+ * invented data.
+ */
+describe('a figure derived from a stand-in format says so', () => {
+  const marker = () => screen.queryByText(/derived from a format .* cannot load/i);
+
+  it('marks the readouts when MLX is running a substituted K-quant', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
+
+    expect(marker()).toBeInTheDocument();
+    // And says what the substitution actually is, rather than only that there is one.
+    expect(marker()).toHaveTextContent(/4\.5 bpw/);
+  });
+
+  it('stays silent on the formats MLX genuinely loads', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+
+    // BF16 is a real MLX format, so a marker here would be crying wolf on the majority case and
+    // would train people to ignore it where it matters.
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'bf16');
+    expect(marker()).not.toBeInTheDocument();
+  });
+
+  it('stays silent on runtimes that load what they are given', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // llama.cpp reads GGUF natively — the same Q4_K_M, no substitution.
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'llama.cpp');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
+
+    expect(marker()).not.toBeInTheDocument();
+  });
+
+  it('tags the format picker that caused it, without repeating the whole derivation', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
+
+    // The control's own description says it is a stand-in; the panel says what the stand-in is.
+    // Printing the same forty words in both taught people to skip both.
+    const picker = screen.getByLabelText('Quantization');
+    expect(picker).toHaveAccessibleDescription(/stand-in for a format/i);
+    expect(picker).not.toHaveAccessibleDescription(/4\.5 bpw/);
+  });
+
+  it('marks the Matrix when any row on it was scored at a stand-in', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const matrix = () => screen.getByRole('region', { name: /every model on every machine/i });
+    const legend = () => within(matrix()).queryByText(/stand-in format .* cannot load/i);
+    // Reachable today only because the *selection* is a stand-in — the `SUBSTITUTE_QUANT_IDS`
+    // fallback cannot land on one with this catalog. The per-cell scan is defence for that route,
+    // not something this can drive.
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'llama.cpp');
+    expect(legend()).not.toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
+    expect(legend()).toBeInTheDocument();
+  });
+});

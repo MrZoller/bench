@@ -89,6 +89,12 @@ export const RUNTIMES: readonly RuntimeSpec[] = [
     // than Q4_K_M's 4.83. Recorded as a modelling choice rather than a claim that MLX reads
     // GGUF, which it does not. What it genuinely cannot do is AWQ or the vendor formats.
     weightFormats: ['bf16', 'int8', 'q8_0', 'q6_k', 'q5_k_m', 'q4_k_m', 'iq4_xs', 'q3_k_m'],
+    substituted: {
+      // The two MLX genuinely loads. Everything else above is a GGUF width standing in, and stays
+      // that way by default if a format is added and nobody says otherwise.
+      nativeFormats: ['bf16', 'int8'],
+      note: 'MLX quantizes with its own affine scheme and the catalog has no measured entry for it, so a GGUF K-quant of the same width stands in — MLX 4-bit is nearer 4.5 bpw than Q4_K_M’s 4.83.',
+    },
     kvPrecisions: ['fp16', 'q8'],
     source: 'https://github.com/ml-explore/mlx',
   },
@@ -112,4 +118,22 @@ export function runtimeDrives(runtime: RuntimeSpec, device: DeviceSpec): boolean
 /** Runtimes that can drive a given device. */
 export function runtimesFor(device: DeviceSpec): readonly RuntimeSpec[] {
   return RUNTIMES.filter((r) => runtimeDrives(r, device));
+}
+
+/**
+ * The note explaining that this pairing's figures rest on a stand-in format, or `undefined` when
+ * they do not.
+ *
+ * One function, because the marker has to appear on every surface that renders a figure and three
+ * hand-written copies of "is this a substitution" is how one of them comes to disagree — the
+ * failure this codebase has hit with the host-RAM caveat, the ceiling check and the KV label.
+ */
+export function substitutionFor(runtime: RuntimeSpec, quantId: string): string | undefined {
+  const substituted = runtime.substituted;
+  if (!substituted) return undefined;
+  // A format this runtime cannot load at all is a different refusal, made by `planPlacement`, and
+  // marking it here would explain a figure that is never produced.
+  if (!runtime.weightFormats.includes(quantId)) return undefined;
+  if (substituted.nativeFormats.includes(quantId)) return undefined;
+  return substituted.note;
 }
