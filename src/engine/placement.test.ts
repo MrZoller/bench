@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_HOST_BANDWIDTH,
   allocatablePerDevice,
+  maxAllocatablePerDevice,
+  raisingCeilingWouldHelp,
   maxContextThatFits,
   offloadBandwidth,
   planPlacement,
@@ -292,13 +294,64 @@ describe('the KV cache shards only as far as the model allows', () => {
 describe('offload crosses a real bus', () => {
   it('takes the device host link when it is slower than host RAM', () => {
     // 80 GB/s of DDR5 behind a 31.5 GB/s PCIe 4.0 link.
-    expect(offloadBandwidth(RTX_4090, DEFAULT_HOST_BANDWIDTH)).toBeCloseTo(31.5e9, -6);
+    expect(offloadBandwidth({ device: RTX_4090, count: 1 }, DEFAULT_HOST_BANDWIDTH)).toBeCloseTo(
+      31.5e9,
+      -6
+    );
     // And behind a 63 GB/s PCIe 5.0 link, still the link.
-    expect(offloadBandwidth(RTX_5090, DEFAULT_HOST_BANDWIDTH)).toBeCloseTo(63e9, -6);
+    expect(offloadBandwidth({ device: RTX_5090, count: 1 }, DEFAULT_HOST_BANDWIDTH)).toBeCloseTo(
+      63e9,
+      -6
+    );
+  });
+
+  it('adds up the links on a multi-card rig, then stops at host memory', () => {
+    // Each card streams its own shard over its own link, so two PCIe 4.0 cards move 63 GB/s
+    // between them — charging one card's 31.5 to the whole rig doubled the transfer time.
+    expect(offloadBandwidth({ device: RTX_4090, count: 2 }, DEFAULT_HOST_BANDWIDTH)).toBeCloseTo(
+      63e9,
+      -6
+    );
+    // Four of them would exceed host memory itself, which is then the binding constraint.
+    expect(offloadBandwidth({ device: RTX_4090, count: 4 }, DEFAULT_HOST_BANDWIDTH)).toBe(
+      DEFAULT_HOST_BANDWIDTH
+    );
   });
 
   it('falls back to host RAM where there is no host to cross to', () => {
     // Unified memory has no separate host: the pool in question already is system memory.
-    expect(offloadBandwidth(DGX_SPARK, DEFAULT_HOST_BANDWIDTH)).toBe(DEFAULT_HOST_BANDWIDTH);
+    expect(offloadBandwidth({ device: DGX_SPARK, count: 1 }, DEFAULT_HOST_BANDWIDTH)).toBe(
+      DEFAULT_HOST_BANDWIDTH
+    );
+  });
+});
+
+/**
+ * "You could raise this" is advice, and advice that cannot be taken is worse than none.
+ */
+describe('a ceiling is only raiseable as far as the platform allows', () => {
+  const ryzen: DeviceSpec = { ...STRIX_HALO_395, allocatableTunable: true };
+
+  it('treats a Mac default as raiseable up to physical memory', () => {
+    // `iogpu.wired_limit_mb` is a default at 75%, not a hardware limit.
+    expect(maxAllocatablePerDevice(MAC_STUDIO_M3_ULTRA_256)).toBe(
+      MAC_STUDIO_M3_ULTRA_256.capacityBytes
+    );
+    const between = MAC_STUDIO_M3_ULTRA_256.allocatableBytes + 1;
+    expect(raisingCeilingWouldHelp(MAC_STUDIO_M3_ULTRA_256, between)).toBe(true);
+  });
+
+  it('refuses to promise more than Variable Graphics Memory exposes', () => {
+    // 96 of 128 GB is the AMD maximum, and it is already the catalogued default — so there is
+    // nothing to raise, and a 117 GiB configuration cannot be rescued by a setting.
+    const stated = { ...ryzen, maxAllocatableBytes: 96 * GIB };
+    expect(maxAllocatablePerDevice(stated)).toBe(96 * GIB);
+    expect(raisingCeilingWouldHelp(stated, 117 * GIB)).toBe(false);
+    expect(raisingCeilingWouldHelp(stated, 90 * GIB)).toBe(false);
+  });
+
+  it('never claims a fixed ceiling can move', () => {
+    expect(raisingCeilingWouldHelp(RTX_5090, 1)).toBe(false);
+    expect(maxAllocatablePerDevice(RTX_5090)).toBe(RTX_5090.allocatableBytes);
   });
 });

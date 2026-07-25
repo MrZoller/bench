@@ -9,7 +9,7 @@ import { Workloads } from './Workloads';
 import { Segmented, Select, StopSlider } from './Controls';
 import { compact, gibLabel, params, percent, tokens } from '@/lib/format';
 import type { KvPrecision } from '@/engine/types';
-import { canShard } from '@/engine/placement';
+import { canShard, maxAllocatablePerDevice, raisingCeilingWouldHelp } from '@/engine/placement';
 import { classifyDecode } from '@/lib/verdicts';
 import { quantApplies } from '@/lib/quantChoice';
 
@@ -168,8 +168,10 @@ export function Bench() {
             d.status !== 'shipping'
               ? `${d.status === 'rumored' ? 'Rumoured' : 'Announced'} — specs may change`
               : undefined,
-            d.allocatableTunable
-              ? `${gibLabel(d.allocatableBytes)} allocatable by default, and raiseable`
+            d.allocatableTunable && maxAllocatablePerDevice(d) > d.allocatableBytes
+              ? `${gibLabel(d.allocatableBytes)} allocatable by default, raiseable to ${gibLabel(
+                  maxAllocatablePerDevice(d)
+                )}`
               : undefined,
             d.note,
           ]
@@ -202,7 +204,13 @@ export function Bench() {
    * charged 0.5 bytes per element and could turn a long-context OOM into a reported fit.
    */
   const kvOptions = useMemo(
-    () => KV_PRECISIONS.filter((k) => runtime.kvPrecisions.includes(k.value)),
+    () =>
+      KV_PRECISIONS.filter((k) => runtime.kvPrecisions.includes(k.value)).map((k) => ({
+        ...k,
+        // A runtime's own name for the format wins, so the control names something the user
+        // could actually pass on a command line.
+        label: runtime.kvLabels?.[k.value] ?? k.label,
+      })),
     [runtime]
   );
 
@@ -258,10 +266,7 @@ export function Bench() {
       <Telemetry
         evaluation={evaluation}
         canOffload={device.class === 'discrete-gpu'}
-        tunableCeiling={
-          device.allocatableTunable === true &&
-          evaluation.placement.usedBytesPerDevice <= device.capacityBytes
-        }
+        tunableCeiling={raisingCeilingWouldHelp(device, evaluation.placement.usedBytesPerDevice)}
       />
       <Workloads evaluation={evaluation} config={config} />
 

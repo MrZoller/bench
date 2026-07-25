@@ -21,6 +21,7 @@ interface DeviceRow {
   capacityGiB: number;
   allocatableGiB: number;
   allocatableTunable?: boolean;
+  maxAllocatableGiB?: number;
   bandwidthGBs: number;
   measuredBandwidthGBs?: number;
   // Rows list only the dtypes their datasheet publishes, so TypeScript widens the absent keys
@@ -56,6 +57,9 @@ function toDevice(row: DeviceRow): CatalogDevice {
     capacityBytes: row.capacityGiB * GIB,
     allocatableBytes: row.allocatableGiB * GIB,
     ...(row.allocatableTunable ? { allocatableTunable: true } : {}),
+    ...(row.maxAllocatableGiB === undefined
+      ? {}
+      : { maxAllocatableBytes: row.maxAllocatableGiB * GIB }),
     bandwidthBytesPerSec: row.bandwidthGBs * GB,
     ...(row.measuredBandwidthGBs
       ? { measuredBandwidthBytesPerSec: row.measuredBandwidthGBs * GB }

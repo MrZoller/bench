@@ -348,6 +348,8 @@ export const VLLM: RuntimeSpec = {
   preallocFraction: 0.9,
   supports: [{ class: 'discrete-gpu' }, { class: 'unified-soc', vendor: 'NVIDIA' }],
   kvPrecisions: ['fp16', 'q8'],
+  // One byte per element, but vLLM spells it fp8_e4m3 and has no integer option.
+  kvLabels: { q8: 'FP8' },
   source: 'https://docs.vllm.ai/',
 };
 

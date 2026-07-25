@@ -29,12 +29,16 @@ export const DEFAULT_HOST_BANDWIDTH = 80e9;
  * direction — so a heavily offloaded DeepSeek V3 had both decode and TTFT understated by 2.5x,
  * well outside the band this engine claims.
  *
- * Derived here from the device rather than passed in, because the previous shape let a caller
- * omit it and silently get the optimistic default — which is exactly what the whole app did.
+ * Derived here from the rig rather than passed in, because the previous shape let a caller omit
+ * it and silently get the optimistic default — which is exactly what the whole app did.
  */
-export function offloadBandwidth(device: DeviceSpec, hostBandwidth: number): number {
-  const link = device.hostLinkBytesPerSec;
-  return link === undefined ? hostBandwidth : Math.min(hostBandwidth, link);
+export function offloadBandwidth(rig: Rig, hostBandwidth: number): number {
+  const link = rig.device.hostLinkBytesPerSec;
+  if (link === undefined) return hostBandwidth;
+  // Each card has its own link and spills its own shard, so a rig streams over all of them at
+  // once — up to the point where host memory itself is the limit. Charging one card's link to
+  // the whole rig doubled the transfer time of any spilled two-card configuration.
+  return Math.min(hostBandwidth, link * Math.max(1, rig.count));
 }
 
 export interface Placement {
@@ -93,6 +97,32 @@ function unmetRequirement(quant: QuantSpec, device: DeviceSpec): string | undefi
     return `${quant.label} needs ${dtype.toUpperCase()} tensor cores, which ${device.name} does not have.`;
   }
   return undefined;
+}
+
+/**
+ * The most memory this device could ever hand the model, after any tuning its platform allows.
+ *
+ * `allocatableBytes` is the *default*; this is the ceiling on raising it. Apple's
+ * `iogpu.wired_limit_mb` goes as far as physical memory, so those are capped by capacity — but
+ * AMD's Variable Graphics Memory tops out at 96 of the Ryzen AI Max+'s 128 GB, which is already
+ * its default. Treating physical capacity as everyone's maximum told a Ryzen owner that a
+ * 117 GiB configuration would fit once they raised a setting the platform will not raise.
+ *
+ * Shared so the "you could raise this" claim is made in one place. The Bench and the Envelope
+ * each had their own version of it, which is how one of them came to be wrong.
+ */
+export function maxAllocatablePerDevice(device: DeviceSpec): number {
+  if (device.allocatableTunable !== true) return device.allocatableBytes;
+  return Math.min(device.maxAllocatableBytes ?? device.capacityBytes, device.capacityBytes);
+}
+
+/** Whether raising the ceiling would actually buy this configuration anything. */
+export function raisingCeilingWouldHelp(device: DeviceSpec, usedBytesPerDevice: number): boolean {
+  return (
+    device.allocatableTunable === true &&
+    maxAllocatablePerDevice(device) > device.allocatableBytes &&
+    usedBytesPerDevice <= maxAllocatablePerDevice(device)
+  );
 }
 
 /** Memory a single device can actually give the model, after the runtime takes its cut. */
