@@ -17,6 +17,9 @@ test-results/
 .env.*
 !.env.example
 
+# Claude Code local overrides
+.claude/settings.local.json
+
 # Editor / OS cruft
 .DS_Store
 .idea/
