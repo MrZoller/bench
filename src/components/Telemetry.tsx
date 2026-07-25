@@ -1,6 +1,6 @@
 import type { Evaluation } from '@/engine';
 import type { StatusTone } from '@/design/tokens';
-import { CAPACITY_TIGHT, classifyDecode, classifyTtft } from '@/lib/verdicts';
+import { CAPACITY_TIGHT, HOST_RAM_UNCHECKED, classifyDecode, classifyTtft } from '@/lib/verdicts';
 import { gibLabel, percent, rate, tokens } from '@/lib/format';
 
 /**
@@ -85,8 +85,10 @@ function capacityReading(
       unit: 'offloaded',
       tone: 'serious',
       verdict: 'Spilling to RAM',
-      detail:
-        'Loads only if the host has RAM for the spilled part, which is not checked here. What does spill crosses the bus every token — usually the whole explanation for "why is it so slow".',
+      // The qualifier is shared with the Envelope's legend — see `HOST_RAM_UNCHECKED`. This tile is
+      // where someone goes to ask why the thing is slow, so it earns the longer tail; the legend
+      // swatch takes a shorter one. What must not differ is the fact.
+      detail: `${HOST_RAM_UNCHECKED} What does spill crosses the bus every token — usually the whole explanation for "why is it so slow".`,
     };
   }
 
