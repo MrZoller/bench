@@ -260,7 +260,11 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
             ? `${fmt(completionTtft)}s to first token — the suggestion arrives after you have moved on.`
             : rateOf('completion') < 20
               ? `${fmt(rateOf('completion'))} tok/s is too slow to finish a line while you pause.`
-              : `${fmt(completionTtft)}s to first token stays inside the window where a suggestion helps.`,
+              : rateOf('completion') < 30
+                ? // Tight on throughput alone: the latency sentence below is entirely positive,
+                  // and printing it here explained why this passed rather than why it did not.
+                  `${fmt(completionTtft)}s to first token is quick, but ${fmt(rateOf('completion'))} tok/s finishes a line slower than you type it.`
+                : `${fmt(completionTtft)}s to first token stays inside the window where a suggestion helps.`,
     }),
     judge('agent', {
       // Agents need all three: speed, headroom, and a prompt pass that does not stall each turn.
@@ -271,13 +275,17 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
       tight:
         fits('agent') && rateOf('agent') >= 15 && runnableContextTokens >= 32768 && agentTtft <= 30,
       why: () =>
-        runnableContextTokens < 32768
+        !fits('agent')
           ? shortfall('agent', 'an agent turn')
-          : agentTtft > 30
-            ? `${fmt(agentTtft)}s to re-read a 16K prompt makes every step a wait.`
-            : rateOf('agent') < 15
-              ? `${fmt(rateOf('agent'))} tok/s makes a multi-step session take minutes per step.`
-              : `${fmt(rateOf('agent'))} tok/s over ${ctx(runnableContextTokens)} of context, ${fmt(agentTtft)}s per turn.`,
+          : // Between the 16.5K a turn needs and the 32K a session needs, the turn requirement
+            // is satisfied — reporting it as the reason named a figure the configuration meets.
+            runnableContextTokens < 32768
+            ? `${ctx(runnableContextTokens)} of context holds a turn but not a session — an agent needs ${ctx(32768)} to keep its history across steps.`
+            : agentTtft > 30
+              ? `${fmt(agentTtft)}s to re-read a 16K prompt makes every step a wait.`
+              : rateOf('agent') < 15
+                ? `${fmt(rateOf('agent'))} tok/s makes a multi-step session take minutes per step.`
+                : `${fmt(rateOf('agent'))} tok/s over ${ctx(runnableContextTokens)} of context, ${fmt(agentTtft)}s per turn.`,
     }),
     judge('rag', {
       // The answer is short; the prompt is not. This lives or dies on prefill — but speed is
@@ -359,10 +367,17 @@ function judge(
  * These appear inside sentences explaining why a threshold was missed, so rounding 14.506 to
  * "15" produced "15 tok/s makes a multi-step session take minutes per step" against a minimum of
  * 15 — a number that appears to satisfy the condition it just failed. Same rule as `ctx`.
+ *
+ * Flooring alone is not enough at the bottom of the range, though: every positive value under
+ * 0.1 floors to "0.0", so a measured 0.089s TTFT read "0.0s to first token" — a claim of zero
+ * latency, which is a different kind of wrong from rounding up but wrong in the same direction.
+ * Anything below a tenth is reported as an upper bound instead, which is both true and still
+ * never flattering.
  */
 function fmt(value: number): string {
   if (!Number.isFinite(value)) return '—';
   if (value >= 10) return Math.floor(value).toString();
+  if (value > 0 && value < 0.1) return '<0.1';
   return (Math.floor(value * 10) / 10).toFixed(1);
 }
 
