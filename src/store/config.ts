@@ -131,8 +131,15 @@ function readInitialConfig(): Config {
   return searchToConfig(window.location.search);
 }
 
-/** The config as the engine wants it: catalogs resolved, usage gathered. */
-function scenarioFor(config: Config): Scenario {
+/**
+ * The config as the engine wants it: catalogs resolved, usage gathered.
+ *
+ * `cachedPrefixTokens` is not part of `Config` and is passed separately on purpose: it is a
+ * property of the *archetype being graded*, not of the scenario the user configured. The Bench's
+ * own three tiles describe a standalone prompt — that is what the sliders mean — and only the
+ * verdict layer has an archetype to ask.
+ */
+function scenarioFor(config: Config, cachedPrefixTokens?: number): Scenario {
   return {
     model: getModel(config.modelId),
     quant: getQuant(config.quantId),
@@ -142,6 +149,7 @@ function scenarioFor(config: Config): Scenario {
       contextTokens: config.contextTokens,
       concurrency: config.concurrency,
       promptTokens: config.promptTokens,
+      cachedPrefixTokens,
       kvPrecision: config.kvPrecision,
     },
   };
@@ -166,8 +174,8 @@ export function evaluateConfig(config: Config): Evaluation {
  * twice and each of those is a binary search over the model's whole context range. The archetype
  * grades need none of that; they need the three answers here.
  */
-export function estimateConfig(config: Config): ScenarioEstimate {
-  return estimateScenario(scenarioFor(config));
+export function estimateConfig(config: Config, cachedPrefixTokens?: number): ScenarioEstimate {
+  return estimateScenario(scenarioFor(config, cachedPrefixTokens));
 }
 
 /** Re-exported so components import catalogs from one place. */

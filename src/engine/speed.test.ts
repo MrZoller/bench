@@ -81,6 +81,53 @@ describe('calibration against published benchmarks', () => {
     expect(result.prefillTokensPerSec).toBeLessThan(2053 * 1.3);
   });
 
+  /**
+   * The anchors are single-prompt measurements, so `cachedPrefixTokens` must not be able to reach
+   * them. Asserted as an identity rather than a band, because the band is ±30% and would absorb a
+   * default of, say, `contextTokens - promptTokens` without complaint — which is exactly the
+   * mistake #23 warns about, and the reason the prefix is opt-in rather than derived.
+   */
+  it('leaves the anchors alone when a prefix is not asked for', () => {
+    const rig = { device: DGX_SPARK, count: 1 };
+    const usage = { ...single(4096), promptTokens: 1024 };
+    const quant = getQuant('mxfp4');
+
+    const declared = estimatePrefill(
+      GPT_OSS_20B,
+      quant,
+      { ...usage, cachedPrefixTokens: 0 },
+      rig,
+      LLAMA_CPP
+    );
+    const absent = estimatePrefill(GPT_OSS_20B, quant, usage, rig, LLAMA_CPP);
+
+    expect(declared.ttftSeconds).toBe(absent.ttftSeconds);
+    expect(declared.attentionFlops).toBe(absent.attentionFlops);
+    expect(declared.prefillTokensPerSec).toBe(absent.prefillTokensPerSec);
+  });
+
+  it('charges a declared prefix, on the attention term only', () => {
+    const rig = { device: DGX_SPARK, count: 1 };
+    const usage = { ...single(65536), promptTokens: 16384 };
+    const quant = getQuant('mxfp4');
+
+    const alone = estimatePrefill(GPT_OSS_20B, quant, usage, rig, LLAMA_CPP);
+    const against = estimatePrefill(
+      GPT_OSS_20B,
+      quant,
+      { ...usage, cachedPrefixTokens: 65536 - 16384 },
+      rig,
+      LLAMA_CPP
+    );
+
+    // Slower, which is the direction a reader will assume backwards: a prefix cache saves
+    // re-reading the prefix, not attending against it.
+    expect(against.ttftSeconds).toBeGreaterThan(alone.ttftSeconds);
+    expect(against.attentionFlops).toBeGreaterThan(alone.attentionFlops);
+    // The new tokens are still the only ones read and projected, so the linear half does not move.
+    expect(against.linearFlops).toBe(alone.linearFlops);
+  });
+
   it('does not hand llama.cpp a tensor-core rate it cannot reach', () => {
     const rig = { device: DGX_SPARK, count: 1 };
     const usage = { ...single(4096), promptTokens: 1024 };

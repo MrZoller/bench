@@ -153,23 +153,54 @@ export function hasSlidingLayers(model: ModelSpec): boolean {
  * overstates gpt-oss prefill FLOPs by roughly 19% at a 16K prompt; ignoring causality overstates
  * every model by nearly 2x. The same mistake on the compute side that the naive KV formula makes
  * on the memory side.
+ *
+ * **A cached prefix.** `cachedPrefixTokens` is the scenario every multi-turn archetype actually
+ * describes and that this function could not express: `n` *new* tokens attending against a
+ * `P`-token prefix already resident in the cache. The new tokens are still read and projected —
+ * that is the linear term, and it stays on `n` — but each of them attends over the prefix as well
+ * as over itself and the new tokens before it. So a full-attention layer computes
+ * `n * P + causal(n)` rather than `causal(n)`.
+ *
+ * This makes the cached case **more** work than the standalone one, not less, which is the
+ * counter-intuitive part: 16K attending against a resident 64K session is nine times the pairs of
+ * 16K attending against itself. What a prefix cache buys is not having to *re-read* the prefix; it
+ * does not make the new tokens cheaper to attend.
+ *
+ * Sliding layers cap the prefix at their window, which is the same dispatch the rest of this
+ * function already makes — a token at absolute position `P + i` attends over
+ * `min(W, P + i + 1)` positions, so the filling triangle is whatever part of the window the prefix
+ * has not already used up.
+ *
+ * At `P = 0` every branch reduces to the expression it replaced, exactly rather than approximately.
+ * That matters more than it looks: the published anchors are single-prompt, and a calibration that
+ * moved because a new parameter was threaded through would stop being evidence of anything.
  */
-export function attentionPairs(model: ModelSpec, promptTokens: number): number {
+export function attentionPairs(
+  model: ModelSpec,
+  promptTokens: number,
+  cachedPrefixTokens = 0
+): number {
   const n = Math.max(0, promptTokens);
+  const prefix = Math.max(0, cachedPrefixTokens);
   /** Every position attending over itself and everything before it. */
   const causal = (span: number) => (span * (span + 1)) / 2;
+  /** `n` new tokens over a resident prefix, unbounded. At `prefix = 0` this is `causal(n)`. */
+  const withPrefix = n * prefix + causal(n);
 
   const windows = model.attention.layerWindows;
-  if (!windows) return model.layers * causal(n);
+  if (!windows) return model.layers * withPrefix;
 
   let pairs = 0;
   for (let layer = 0; layer < model.layers; layer++) {
     const window = windows[layer];
-    if (window === null || window === undefined || n <= window) {
-      pairs += causal(n);
+    if (window === null || window === undefined || prefix + n <= window) {
+      // Full attention, or a window the whole working set still fits inside.
+      pairs += withPrefix;
     } else {
-      // A triangle while the window is still filling, then a band of constant width.
-      pairs += causal(window) + (n - window) * window;
+      // `k` new tokens are still inside the filling triangle — none of them, once the prefix alone
+      // has filled the window — and the rest attend over a band of exactly `window`.
+      const k = Math.min(Math.max(window - prefix, 0), n);
+      pairs += k * prefix + causal(k) + (n - k) * window;
     }
   }
   return pairs;
