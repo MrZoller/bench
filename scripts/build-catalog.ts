@@ -664,27 +664,31 @@ async function deriveStackShape(
 }
 
 async function buildModel(seed: Seed) {
-  const api = await fetchJson<HfApiModel>(
-    `https://huggingface.co/api/models/${seed.id}?expand[]=safetensors&expand[]=downloads&expand[]=likes&expand[]=createdAt&expand[]=sha`,
+  // Two calls on purpose. The first resolves `main` to a commit; the second asks for that
+  // commit specifically, so the parameter totals describe the same revision as the architecture
+  // and the tensor layout. Reading the totals from the unpinned endpoint left one field of the
+  // row sourced from an asynchronously computed cache that is not guaranteed to match the sha
+  // reported beside it — a stale total next to current expert and embedding counts, consistent
+  // enough to look right.
+  const resolved = await fetchJson<HfApiModel>(
+    `https://huggingface.co/api/models/${seed.id}?expand[]=sha`,
     seed.id
   );
-
-  /**
-   * Every subsequent fetch is pinned to this commit rather than to `main`.
-   *
-   * A model row is assembled from four requests — this one, config.json, the safetensors index,
-   * and the shard headers. Resolving `main` separately each time means a publisher pushing
-   * mid-run can straddle two revisions and produce a row whose expert counts, embedding size
-   * and totals describe different models. Nothing would fail; the numbers would just be wrong
-   * together, which is the failure mode this file exists to prevent.
-   *
-   * One caveat the pin does not cover: the API's `safetensors` block is an asynchronously
-   * computed cache and is not guaranteed to correspond to the `sha` reported beside it.
-   */
-  const revision = api.sha;
-  if (!revision) {
+  if (!resolved.sha) {
     throw new DerivationError(
       `${seed.id}: API returned no commit sha, so the fetches cannot be pinned to one revision`
+    );
+  }
+  const revision = resolved.sha;
+
+  const api = await fetchJson<HfApiModel>(
+    `https://huggingface.co/api/models/${seed.id}/revision/${revision}` +
+      '?expand[]=safetensors&expand[]=downloads&expand[]=likes&expand[]=createdAt&expand[]=sha',
+    seed.id
+  );
+  if (api.sha !== revision) {
+    throw new DerivationError(
+      `${seed.id}: asked for revision ${revision} but the API answered for ${api.sha}`
     );
   }
 
@@ -738,9 +742,17 @@ async function buildModel(seed: Seed) {
   const denseParams = totalParams - expertParams;
   const embeddingParams = vocabSize * hiddenSize;
   const activeDense = Math.max(0, denseParams - embeddingParams);
+  /**
+   * The *published* convention, and it only subtracts the embedding for MoE models.
+   *
+   * A dense model's active count is its total — that is what every vendor states and what
+   * `ModelSpec` promises. Subtracting the embedding here emitted Qwen3-32B as 31.98B active
+   * against 32.76B total with no routed experts anywhere, which is a fabricated headline. The
+   * physical decode basis is `activeDenseParams` below and needs no help from this field.
+   */
   const activeParams = moe
     ? activeDense + (moe.experts.perToken / moe.experts.total) * expertParams
-    : activeDense;
+    : totalParams;
 
   /**
    * `activeParams` above is the *published* convention, and it is not what a decode step reads.

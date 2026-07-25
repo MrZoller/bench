@@ -367,3 +367,42 @@ describe('precision fallbacks never invent silicon', () => {
     expect(prefill('nvfp4', blackwell) / prefill('bf16', blackwell)).toBeCloseTo(4, 0);
   });
 });
+
+/**
+ * An expert-only quantization computes at two rates, and crediting the whole prefill pass at
+ * the faster one overstates every model with a substantial dense half.
+ */
+describe('expert-only formats are timed at two rates', () => {
+  // A real Blackwell shape: FP4 units present at 4x fp16.
+  const blackwell: DeviceSpec = {
+    ...RTX_5090,
+    flops: { fp16: 419 * TFLOP, fp8: 838 * TFLOP, fp4: 1676 * TFLOP },
+  };
+  const rate = (model: typeof QWEN3_32B, quantId: string) =>
+    estimatePrefill(
+      model,
+      getQuant(quantId),
+      { contextTokens: 4096, concurrency: 1, kvPrecision: 'fp16', promptTokens: 1024 },
+      { device: blackwell, count: 1 },
+      VLLM
+    ).prefillTokensPerSec;
+
+  it('gives a dense model no speedup at all from an expert-only format', () => {
+    // MXFP4 sets denseBpw: 16, so with no routed experts every tensor stays BF16. Claiming the
+    // FP4 peak here was a 4x on work that does not exist.
+    expect(rate(QWEN3_32B, 'mxfp4')).toBeCloseTo(rate(QWEN3_32B, 'bf16'), 0);
+  });
+
+  it('gives an MoE model a partial speedup, between the two rates', () => {
+    const speedup = rate(GPT_OSS_20B, 'mxfp4') / rate(GPT_OSS_20B, 'bf16');
+    expect(speedup).toBeGreaterThan(1.5);
+    expect(speedup).toBeLessThan(4);
+  });
+
+  it('still gives a uniform 4-bit format the full rate', () => {
+    // NVFP4 has no denseBpw, so nothing is spared and the whole pass runs at the FP4 peak.
+    for (const model of [QWEN3_32B, GPT_OSS_20B]) {
+      expect(rate(model, 'nvfp4') / rate(model, 'bf16')).toBeCloseTo(4, 0);
+    }
+  });
+});

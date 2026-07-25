@@ -9,7 +9,12 @@ import type {
 } from './types';
 import { effectiveBandwidth } from './types';
 import { attentionSpanPerToken, kvReadBytesPerToken } from './kv';
-import { activeWeightBytes, outputProjectionParams, prefillComputeParams } from './weights';
+import {
+  activeWeightBytes,
+  expertFraction,
+  outputProjectionParams,
+  prefillComputeParams,
+} from './weights';
 import type { Placement } from './placement';
 import { DEFAULT_HOST_BANDWIDTH } from './placement';
 
@@ -247,10 +252,38 @@ export function estimatePrefill(
   const attentionFlops =
     4 * promptTokens * attentionSpanPerToken(model, promptTokens) * model.attention.projectionWidth;
 
-  const peak = peakFlops(rig.device, quant, runtime);
-  const achieved = peak * runtime.computeEfficiency * Math.max(1, rig.count) * tpEfficiency(rig);
+  /**
+   * Expert-only schemes compute at two rates, not one.
+   *
+   * MXFP4 sets `denseBpw: 16` because attention, routing, embeddings and the output head stay
+   * BF16 — only the routed experts are 4-bit. Crediting the whole pass at the FP4 peak
+   * overstates every model with a substantial dense half, and is completely wrong for a dense
+   * model, where `weightBreakdown` charges 100% of parameters at 16 bits while prefill claims a
+   * 4x rate on all of them.
+   *
+   * So the expert FLOPs are timed at the quant's compute dtype and everything else — dense
+   * linear layers, the output projection, and all of attention — at fp16.
+   */
+  const throughput = (dtype: QuantSpec['computeDtype']) =>
+    peakFlops(rig.device, { ...quant, computeDtype: dtype }, runtime) *
+    runtime.computeEfficiency *
+    Math.max(1, rig.count) *
+    tpEfficiency(rig);
 
-  let ttftSeconds = achieved > 0 ? (linearFlops + attentionFlops) / achieved : Infinity;
+  const expertRate = throughput(quant.computeDtype);
+  // `denseBpw` present means the scheme deliberately spares the non-expert tensors; absent
+  // means it is uniform and the dense half computes at the same rate as everything else.
+  const denseRate = quant.denseBpw === undefined ? expertRate : throughput('fp16');
+
+  // The experts one token routes through. Zero for a dense model, which is what makes the whole
+  // pass fall to the dense rate there rather than claiming a 4x it cannot use on any tensor.
+  const expertLinearFlops = 2 * model.expertParams * expertFraction(model, 1) * promptTokens;
+  const denseLinearFlops = Math.max(0, linearFlops - expertLinearFlops);
+
+  let ttft =
+    expertRate > 0 && denseRate > 0
+      ? expertLinearFlops / expertRate + (denseLinearFlops + attentionFlops) / denseRate
+      : Infinity;
 
   // Offloaded weights must cross the host bus once per prefill pass before compute can start.
   // Without this the offload cliff is invisible on the number users watch first.
@@ -262,13 +295,12 @@ export function estimatePrefill(
   const offload = placement?.offloadFraction ?? 0;
   if (offload > 0) {
     const streamedBytes = activeWeightBytes(model, quant, promptTokens) * offload;
-    ttftSeconds += streamedBytes / hostBandwidth;
+    ttft += streamedBytes / hostBandwidth;
   }
 
   return {
-    ttftSeconds,
-    prefillTokensPerSec:
-      ttftSeconds > 0 && Number.isFinite(ttftSeconds) ? promptTokens / ttftSeconds : 0,
+    ttftSeconds: ttft,
+    prefillTokensPerSec: ttft > 0 && Number.isFinite(ttft) ? promptTokens / ttft : 0,
     linearFlops,
     attentionFlops,
     attentionBound: attentionFlops > linearFlops,
