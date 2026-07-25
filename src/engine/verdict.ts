@@ -249,6 +249,28 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
     `Only ${ctx(runnableContextTokens)} of context fits — ${sends} needs ${ctx(needs(id))} with room to answer in.`;
 
   /**
+   * The `good` bars a `tight` row misses, named — or nothing, when it misses none.
+   *
+   * Every archetype had the same hole and it was found one tier at a time. Once the fail-level
+   * branches were exhausted the fallback printed healthy figures for a row that had been marked
+   * down, with nothing saying which predicate did it: an agent reading "139 tok/s over 40K of
+   * context, 4.0s per turn" is being shown three good numbers and no reason. A review named
+   * completion, agent and long-context; the same gap was also in chat and rag.
+   *
+   * A shared builder rather than five more nested ternaries, because five hand-written copies of
+   * one sentence is exactly how the serving and long-context versions came to disagree. Returns
+   * `undefined` when every bar is met, so a genuinely `good` row keeps its positive sentence and
+   * this cannot fire on one.
+   */
+  const shortOfGood = (...bars: (string | false)[]) => {
+    const live = bars.filter((b): b is string => typeof b === 'string');
+    if (live.length === 0) return undefined;
+    const list =
+      live.length === 1 ? live[0] : `${live.slice(0, -1).join(', ')} and ${live[live.length - 1]}`;
+    return `Usable, but ${list}.`;
+  };
+
+  /**
    * Every archetype measured at its own scenario, decode included. Memoised on the scenario
    * rather than on the archetype id, because a tier can be graded at a working size its archetype
    * does not name — see the long-context tight tier, which is a smaller job and not the same job
@@ -307,7 +329,13 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
             ? `${fmt(rateOf('chat'))} tok/s reads slower than most people do.`
             : chatTtft > 5
               ? `A ${secs(chatTtft)}s wait on a short message breaks the back-and-forth.`
-              : `${fmt(rateOf('chat'))} tok/s, ${secs(chatTtft)}s to first token on a short message.`,
+              : (shortOfGood(
+                  rateOf('chat') < 15 &&
+                    `${fmt(rateOf('chat'))} tok/s is under the 15 tok/s that keeps pace with reading`,
+                  chatTtft > 2 &&
+                    `${secs(chatTtft)}s to first token is over the 2s a conversation wants`
+                ) ??
+                `${fmt(rateOf('chat'))} tok/s, ${secs(chatTtft)}s to first token on a short message.`),
     }),
     judge('completion', {
       // A suggestion that arrives after you have typed the next line is worse than none.
@@ -320,11 +348,23 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
             ? `${secs(completionTtft)}s to first token — the suggestion arrives after you have moved on.`
             : rateOf('completion') < 20
               ? `${fmt(rateOf('completion'))} tok/s is too slow to finish a line while you pause.`
-              : rateOf('completion') < 30
-                ? // Tight on throughput alone: the latency sentence below is entirely positive,
-                  // and printing it here explained why this passed rather than why it did not.
-                  `${secs(completionTtft)}s to first token is quick, but ${fmt(rateOf('completion'))} tok/s finishes a line slower than you type it.`
-                : `${secs(completionTtft)}s to first token stays inside the window where a suggestion helps.`,
+              : // Both good-tier bars, through one builder. The throughput case had its own
+                // branch and the latency case had none, so a 159 tok/s suggestion arriving in
+                // 0.6s — correctly `tight` — was told its latency "stays inside the window where
+                // a suggestion helps", which is the sentence for a row that passed.
+                (shortOfGood(
+                  rateOf('completion') < 30 &&
+                    `${fmt(rateOf('completion'))} tok/s finishes a line slower than you type it`,
+                  // This one bar is described rather than printed. `secs` ceils, so a measurement
+                  // can no longer render as its own limit — but 0.4 is the sub-second case, where
+                  // the limit and a near miss are one tenth apart and read as the same order of
+                  // magnitude beside each other. The neighbouring test forbids the literal for
+                  // that reason. Chat's 2s and rag's 5s are far enough from their measurements to
+                  // state plainly, and do.
+                  completionTtft > 0.4 &&
+                    `${secs(completionTtft)}s to first token is past what an inline suggestion can absorb`
+                ) ??
+                `${secs(completionTtft)}s to first token stays inside the window where a suggestion helps.`),
     }),
     judge('agent', {
       // Agents need all three: speed, headroom, and a prompt pass that does not stall each turn.
@@ -345,7 +385,18 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
               ? `${secs(agentTtft)}s to re-read a 16K prompt makes every step a wait.`
               : rateOf('agent') < 15
                 ? `${fmt(rateOf('agent'))} tok/s makes a multi-step session take minutes per step.`
-                : `${fmt(rateOf('agent'))} tok/s over ${ctx(runnableContextTokens)} of context, ${secs(agentTtft)}s per turn.`,
+                : // All three good-tier bars. The capacity one is the easiest to hit and was the
+                  // most misleading: a 40K-capped model reading "139 tok/s over 40K of context,
+                  // 4.0s per turn" is three healthy figures explaining nothing.
+                  (shortOfGood(
+                    runnableContextTokens < 65536 &&
+                      `${ctx(runnableContextTokens)} of context is short of the ${ctx(65536)} a comfortable session keeps`,
+                    rateOf('agent') < 25 &&
+                      `${fmt(rateOf('agent'))} tok/s is under the 25 tok/s that keeps a step brisk`,
+                    agentTtft > 10 &&
+                      `${secs(agentTtft)}s to re-read a 16K prompt is longer than a brisk step allows`
+                  ) ??
+                  `${fmt(rateOf('agent'))} tok/s over ${ctx(runnableContextTokens)} of context, ${secs(agentTtft)}s per turn.`),
     }),
     judge('rag', {
       // The answer is short; the prompt is not. This lives or dies on prefill — but speed is
@@ -365,11 +416,15 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
             ? `${secs(ragPrefill.ttftSeconds)}s to read a 32K document before answering.`
             : rateOf('rag') < 5
               ? `Reads the document in ${secs(ragPrefill.ttftSeconds)}s, then answers at ${fmt(rateOf('rag'))} tok/s — minutes for a short reply.`
-              : rateOf('rag') < 10
-                ? // Tight on the answer alone, so the prompt figure alone would read as a pass.
-                  // Same branch completion needed, for the same reason, one archetype over.
-                  `Reads the document in ${secs(ragPrefill.ttftSeconds)}s, but answers at only ${fmt(rateOf('rag'))} tok/s.`
-                : `${Math.round(ragPrefill.prefillTokensPerSec)} tok/s prompt processing — ${secs(ragPrefill.ttftSeconds)}s for a 32K document.`,
+              : // Tight on the answer alone, or on the read alone. The first had its own branch —
+                // the prompt figure by itself reads as a pass — and the second had none, so a
+                // twelve-second read of a 32K document was reported as though it were quick.
+                (shortOfGood(
+                  ragPrefill.ttftSeconds > 5 &&
+                    `${secs(ragPrefill.ttftSeconds)}s to read the document is over the 5s bar`,
+                  rateOf('rag') < 10 && `it answers at only ${fmt(rateOf('rag'))} tok/s`
+                ) ??
+                `${Math.round(ragPrefill.prefillTokensPerSec)} tok/s prompt processing — ${secs(ragPrefill.ttftSeconds)}s for a 32K document.`),
     }),
     judge('long-context', {
       // Offload-aware: the resident figure is zero for any spilled configuration, which would
@@ -415,14 +470,34 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
             ? `Holds ${ctx(runnableContextTokens)}, but takes ${secs(longMeasured.prefill.ttftSeconds)}s to read ${ctx(longPrompt)} of it before saying anything.`
             : longMeasured.decode.perUserTokensPerSec < 2
               ? `Holds ${ctx(runnableContextTokens)} and answers at ${fmt(longMeasured.decode.perUserTokensPerSec)} tok/s — the window fits, the work does not.`
-              : // Tight on capacity alone: everything measured here is comfortable, and without
-                // this the row was marked down while reporting only good news. The same missing
-                // cause the serving tier had, in the tier this change introduced.
-                !holdsFullWindow
-                ? `Reads ${ctx(longPrompt)} in ${secs(longMeasured.prefill.ttftSeconds)}s comfortably, but holds ${ctx(runnableContextTokens)} — short of the ${ctx(131072)} these jobs assume.`
-                : runnableContextTokens > maxContextTokens
+              : // Every good-tier bar this misses, through the same builder as the other tiers.
+                //
+                // The capacity bar states the allowance-adjusted figure. Written as a bare 128K it
+                // contradicted itself in the 512-token band above 131,072: a rig holding 131,300
+                // read "holds 128.2K — short of the 128K", because `holdsFullWindow` is about the
+                // prompt *plus room to answer* and the sentence quoted only the prompt.
+                //
+                // Prefill and decode are here because either can be the sole cause once the full
+                // window fits: DeepSeek V3 NVFP4 on one 5090 reaches 160K and prefills in 110s
+                // but decodes at 3.2 tok/s, and the row used to mention only the offload and the
+                // prompt pass — hiding the predicate that actually downgraded it.
+                (shortOfGood(
+                  // No adjective on the read: reaching this bar guarantees only the 600s tight
+                  // limit, not the 120s comfortable one, so calling a 590s read "comfortable"
+                  // would be the same positive-language-on-a-downgrade this whole helper exists
+                  // to remove. The measurement is printed instead, which is not an opinion.
+                  !holdsFullWindow &&
+                    `it holds ${ctx(runnableContextTokens)}, short of the ${ctx(131072 + RESPONSE_ALLOWANCE)} a full window needs with room to answer in — it reads the ${ctx(longPrompt)} it can hold in ${secs(longMeasured.prefill.ttftSeconds)}s`,
+                  holdsFullWindow &&
+                    longMeasured.prefill.ttftSeconds > 120 &&
+                    `${secs(longMeasured.prefill.ttftSeconds)}s to read ${ctx(longPrompt)} is a long wait before it says anything`,
+                  holdsFullWindow &&
+                    longMeasured.decode.perUserTokensPerSec < 5 &&
+                    `it answers at ${fmt(longMeasured.decode.perUserTokensPerSec)} tok/s`
+                ) ??
+                (runnableContextTokens > maxContextTokens
                   ? `Reaches ${ctx(runnableContextTokens)}, though only with weights offloaded — ${secs(longMeasured.prefill.ttftSeconds)}s to read ${ctx(longPrompt)}.`
-                  : `Holds ${ctx(runnableContextTokens)} at this concurrency, ${secs(longMeasured.prefill.ttftSeconds)}s to read ${ctx(longPrompt)}.`,
+                  : `Holds ${ctx(runnableContextTokens)} at this concurrency, ${secs(longMeasured.prefill.ttftSeconds)}s to read ${ctx(longPrompt)}.`)),
     }),
     judge('batch', {
       // No latency budget at all — but the request still has to fit, and the throughput has to

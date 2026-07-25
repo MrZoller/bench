@@ -623,3 +623,49 @@ describe('the pass reports the term that actually costs the most', () => {
 function tpPenalty(rig: { device: typeof RTX_5090; count: number }): number {
   return achievedBandwidth(rig, VLLM) / (achievedBandwidth({ ...rig, count: 1 }, VLLM) * rig.count);
 }
+
+/**
+ * The other half of refusing an unshardable rig. `planPlacement` stops dividing the model across
+ * machines that cannot talk to each other; this stops summing their bandwidth and their FLOPS.
+ *
+ * Currently unreachable on real data — vLLM is the only tensor-parallel runtime and it supports
+ * `unified-soc` for NVIDIA alone — so a synthetic runtime is used deliberately. That reachability
+ * is a coincidence of the catalog rather than an invariant, and the next unified-memory row with a
+ * tensor-parallel runtime would silently uncover it.
+ */
+describe('devices with no link between them do not pool their throughput', () => {
+  // vLLM's shape, pointed at Apple silicon: the pairing the catalog does not currently contain.
+  const tensorOnApple: RuntimeSpec = {
+    ...VLLM,
+    supports: [{ class: 'unified-soc', vendor: 'apple' }],
+  };
+
+  it('does not sum bandwidth across Mac Studios', () => {
+    const one = achievedBandwidth({ device: MAC_STUDIO_M3_ULTRA_256, count: 1 }, tensorOnApple);
+    const eight = achievedBandwidth({ device: MAC_STUDIO_M3_ULTRA_256, count: 8 }, tensorOnApple);
+
+    expect(eight).toBe(one);
+  });
+
+  it('still pools across hardware that has a link', () => {
+    // The Spark is the same device class with a real ConnectX-7, which is the distinction
+    // `canShard` exists to draw.
+    const one = achievedBandwidth({ device: DGX_SPARK, count: 1 }, tensorOnApple);
+    const two = achievedBandwidth({ device: DGX_SPARK, count: 2 }, tensorOnApple);
+
+    expect(two).toBeGreaterThan(one);
+  });
+
+  it('does not sum prefill compute across them either', () => {
+    const at = (count: number) =>
+      estimatePrefill(
+        LLAMA_31_8B,
+        getQuant('bf16'),
+        { contextTokens: 8192, concurrency: 1, promptTokens: 2048, kvPrecision: 'fp16' },
+        { device: MAC_STUDIO_M3_ULTRA_256, count },
+        tensorOnApple
+      ).ttftSeconds;
+
+    expect(at(8)).toBe(at(1));
+  });
+});

@@ -16,7 +16,12 @@ import {
   prefillComputeParams,
 } from './weights';
 import type { Placement } from './placement';
-import { DEFAULT_HOST_BANDWIDTH, kvShards, offloadBandwidth } from './placement';
+import {
+  DEFAULT_HOST_BANDWIDTH,
+  effectiveDeviceCount,
+  kvShards,
+  offloadBandwidth,
+} from './placement';
 
 /**
  * Throughput and latency, as a roofline.
@@ -91,7 +96,7 @@ const CLASS_BANDWIDTH_UTILIZATION: Record<DeviceClass, number> = {
 const TP_SCALING = { fabric: 0.95, pcie: 0.85, network: 0.7 } as const;
 
 function tpEfficiency(rig: Rig): number {
-  const count = Math.max(1, rig.count);
+  const count = effectiveDeviceCount(rig);
   if (count <= 1) return 1;
 
   const link = rig.device.interconnect ?? '';
@@ -124,7 +129,7 @@ export function achievedBandwidth(rig: Rig, runtime: RuntimeSpec): number {
     CLASS_BANDWIDTH_UTILIZATION[rig.device.class];
 
   if (runtime.parallelism === 'layer') return perDevice;
-  return perDevice * Math.max(1, rig.count) * tpEfficiency(rig);
+  return perDevice * effectiveDeviceCount(rig) * tpEfficiency(rig);
 }
 
 export interface DecodeEstimate {
@@ -182,7 +187,7 @@ export function estimateDecode(
    * holds the entire DeepSeek latent cache while the speed panel prices one eighth of it. Same
    * divisor, from the same function, so the two cannot drift.
    */
-  const shards = Math.max(1, rig.count);
+  const shards = effectiveDeviceCount(rig);
   /**
    * Under tensor parallelism the cache is replicated when it cannot shard, so the rig's
    * aggregate bandwidth is scaled down by how far it actually divides.
@@ -391,7 +396,7 @@ export function estimatePrefill(
     const perDevice =
       peakFlops(rig.device, { ...quant, computeDtype: dtype }, runtime) * runtime.computeEfficiency;
     if (runtime.parallelism === 'layer') return perDevice;
-    return perDevice * Math.max(1, rig.count) * tpEfficiency(rig);
+    return perDevice * effectiveDeviceCount(rig) * tpEfficiency(rig);
   };
 
   const expertRate = throughput(quant.computeDtype);

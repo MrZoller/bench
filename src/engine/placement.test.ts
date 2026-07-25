@@ -4,6 +4,7 @@ import {
   allocatablePerDevice,
   maxAllocatablePerDevice,
   raisingCeilingWouldHelp,
+  canShard,
   maxContextThatFits,
   offloadBandwidth,
   planPlacement,
@@ -493,5 +494,46 @@ describe('layer splits are sized, not divided', () => {
 
     const tp1 = achievedBandwidth({ device: RTX_5090, count: 1 }, VLLM);
     expect(achievedBandwidth({ device: RTX_5090, count: 8 }, VLLM)).toBeGreaterThan(tp1 * 4);
+  });
+});
+
+/**
+ * Sharding needs a transport, and the split ran regardless of whether one exists — eight Mac
+ * Studios came back as a supported placement holding an eighth of the model each, over an
+ * interconnect the catalog says they do not have. The Bench hides its device-count control for
+ * these rows, but that is one surface's store protecting itself; the Matrix, the Envelope and any
+ * direct `evaluate` caller reach `planPlacement` without passing through it.
+ */
+describe('a rig is only sharded when its devices can talk to each other', () => {
+  const macRig = (count: number) => ({ device: MAC_STUDIO_M3_ULTRA_256, count });
+
+  it('refuses a multi-device rig with no interconnect', () => {
+    expect(canShard(MAC_STUDIO_M3_ULTRA_256)).toBe(false);
+
+    const plan = planPlacement(LLAMA_31_8B, getQuant('q4_k_m'), usage(4096), macRig(8), MLX);
+    expect(plan.unsupported).toMatch(/no interconnect/i);
+  });
+
+  it('does not divide the model across devices it has refused', () => {
+    const one = planPlacement(LLAMA_31_8B, getQuant('q4_k_m'), usage(4096), macRig(1), MLX);
+    const eight = planPlacement(LLAMA_31_8B, getQuant('q4_k_m'), usage(4096), macRig(8), MLX);
+
+    // The figure that gave it away: an eighth of the weights per machine, for a rig that cannot
+    // move a tensor between them.
+    expect(eight.weightBytesPerDevice).toBe(one.weightBytesPerDevice);
+  });
+
+  it('still shards hardware that has a link', () => {
+    // The Spark is `unified-soc` like the Mac and has ConnectX-7, which is the whole reason
+    // `canShard` keys on the transport rather than the device class.
+    const rig = { device: DGX_SPARK, count: 2 };
+    const plan = planPlacement(LLAMA_31_8B, getQuant('q4_k_m'), usage(4096), rig, LLAMA_CPP);
+
+    expect(plan.unsupported).toBeUndefined();
+  });
+
+  it('leaves a single device of unshardable hardware alone', () => {
+    const plan = planPlacement(LLAMA_31_8B, getQuant('q4_k_m'), usage(4096), macRig(1), MLX);
+    expect(plan.unsupported).toBeUndefined();
   });
 });

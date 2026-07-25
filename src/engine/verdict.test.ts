@@ -757,3 +757,119 @@ describe('no archetype escapes its own scenario', () => {
     expect(passing.length).toBeGreaterThan(4);
   });
 });
+
+/**
+ * A `tight` row that prints only healthy figures is a verdict with no evidence — the reader sees
+ * three good numbers and a downgrade, and cannot tell which predicate did it. The review named
+ * completion, agent and long-context; the same hole was in chat and rag, so this covers the class
+ * across every archetype that has a `good` tier to miss.
+ */
+describe('a tight verdict always names the bar it missed', () => {
+  const stub = (perUser: number, ttft: number, placement: Placement = RESIDENT) => ({
+    placement,
+    decode: {
+      perUserTokensPerSec: perUser,
+      aggregateTokensPerSec: perUser,
+      weightReadBytes: 1,
+      kvReadBytes: 1,
+      weightSeconds: 1,
+      kvSeconds: 0.1,
+      kvBound: false,
+    },
+    prefill: {
+      ttftSeconds: ttft,
+      prefillTokensPerSec: 5000,
+      linearFlops: 1,
+      attentionFlops: 1,
+      linearSeconds: 0.1,
+      attentionSeconds: 0.1,
+      attentionBound: false,
+    },
+  });
+
+  const graded = (runnableContextTokens: number, perUser: number, ttft: number) =>
+    new Map(
+      judgeWorkloads({
+        selectedPlacement: RESIDENT,
+        usage: { contextTokens: 4096, concurrency: 4, promptTokens: 2048, kvPrecision: 'fp16' },
+        maxContextTokens: runnableContextTokens,
+        runnableContextTokens,
+        evaluateAt: () => stub(perUser, ttft),
+      }).map((v) => [v.workload.id, v])
+    );
+
+  /** Every tier that carries a `good` bar, and the band that leaves each one tight on it alone. */
+  it.each([
+    // id,          runnable,  rate, ttft, what the sentence has to own up to
+    ['chat', 400_000, 12, 0.2, /15 tok\/s/],
+    ['chat', 400_000, 60, 3, /to first token/],
+    ['completion', 400_000, 25, 0.2, /finishes a line slower/],
+    ['completion', 400_000, 60, 0.6, /inline suggestion can absorb/],
+    ['agent', 40_000, 60, 1, /64K/],
+    ['agent', 400_000, 20, 1, /25 tok\/s/],
+    ['agent', 400_000, 60, 15, /brisk step/],
+    ['rag', 400_000, 7, 1, /7\.0 tok\/s/],
+    ['rag', 400_000, 60, 12, /over the 5s bar/],
+    // Holds the full window, decode is fine, prefill alone is between the 120s good bar and the
+    // 600s tight one. Deleting this conjunct left the whole suite green while reintroducing the
+    // bug for any rig in that band.
+    ['long-context', 200_000, 60, 300, /300s to read 128K is a long wait/],
+    ['long-context', 200_000, 3.2, 110, /3\.2 tok\/s/],
+  ] as const)('explains %s at rate %s and ttft %s', (id, runnable, rate, ttft, expected) => {
+    const verdict = graded(runnable, rate, ttft).get(id)!;
+
+    expect(verdict.fitness).toBe('tight');
+    expect(verdict.reason).toMatch(expected);
+    // The positive fallback is for rows that missed nothing, and must not appear on a downgrade.
+    expect(verdict.reason).toMatch(/^Usable, but /);
+  });
+
+  it('says nothing extra when a row misses no bar at all', () => {
+    // Comfortable everywhere: the reason stays the plain positive sentence.
+    const chat = graded(400_000, 200, 0.05).get('chat')!;
+
+    expect(chat.fitness).toBe('good');
+    expect(chat.reason).not.toMatch(/^Usable, but /);
+  });
+
+  it('names the decode rate when decode alone downgrades long-context', () => {
+    // The full window fits and prefill clears its bar, so decode is the only thing left — and the
+    // row used to mention only the offload and the prompt pass. DeepSeek V3 NVFP4 on one 5090 is
+    // the real shape of this: 160K reached, ~110s to prefill, 3.2 tok/s out.
+    const long = graded(200_000, 3.2, 110).get('long-context')!;
+
+    expect(long.fitness).toBe('tight');
+    expect(long.reason).toMatch(/3\.2 tok\/s/);
+    expect(long.reason).toMatch(/^Usable, but /);
+  });
+
+  it('does not tell a machine holding 128K that it is short of 128K', () => {
+    // `holdsFullWindow` is the prompt *plus* room to answer, so between 131,072 and 131,583 the
+    // window is short only by the response allowance. Quoting the bare prompt figure produced
+    // "holds 128.2K - short of the 128K", which contradicts its own numbers.
+    const long = graded(131_300, 60, 1).get('long-context')!;
+
+    expect(long.fitness).toBe('tight');
+    expect(long.reason).not.toMatch(/short of the 128K\b/);
+    expect(long.reason).toMatch(/128\.5K/);
+    expect(long.reason).toMatch(/^Usable, but /);
+  });
+
+  it('names every live bar when long-context misses more than one', () => {
+    // Slow to read *and* slow to answer, with the window held: both have to be owned up to.
+    const long = graded(200_000, 3.2, 300).get('long-context')!;
+
+    expect(long.reason).toMatch(/300s to read/);
+    expect(long.reason).toMatch(/3\.2 tok\/s/);
+    expect(long.reason).toMatch(/ and /);
+  });
+
+  it('names both causes when both are live', () => {
+    // Under the rate bar and over the latency one at the same time.
+    const chat = graded(400_000, 12, 3).get('chat')!;
+
+    expect(chat.reason).toMatch(/15 tok\/s/);
+    expect(chat.reason).toMatch(/to first token/);
+    expect(chat.reason).toMatch(/ and /);
+  });
+});
