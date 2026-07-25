@@ -25,6 +25,21 @@ const matrix = (page: import('@playwright/test').Page) =>
  */
 const cells = (page: import('@playwright/test').Page) => matrix(page).locator('table td button');
 
+/**
+ * How far above the viewport top the anchor may sit and still count as scrolled to it.
+ *
+ * `block: 'start'` aims the anchor at y = 0, and on macOS it lands there exactly. On the Linux CI
+ * runner it lands at **-0.5** — the zero-height anchor sits between a flex `gap-5` and a `-mb-5`
+ * that cancels it, and the fractional layout that produces rounds the scroll offset a half pixel
+ * past. The detail below it is fully visible; the scroll is correct.
+ *
+ * This is not the assertion being widened to make a red run green. What the spec distinguishes is a
+ * scroll that happened from one that did not, and the failing case is not half a pixel — it is
+ * **-1323px**, the anchor still down at the Matrix where the click was. Two pixels of tolerance
+ * leaves that gap entirely intact, and restoring `display: contents` still fails this test.
+ */
+const SUBPIXEL = 2;
+
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
   // The grid is the last section to lay out; waiting on a cell avoids racing the first paint.
@@ -49,8 +64,8 @@ test('clicking a cell scrolls the detail it loads back into view', async ({ page
 
   const box = await anchor.boundingBox();
   expect(box).not.toBeNull();
-  // In the viewport, near the top — `block: 'start'`.
-  expect(box!.y).toBeGreaterThanOrEqual(0);
+  // At the top of the viewport — `block: 'start'` — rather than merely somewhere in it.
+  expect(box!.y).toBeGreaterThan(-SUBPIXEL);
   expect(box!.y).toBeLessThan(page.viewportSize()!.height / 2);
 });
 
@@ -74,7 +89,8 @@ test('scrolls even when the cell clicked is the one already selected', async ({ 
 
   const box = await anchor.boundingBox();
   expect(box).not.toBeNull();
-  expect(box!.y).toBeGreaterThanOrEqual(0);
+  expect(box!.y).toBeGreaterThan(-SUBPIXEL);
+  expect(box!.y).toBeLessThan(page.viewportSize()!.height / 2);
 });
 
 /**
