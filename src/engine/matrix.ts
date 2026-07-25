@@ -1,5 +1,5 @@
 import type { ModelSpec, DeviceSpec, QuantSpec, RuntimeSpec, UsageSpec } from './types';
-import { planPlacement } from './placement';
+import { planPlacement, raisingCeilingWouldHelp } from './placement';
 import { estimateDecode, estimatePrefill } from './speed';
 
 /**
@@ -28,6 +28,16 @@ export interface MatrixCell {
   runs: boolean;
   /** Why not, when it does not. */
   blockedBy?: string;
+  /**
+   * Set when the cell is over the *default* allocation on a machine that lets you raise it.
+   *
+   * A setting and a hardware limit are not the same answer, and this grid is read as a shortlist:
+   * DeepSeek V3 at Q5_K_M needs about 445 GiB, which is past the 512 GB Mac Studio's 384 GiB
+   * default and inside the 512 it can be tuned to. Collapsing that into the same "will not run"
+   * as a configuration beyond physical capacity strikes a machine off the list over a checkbox.
+   * The Envelope and Telemetry both preserved the distinction; this surface dropped it.
+   */
+  raiseCeilingWouldHelp?: boolean;
   /** Used bytes over allocatable. Above 1 means it did not fit resident. */
   utilization: number;
   offloadFraction: number;
@@ -81,10 +91,19 @@ export function computeMatrix(request: MatrixRequest): MatrixCell[][] {
       const placement = planPlacement(model, quant, cellUsage, rig, runtime);
 
       if (placement.unsupported || placement.impossible) {
+        // Same call `raisingCeilingWouldHelp` serves in the Envelope and Telemetry, rather than a
+        // third re-derivation of "is this a setting or a wall" — the two that already existed
+        // disagreed once, which is why it lives in `placement.ts`.
+        const raiseable =
+          placement.unsupported === undefined &&
+          raisingCeilingWouldHelp(device, placement.usedBytesPerDevice);
+
         return {
           ...base,
           runs: false,
-          blockedBy: placement.unsupported ?? 'Does not fit',
+          blockedBy:
+            placement.unsupported ?? (raiseable ? 'Past the default allocation' : 'Does not fit'),
+          ...(raiseable ? { raiseCeilingWouldHelp: true } : {}),
           utilization: placement.utilization,
           offloadFraction: 0,
           tokensPerSec: 0,

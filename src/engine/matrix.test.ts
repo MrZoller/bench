@@ -3,7 +3,14 @@ import { computeMatrix, measureMax, measureValue, type MatrixMeasure } from './m
 import { MODELS, DEVICES } from '@/data/catalog';
 import { getQuant } from '@/data/quants';
 import { getRuntime } from '@/data/runtimes';
-import { LLAMA_31_8B, DEEPSEEK_V3, RTX_5090, DGX_SPARK, MAC_STUDIO_M3_ULTRA_256 } from './fixtures';
+import {
+  LLAMA_31_8B,
+  DEEPSEEK_V3,
+  RTX_5090,
+  DGX_SPARK,
+  MAC_STUDIO_M3_ULTRA_256,
+  MAC_STUDIO_M3_ULTRA_512,
+} from './fixtures';
 import { LLAMA_CPP, MLX } from './fixtures';
 
 const USAGE = {
@@ -175,5 +182,60 @@ describe('per-row context limits', () => {
       deviceCount: 1,
     });
     expect(cells[0][0].contextTokens).toBe(8192);
+  });
+});
+
+/**
+ * The grid is read as a shortlist, so "will not run" strikes a machine off it. A default
+ * allocation is not a hardware limit, and the two want different answers from the reader — one is
+ * a setting to change, the other is a machine to rule out. The Envelope and Telemetry both kept
+ * the distinction; this surface collapsed it.
+ */
+describe('a tunable allocation ceiling is not a hardware limit', () => {
+  it('marks a cell that only exceeds the default allocation', () => {
+    // DeepSeek V3 at Q5_K_M needs roughly 445 GiB: past the 512 GB Mac Studio's default
+    // allocation, inside the ceiling the user can raise it to.
+    const [[cell]] = computeMatrix({
+      models: [DEEPSEEK_V3],
+      devices: [MAC_STUDIO_M3_ULTRA_512],
+      quantFor: () => getQuant('q5_k_m'),
+      runtime: MLX,
+      usage: USAGE,
+      deviceCount: 1,
+    });
+
+    expect(cell.runs).toBe(false);
+    expect(cell.raiseCeilingWouldHelp).toBe(true);
+    expect(cell.blockedBy).not.toBe('Does not fit');
+  });
+
+  it('does not mark one that is past the hardware', () => {
+    // Same model at BF16 is far beyond any ceiling this machine can be tuned to.
+    const [[cell]] = computeMatrix({
+      models: [DEEPSEEK_V3],
+      devices: [MAC_STUDIO_M3_ULTRA_512],
+      quantFor: () => getQuant('bf16'),
+      runtime: MLX,
+      usage: USAGE,
+      deviceCount: 1,
+    });
+
+    expect(cell.runs).toBe(false);
+    expect(cell.raiseCeilingWouldHelp).toBeUndefined();
+  });
+
+  it('does not mark a pair the runtime cannot drive, whatever the memory says', () => {
+    // `unsupported` is a different failure and must not be dressed as a raisable setting.
+    const [[cell]] = computeMatrix({
+      models: [DEEPSEEK_V3],
+      devices: [MAC_STUDIO_M3_ULTRA_512],
+      quantFor: () => getQuant('q5_k_m'),
+      runtime: getRuntime('vllm'),
+      usage: USAGE,
+      deviceCount: 1,
+    });
+
+    expect(cell.raiseCeilingWouldHelp).toBeUndefined();
+    expect(cell.blockedBy).toMatch(/vLLM/);
   });
 });

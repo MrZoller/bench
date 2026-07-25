@@ -9,9 +9,9 @@ import {
 import { DEVICES, MODELS, getDevice, getModel } from '@/data/catalog';
 import { getQuant } from '@/data/quants';
 import { getRuntime } from '@/data/runtimes';
-import { quantApplies } from '@/lib/quantChoice';
+import { FALLBACK_QUANT_ID, quantApplies } from '@/lib/quantChoice';
 import { sequential } from '@/design/tokens';
-import { params, percent, rate, seconds } from '@/lib/format';
+import { params, percent, rate, seconds, tokens } from '@/lib/format';
 import { useConfig, type Config } from '@/store/config';
 
 /**
@@ -40,14 +40,29 @@ const MEASURES: readonly { value: MatrixMeasure; label: string; hint: string }[]
 const RAMP = [...sequential].reverse();
 
 /**
- * What a row is evaluated at when the selected format does not apply to it.
+ * What a row is evaluated at when the selected format does not apply to it, in preference order.
  *
- * Q4_K_M rather than the store's BF16 fallback. That one is chosen for *safety* — it always
+ * Q4_K_M leads rather than the store's BF16 fallback. That one is chosen for *safety* — it always
  * applies — but on a grid meant to compare hardware it makes every dense model look far worse
  * than anyone would actually run it, which is the opposite of informative. Q4_K_M is the
  * default local trade and the honest stand-in.
+ *
+ * A list rather than one constant, because the substitute has to be a format the *runtime* can
+ * load. Returning Q4_K_M unconditionally handed vLLM a GGUF K-quant it does not read, and since
+ * the substitution bypassed the runtime check entirely, those rows were sized, coloured and
+ * ranked as runnable — then produced different figures when clicked, because the Bench coerces
+ * the selection to something loadable. The order runs 4-bit, then 8-bit, then BF16: comparable
+ * quality first, universality last, so a row only falls back as far as it has to.
  */
-const SUBSTITUTE_QUANT_ID = 'q4_k_m';
+const SUBSTITUTE_QUANT_IDS = ['q4_k_m', 'awq_4bit', 'int8', 'q8_0', FALLBACK_QUANT_ID] as const;
+
+/**
+ * The element a Matrix click scrolls back to — the detail that click just loaded.
+ *
+ * Exported so the Bench holds the anchor and this file only names it. A `getElementById` reaching
+ * for a string the other component happens to use is the kind of coupling that breaks silently.
+ */
+export const DETAIL_ANCHOR_ID = 'bench-detail';
 
 export function Matrix({ config }: { config: Config }) {
   const headingId = useId();
@@ -75,15 +90,37 @@ export function Matrix({ config }: { config: Config }) {
    * Substituting keeps every row informative, and the substitution is stated rather than hidden.
    */
   const quantFor = useMemo(
-    () => (model: (typeof models)[number], device: (typeof devices)[number]) =>
-      quantApplies(quant, model, device) ? quant : getQuant(SUBSTITUTE_QUANT_ID),
-    [quant]
+    () => (model: (typeof models)[number], device: (typeof devices)[number]) => {
+      if (quantApplies(quant, model, device, runtime)) return quant;
+      // `runtime` is passed to both checks. Omitting it from the first let an unloadable
+      // selection through as though it applied; omitting it from the second chose an unloadable
+      // stand-in. The last entry always applies, so `find` cannot come back empty.
+      return (
+        SUBSTITUTE_QUANT_IDS.map(getQuant).find((q) => quantApplies(q, model, device, runtime)) ??
+        getQuant(FALLBACK_QUANT_ID)
+      );
+    },
+    [quant, runtime]
   );
 
-  const substituted = useMemo(
-    () => models.some((m) => devices.some((d) => !quantApplies(quant, m, d))),
-    [models, devices, quant]
-  );
+  /**
+   * The formats actually standing in, named so the header can state them.
+   *
+   * A set rather than a flag: the substitute now depends on what the runtime can load and what
+   * the device can run, so one grid can carry more than one. Saying "Q4_K_M where it does not
+   * apply" when half the rows were really evaluated at BF16 would misdescribe the comparison
+   * being shown.
+   */
+  const substitutes = useMemo(() => {
+    const used = new Set<string>();
+    for (const m of models) {
+      for (const d of devices) {
+        const chosen = quantFor(m, d);
+        if (chosen.id !== quant.id) used.add(chosen.label);
+      }
+    }
+    return [...used];
+  }, [models, devices, quant, quantFor]);
 
   const cells = useMemo(
     () =>
@@ -106,20 +143,53 @@ export function Matrix({ config }: { config: Config }) {
   const max = measureMax(cells, measure);
   const runnable = cells.flat().filter((c) => c.runs).length;
 
+  /**
+   * Tall enough for the longest label this grid actually renders.
+   *
+   * A fixed 96px was set for the names that existed then and is short for several shipping ones —
+   * the catalog reaches 40 characters. The table sits in an `overflow-x-auto` container, which
+   * clips vertically rather than scrolling, and the Mac Studio variants differ only in the
+   * trailing capacity suffix that got cut, so two columns became indistinguishable — the exact
+   * failure the rotation was introduced to fix.
+   *
+   * Rotated 45 degrees, so the vertical extent is the label's width times sin(45). ~6.5px per
+   * character at this size is an estimate rather than a measurement, but it errs long, and the
+   * cost of erring is whitespace where the cost of erring short is an unreadable header.
+   */
+  const headerHeight = useMemo(() => {
+    const longest = Math.max(0, ...devices.map((d) => shortName(d.name).length));
+    return Math.ceil(longest * 6.5 * Math.SQRT1_2) + 20;
+  }, [devices]);
+
   return (
     <section aria-labelledby={headingId} className="panel p-5">
       <header className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
+        {/* The grid moves materially with context, concurrency, prompt and KV precision — the fit
+            counts and the throughput colours all change — and the heading named only the format
+            and the runtime. The sliders that control it sit below this section, so a screenshot of
+            the Matrix carried no record of the request it answers, and two of them taken at
+            different settings are indistinguishable. Every input that moves a cell is stated. */}
         <h2 id={headingId} className="text-sm font-semibold tracking-wide">
           Every model on every machine
           <span className="ml-2 font-normal text-[var(--color-text-faint)]">
             at {quant.label}
-            {substituted &&
-              `, ${getQuant(SUBSTITUTE_QUANT_ID).label} where it does not apply`}, {runtime.label}
+            {substitutes.length > 0 &&
+              `, ${substitutes.join(' or ')} where it does not apply`}, {runtime.label} —{' '}
+            {tokens(config.contextTokens)} context, {tokens(config.promptTokens)} prompt,{' '}
+            {config.concurrency} {config.concurrency === 1 ? 'user' : 'users'},{' '}
+            {config.kvPrecision.toUpperCase()} KV
           </span>
         </h2>
         <p className="text-sm whitespace-nowrap text-[var(--color-text-muted)]">
           <span className="tabular text-[var(--color-text)]">{runnable}</span> of{' '}
           {cells.flat().length} combinations run
+        </p>
+        {/* Outside the h2, which is this section's `aria-labelledby` target — the accessible name
+            is computed from its whole subtree, so a sentence nested in there is read out every
+            time the landmark is announced. The workload belongs in the name; the caveat does not. */}
+        <p className="basis-full text-sm text-[var(--color-text-faint)]">
+          Rows are capped at each model’s own context limit, so a model that stops short of{' '}
+          {tokens(config.contextTokens)} is scored at whatever it does accept.
         </p>
       </header>
 
@@ -168,7 +238,8 @@ export function Matrix({ config }: { config: Config }) {
                   // Fixed width, and the label taken out of flow below, so a long name cannot
                   // stretch its own column — "RTX PRO 6000 Blackwell" was three times the width
                   // of its neighbours and skewed the whole grid.
-                  className="relative h-24 w-7 min-w-7 p-0 align-bottom font-normal text-[var(--color-text-faint)]"
+                  className="relative w-7 min-w-7 p-0 align-bottom font-normal text-[var(--color-text-faint)] [@media(pointer:coarse)]:w-11 [@media(pointer:coarse)]:min-w-11"
+                  style={{ height: headerHeight }}
                 >
                   {/*
                     Rotated rather than truncated. Horizontally these clipped to "GeForc…" four
@@ -214,11 +285,50 @@ export function Matrix({ config }: { config: Config }) {
                         set('quantId', cell.quantId);
                         set('deviceCount', 1);
                         set('contextTokens', cell.contextTokens);
+                        /**
+                         * The detail this loads sits several sections above, and a cell already
+                         * matching the current selection changes nothing the Matrix renders — so
+                         * clicking one left the viewport on an unchanged grid and the action
+                         * appeared to do nothing at all. The selected square is now marked too,
+                         * so the click is acknowledged where it happened as well as where it
+                         * landed.
+                         */
+                        // Optional on the method as well as the element: `scrollIntoView` is
+                        // absent in jsdom and in some embedded browsers, and a click that throws
+                        // here would abandon the selection it had just made — trading a scroll
+                        // that did not happen for a scenario that did not load.
+                        //
+                        // The animation is gated on the motion preference, which the stylesheet's
+                        // reduced-motion block cannot do for it: that neutralises CSS animation
+                        // and transition durations and has no effect on a scroll asked for in JS.
+                        // A multi-section animated jump is exactly the motion it exists to
+                        // suppress, so the preference is read here instead.
+                        const reduce = window.matchMedia?.(
+                          '(prefers-reduced-motion: reduce)'
+                        )?.matches;
+                        document.getElementById(DETAIL_ANCHOR_ID)?.scrollIntoView?.({
+                          behavior: reduce ? 'auto' : 'smooth',
+                          block: 'start',
+                        });
                       }}
                       title={tooltip(cell, measure, quant.id)}
                       aria-label={tooltip(cell, measure, quant.id)}
-                      className={`h-7 w-full rounded-sm focus:ring-2 focus:ring-[var(--color-accent)] focus:outline-none ${
+                      aria-current={
+                        cell.modelId === config.modelId && cell.deviceId === config.deviceId
+                          ? 'true'
+                          : undefined
+                      }
+                      // 28px squares two pixels apart are under the 44px `marks.hitTarget` this
+                      // repo declares, and with hundreds of neighbours a touch user loading the
+                      // wrong scenario is the likely outcome rather than the unlucky one. Coarse
+                      // pointers get the full target; a mouse keeps the dense grid, which is what
+                      // makes the comparison legible in one screen.
+                      className={`h-7 w-full rounded-sm focus:ring-2 focus:ring-[var(--color-accent)] focus:outline-none [@media(pointer:coarse)]:h-11 ${
                         cell.runs ? '' : 'border border-dashed border-[var(--color-border)]'
+                      } ${cell.raiseCeilingWouldHelp ? 'border-[var(--color-warning)]' : ''} ${
+                        cell.modelId === config.modelId && cell.deviceId === config.deviceId
+                          ? 'ring-2 ring-[var(--color-accent)] ring-offset-1 ring-offset-[var(--color-surface)]'
+                          : ''
                       }`}
                       style={{ background: fill(cell, measure, max) }}
                     />
@@ -246,6 +356,20 @@ export function Matrix({ config }: { config: Config }) {
           />
           will not run
         </span>
+        {/* A default allocation and a hardware limit are not the same answer, and this grid is
+            read as a shortlist. DeepSeek V3 at Q5_K_M is past the 512 GB Mac Studio's 384 GiB
+            default and inside the 512 it can be tuned to — struck off the list over a checkbox,
+            when the Envelope and Telemetry both kept the distinction. Shown only when the grid
+            actually contains one, so the legend does not explain a state nobody is looking at. */}
+        {cells.flat().some((c) => c.raiseCeilingWouldHelp) && (
+          <span className="ml-3 flex items-center gap-1.5">
+            <span
+              aria-hidden="true"
+              className="inline-block h-3 w-3 rounded-sm border border-dashed border-[var(--color-warning)]"
+            />
+            past the default allocation, which this machine lets you raise
+          </span>
+        )}
       </div>
     </section>
   );

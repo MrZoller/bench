@@ -988,3 +988,78 @@ describe('the share link never reports a result a later click has superseded', (
     expect(screen.getByText(/link copied/i)).toBeInTheDocument();
   });
 });
+
+/**
+ * The Matrix substitutes a format wherever the selected one does not apply, and that substitution
+ * used to bypass the runtime check entirely — it asked `quantApplies` without the runtime and then
+ * returned a hardcoded Q4_K_M. Under vLLM, which reads no GGUF K-quant, every dense row was
+ * therefore sized, coloured and ranked at a checkpoint that cannot be loaded, and clicking one
+ * landed in a Bench that coerced it to something else and showed different figures.
+ */
+describe('the Matrix only ever scores a format the runtime can load', () => {
+  it('substitutes something vLLM can read, not a GGUF K-quant', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'vllm');
+    // MXFP4 is expert-only, so every dense row needs a stand-in.
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'mxfp4');
+
+    const matrix = screen.getByRole('region', { name: /every model on every machine/i });
+
+    // The heading states what is standing in, and it cannot be a format vLLM does not load.
+    expect(within(matrix).queryByText(/Q4_K_M where it does not apply/i)).not.toBeInTheDocument();
+
+    // No cell may be blocked by the tool's own substitution being unloadable. That string comes
+    // from `planPlacement`, which now refuses these pairs — so before the substitute learned about
+    // the runtime, this is exactly what the grid filled up with.
+    const unloadable = within(matrix)
+      .getAllByRole('button')
+      .filter((b) => /cannot load/i.test(b.getAttribute('aria-label') ?? ''));
+    expect(unloadable).toHaveLength(0);
+  });
+
+  it('still prefers the 4-bit stand-in where the runtime does read it', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'llama.cpp');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'mxfp4');
+
+    const matrix = screen.getByRole('region', { name: /every model on every machine/i });
+    // llama.cpp loads GGUF, so the honest local trade is still the substitute — the fix must not
+    // have demoted every grid to BF16 on its way to being correct for vLLM.
+    expect(within(matrix).getByText(/Q4_K_M where it does not apply/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * A cell that already matches the selection changes nothing the Matrix renders, so before the
+ * selected square was marked, clicking one was indistinguishable from the click not registering.
+ * The scroll that accompanies it cannot be tested here — jsdom has no `scrollIntoView` at all,
+ * which is how an anchor that generates no box passed for a working one.
+ */
+describe('the Matrix acknowledges the cell you clicked', () => {
+  it('marks the selected square, and moves the mark when the selection moves', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const matrix = screen.getByRole('region', { name: /every model on every machine/i });
+    const marked = () =>
+      within(matrix)
+        .getAllByRole('button')
+        .filter((b) => b.getAttribute('aria-current') === 'true');
+
+    // Exactly one square is current at any time — the one the Bench above is showing.
+    expect(marked()).toHaveLength(1);
+    const before = marked()[0].getAttribute('aria-label');
+
+    // Change the selection from outside the grid; the mark has to follow the store, not the click.
+    // Deliberately not the Spark, which is the default rig — selecting it changes nothing, and
+    // the assertion below would then pass against a mark that never moved.
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+
+    expect(marked()).toHaveLength(1);
+    expect(marked()[0].getAttribute('aria-label')).not.toBe(before);
+  });
+});
