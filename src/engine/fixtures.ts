@@ -160,7 +160,8 @@ export const DGX_SPARK: DeviceSpec = {
   capacityBytes: 128 * GIB,
   allocatableBytes: 120 * GIB, // coherent pool; OS still needs room
   bandwidthBytesPerSec: 273 * GB,
-  flops: { fp16: 125 * TFLOP, fp4: 1000 * TFLOP },
+  // Dense, matching devices.json. NVIDIA's headline 1 PetaFLOP for GB10 is the sparse figure.
+  flops: { fp16: 125 * TFLOP, fp8: 250 * TFLOP, fp4: 500 * TFLOP },
   interconnect: 'ConnectX-7 200GbE',
   tdpWatts: 240,
   msrpUsd: 3999,

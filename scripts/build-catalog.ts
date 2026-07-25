@@ -1,0 +1,534 @@
+/**
+ * Builds src/data/models.generated.json from Hugging Face.
+ *
+ * The model landscape moves faster than any training cutoff, so this catalog is *derived*,
+ * never typed from memory. Two sources per model, both authoritative:
+ *
+ *   - `/api/models/{id}?expand[]=safetensors` — exact parameter counts by dtype, summed from
+ *     the repo's own safetensors index. Not a rounded marketing figure.
+ *   - `/{id}/raw/main/config.json` — the architecture itself: layers, KV heads, head dim,
+ *     expert counts, attention window pattern, native quantization.
+ *
+ * Everything the engine needs is computed from those. Where a field can't be determined the
+ * script throws rather than guessing: a wrong KV formula silently costs someone a GPU, and a
+ * loud failure during a weekly refresh is much cheaper than a plausible wrong number shipped
+ * to a page people trust.
+ *
+ * Usage:
+ *   npm run catalog             # write the catalog
+ *   npm run catalog -- --dry-run  # fetch and report, write nothing
+ *
+ * Set HF_TOKEN to include gated repos (meta-llama in particular returns 401 without one).
+ */
+
+import { writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const OUT = resolve(HERE, '../src/data/models.generated.json');
+
+// ---------------------------------------------------------------------------
+// The seed list
+// ---------------------------------------------------------------------------
+
+interface Seed {
+  /** Hugging Face repo id. */
+  id: string;
+  /** Display name, since repo ids are inconsistent about capitalisation and suffixes. */
+  name: string;
+  org: string;
+  /**
+   * Documented corrections applied after derivation. Each needs a reason — this is the one
+   * place the script accepts a hand-entered number, so it must never become a dumping ground
+   * for "the derived value looked wrong".
+   */
+  overrides?: {
+    totalParams?: number;
+    reason: string;
+  };
+}
+
+/**
+ * Curated rather than "top N by downloads": the download charts are dominated by tiny models,
+ * embedding models and one-off GGUF re-uploads. This list is the set of models people
+ * actually weigh hardware against, hand-reviewed once and refreshed as the field moves.
+ */
+const SEEDS: Seed[] = [
+  // --- Dense, small enough to run anywhere ---
+  { id: 'Qwen/Qwen3-4B', name: 'Qwen3 4B', org: 'Alibaba' },
+  { id: 'Qwen/Qwen3-8B', name: 'Qwen3 8B', org: 'Alibaba' },
+  { id: 'Qwen/Qwen3-14B', name: 'Qwen3 14B', org: 'Alibaba' },
+  { id: 'Qwen/Qwen3-32B', name: 'Qwen3 32B', org: 'Alibaba' },
+  // Gemma is gated on google/*, so these point at open mirrors of the same weights.
+  { id: 'unsloth/gemma-3-12b-it', name: 'Gemma 3 12B', org: 'Google' },
+  { id: 'unsloth/gemma-3-27b-it', name: 'Gemma 3 27B', org: 'Google' },
+  { id: 'mistralai/Mistral-Small-24B-Instruct-2501', name: 'Mistral Small 24B', org: 'Mistral' },
+
+  // --- Llama: gated on meta-llama, so mirrors keep the catalog buildable without a token ---
+  {
+    id: 'NousResearch/Meta-Llama-3.1-8B-Instruct',
+    name: 'Llama 3.1 8B Instruct',
+    org: 'Meta',
+  },
+  {
+    id: 'NousResearch/Meta-Llama-3.1-70B-Instruct',
+    name: 'Llama 3.1 70B Instruct',
+    org: 'Meta',
+  },
+
+  // --- MoE: the interesting cases for unified-memory hardware ---
+  { id: 'openai/gpt-oss-20b', name: 'gpt-oss 20B', org: 'OpenAI' },
+  { id: 'openai/gpt-oss-120b', name: 'gpt-oss 120B', org: 'OpenAI' },
+  { id: 'Qwen/Qwen3-30B-A3B', name: 'Qwen3 30B-A3B', org: 'Alibaba' },
+  { id: 'Qwen/Qwen3-235B-A22B', name: 'Qwen3 235B-A22B', org: 'Alibaba' },
+  { id: 'mistralai/Mixtral-8x7B-Instruct-v0.1', name: 'Mixtral 8x7B', org: 'Mistral' },
+
+  // --- MLA: the family the naive KV formula gets most wrong ---
+  {
+    id: 'deepseek-ai/DeepSeek-V3',
+    name: 'DeepSeek V3',
+    org: 'DeepSeek',
+    overrides: {
+      totalParams: 671e9,
+      reason:
+        "HF's safetensors index reports 684.5B, which includes the Multi-Token Prediction " +
+        'module. MTP ships in the repo but is not loaded for ordinary inference, so counting ' +
+        'it would overstate weights by ~13B. 671B is the published figure.',
+    },
+  },
+  {
+    id: 'deepseek-ai/DeepSeek-R1',
+    name: 'DeepSeek R1',
+    org: 'DeepSeek',
+    overrides: {
+      totalParams: 671e9,
+      reason: 'Same MTP module as DeepSeek V3; 671B is the published figure.',
+    },
+  },
+  {
+    id: 'zai-org/GLM-4.5-Air',
+    name: 'GLM 4.5 Air',
+    org: 'Z.ai',
+    overrides: {
+      totalParams: 106e9,
+      reason:
+        "HF's safetensors index reports 110.5B including the MTP module. The published " +
+        'figure is 106B, which also reproduces the stated 12B active exactly.',
+    },
+  },
+];
+
+// ---------------------------------------------------------------------------
+// Shapes we read from Hugging Face
+// ---------------------------------------------------------------------------
+
+interface HfApiModel {
+  id: string;
+  downloads?: number;
+  likes?: number;
+  createdAt?: string;
+  safetensors?: { total?: number; parameters?: Record<string, number> };
+}
+
+/** config.json is untyped by nature — every architecture adds its own fields. */
+type HfConfig = Record<string, unknown>;
+
+/**
+ * Multimodal repos nest the language model under `text_config` and keep the vision tower
+ * alongside it. Everything this script derives is about the text stack, so unwrap when present.
+ *
+ * Note the vision tower still counts toward the safetensors total — for Gemma 3 27B that is
+ * roughly 0.4B of the reported parameters. Left in deliberately: those weights do occupy
+ * memory when the model is loaded, unlike an MTP module that inference never touches.
+ */
+function textConfig(config: HfConfig): HfConfig {
+  const nested = config.text_config;
+  return nested && typeof nested === 'object' ? { ...config, ...(nested as HfConfig) } : config;
+}
+
+function num(config: HfConfig, key: string): number | undefined {
+  const value = config[key];
+  return typeof value === 'number' ? value : undefined;
+}
+
+function firstNum(config: HfConfig, ...keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = num(config, key);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+class DerivationError extends Error {}
+
+function require(value: number | undefined, id: string, what: string): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    throw new DerivationError(`${id}: could not determine ${what} from config.json`);
+  }
+  return value;
+}
+
+// ---------------------------------------------------------------------------
+// Architecture derivation
+// ---------------------------------------------------------------------------
+
+type AttentionCore =
+  | { kind: 'gqa'; kvHeads: number; headDim: number }
+  | { kind: 'mla'; kvLoraRank: number; qkRopeHeadDim: number };
+
+/**
+ * Multi-head latent attention caches one compressed latent per token per layer; grouped-query
+ * caches keys and values per KV head. Detected by the presence of `kv_lora_rank`, which is
+ * what DeepSeek's config uses and no GQA model defines.
+ */
+function deriveAttentionCore(id: string, config: HfConfig): AttentionCore {
+  const kvLoraRank = num(config, 'kv_lora_rank');
+  if (kvLoraRank !== undefined) {
+    return {
+      kind: 'mla',
+      kvLoraRank,
+      qkRopeHeadDim: require(num(config, 'qk_rope_head_dim'), id, 'qk_rope_head_dim'),
+    };
+  }
+
+  const heads = require(num(config, 'num_attention_heads'), id, 'num_attention_heads');
+  const hidden = require(num(config, 'hidden_size'), id, 'hidden_size');
+  // Most configs state head_dim; older ones imply it from hidden_size / num_attention_heads.
+  const headDim = num(config, 'head_dim') ?? hidden / heads;
+
+  return {
+    kind: 'gqa',
+    // Absent num_key_value_heads means full multi-head attention: one KV head per query head.
+    kvHeads: num(config, 'num_key_value_heads') ?? heads,
+    headDim: require(headDim, id, 'head_dim'),
+  };
+}
+
+/**
+ * Per-layer attention window, or undefined when every layer attends over the full context.
+ *
+ * Three conventions in the wild, in order of precedence:
+ *   - `layer_types` — an explicit per-layer array (gpt-oss, recent transformers exports)
+ *   - `sliding_window_pattern` — Gemma 3's "every Nth layer is full attention"
+ *   - a bare `sliding_window` — applies to every layer (Mistral-style), unless switched off
+ */
+function deriveLayerWindows(config: HfConfig, layers: number): (number | null)[] | undefined {
+  const window = num(config, 'sliding_window');
+  const layerTypes = config.layer_types;
+
+  if (Array.isArray(layerTypes)) {
+    if (window === undefined) return undefined;
+    return layerTypes
+      .slice(0, layers)
+      .map((t) => (typeof t === 'string' && t.includes('sliding') ? window : null));
+  }
+
+  if (window === undefined || config.use_sliding_window === false) return undefined;
+
+  const pattern = num(config, 'sliding_window_pattern');
+  if (pattern !== undefined && pattern > 0) {
+    // Gemma 3: layers are sliding except every `pattern`-th, which is full attention.
+    return Array.from({ length: layers }, (_, i) => ((i + 1) % pattern === 0 ? null : window));
+  }
+
+  return Array.from({ length: layers }, () => window);
+}
+
+/** Dtypes whose element count is a packed byte count rather than a logical parameter count. */
+const PACKED_DTYPES = new Set(['U8', 'I8', 'U4', 'I4', 'UINT8', 'INT8']);
+
+/**
+ * Logical parameter count.
+ *
+ * `safetensors.total` is a sum of tensor *elements*, which equals the parameter count only for
+ * formats that store one element per parameter. FP8 does; MXFP4 does not — gpt-oss-120b reports
+ * 118.24B U8 elements against 114.66B logical expert parameters, the extra 1/32 being one shared
+ * scale byte per 32-value block. Taking the total at face value overstates the model by 3.6B and
+ * puts the headline size at 120B where the vendor says 117B.
+ *
+ * For packed formats the count is rebuilt as "everything stored unpacked, plus the analytic
+ * expert count", and the packed figure is used to check that assumption rather than to trust it.
+ */
+function deriveTotalParams(id: string, api: HfApiModel, expertParams: number): number {
+  const byDtype = api.safetensors?.parameters ?? {};
+  const total = api.safetensors?.total;
+
+  const packed = Object.entries(byDtype)
+    .filter(([dtype]) => PACKED_DTYPES.has(dtype.toUpperCase()))
+    .reduce((sum, [, count]) => sum + count, 0);
+
+  if (packed === 0) {
+    if (total === undefined) {
+      throw new DerivationError(`${id}: no safetensors parameter count published`);
+    }
+    return total;
+  }
+
+  if (expertParams === 0) {
+    throw new DerivationError(
+      `${id}: stores packed tensors but derived no routed experts, so the logical parameter ` +
+        'count cannot be reconstructed. Add an override with a reason.'
+    );
+  }
+
+  /**
+   * MXFP4 carries one scale byte per 32 values, so packed elements are 33/32 of logical —
+   * exactly, not approximately. The band is tight on purpose: a loose one would also admit a
+   * model quantized *uniformly* to int8 whenever experts happen to be ~91%+ of it, and the
+   * rebuild below would then throw away every non-expert parameter. That is a several-GB
+   * understatement presented as a precise figure, which is the exact failure this file exists
+   * to prevent. Anything not MXFP4-shaped should land in the override path instead.
+   */
+  const ratio = packed / expertParams;
+  const expected = 33 / 32;
+  if (Math.abs(ratio - expected) / expected > 0.005) {
+    throw new DerivationError(
+      `${id}: packed element count is ${ratio.toFixed(5)}x the analytic expert count, ` +
+        `expected ${expected.toFixed(5)} for MXFP4. Either the expert shape is wrong or this ` +
+        'is a different packing — add an override with a reason rather than trusting this.'
+    );
+  }
+
+  const unpacked = Object.entries(byDtype)
+    .filter(([dtype]) => !PACKED_DTYPES.has(dtype.toUpperCase()))
+    .reduce((sum, [, count]) => sum + count, 0);
+
+  return unpacked + expertParams;
+}
+
+interface MoeDerivation {
+  expertParams: number;
+  experts: { total: number; perToken: number };
+}
+
+/**
+ * Routed-expert parameter count, or null for dense models.
+ *
+ * Assumes gated FFNs (gate, up, down — three matrices per expert), which every current MoE
+ * language model uses. Partial MoE fields throw rather than defaulting, because a model that
+ * declares experts but not how many are routed is one this script does not actually understand.
+ */
+function deriveMoe(id: string, config: HfConfig, layers: number): MoeDerivation | null {
+  const total = firstNum(config, 'num_local_experts', 'n_routed_experts', 'num_experts');
+  const perToken = firstNum(config, 'num_experts_per_tok', 'experts_per_token');
+
+  if (total === undefined && perToken === undefined) return null;
+  if (total === undefined || perToken === undefined) {
+    throw new DerivationError(
+      `${id}: partial MoE config — expert total ${total}, per-token ${perToken}. ` +
+        'Refusing to guess the other.'
+    );
+  }
+
+  const hidden = require(num(config, 'hidden_size'), id, 'hidden_size');
+  const moeIntermediate = require(firstNum(
+    config,
+    'moe_intermediate_size',
+    'intermediate_size'
+  ), id, 'moe_intermediate_size');
+
+  /**
+   * Which layers actually carry experts. Two families use different rules, and transformers
+   * implements each with a specific phase — getting it wrong overcounts by a whole layer
+   * whenever the layer count isn't a multiple of the step, which for a large MoE is billions
+   * of parameters in silence.
+   *
+   *   DeepSeek: `i >= first_k_dense_replace && i % moe_layer_freq == 0`
+   *   Qwen:     `(i + 1) % decoder_sparse_step == 0`
+   *
+   * Both then exclude anything listed in `mlp_only_layers`.
+   */
+  const mlpOnly = new Set(
+    Array.isArray(config.mlp_only_layers) ? (config.mlp_only_layers as number[]) : []
+  );
+  const firstDense = num(config, 'first_k_dense_replace');
+  const moeLayerFreq = num(config, 'moe_layer_freq') ?? 1;
+  const sparseStep = num(config, 'decoder_sparse_step') ?? 1;
+
+  let moeLayers = 0;
+  for (let layer = 0; layer < layers; layer++) {
+    if (mlpOnly.has(layer)) continue;
+
+    const isMoe =
+      firstDense === undefined
+        ? (layer + 1) % sparseStep === 0
+        : layer >= firstDense && layer % moeLayerFreq === 0;
+
+    if (isMoe) moeLayers++;
+  }
+
+  return {
+    expertParams: moeLayers * total * 3 * hidden * moeIntermediate,
+    experts: { total, perToken },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Fetching
+// ---------------------------------------------------------------------------
+
+const TOKEN = process.env.HF_TOKEN;
+const headers: Record<string, string> = TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {};
+
+async function fetchJson<T>(url: string, what: string): Promise<T> {
+  const response = await fetch(url, { headers });
+  if (!response.ok) {
+    const hint =
+      response.status === 401 || response.status === 403
+        ? ' (gated repo — set HF_TOKEN, or seed an open mirror instead)'
+        : '';
+    throw new DerivationError(`${what}: HTTP ${response.status} from ${url}${hint}`);
+  }
+  return (await response.json()) as T;
+}
+
+async function buildModel(seed: Seed) {
+  const api = await fetchJson<HfApiModel>(
+    `https://huggingface.co/api/models/${seed.id}?expand[]=safetensors&expand[]=downloads&expand[]=likes&expand[]=createdAt`,
+    seed.id
+  );
+  const config = textConfig(
+    await fetchJson<HfConfig>(`https://huggingface.co/${seed.id}/raw/main/config.json`, seed.id)
+  );
+
+  const layers = require(num(config, 'num_hidden_layers'), seed.id, 'num_hidden_layers');
+  const hiddenSize = require(num(config, 'hidden_size'), seed.id, 'hidden_size');
+  const vocabSize = require(num(config, 'vocab_size'), seed.id, 'vocab_size');
+
+  const moe = deriveMoe(seed.id, config, layers);
+  const expertParams = moe?.expertParams ?? 0;
+
+  /**
+   * Models carrying a Multi-Token Prediction module report it in their safetensors index even
+   * though ordinary inference never loads it — DeepSeek V3 by ~13B, GLM-4.5-Air by ~4B.
+   * Subtracting it analytically would mean reconstructing an architecture-specific block, so
+   * instead this refuses to guess and asks for the published figure. A new MTP model appearing
+   * in a weekly refresh should stop the build, not quietly ship an inflated weight estimate.
+   */
+  if (
+    (num(config, 'num_nextn_predict_layers') ?? 0) > 0 &&
+    seed.overrides?.totalParams === undefined
+  ) {
+    throw new DerivationError(
+      `${seed.id}: declares num_nextn_predict_layers, so its safetensors total includes an ` +
+        'MTP module that inference does not load. Add a totalParams override with the ' +
+        "vendor's published parameter count and a reason."
+    );
+  }
+
+  const totalParams = seed.overrides?.totalParams ?? deriveTotalParams(seed.id, api, expertParams);
+
+  if (expertParams >= totalParams) {
+    throw new DerivationError(
+      `${seed.id}: derived expert params (${expertParams}) exceed total (${totalParams}) — ` +
+        'the expert-shape assumption is wrong for this architecture'
+    );
+  }
+
+  /**
+   * The input embedding is a row lookup, not a matmul: decoding reads one row of it per token,
+   * not the whole table. Excluding it from the active count is both physically right and what
+   * reconciles this derivation with vendors' published figures — it is the difference between
+   * 5.75B and the stated 5.1B for gpt-oss-120b, and between 12.6B and 12B for GLM-4.5-Air.
+   */
+  const denseParams = totalParams - expertParams;
+  const embeddingParams = vocabSize * hiddenSize;
+  const activeDense = Math.max(0, denseParams - embeddingParams);
+  const activeParams = moe
+    ? activeDense + (moe.experts.perToken / moe.experts.total) * expertParams
+    : activeDense;
+
+  const layerWindows = deriveLayerWindows(config, layers);
+  const quantMethod = (config.quantization_config as Record<string, unknown> | undefined)
+    ?.quant_method;
+
+  return {
+    id: seed.id,
+    name: seed.name,
+    org: seed.org,
+    totalParams,
+    activeParams,
+    expertParams,
+    ...(moe ? { experts: moe.experts } : {}),
+    layers,
+    hiddenSize,
+    vocabSize,
+    attention: {
+      core: deriveAttentionCore(seed.id, config),
+      ...(layerWindows ? { layerWindows } : {}),
+    },
+    ...(typeof quantMethod === 'string' ? { nativeQuant: quantMethod } : {}),
+    maxContext: require(num(config, 'max_position_embeddings'), seed.id, 'max_position_embeddings'),
+    popularity: { downloads: api.downloads ?? 0, likes: api.likes ?? 0 },
+    ...(api.createdAt ? { releasedAt: api.createdAt } : {}),
+    source: `https://huggingface.co/${seed.id}`,
+    ...(seed.overrides ? { overrideNote: seed.overrides.reason } : {}),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
+
+async function main() {
+  const dryRun = process.argv.includes('--dry-run');
+  const models = [];
+  const failures: string[] = [];
+
+  for (const seed of SEEDS) {
+    try {
+      const model = await buildModel(seed);
+      models.push(model);
+      const moe =
+        model.expertParams > 0 ? ` MoE ${(model.activeParams / 1e9).toFixed(1)}B act` : '';
+      const sliding = model.attention.layerWindows ? ' sliding' : '';
+      console.log(
+        `  ok  ${seed.id.padEnd(48)} ${(model.totalParams / 1e9).toFixed(1).padStart(6)}B` +
+          ` ${model.attention.core.kind}${moe}${sliding}`
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      failures.push(message);
+      console.error(`  FAIL ${message}`);
+    }
+  }
+
+  console.log(`\n${models.length} ok, ${failures.length} failed, ${SEEDS.length} seeded`);
+
+  // A refresh that silently drops half the catalog is worse than one that fails: the site
+  // would keep building and quietly stop offering models people came to look for.
+  if (failures.length > SEEDS.length / 3) {
+    console.error('\nToo many failures — refusing to write a gutted catalog.');
+    process.exit(1);
+  }
+
+  if (dryRun) {
+    console.log('\n--dry-run: nothing written.');
+    return;
+  }
+
+  writeFileSync(
+    OUT,
+    JSON.stringify(
+      {
+        $comment:
+          'GENERATED by scripts/build-catalog.ts from Hugging Face. Do not edit by hand — ' +
+          'run `npm run catalog`. Corrections belong in the seed list, with a reason.',
+        generatedAt: new Date().toISOString(),
+        // Recorded so a refresh that quietly lost models is visible in the artifact rather
+        // than only in a CI log nobody reads.
+        failures,
+        models,
+      },
+      null,
+      2
+    ) + '\n'
+  );
+  console.log(`\nWrote ${OUT}`);
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
