@@ -109,7 +109,6 @@ function workload(id: string): Workload {
 
 export interface VerdictInputs {
   placement: Placement;
-  decode: DecodeEstimate;
   usage: UsageSpec;
   /** Largest context the rig can hold with every weight resident. */
   maxContextTokens: number;
@@ -121,6 +120,10 @@ export interface VerdictInputs {
   runnableContextTokens: number;
   /**
    * The whole scenario re-evaluated at an archetype's own prompt.
+   *
+   * This is the *only* source of a measurement here — the slider's own decode estimate is
+   * deliberately not an input, because batch and serving quietly went on using it after every
+   * other archetype had moved across, and an unused field cannot be reached for by mistake.
    *
    * Both halves, not just prefill. Re-running prefill alone left decode describing the *selected*
    * cache while the latency described a 16K agent turn — so an agent could be graded on 26.8
@@ -144,7 +147,7 @@ export interface VerdictInputs {
  * completion passes, everything below it does too.
  */
 export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
-  const { placement, decode, usage, maxContextTokens, runnableContextTokens, evaluateAt } = inputs;
+  const { placement, usage, maxContextTokens, runnableContextTokens, evaluateAt } = inputs;
 
   // Nothing else is meaningful if it cannot load. Said once, rather than seven times.
   if (placement.unsupported || placement.impossible) {
@@ -152,7 +155,8 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
     return WORKLOADS.map((w) => ({ workload: w, fitness: 'fail' as const, reason }));
   }
 
-  const aggregate = decode.aggregateTokensPerSec;
+  /** Aggregate throughput at the batch archetype's own request, not at the slider's. */
+  const batchAggregate = () => at('batch').decode.aggregateTokensPerSec;
 
   /**
    * What an archetype needs to hold: its prompt plus room to answer. Every fit check reads this
@@ -258,24 +262,33 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
             : `Holds ${ctx(runnableContextTokens)} at this concurrency.`,
     }),
     judge('batch', {
-      // No latency budget at all. The only question is whether it runs and finishes.
-      pass: aggregate >= 5,
-      tight: aggregate >= 1,
+      // No latency budget at all — but the request still has to fit, and the aggregate has to
+      // be measured at the batch scenario rather than at whatever the slider says.
+      pass: fits('batch') && batchAggregate() >= 5,
+      tight: fits('batch') && batchAggregate() >= 1,
       why: () =>
-        aggregate >= 5
-          ? `${fmt(aggregate)} tok/s aggregate — latency does not matter here, only the total.`
-          : `${fmt(aggregate)} tok/s aggregate makes even an overnight run small.`,
+        !fits('batch')
+          ? `Only ${ctx(runnableContextTokens)} of context fits — short of the ${ctx(workload('batch').typicalPromptTokens)} a batch job sends.`
+          : batchAggregate() >= 5
+            ? `${fmt(batchAggregate())} tok/s aggregate — latency does not matter here, only the total.`
+            : `${fmt(batchAggregate())} tok/s aggregate makes even an overnight run small.`,
     }),
     judge('serving', {
       // Every concurrent user brings their own cache, which is what actually runs out.
-      pass: usage.concurrency >= 4 && rateOf('serving') >= 10 && placement.headroomBytes > 0,
-      tight: usage.concurrency >= 2 && rateOf('serving') >= 5,
+      pass:
+        fits('serving') &&
+        usage.concurrency >= 4 &&
+        rateOf('serving') >= 10 &&
+        placement.headroomBytes > 0,
+      tight: fits('serving') && usage.concurrency >= 2 && rateOf('serving') >= 5,
       why: () =>
-        usage.concurrency < 2
-          ? 'Set concurrency above 1 to see whether this holds several users.'
-          : rateOf('serving') < 5
-            ? `${fmt(rateOf('serving'))} tok/s each once ${usage.concurrency} users share the device.`
-            : `${usage.concurrency} users at ${fmt(rateOf('serving'))} tok/s each, ${fmt(aggregate)} aggregate.`,
+        !fits('serving')
+          ? `Only ${ctx(runnableContextTokens)} of context fits — not enough for ${usage.concurrency} users to hold a turn each.`
+          : usage.concurrency < 2
+            ? 'Set concurrency above 1 to see whether this holds several users.'
+            : rateOf('serving') < 5
+              ? `${fmt(rateOf('serving'))} tok/s each once ${usage.concurrency} users share the device.`
+              : `${usage.concurrency} users at ${fmt(rateOf('serving'))} tok/s each, ${fmt(at('serving').decode.aggregateTokensPerSec)} aggregate.`,
     }),
   ];
 }

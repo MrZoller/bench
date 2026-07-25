@@ -27,7 +27,6 @@ export function Workloads({ evaluation, config }: { evaluation: Evaluation; conf
 
   const verdicts = judgeWorkloads({
     placement: evaluation.placement,
-    decode: evaluation.decode,
     usage: {
       contextTokens: config.contextTokens,
       concurrency: config.concurrency,
