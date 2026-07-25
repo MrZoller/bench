@@ -269,6 +269,26 @@ describe('generated model catalog', () => {
   });
 
   /**
+   * Sliding-window metadata has to be complete or absent, never partial. A short `layer_types`
+   * array and a missing array are indistinguishable to `layerWindows?.[i]`, so a partial one
+   * would silently read as full attention — overstating KV and prefill for precisely the models
+   * the hybrid handling exists to get right.
+   */
+  it('gives every sliding-window model a window for every layer', () => {
+    for (const model of MODELS) {
+      const windows = model.attention.layerWindows;
+      if (!windows) continue;
+
+      expect(windows).toHaveLength(model.layers);
+      // An array that is all-null is the same thing as no array, and should have been omitted.
+      expect(windows.some((w) => w !== null)).toBe(true);
+      for (const w of windows) {
+        if (w !== null) expect(w).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  /**
    * The catalogued models are the ones the engine actually runs, so the invariant that keeps
    * decode honest has to hold across all of them, not just the ones spot-checked above.
    */

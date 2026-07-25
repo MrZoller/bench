@@ -257,15 +257,37 @@ function deriveAttention(
  *   - `sliding_window_pattern` — Gemma 3's "every Nth layer is full attention"
  *   - a bare `sliding_window` — applies to every layer (Mistral-style), unless switched off
  */
-function deriveLayerWindows(config: HfConfig, layers: number): (number | null)[] | undefined {
+function deriveLayerWindows(
+  id: string,
+  config: HfConfig,
+  layers: number
+): (number | null)[] | undefined {
   const window = num(config, 'sliding_window');
   const layerTypes = config.layer_types;
 
   if (Array.isArray(layerTypes)) {
-    if (window === undefined) return undefined;
+    const sliding = layerTypes.filter((t) => typeof t === 'string' && t.includes('sliding'));
+
+    // Both of these silently read as full attention downstream — an absent array entry and an
+    // absent array are indistinguishable to `layerWindows?.[i]` — which overstates KV and
+    // prefill attention for exactly the models the sliding-window handling exists to get right.
+    if (layerTypes.length < layers) {
+      throw new DerivationError(
+        `${id}: layer_types lists ${layerTypes.length} entries for ${layers} layers. ` +
+          'The missing ones would silently read as full attention.'
+      );
+    }
+    if (sliding.length > 0 && window === undefined) {
+      throw new DerivationError(
+        `${id}: layer_types names ${sliding.length} sliding layers but no sliding_window size. ` +
+          'Refusing to treat them as full attention.'
+      );
+    }
+    if (sliding.length === 0) return undefined;
+
     return layerTypes
       .slice(0, layers)
-      .map((t) => (typeof t === 'string' && t.includes('sliding') ? window : null));
+      .map((t) => (typeof t === 'string' && t.includes('sliding') ? window! : null));
   }
 
   if (window === undefined || config.use_sliding_window === false) return undefined;
@@ -279,8 +301,19 @@ function deriveLayerWindows(config: HfConfig, layers: number): (number | null)[]
   return Array.from({ length: layers }, () => window);
 }
 
-/** Dtypes whose element count is a packed byte count rather than a logical parameter count. */
-const PACKED_DTYPES = new Set(['U8', 'I8', 'U4', 'I4', 'UINT8', 'INT8']);
+/**
+ * Dtypes whose element count is a packed byte count rather than a logical parameter count.
+ *
+ * `I8`/`INT8` are deliberately absent. An int8-quantized tensor stores exactly one logical
+ * parameter per element, so counting it as packed would send every dense INT8 repository into
+ * the reconstruction path, fail the MXFP4-specific 33/32 ratio guard, and — since any seed
+ * failure now blocks the write — make such a model unaddable rather than merely unusual.
+ *
+ * `U8` stays, because that is how MXFP4 stores its blocks. A repository that genuinely holds
+ * one parameter per unsigned byte will trip the ratio guard and land in the override path,
+ * which is the loud failure this file prefers to a silent rebuild.
+ */
+const PACKED_DTYPES = new Set(['U8', 'UINT8', 'U4', 'I4']);
 
 /**
  * Logical parameter count.
@@ -558,7 +591,19 @@ interface StackShape {
   nonLanguageParams: number;
 }
 
-async function deriveStackShape(id: string, revision: string): Promise<StackShape> {
+/** Names an untied output projection is stored under, across architectures. */
+const OUTPUT_HEAD_SUFFIXES = [
+  'lm_head.weight',
+  'output_layer.weight',
+  'output.weight',
+  'embed_out.weight',
+];
+
+async function deriveStackShape(
+  id: string,
+  revision: string,
+  declaredTied: boolean | undefined
+): Promise<StackShape> {
   const weightMap = await fetchTensorMap(id, revision);
   const names = Object.keys(weightMap);
 
@@ -570,7 +615,30 @@ async function deriveStackShape(id: string, revision: string): Promise<StackShap
     );
   }
 
-  const tiedEmbeddings = !names.some((name) => name.endsWith('lm_head.weight'));
+  /**
+   * Tied means there is no separate output projection — so the test has to be able to find one
+   * under whatever name the architecture uses. `lm_head.weight` is the transformers convention;
+   * GLM-family exports use `output_layer.weight`, and older ones `output.weight` or
+   * `embed_out.weight`. Matching only the first would declare such a model tied and keep its
+   * input embedding in the per-token count, overstating decode traffic by a whole vocabulary
+   * table — the same magnitude of error, in the opposite direction, as the bug this field
+   * exists to fix.
+   */
+  const outputHead = names.find((name) => OUTPUT_HEAD_SUFFIXES.some((s) => name.endsWith(s)));
+  const tiedEmbeddings = outputHead === undefined;
+
+  /**
+   * `tie_word_embeddings` is not trustworthy enough to derive from — it is absent on both Gemma
+   * 3 repos despite them being tied — but when a repo *does* state it, a disagreement means
+   * this list of names is incomplete for that architecture. Better to stop than to guess which
+   * side is right.
+   */
+  if (declaredTied === false && tiedEmbeddings) {
+    throw new DerivationError(
+      `${id}: config says the embeddings are untied, but no output projection matched ` +
+        `${OUTPUT_HEAD_SUFFIXES.join(', ')}. Add this architecture's output tensor name.`
+    );
+  }
 
   const otherShards = [
     ...new Set(names.filter((n) => classifyTensor(n) === 'other').map((n) => weightMap[n])),
@@ -687,13 +755,17 @@ async function buildModel(seed: Seed) {
    * Kept as its own field rather than folded into `activeParams`, because the published figure
    * is what the catalog tests check against vendors and what users recognise on a model card.
    */
-  const stack = await deriveStackShape(seed.id, revision);
+  const stack = await deriveStackShape(
+    seed.id,
+    revision,
+    typeof config.tie_word_embeddings === 'boolean' ? config.tie_word_embeddings : undefined
+  );
   const activeDenseParams = Math.max(
     0,
     denseParams - stack.nonLanguageParams - (stack.tiedEmbeddings ? 0 : embeddingParams)
   );
 
-  const layerWindows = deriveLayerWindows(config, layers);
+  const layerWindows = deriveLayerWindows(seed.id, config, layers);
   const attention = deriveAttention(seed.id, config);
   const quantMethod = (config.quantization_config as Record<string, unknown> | undefined)
     ?.quant_method;
