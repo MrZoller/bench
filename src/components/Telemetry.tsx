@@ -1,5 +1,6 @@
 import type { Evaluation } from '@/engine';
 import type { StatusTone } from '@/design/tokens';
+import { CAPACITY_TIGHT, classifyDecode } from '@/lib/verdicts';
 import { gibLabel, percent, rate, seconds, tokens } from '@/lib/format';
 
 /**
@@ -14,17 +15,6 @@ import { gibLabel, percent, rate, seconds, tokens } from '@/lib/format';
  * Each tile carries an icon and a word alongside its colour — a verdict must never be conveyed
  * by hue alone.
  */
-
-/**
- * Decode thresholds, in tokens per second per user.
- *
- * Exported because two places make claims about speed — this tile and the teaching aside — and
- * every time they have held their own copy of the number they have drifted apart. Reading speed
- * and patience, not benchmarks: below ~10 you watch a cursor, ~15 keeps pace with reading, past
- * ~30 it outruns most people.
- */
-export const DECODE_FAST = 30;
-export const DECODE_USABLE = 15;
 
 const TONE_STYLE: Record<StatusTone, { color: string; icon: string; word: string }> = {
   good: { color: 'var(--color-good)', icon: '●', word: 'Comfortable' },
@@ -106,40 +96,33 @@ function capacityReading(
     label: 'Capacity',
     value: gibLabel(headroom),
     unit: 'free',
-    tone: utilization > 0.9 ? 'warning' : 'good',
-    verdict: utilization > 0.9 ? 'Tight' : 'Fits',
+    tone: utilization > CAPACITY_TIGHT ? 'warning' : 'good',
+    verdict: utilization > CAPACITY_TIGHT ? 'Tight' : 'Fits',
     detail:
-      utilization > 0.9
+      utilization > CAPACITY_TIGHT
         ? 'Fits, with little room to raise context or add a user.'
         : `Room to grow — ${tokens(evaluation.maxContextTokens)} context would still fit at this concurrency.`,
   };
 }
 
 function decodeReading(evaluation: Evaluation): Reading {
-  /**
-   * Classified on the *displayed* figure, not the raw one.
-   *
-   * `rate()` rounds, so an estimate of 14.7 prints as "15" — and judged on 14.7 it is labelled
-   * Slow, putting "15 tok/s · Slow" on screen against a threshold of 15. Reading the same value
-   * the user reads removes the disagreement rather than narrowing the window where it happens.
-   */
-  const shown = rate(evaluation.decode.perUserTokensPerSec);
-  const perUser = Number(shown);
+  const { shown, word, tone } = classifyDecode(evaluation.decode.perUserTokensPerSec);
+  const { kvBound, offloadPenalty } = evaluation.decode;
 
-  // Thresholds are reading speed, not benchmarks: below ~10 tok/s a chat feels like waiting,
-  // and above ~30 it outruns most people.
-  const tone: StatusTone =
-    perUser >= DECODE_FAST ? 'good' : perUser >= DECODE_USABLE ? 'warning' : 'serious';
   return {
     key: 'decode',
     label: 'Decode',
     value: shown,
     unit: 'tok/s per user',
     tone,
-    verdict: perUser >= DECODE_FAST ? 'Fast' : perUser >= DECODE_USABLE ? 'Usable' : 'Slow',
-    detail: evaluation.decode.kvBound
-      ? 'KV traffic now outweighs weight traffic — at this context the cache, not the model, sets the speed.'
-      : 'Bound by weight bandwidth. Lower quantization or faster memory is what moves this.',
+    verdict: word,
+    detail: offloadPenalty
+      ? // Named before the cache: spilled weights cross the host bus at a fraction of device
+        // bandwidth, so they can dominate the step even while moving fewer bytes than the KV.
+        `Weights crossing the host bus set the pace — ${percent(offloadPenalty.fraction)} of them spill every token.`
+      : kvBound
+        ? 'KV traffic now costs more time per step than the weights — at this context the cache, not the model, sets the speed.'
+        : 'Bound by weight bandwidth. Lower quantization or faster memory is what moves this.',
   };
 }
 
