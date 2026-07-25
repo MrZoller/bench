@@ -418,3 +418,32 @@ describe('the Bench and its tiles cannot disagree', () => {
     expect(radios.filter((r) => (r as HTMLInputElement).checked)).toHaveLength(1);
   });
 });
+
+/**
+ * A control that names a flag the runtime does not accept is wrong even when the arithmetic
+ * behind it is right. vLLM's one-byte cache is `fp8_e4m3`; there is no integer option at all.
+ */
+describe('the KV control names something the runtime accepts', () => {
+  it('calls the one-byte cache FP8 under vLLM', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'vllm');
+
+    const group = screen.getByRole('group', { name: /KV precision/i });
+    expect(within(group).getByText('FP8')).toBeInTheDocument();
+    expect(within(group).queryByText('Q8')).not.toBeInTheDocument();
+  });
+
+  it('still calls it Q8 under llama.cpp, which really does mean q8_0', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'llama.cpp');
+
+    const group = screen.getByRole('group', { name: /KV precision/i });
+    expect(within(group).getByText('Q8')).toBeInTheDocument();
+  });
+});

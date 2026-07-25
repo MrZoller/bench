@@ -203,7 +203,13 @@ export function Bench() {
    * charged 0.5 bytes per element and could turn a long-context OOM into a reported fit.
    */
   const kvOptions = useMemo(
-    () => KV_PRECISIONS.filter((k) => runtime.kvPrecisions.includes(k.value)),
+    () =>
+      KV_PRECISIONS.filter((k) => runtime.kvPrecisions.includes(k.value)).map((k) => ({
+        ...k,
+        // A runtime's own name for the format wins, so the control names something the user
+        // could actually pass on a command line.
+        label: runtime.kvLabels?.[k.value] ?? k.label,
+      })),
     [runtime]
   );
 

@@ -52,6 +52,10 @@ export const RUNTIMES: readonly RuntimeSpec[] = [
     // `--kv-cache-dtype` takes auto/native or an FP8 variant. There is no 4-bit KV cache, and
     // offering one lets a long-context OOM be reported as a comfortable fit.
     kvPrecisions: ['fp16', 'q8'],
+    // vLLM's one-byte cache is FP8, not integer Q8 — `fp8_e4m3`/`fp8_e5m2`, with no int8 option
+    // at all. One byte per element either way, so no figure on screen changes, but "Q8" named a
+    // flag a user cannot type.
+    kvLabels: { q8: 'FP8' },
     source: 'https://docs.vllm.ai/',
   },
   {
