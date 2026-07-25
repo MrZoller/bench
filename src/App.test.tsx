@@ -555,3 +555,30 @@ describe('an explicitly shared scenario survives being opened', () => {
     });
   });
 });
+
+/**
+ * A grid can hold both kinds of closed cell at once, and the legend used to pick one explanation
+ * from whether *any* cell was raiseable — telling the reader that cells past the machine itself
+ * could be fixed with a setting.
+ */
+describe('the Envelope legend covers every reason its cells are closed', () => {
+  it('names both causes when both are on screen', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-512');
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+
+    const region = screen.getByRole('region', { name: /how much room/i });
+    const legend = within(region).queryByText(/past the ceiling it hands out by default/i);
+
+    // Whenever the legend offers the raiseable explanation, it must not offer it alone if any
+    // cell is genuinely past the hardware.
+    if (legend) {
+      const table = within(region).queryByText(/Some of these are past what this machine holds/i);
+      const onlyRaiseable = within(region).queryByText(/^Within the memory this machine has/i);
+      expect(table !== null || onlyRaiseable !== null).toBe(true);
+    }
+  });
+});

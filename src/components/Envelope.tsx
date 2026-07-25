@@ -180,7 +180,9 @@ export function Envelope({ config }: { config: Config }) {
    * device, so this is a property of the whole picture — and the Telemetry tile beside it already
    * tells the user they can raise it.
    */
-  const raiseable = grid.cells.flat().some((c) => c.overBecause === 'allocation');
+  const closed = grid.cells.flat().filter((c) => c.state === 'over');
+  const raiseable = closed.some((c) => c.overBecause === 'allocation');
+  const beyondHardware = closed.some((c) => c.overBecause === 'capacity');
 
   const counts = grid.cells.flat().reduce<Record<string, number>>((acc, cell) => {
     acc[cell.state] = (acc[cell.state] ?? 0) + 1;
@@ -255,12 +257,27 @@ export function Envelope({ config }: { config: Config }) {
         {(Object.keys(STATE_STYLE) as CellState[])
           .filter((state) => counts[state])
           .map((state) => {
+            /**
+             * The red cells can be closed for two reasons at once, and one grid routinely holds
+             * both: on a 512 GiB Mac the small-context corner is a raiseable ceiling away from
+             * running while the far corner is past the machine however it is tuned. Picking the
+             * legend from whether *any* cell is raiseable told the reader the far corner was
+             * fixable too.
+             *
+             * Said as one entry naming both, exactly as `tight` handles its three causes — the
+             * table is where a specific cell is identified.
+             */
             const { label, hint } =
               state === 'over' && raiseable
-                ? {
-                    label: 'Past the default allocation',
-                    hint: 'Within the memory this machine has, but past the ceiling it hands out by default — which you can raise.',
-                  }
+                ? beyondHardware
+                  ? {
+                      label: 'Will not run',
+                      hint: 'Some of these are past what this machine holds; the rest are only past the ceiling it hands out by default, which you can raise. The table says which.',
+                    }
+                  : {
+                      label: 'Past the default allocation',
+                      hint: 'Within the memory this machine has, but past the ceiling it hands out by default — which you can raise.',
+                    }
                 : STATE_STYLE[state];
 
             return (
