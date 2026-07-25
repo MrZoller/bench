@@ -71,6 +71,17 @@ reading the test that guards them.
 - **Compute precision comes from the quant's `computeDtype` gated on the runtime's
   `nativeLowPrecision`**, never from storage bit width. llama.cpp dequantizes every GGUF to fp16,
   so it cannot reach a Blackwell card's FP4 rate. Inferring from `bpw` overstated prefill 8×.
+- **KV shards only as far as the model allows, and `placement` and `speed` must agree on how
+  far.** Weights divide to any degree; GQA divides by attention head, so 4 KV heads on 8 cards
+  replicate across each pair and per-card KV is a quarter, not an eighth. MLA has no head axis at
+  all — vLLM keeps the whole latent on every rank. `kvShards()` is the one answer and both modules
+  call it; when only `placement` knew, the memory panel said each card held the entire DeepSeek
+  cache while the speed panel priced one eighth of it.
+- **Offloaded weights read at the slower of host RAM and the bus to the host** —
+  `min(hostBandwidth, device.hostLinkBytesPerSec)`. `interconnect` is the _device-to-device_ link
+  `tpEfficiency` models and is not this: an H100 SXM talks to its neighbours over NVLink and to
+  the host over PCIe 5.0. Modelling only host RAM made every spilled configuration on a PCIe 4.0
+  card 2.5× too fast, on both decode and TTFT.
 - **Prefill attention respects sliding windows** too, not just KV. Treating every gpt-oss layer as
   full attention overstates the attention term ~2× at long prompts.
 - The two calibration anchors are **DGX Spark on gpt-oss-20b** (2,053 tok/s prefill, 49.7 tok/s

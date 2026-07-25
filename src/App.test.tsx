@@ -1,8 +1,9 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
 import App from './App';
 import { useConfig, DEFAULT_CONFIG } from '@/store/config';
+import { configToShareSearch } from '@/store/url';
 import { getModel } from '@/data/catalog';
 import { tokens } from '@/lib/format';
 
@@ -518,5 +519,39 @@ describe('sharing a scenario degrades honestly', () => {
     } finally {
       window.history.replaceState = replaceState;
     }
+  });
+});
+
+/**
+ * A link that was sent is a claim; the address bar must not retract it. Opening a fully-encoded
+ * link to the default scenario used to erase it on the first render, so the recipient's bookmark
+ * of that address resolved against whatever defaults shipped later — the exact failure the full
+ * encoding exists to prevent, reintroduced by the synchroniser.
+ */
+describe('an explicitly shared scenario survives being opened', () => {
+  const original = window.location.search;
+
+  afterEach(() => {
+    window.history.replaceState(null, '', `${window.location.pathname}${original}`);
+  });
+
+  it('keeps the querystring when the page was opened with one', async () => {
+    const shared = configToShareSearch(DEFAULT_CONFIG);
+    window.history.replaceState(null, '', `${window.location.pathname}${shared}`);
+
+    render(<App />);
+    // The write is throttled, so wait for the address bar to settle rather than reading it now.
+    await waitFor(() => {
+      expect(window.location.search).not.toBe('');
+    });
+    expect(new URLSearchParams(window.location.search).get('m')).toBe(DEFAULT_CONFIG.modelId);
+  });
+
+  it('leaves a bare address bare, because it claimed nothing', async () => {
+    window.history.replaceState(null, '', window.location.pathname);
+    render(<App />);
+    await waitFor(() => {
+      expect(window.location.search).toBe('');
+    });
   });
 });

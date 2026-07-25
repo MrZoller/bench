@@ -116,18 +116,21 @@ function decodeReading(evaluation: Evaluation): Reading {
     unit: 'tok/s per user',
     tone,
     verdict: word,
-    detail: offloadPenalty
-      ? // Named before the cache: spilled weights cross the host bus at a fraction of device
-        // bandwidth, so they can dominate the step even while moving fewer bytes than the KV.
-        `Weights crossing the host bus set the pace — ${percent(offloadPenalty.fraction)} of them spill every token.`
-      : kvBound
-        ? 'KV traffic now costs more time per step than the weights — at this context the cache, not the model, sets the speed.'
+    // `kvBound` is the engine's own comparison of weight seconds against cache seconds, so it
+    // outranks the mere *existence* of a spill. Testing the spill first meant a 0.08% offload
+    // blamed the host bus while the cache was costing six times as much time — sending someone
+    // to fix the wrong thing, which is the error this whole tile exists to avoid.
+    detail: kvBound
+      ? 'KV traffic now costs more time per step than the weights — at this context the cache, not the model, sets the speed.'
+      : offloadPenalty
+        ? `Weights crossing the host bus set the pace — ${percent(offloadPenalty.fraction)} of them spill every token.`
         : 'Bound by weight bandwidth. Lower quantization or faster memory is what moves this.',
   };
 }
 
 function prefillReading(evaluation: Evaluation): Reading {
-  const { ttftSeconds, prefillTokensPerSec, attentionBound, offloadPenalty } = evaluation.prefill;
+  const { ttftSeconds, prefillTokensPerSec, linearSeconds, attentionSeconds, offloadPenalty } =
+    evaluation.prefill;
 
   /**
    * Classified on the displayed figure, exactly as decode is. `seconds()` rounds, so 10.27s
@@ -138,13 +141,15 @@ function prefillReading(evaluation: Evaluation): Reading {
   const { shown, word, tone } = classifyTtft(ttftSeconds);
 
   /**
-   * Streaming is named as the bottleneck only when it outweighs the rest of the pass. An 8%
-   * spill over a fast bus adds ~0.01s to a ~1.15s prompt, and calling that the cause sends
-   * someone to fix the wrong thing — the mirror of the error this branch was added to correct.
+   * The largest of the three terms wins — a strict maximum, not a majority.
+   *
+   * "More than everything else put together" was the old test, and it cannot identify a largest
+   * of three. A pass split 40% streaming / 35% attention / 25% linear has streaming as the clear
+   * maximum and the old test still failed it, handing the verdict to attention — a term costing
+   * a seventh less. Anything short of a majority was unattributable, which is most real splits.
    */
-  const streamingDominates =
-    offloadPenalty !== undefined &&
-    offloadPenalty.streamingSeconds > ttftSeconds - offloadPenalty.streamingSeconds;
+  const streaming = offloadPenalty?.streamingSeconds ?? 0;
+  const largest = Math.max(streaming, attentionSeconds, linearSeconds);
 
   return {
     key: 'prefill',
@@ -153,13 +158,14 @@ function prefillReading(evaluation: Evaluation): Reading {
     unit: '',
     tone,
     verdict: word,
-    detail: streamingDominates
-      ? `${rate(prefillTokensPerSec)} tok/s prompt processing, dominated by streaming ${percent(
-          offloadPenalty!.fraction
-        )} of the weights across the host bus before the prompt can start.`
-      : attentionBound
-        ? `${rate(prefillTokensPerSec)} tok/s prompt processing. Quadratic attention now dominates the pass, so this degrades faster than linearly as the prompt grows.`
-        : `${rate(prefillTokensPerSec)} tok/s prompt processing, bound by compute on the linear layers.`,
+    detail:
+      largest === streaming && offloadPenalty !== undefined
+        ? `${rate(prefillTokensPerSec)} tok/s prompt processing, dominated by streaming ${percent(
+            offloadPenalty.fraction
+          )} of the weights across the host bus before the prompt can start.`
+        : largest === attentionSeconds
+          ? `${rate(prefillTokensPerSec)} tok/s prompt processing. Quadratic attention now dominates the pass, so this degrades faster than linearly as the prompt grows.`
+          : `${rate(prefillTokensPerSec)} tok/s prompt processing, bound by compute on the linear layers.`,
   };
 }
 

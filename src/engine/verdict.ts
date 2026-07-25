@@ -159,8 +159,19 @@ export interface VerdictInputs {
 /**
  * Grade every archetype against one configuration.
  *
- * Ordered by how tight their latency budget is, so the list reads as a ladder: if inline
- * completion passes, everything below it does too.
+ * Ordered by how tight their latency budget is. That ordering is real but it is *only* about
+ * latency, and it does not make the list a ladder — a claim this file used to make and that is
+ * false wherever capacity rather than speed decides.
+ *
+ * Each archetype is graded at the prompt it really sends, which was itself a correction: judging
+ * all seven against one slider conflated them. But it also means they ask for different amounts
+ * of room. Inline completion sends 512 tokens and chat sends 1,024, so at 128 concurrent users
+ * on a small card the chat cache can spill while the completion cache stays resident, and
+ * completion is genuinely the easier workload there. Serving 128 autocomplete sessions really is
+ * easier than serving 128 conversations.
+ *
+ * Capping completion at chat's grade would restore the appearance of a ladder by reporting a
+ * failure that is not happening. The ordering claim is the thing that was wrong.
  */
 export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
   const { selectedPlacement, usage, maxContextTokens, runnableContextTokens, evaluateAt } = inputs;
@@ -185,6 +196,18 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
    */
   const needs = (id: string) => workload(id).typicalPromptTokens + RESPONSE_ALLOWANCE;
   const fits = (id: string) => runnableContextTokens >= needs(id);
+
+  /**
+   * Why a request does not fit, said the same way in all seven places.
+   *
+   * Each of these used to name only what the archetype *sends*, so at a runnable context of
+   * exactly 32,768 the RAG row read "Only 32K of context fits — not enough for the 32K
+   * document", which contradicts itself. The missing 512 tokens are the room to answer in, and
+   * no rounding was involved — an earlier fix to the formatter could not have caught it. Stating
+   * the requirement makes the shortfall visible as one whatever the numbers happen to be.
+   */
+  const shortfall = (id: string, sends: string) =>
+    `Only ${ctx(runnableContextTokens)} of context fits — ${sends} needs ${ctx(needs(id))} with room to answer in.`;
 
   /**
    * Every archetype measured at its own scenario, decode included. Memoised per id because the
@@ -219,7 +242,7 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
       tight: fits('chat') && rateOf('chat') >= 10 && chatTtft <= 5,
       why: () =>
         !fits('chat')
-          ? `Only ${ctx(runnableContextTokens)} of context fits — not even one short exchange.`
+          ? shortfall('chat', 'one short exchange')
           : rateOf('chat') < 10
             ? `${fmt(rateOf('chat'))} tok/s reads slower than most people do.`
             : chatTtft > 5
@@ -232,7 +255,7 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
       tight: fits('completion') && rateOf('completion') >= 20 && completionTtft <= 1,
       why: () =>
         !fits('completion')
-          ? `Only ${ctx(runnableContextTokens)} of context fits — less than one suggestion needs.`
+          ? shortfall('completion', 'one suggestion')
           : completionTtft > 1
             ? `${fmt(completionTtft)}s to first token — the suggestion arrives after you have moved on.`
             : rateOf('completion') < 20
@@ -249,7 +272,7 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
         fits('agent') && rateOf('agent') >= 15 && runnableContextTokens >= 32768 && agentTtft <= 30,
       why: () =>
         runnableContextTokens < 32768
-          ? `Only ${ctx(runnableContextTokens)} of context fits — an agent fills that within a few turns.`
+          ? shortfall('agent', 'an agent turn')
           : agentTtft > 30
             ? `${fmt(agentTtft)}s to re-read a 16K prompt makes every step a wait.`
             : rateOf('agent') < 15
@@ -265,7 +288,7 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
       tight: ragFits && ragPrefill.ttftSeconds <= 20,
       why: () =>
         !ragFits
-          ? `Only ${ctx(runnableContextTokens)} of context fits — not enough for the 32K document this assumes.`
+          ? shortfall('rag', 'the 32K document this assumes')
           : ragPrefill.ttftSeconds > 20
             ? `${fmt(ragPrefill.ttftSeconds)}s to read a 32K document before answering.`
             : `${Math.round(ragPrefill.prefillTokensPerSec)} tok/s prompt processing — ${fmt(ragPrefill.ttftSeconds)}s for a 32K document.`,
@@ -277,7 +300,7 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
       tight: runnableContextTokens >= 65536 + RESPONSE_ALLOWANCE,
       why: () =>
         runnableContextTokens < 65536 + RESPONSE_ALLOWANCE
-          ? `Caps out at ${ctx(runnableContextTokens)} — short of the 128K these jobs assume.`
+          ? shortfall('long-context', 'the 128K window these jobs assume')
           : runnableContextTokens > maxContextTokens
             ? `Reaches ${ctx(runnableContextTokens)}, though only with weights offloaded.`
             : `Holds ${ctx(runnableContextTokens)} at this concurrency.`,
@@ -289,7 +312,7 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
       tight: fits('batch') && batchAggregate() >= 1,
       why: () =>
         !fits('batch')
-          ? `Only ${ctx(runnableContextTokens)} of context fits — short of the ${ctx(workload('batch').typicalPromptTokens)} a batch job sends.`
+          ? shortfall('batch', 'a batch job')
           : batchAggregate() >= 5
             ? `${fmt(batchAggregate())} tok/s aggregate — latency does not matter here, only the total.`
             : `${fmt(batchAggregate())} tok/s aggregate makes even an overnight run small.`,
@@ -304,12 +327,17 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
       tight: fits('serving') && usage.concurrency >= 2 && rateOf('serving') >= 5,
       why: () =>
         !fits('serving')
-          ? `Only ${ctx(runnableContextTokens)} of context fits — not enough for ${usage.concurrency} users to hold a turn each.`
+          ? shortfall('serving', `a turn each for ${usage.concurrency} users`)
           : usage.concurrency < 2
             ? 'Set concurrency above 1 to see whether this holds several users.'
             : rateOf('serving') < 5
               ? `${fmt(rateOf('serving'))} tok/s each once ${usage.concurrency} users share the device.`
-              : `${usage.concurrency} users at ${fmt(rateOf('serving'))} tok/s each, ${fmt(at('serving').decode.aggregateTokensPerSec)} aggregate.`,
+              : // Spill is the one thing here that can hold serving back while every printed
+                // figure looks healthy — the rate is fine, the fit is fine, and the reason said
+                // so, leaving the actual constraint invisible.
+                headroomOf('serving') <= 0
+                ? `${usage.concurrency} users at ${fmt(rateOf('serving'))} tok/s each, but no headroom left — weights spill to host RAM, and one more user has nowhere to go.`
+                : `${usage.concurrency} users at ${fmt(rateOf('serving'))} tok/s each, ${fmt(at('serving').decode.aggregateTokensPerSec)} aggregate.`,
     }),
   ];
 }

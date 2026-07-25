@@ -206,9 +206,32 @@ export const RTX_5090: DeviceSpec = {
   // fixture-based NVFP4 estimate 4x too low and left the card's actual FP4 path untested.
   flops: { fp16: 419 * TFLOP, fp8: 838 * TFLOP, fp4: 1676 * TFLOP },
   interconnect: 'PCIe 5.0 x16',
+  // The link to the *host*, not the one to a neighbouring card. Offloaded weights cross this.
+  hostLinkBytesPerSec: 63 * GB,
   tdpWatts: 575,
   msrpUsd: 1999,
   source: 'https://www.techpowerup.com/gpu-specs/geforce-rtx-5090.c4216',
+};
+
+/**
+ * A 4090 exists in the fixtures for one reason: it is PCIe 4.0, half the 5090's host link, so
+ * it is the case that shows offload bandwidth is a device property rather than a constant.
+ */
+export const RTX_4090: DeviceSpec = {
+  id: 'rtx-4090',
+  name: 'GeForce RTX 4090',
+  vendor: 'NVIDIA',
+  class: 'discrete-gpu',
+  status: 'shipping',
+  capacityBytes: 24 * GIB,
+  allocatableBytes: 23 * GIB,
+  bandwidthBytesPerSec: 1008 * GB,
+  flops: { fp16: 165.2 * TFLOP, fp8: 330.3 * TFLOP },
+  interconnect: 'PCIe 4.0 x16',
+  hostLinkBytesPerSec: 31.5 * GB,
+  tdpWatts: 450,
+  msrpUsd: 1599,
+  source: 'https://www.techpowerup.com/gpu-specs/geforce-rtx-4090.c3889',
 };
 
 /**
