@@ -11,8 +11,11 @@ import { evaluateConfig, type Config } from '@/store/config';
  * unusable for a coding agent" is what someone deciding how to spend money needs.
  *
  * Each row carries an icon, a word and a written reason, so the grading never depends on colour.
- * Ordered by how tight the latency budget is, which makes the list read as a ladder: whatever
- * passes near the top implies everything below it.
+ * Ordered by how tight the latency budget is — not by overall difficulty, and the two come apart
+ * whenever capacity rather than speed is the binding constraint. Every row is graded at the
+ * prompt that row really sends, so a row asking for less room can pass where one above it fails;
+ * that is a real difference between the workloads, not an inconsistency, and the written reason
+ * on each row is what explains it.
  */
 
 const FITNESS: Record<Fitness, { icon: string; word: string; color: string }> = {
