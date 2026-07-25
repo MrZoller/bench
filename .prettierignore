@@ -1,0 +1,8 @@
+dist/
+coverage/
+playwright-report/
+test-results/
+package-lock.json
+
+# Machine-generated catalog — formatting is the generator's business, not Prettier's.
+src/data/models.generated.json

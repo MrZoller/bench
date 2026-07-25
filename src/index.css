@@ -1,0 +1,16 @@
+@import 'tailwindcss';
+
+/*
+ * Design tokens land here as CSS custom properties, mirroring src/design/tokens.ts.
+ * Kept deliberately bare until the visual pass — see the plan's build order.
+ */
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+}
