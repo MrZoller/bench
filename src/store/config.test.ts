@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_CONFIG, evaluateConfig, useConfig, type Config } from './config';
 import { getModel } from '@/data/catalog';
+import { getQuant } from '@/data/quants';
 
 /**
  * The store is the boundary between untrusted input and the engine.
@@ -142,5 +143,39 @@ describe('quantization follows the model', () => {
     store.set('quantId', 'q4_k_m');
     store.set('modelId', 'Qwen/Qwen3-32B');
     expect(useConfig.getState().quantId).toBe('q4_k_m');
+  });
+});
+
+/**
+ * The store and the picker must agree about what is selectable. Both of these were cases where
+ * the control offered something the store then quietly took away.
+ */
+describe('the store agrees with the controls', () => {
+  it('keeps a multi-device count on hardware that has a link between units', () => {
+    useConfig.setState(DEFAULT_CONFIG);
+    const store = useConfig.getState();
+
+    // The Spark is unified-soc *and* has ConnectX, so the picker offers a count — and the
+    // store used to reset it to 1 on every change, making the linked case unevaluatable.
+    store.set('deviceId', 'dgx-spark');
+    store.set('deviceCount', 4);
+    expect(useConfig.getState().deviceCount).toBe(4);
+
+    store.set('deviceId', 'mac-studio-m3-ultra-256');
+    expect(useConfig.getState().deviceCount).toBe(1);
+  });
+
+  /**
+   * The default quant is `mxfp4`, which the picker hides for dense models — so resolving an
+   * unknown id to the default *before* checking applicability landed a dense model on exactly
+   * the option the rule exists to prevent.
+   */
+  it('never resolves an unknown quantization onto an expert-only default', () => {
+    useConfig.setState({ ...DEFAULT_CONFIG, modelId: 'Qwen/Qwen3-32B' });
+    useConfig.getState().set('quantId', 'not-a-real-quant');
+
+    const { quantId, modelId } = useConfig.getState();
+    expect(getModel(modelId).expertParams).toBe(0);
+    expect(getQuant(quantId).denseBpw).toBeUndefined();
   });
 });

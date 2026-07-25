@@ -7,6 +7,7 @@ import { DECODE_FAST, Telemetry } from './Telemetry';
 import { Segmented, Select, StopSlider } from './Controls';
 import { compact, gibLabel, params, percent, tokens } from '@/lib/format';
 import type { KvPrecision } from '@/engine/types';
+import { canShard } from '@/engine/placement';
 
 /**
  * The Bench — the hero surface.
@@ -102,7 +103,7 @@ export function Bench() {
    * spilling needs a slower *tier*, sharding needs a *link*, and only one device has one
    * without the other.
    */
-  const shardable = device.interconnect !== undefined;
+  const shardable = canShard(device);
 
   const modelOptions = useMemo(
     () =>

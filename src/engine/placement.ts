@@ -1,4 +1,12 @@
-import type { DeviceClass, ModelSpec, QuantSpec, Rig, RuntimeSpec, UsageSpec } from './types';
+import type {
+  DeviceClass,
+  DeviceSpec,
+  ModelSpec,
+  QuantSpec,
+  Rig,
+  RuntimeSpec,
+  UsageSpec,
+} from './types';
 import { activationBytes } from './activations';
 import { kvBytesTotal } from './kv';
 import { weightBytes } from './weights';
@@ -57,6 +65,21 @@ export interface Placement {
 
   /** Set when the runtime cannot drive this class of device at all. */
   unsupported?: string;
+}
+
+/**
+ * Whether a model can be sharded across several of these at all.
+ *
+ * Keyed on having a transport, not on device class. A DGX Spark is `unified-soc` and has a real
+ * ConnectX link that `tpEfficiency` already models; a Mac Studio is the same class with nothing
+ * between chassis. Exported so the UI and the store cannot hold divergent copies of this rule —
+ * they did, and the slider offered counts the store immediately reset.
+ *
+ * Deliberately distinct from offload, which really is a discrete-GPU property: spilling needs a
+ * slower *tier*, sharding needs a *link*, and the Spark has one without the other.
+ */
+export function canShard(device: DeviceSpec): boolean {
+  return device.interconnect !== undefined;
 }
 
 /** Memory a single device can actually give the model, after the runtime takes its cut. */

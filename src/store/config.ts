@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { KvPrecision } from '@/engine/types';
 import { evaluate, type Evaluation } from '@/engine';
+import { canShard } from '@/engine/placement';
 import { getDevice, getModel, MODELS, DEVICES } from '@/data/catalog';
 import { getQuant } from '@/data/quants';
 import { getRuntime, RUNTIMES } from '@/data/runtimes';
@@ -70,6 +71,9 @@ function coerce(config: Config): Config {
    * tops out between 32K and 164K while the slider offers stops up to 1M, so without this a
    * 40K Qwen would report fit, memory and speed for a 1M window it cannot process.
    */
+  const resolvedQuant = known(config.quantId, getQuant, DEFAULT_CONFIG.quantId);
+  const quantId = expertOnlyOnDense(resolvedQuant, modelId) ? 'bf16' : resolvedQuant;
+
   const contextTokens = Math.min(
     getModel(modelId).maxContext,
     clamp(config.contextTokens, 512, 1_048_576, DEFAULT_CONFIG.contextTokens)
@@ -83,19 +87,20 @@ function coerce(config: Config): Config {
      * everything that is not a routed expert, so with none present it computes exactly BF16
      * while still calling itself 4-bit. The picker hides it there, so the *selection* has to
      * move too — otherwise switching from gpt-oss to Qwen leaves the store holding an option
-     * the control no longer offers, and the two silently disagree about what is selected.
+     * the control no longer offers.
+     *
+     * Applicability is checked *after* resolving the id, not before. Checked first, an unknown
+     * id fails its lookup, reports "not expert-only", and is then replaced by the default —
+     * which is `mxfp4`, so a dense model with a junk quant in its URL landed on exactly the
+     * option this rule exists to prevent.
      */
-    quantId: expertOnlyOnDense(config.quantId, modelId)
-      ? 'bf16'
-      : known(config.quantId, getQuant, DEFAULT_CONFIG.quantId),
+    quantId,
     runtimeId: known(config.runtimeId, getRuntime, DEFAULT_CONFIG.runtimeId),
     deviceId,
-    // Only discrete GPUs shard a model across devices; a count above 1 anywhere else describes
-    // a rig that cannot exist, and the engine would happily divide the weights across it.
-    deviceCount:
-      device.class === 'discrete-gpu'
-        ? clamp(config.deviceCount, 1, 8, DEFAULT_CONFIG.deviceCount)
-        : 1,
+    // The same predicate the picker uses. Holding a second copy here meant the Spark's slider
+    // was offered and then silently reset to 1x on every change, so the linked-Spark
+    // configuration could never actually be evaluated.
+    deviceCount: canShard(device) ? clamp(config.deviceCount, 1, 8, DEFAULT_CONFIG.deviceCount) : 1,
     contextTokens,
     concurrency: clamp(config.concurrency, 1, 128, DEFAULT_CONFIG.concurrency),
     /**
