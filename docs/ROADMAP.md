@@ -26,16 +26,16 @@ Three things are the moat, in order:
 
 ## Status
 
-| Phase | State | Notes |
-|---|---|---|
-| 1. Scaffold | **done** | React 19 + TS strict + Vite + Tailwind v4 + Zustand. CI: lint → format:check → test → build |
-| 2. Engine | **done** | `src/engine/`, pure, no React. Pinned to published measurements at both ends of the hardware range |
-| 3. Catalogs | **done** | [PR #1](https://github.com/MrZoller/bench/pull/1) — 17 models derived from HF, 25 devices curated |
-| 4. Design tokens + the Bench | **next** | Hero surface. Load the `dataviz` skill before any chart/meter/palette code |
-| 5. Verdict + explain layers | pending | Workload archetypes; the total-vs-active-params teaching moment |
-| 6. Envelope + Matrix surfaces | pending | Context × concurrency feasibility field; model × device heatmap |
-| 7. URL state, responsive, a11y | pending | Full config in the querystring so a link reproduces a scenario |
-| 8. Weekly catalog refresh + deploy | pending | Scheduled `build-catalog` → PR on diff; static deploy to a zoller.ai subdomain |
+| Phase                              | State    | Notes                                                                                              |
+| ---------------------------------- | -------- | -------------------------------------------------------------------------------------------------- |
+| 1. Scaffold                        | **done** | React 19 + TS strict + Vite + Tailwind v4 + Zustand. CI: lint → format:check → test → build        |
+| 2. Engine                          | **done** | `src/engine/`, pure, no React. Pinned to published measurements at both ends of the hardware range |
+| 3. Catalogs                        | **done** | [PR #1](https://github.com/MrZoller/bench/pull/1) — 17 models derived from HF, 25 devices curated  |
+| 4. Design tokens + the Bench       | **next** | Hero surface. Load the `dataviz` skill before any chart/meter/palette code                         |
+| 5. Verdict + explain layers        | pending  | Workload archetypes; the total-vs-active-params teaching moment                                    |
+| 6. Envelope + Matrix surfaces      | pending  | Context × concurrency feasibility field; model × device heatmap                                    |
+| 7. URL state, responsive, a11y     | pending  | Full config in the querystring so a link reproduces a scenario                                     |
+| 8. Weekly catalog refresh + deploy | pending  | Scheduled `build-catalog` → PR on diff; static deploy to a zoller.ai subdomain                     |
 
 ## Decisions already made
 
@@ -64,7 +64,7 @@ reading the test that guards them.
   4.47 bpw blended rate understates bytes-per-token ~2×, straight onto decode throughput.
 - **`bandwidthEfficiency` and `CLASS_BANDWIDTH_UTILIZATION` are two knobs fitted to two data
   points, and only their product is observable.** The split between "what the runtime achieves"
-  and "what the memory subsystem allows" is *not identifiable* from current data — it is a
+  and "what the memory subsystem allows" is _not identifiable_ from current data — it is a
   defensible physical story, not a measurement. It becomes testable when a second CPU-capable
   runtime or CPU device is added. Re-derive then; don't assume.
 - **Compute precision comes from the quant's `computeDtype` gated on the runtime's
@@ -78,12 +78,12 @@ reading the test that guards them.
 
 **Catalog**
 
-- **`safetensors.total` counts tensor *elements*, not parameters.** True for FP8, false for MXFP4:
+- **`safetensors.total` counts tensor _elements_, not parameters.** True for FP8, false for MXFP4:
   gpt-oss-120b's `U8` count is exactly 33/32 of logical expert params, the extra being one scale
   byte per 32-value block. The ratio guard is tight to 0.5% on purpose — a loose band would also
   admit a uniformly-int8 model and silently discard its entire dense half.
 - **Multi-Token Prediction modules inflate reported totals** (DeepSeek V3/R1 by ~13B, GLM-4.5-Air
-  by ~4B) and inference never loads them. Detected via `num_nextn_predict_layers` and *refused*,
+  by ~4B) and inference never loads them. Detected via `num_nextn_predict_layers` and _refused_,
   not estimated; the seed list carries the published figure with a written reason.
 - **Active params exclude the input embedding** — decode gathers one row rather than reading the
   table. This is what reconciles every derived figure with its vendor's.
