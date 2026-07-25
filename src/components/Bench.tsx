@@ -8,7 +8,7 @@ import { Telemetry } from './Telemetry';
 import { Segmented, Select, StopSlider } from './Controls';
 import { compact, gibLabel, params, percent, tokens } from '@/lib/format';
 import type { KvPrecision } from '@/engine/types';
-import { canShard } from '@/engine/placement';
+import { canShard, maxAllocatablePerDevice, raisingCeilingWouldHelp } from '@/engine/placement';
 import { classifyDecode } from '@/lib/verdicts';
 import { quantApplies } from '@/lib/quantChoice';
 
@@ -167,8 +167,10 @@ export function Bench() {
             d.status !== 'shipping'
               ? `${d.status === 'rumored' ? 'Rumoured' : 'Announced'} — specs may change`
               : undefined,
-            d.allocatableTunable
-              ? `${gibLabel(d.allocatableBytes)} allocatable by default, and raiseable`
+            d.allocatableTunable && maxAllocatablePerDevice(d) > d.allocatableBytes
+              ? `${gibLabel(d.allocatableBytes)} allocatable by default, raiseable to ${gibLabel(
+                  maxAllocatablePerDevice(d)
+                )}`
               : undefined,
             d.note,
           ]
@@ -257,10 +259,7 @@ export function Bench() {
       <Telemetry
         evaluation={evaluation}
         canOffload={device.class === 'discrete-gpu'}
-        tunableCeiling={
-          device.allocatableTunable === true &&
-          evaluation.placement.usedBytesPerDevice <= device.capacityBytes
-        }
+        tunableCeiling={raisingCeilingWouldHelp(device, evaluation.placement.usedBytesPerDevice)}
       />
 
       {/* Usage: the half of the question that is about you, not the hardware. */}

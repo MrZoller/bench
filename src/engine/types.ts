@@ -251,6 +251,18 @@ export interface DeviceSpec {
   allocatableBytes: number;
   /** Whether that ceiling can be raised by the user (macOS iogpu.wired_limit_mb, AMD VGM). */
   allocatableTunable?: boolean;
+  /**
+   * Highest the allocation ceiling can actually be raised to, in bytes.
+   *
+   * Absent means "as far as physical memory allows" — true of Apple's `iogpu.wired_limit_mb`,
+   * where the catalogued figure is a 75% default rather than a limit. Present where the platform
+   * states a real maximum: AMD's Variable Graphics Memory exposes 96 of the Ryzen AI Max+'s
+   * 128 GB, so its default *is* its maximum and raising the setting buys nothing.
+   *
+   * Without this the UI told a Ryzen owner that a 117 GiB configuration would fit once they
+   * raised the ceiling, which the platform does not permit.
+   */
+  maxAllocatableBytes?: number;
 
   /** Theoretical peak memory bandwidth, bytes/sec. */
   bandwidthBytesPerSec: number;

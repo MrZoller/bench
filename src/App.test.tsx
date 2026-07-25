@@ -273,8 +273,21 @@ describe('the Bench keeps its claims consistent with its own numbers', () => {
     const user = userEvent.setup();
     render(<App />);
 
+    // A Mac's 75% is a default and `iogpu.wired_limit_mb` goes as far as memory allows, so this
+    // one really is raiseable — and the curated note still has to survive beside the warning.
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
+    expect(screen.getByText(/raiseable to/i)).toBeInTheDocument();
+  });
+
+  it('does not promise a ceiling the platform will not raise', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // The Ryzen's 96 GiB is Variable Graphics Memory's *maximum*, not a default — it is already
+    // at its ceiling, so telling the user to raise it is advice they cannot take.
     await user.selectOptions(screen.getByLabelText('Hardware'), 'ryzen-ai-max-395');
-    expect(screen.getByText(/raiseable/i)).toBeInTheDocument();
+    expect(screen.queryByText(/raiseable/i)).not.toBeInTheDocument();
+    // The curated bandwidth note is a separate claim and must still be there.
     expect(screen.getByText(/213/)).toBeInTheDocument();
   });
 });
