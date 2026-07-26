@@ -86,14 +86,14 @@ export const RUNTIMES: readonly RuntimeSpec[] = [
     // MLX quantizes with its own affine scheme at 4 and 8 bits, and the catalog has no
     // MLX-native entries for those — so the GGUF K-quants stand in *by width*, which is what a
     // roofline over bits-per-weight actually consumes. Not exact: MLX 4-bit is nearer 4.5 bpw
-    // than Q4_K_M's 4.83. Recorded as a modelling choice rather than a claim that MLX reads
+    // than Q4_K_M's 4.85. Recorded as a modelling choice rather than a claim that MLX reads
     // GGUF, which it does not. What it genuinely cannot do is AWQ or the vendor formats.
     weightFormats: ['bf16', 'int8', 'q8_0', 'q6_k', 'q5_k_m', 'q4_k_m', 'iq4_xs', 'q3_k_m'],
     substituted: {
       // The two MLX genuinely loads. Everything else above is a GGUF width standing in, and stays
       // that way by default if a format is added and nobody says otherwise.
       nativeFormats: ['bf16', 'int8'],
-      note: 'MLX quantizes with its own affine scheme and the catalog has no measured entry for it, so a GGUF K-quant of the same width stands in — MLX 4-bit is nearer 4.5 bpw than Q4_K_M’s 4.83.',
+      note: 'MLX quantizes with its own affine scheme and the catalog has no measured entry for it, so a GGUF K-quant of the same width stands in — MLX 4-bit is nearer 4.5 bpw than Q4_K_M’s 4.85.',
     },
     kvPrecisions: ['fp16', 'q8'],
     source: 'https://github.com/ml-explore/mlx',

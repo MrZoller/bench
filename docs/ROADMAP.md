@@ -338,19 +338,22 @@ Correctness follow-ups live in [issues #12–#20](https://github.com/MrZoller/be
 section is for the questions those issues cannot settle.
 
 - **MLX has no native quantization entries** ([#18](https://github.com/MrZoller/bench/issues/18)).
-  GGUF K-quants stand in _by width_ — Q4_K_M's 4.83 bpw against MLX's ~4.5 — so every figure for an
+  GGUF K-quants stand in _by width_ — Q4_K_M's 4.85 bpw against MLX's ~4.5 — so every figure for an
   Apple-silicon configuration derives from a format MLX does not load. The alternative, BF16 and
   INT8 only, makes Apple silicon unusable in a tool where it is a headline case, so the
   substitution stays; it is entangled with the `weightFormats` check, whose MLX list includes those
   K-quants precisely so it keeps working.
 
-  **What changed is that it is no longer invisible.** `substitutedFormats` names the stand-ins on
-  the runtime, and the Bench marks every figure derived from one while the Matrix marks a grid
-  containing any. That is the rule `devices.json` already followed for pre-release specs, applied to
-  the other kind of uncertain input: an approximation that is documented is a modelling choice, and
-  an approximation that is invisible is invented data. Note the marker is deliberately narrow — BF16
-  and INT8 are real MLX formats and carry none, because a warning on the majority case trains people
-  to ignore it where it matters.
+  **What changed is that it is no longer invisible.** `substituted.nativeFormats` on the runtime
+  names the formats it genuinely loads — everything else in `weightFormats` is a stand-in and is
+  marked by default. The polarity is the point, and the reason to state it here: a format added to
+  a runtime later is marked until someone says otherwise, where a list of the stand-ins themselves
+  would leave that format silently unmarked. The Bench marks every figure derived from one; the
+  Matrix marks a grid containing any. That is the rule `devices.json` already followed for
+  pre-release specs, applied to the other kind of uncertain input: a documented approximation is a
+  modelling choice, and an invisible one is invented data. Note the marker is deliberately narrow —
+  BF16 and INT8 are real MLX formats and carry none, because a warning on the majority case trains
+  people to ignore it where it matters.
 
   **What would still resolve it** is measured bits-per-weight for MLX's affine 4- and 8-bit schemes,
   at which point the substitution is deleted rather than explained. That needs real checkpoints on
