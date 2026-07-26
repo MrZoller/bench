@@ -407,40 +407,61 @@ export function Matrix({ config }: { config: Config }) {
         </table>
       </div>
 
-      {/* A ramp legend, since a continuous scale has no discrete keys to list. */}
-      <div className="mt-4 flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
-        <span>worse</span>
-        <span aria-hidden="true" className="flex h-3 flex-1 overflow-hidden rounded-sm">
-          {RAMP.map((step) => (
-            <span key={step} className="flex-1" style={{ background: step }} />
-          ))}
+      {/* A ramp legend, since a continuous scale has no discrete keys to list.
+          `flex-wrap`, because two of the four entries are prose and the row does not fit a phone.
+          Unlike the grid above it this div has no scroll container of its own, so a row that
+          overran did not scroll itself — it scrolled the page. At 320px the legend measured 299px
+          inside a 246px box and took the document to 336/320. Issue #34; guarded by
+          `e2e/matrix-legend.spec.ts`, since jsdom reports every one of those widths as 0. */}
+      <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-[var(--color-text-muted)]">
+        {/* The ramp and its two ends are one item, with a floor under it.
+            `flex-1` is `flex: 1 1 0%`, so the gradient's flex basis is zero and it is the only
+            thing here that yields when the row is tight — which it was at every width below about
+            1280px once the third key appeared. The ramp measured 0×12 on a 1024px laptop: the
+            legend's entire subject, absent, while the prose explaining the exceptions sat at full
+            width. Wrapping alone does not fix that, because a zero-basis item on a full line still
+            gets no space: it survives wherever a line breaks early (139.8px at 390) and collapses
+            wherever the keys nearly fill one (13.6px at 1024). A floor is what makes the ramp
+            claim a width and, failing that, take a line of its own — `min-width` is resolved into
+            the hypothetical main size, so it governs line-breaking and shrinking alike.
+            Capped at `100%`, not left at a bare `12rem`, because a rem floor is a floor the
+            viewport cannot argue with: under browser text scaling the root grows while the
+            viewport does not, and at 320px with a 24px root the floor alone took the document to
+            343/320 — reintroducing the sideways scroll this whole block exists to remove, in the
+            one setting a reader most needs it not to. `min()` yields instead. */}
+        <span className="flex min-w-[min(12rem,100%)] flex-1 items-center gap-2">
+          <span>worse</span>
+          <span aria-hidden="true" className="flex h-3 flex-1 overflow-hidden rounded-sm">
+            {RAMP.map((step) => (
+              <span key={step} className="flex-1" style={{ background: step }} />
+            ))}
+          </span>
+          <span>better</span>
         </span>
-        <span>better</span>
-        <span className="ml-3 flex items-center gap-1.5">
+        <span className="flex items-center gap-1.5">
           <span
             aria-hidden="true"
             className="inline-block h-3 w-3 rounded-sm border border-dashed border-[var(--color-border)]"
           />
           will not run
         </span>
-        {/* A default allocation and a hardware limit are not the same answer, and this grid is
-            read as a shortlist. DeepSeek V3 at Q5_K_M is past the 512 GB Mac Studio's 384 GiB
-            default and inside the 512 it can be tuned to — struck off the list over a checkbox,
-            when the Envelope and Telemetry both kept the distinction. Shown only when the grid
-            actually contains one, so the legend does not explain a state nobody is looking at. */}
-        {/* The same rule the "past the default allocation" note follows: a state the grid is really
-            in gets a line, and only when it is in it.
+        {/* A state the grid is really in gets a line, and only when it is in it.
             No glyph, unlike its two neighbours. Theirs key a swatch that literally matches a cell
             border, so a reader scans the grid and finds it; this is about where the numbers came
             from, and nothing on the grid can be pointed at — which is the whole problem it reports.
             A key to a mark that appears nowhere is worse than prose. */}
         {substitutedCells && (
-          <span className="ml-3 text-[var(--color-warning)]">
+          <span className="text-[var(--color-warning)]">
             some rows scored at a stand-in format {runtime.label} cannot load
           </span>
         )}
+        {/* A default allocation and a hardware limit are not the same answer, and this grid is
+            read as a shortlist. DeepSeek V3 at Q5_K_M is past the 512 GB Mac Studio's 384 GiB
+            default and inside the 512 it can be tuned to — struck off the list over a checkbox,
+            when the Envelope and Telemetry both kept the distinction. Shown only when the grid
+            actually contains one, so the legend does not explain a state nobody is looking at. */}
         {cells.flat().some((c) => c.raiseCeilingWouldHelp) && (
-          <span className="ml-3 flex items-center gap-1.5">
+          <span className="flex items-center gap-1.5">
             <span
               aria-hidden="true"
               className="inline-block h-3 w-3 rounded-sm border border-dashed border-[var(--color-warning)]"

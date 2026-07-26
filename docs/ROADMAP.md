@@ -39,7 +39,7 @@ deployment, and the follow-up list in [issues #12–#20](https://github.com/MrZo
 | 4. Design tokens + the Bench       | **done** (#5)     | Hero surface. Load the `dataviz` skill before any chart/meter/palette code                         |
 | 5. Verdict + explain layers        | **done** (#4)     | Seven workload archetypes. See **Verdicts**, below                                                 |
 | 6. Envelope + Matrix surfaces      | **done** (#7, #8) | Context × concurrency feasibility field; model × device heatmap                                    |
-| 7. URL state, responsive, a11y     | **mostly** (#6)   | Querystring round-trips a scenario. Browser-level pass in `e2e/` (#19); URL defect in #15         |
+| 7. URL state, responsive, a11y     | **mostly** (#6)   | Querystring round-trips a scenario. Browser-level pass in `e2e/` (#19); URL defect in #15          |
 | 8. Weekly catalog refresh + deploy | **next**          | Scheduled `build-catalog` → PR on diff; static deploy to a zoller.ai subdomain                     |
 
 **Correctness debt is tracked as issues, not here.** Four are open once this lands. #9 and #10,
@@ -257,6 +257,38 @@ reading the test that guards them.
 - **`vite preview` binds `localhost`, which is `::1` on an IPv6 host** — so the config passes
   `--host 127.0.0.1` to match the URL Playwright probes. Without it the run dies on a `webServer`
   timeout that says nothing about why.
+- **Pin the state a conditional defect needs, and assert you reached it before measuring.** The
+  Matrix legend's overflow (#34) needed three keys at once, two of them conditional, and on a fresh
+  page only one renders — so a spec written against `/` passes with the bug intact. The scenario is
+  in the querystring (`?r=mlx&q=q5_k_m`) and the three keys are asserted in their own test. Deleting
+  the query params leaves all four geometry assertions green and fails only that one, which is what
+  it is for.
+- **Measure the viewport the defect actually needs.** The same spec was first written at 390px,
+  where there is no overflow at all: the prose keys wrap their own text and the panel's padding
+  absorbs the rest. It appears at 360 and escapes to the document at 320. Four assertions passed
+  against unfixed markup before the widths were probed rather than assumed.
+- **And the fix that closes the filed issue is rarely the whole defect.** The ramp is `flex-1`, so
+  its flex basis is 0 and it is the only item in the row that yields. On the filed markup that put
+  it at **zero width at every viewport from 320 to 1024px** — the legend's entire subject missing
+  on a laptop, while the prose about the exceptions sat at full size, and nothing reported it.
+  `flex-wrap` alone does not fix that: a zero-basis item still takes only the free space left on
+  its own line, so it survives wherever a line breaks early (139.8px at 390, 373.8 at 640) and
+  collapses wherever the keys nearly fill one (69.8px at 320, **13.6px at 1024**). A floor on the
+  ramp group is the other half — `min-width` is resolved into the hypothetical main size, which is
+  what both line-breaking and shrinking are measured against, so the ramp claims a width or takes a
+  line of its own. The two halves are separately mutation-checked, and the desktop layout is
+  unchanged by either.
+- **A `rem` floor is a floor the viewport cannot argue with.** The obvious `min-w-48` fixes the
+  ramp and quietly reopens the overflow: browser text scaling grows the root font size without
+  shrinking the viewport, so at 320px with a 24px root the 12rem floor alone took the document to
+  343/320 — the sideways scroll the wrap was added to remove, returning in the one setting a reader
+  most needs it gone. `min-w-[min(12rem,100%)]` yields instead, and is identical at the default
+  root. Worth checking on any `min-w-`/`w-` in rem that a narrow layout depends on.
+- **Reflow at 200% text is not clean yet, and the legend was not the only offender.** Probing the
+  above at a 32px root found `Matrix.tsx`'s "N of M combinations run" line — an explicit
+  `whitespace-nowrap` — taking the document to 409/320 on its own. It predates the legend work and
+  is filed rather than fixed here; the point for next time is that the probe which proves your fix
+  is also the cheapest audit of its neighbours.
 
 **Verdicts**
 
