@@ -1516,4 +1516,42 @@ describe('a figure derived from a stand-in format says so', () => {
     await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
     expect(legend()).toBeInTheDocument();
   });
+
+  /**
+   * The all-blocked grid, which is the state gating the legend on `runs` hid it in.
+   *
+   * At the longest context and the most users, every Apple cell under MLX fails placement, so a
+   * scan for a *running* substituted cell finds nothing — while the grid goes on publishing a
+   * verdict for every cell and, on some of them, "past the default allocation, which this machine
+   * lets you raise". Every one of those rests on Q4_K_M's 4.85 bpw standing in for MLX's ~4.5,
+   * and since the stand-in is the heavier of the two, a borderline "past the default" is the
+   * verdict most likely to flip. The mark is least dispensable exactly where it was dropped.
+   */
+  it('marks the Matrix when every cell was scored at a stand-in and none of them fit', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const matrix = () => screen.getByRole('region', { name: /every model on every machine/i });
+    const legend = () => within(matrix()).queryByText(/stand-in format .* cannot load/i);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
+
+    const context = screen.getByLabelText('Context per sequence') as HTMLInputElement;
+    fireEvent.change(context, { target: { value: String(Number(context.max)) } });
+    const users = screen.getByLabelText('Concurrent users') as HTMLInputElement;
+    fireEvent.change(users, { target: { value: String(Number(users.max)) } });
+
+    // Nothing on the grid runs — the precondition, asserted rather than assumed, since a catalog
+    // change that leaves one cell running would make the rest of this test vacuous.
+    expect(
+      within(matrix()).getByText(
+        (_, el) =>
+          el?.tagName === 'CAPTION' && /\b0 of \d+ combinations run/.test(el.textContent ?? '')
+      )
+    ).toBeInTheDocument();
+
+    expect(legend()).toBeInTheDocument();
+  });
 });

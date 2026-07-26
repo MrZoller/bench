@@ -185,9 +185,18 @@ export function Matrix({ config }: { config: Config }) {
    * a test asserting the second would have nothing to drive it with. Scanning the cells anyway
    * costs one pass and closes the route before a catalog change opens it, which is cheaper than
    * noticing later that the grid was marked honestly on a Mac and silently on a fallback row.
+   *
+   * `evaluated`, not `runs`. A cell that was measured and did not fit is still a figure derived
+   * from the stand-in: its verdict, its tooltip and — the sharp end — its "past the default
+   * allocation, which this machine lets you raise" recommendation all rest on the stand-in's bit
+   * width. Gating on `runs` hid the mark exactly when the grid was most confidently wrong: at 128K
+   * over 128 users on MLX, every Apple cell fails placement, so the grid published 85 verdicts and
+   * a raise-the-ceiling recommendation with nothing saying what they were computed from. Since
+   * Q4_K_M's 4.85 bpw is the *heavier* stand-in, a borderline "past the default" is the verdict
+   * most likely to flip. Raised by Codex on PR #32.
    */
   const substitutedCells = useMemo(
-    () => cells.flat().some((cell) => cell.runs && substitutionFor(runtime, cell.quantId)),
+    () => cells.flat().some((cell) => cell.evaluated && substitutionFor(runtime, cell.quantId)),
     [cells, runtime]
   );
 
