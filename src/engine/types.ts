@@ -354,6 +354,38 @@ export interface RuntimeSpec {
    * would report capacity and throughput for a pairing that cannot be loaded at all.
    */
   weightFormats: readonly string[];
+  /**
+   * Set when some of `weightFormats` are stand-ins *by width* rather than formats this runtime
+   * really loads.
+   *
+   * The engine cannot tell the difference — a roofline consumes bits per weight, and a stand-in of
+   * the right width produces plausible arithmetic either way. That is exactly what makes it worth
+   * recording: MLX quantizes with its own affine scheme at 4 and 8 bits, the catalog has no MLX
+   * entries for those, and other catalogued formats fill in. So every memory and throughput
+   * figure for an
+   * Apple-silicon configuration derives from a format MLX does not read, while the vLLM and
+   * llama.cpp figures do not — and nothing on screen said which was which.
+   *
+   * Kept in `weightFormats` rather than removed from it: dropping the substitution restricts Apple
+   * silicon to BF16 alone, which makes a headline case largely unusable. A documented
+   * approximation beats an honest refusal here; an *undocumented* one beats neither.
+   *
+   * **The list is of the formats that are real, not of the stand-ins**, and the polarity is the
+   * whole point. Naming the stand-ins meant adding a width to `weightFormats` and forgetting the
+   * second list left it offered, scored, and unmarked — silently. Naming the natives makes a
+   * newly-added format marked until someone declares it real, so the failure mode is a warning
+   * nobody needed rather than a figure nobody questioned.
+   *
+   * One object rather than two optional fields, so a runtime cannot declare a substitution and omit
+   * its explanation — which returned `undefined` from the lookup, read as "not a substitution" at
+   * both call sites, and reached exactly the invisible state this exists to abolish.
+   */
+  substituted?: {
+    /** Formats here that the runtime genuinely loads. Everything else in `weightFormats` stands in. */
+    nativeFormats: readonly string[];
+    /** What the substitution is, in one clause, for the marker shown beside those figures. */
+    note: string;
+  };
   /** KV cache dtypes the runtime can actually store. */
   kvPrecisions: readonly KvPrecision[];
   /**

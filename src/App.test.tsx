@@ -1431,3 +1431,218 @@ describe('the Envelope says what a region does, not only what it fails', () => {
     expect(within(region).getByText(/not checked here/i)).toBeInTheDocument();
   });
 });
+
+/**
+ * MLX quantizes with its own affine scheme, the catalog has no measured entry for it, and other
+ * catalogued formats stand in *by width*. The engine cannot tell the difference — a roofline consumes bits
+ * per weight, and a stand-in of the right width produces plausible arithmetic — so every figure for
+ * an Apple-silicon configuration derived from a format MLX does not read, with nothing on screen
+ * saying which figures those were. The same rule `devices.json` already follows for pre-release
+ * specs: an approximation that is documented is a modelling choice; one that is invisible is
+ * invented data.
+ */
+describe('a figure derived from a stand-in format says so', () => {
+  const marker = () => screen.queryByText(/derived from a format .* cannot load/i);
+
+  /**
+   * The width named has to be the width the figures beside it were computed at.
+   *
+   * MLX substitutes seven formats — six GGUF plus INT8 — from Q3_K_M's 3.91 bpw to Q8_0's 8.5, and
+   * the note on the runtime is one static string. So a sentence naming a particular quant was true
+   * of exactly one of them and off by up to a factor of two on the rest, while claiming "the
+   * arithmetic is sound for that width". Both cases are asserted because the Q4_K_M one passes
+   * either way; only Q8_0 distinguishes a composed width from a hardcoded one.
+   */
+  it.each([
+    ['q4_k_m', /4\.85 bpw/],
+    ['q8_0', /8\.5 bpw/],
+  ])('names the width the figures were actually computed at, for %s', async (quantId, width) => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+    await user.selectOptions(screen.getByLabelText('Quantization'), quantId);
+
+    expect(marker()).toBeInTheDocument();
+    // And says what the substitution actually is, rather than only that there is one. Both halves:
+    // the runtime's own note, and the width composed from the selected quant. Without the first,
+    // deleting `{substitution}` from the banner leaves every other assertion here passing.
+    expect(marker()).toHaveTextContent(/affine scheme/i);
+    expect(marker()).toHaveTextContent(width);
+  });
+
+  it('stays silent on the formats MLX genuinely loads', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+
+    // BF16 is a real MLX format — no groups, no scales, no biases, so 16 bpw is exact — and a
+    // marker here would be crying wolf on the majority case and train people to ignore it where it
+    // matters. It is also the landing state: switching the runtime to MLX coerces to BF16.
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'bf16');
+    expect(marker()).not.toBeInTheDocument();
+  });
+
+  /**
+   * INT8 is a stand-in under MLX, and the catalog said otherwise until PR #32.
+   *
+   * MLX's 8-bit is affine at 8 bits just as its 4-bit is, while the catalogued `int8` row is
+   * LLM.int8() — per-channel, no group metadata, 8.0 bpw exactly, cited to arXiv 2208.07339 and
+   * offered to vLLM. Listing it as native inverted the two 8-bit stand-ins against each other: on
+   * a 235B, the *marked* Q8_0 at 8.5 bpw reported 13.7 GiB heavier than the unmarked INT8, so the
+   * lighter and more optimistic of the two was the one carrying no provenance at all.
+   *
+   * Pinned because nothing asserted MLX + INT8 in either direction, which is how a modelling call
+   * gets reversed by a one-word catalog edit and nobody notices.
+   */
+  it('marks INT8 under MLX, which quantizes 8-bit its own way too', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'int8');
+
+    expect(marker()).toBeInTheDocument();
+    // At the row's own width, not Q4_K_M's — the composed clause has to follow the selection here
+    // as it does for every other stand-in.
+    expect(marker()).toHaveTextContent(/8 bpw/);
+  });
+
+  /**
+   * The banner promises "the memory and speed figures below", so it has to go quiet when there are
+   * none. Reachable because the runtime picker deliberately permits a pairing it cannot drive and
+   * `coerce` never reconciles the device against the runtime: on an RTX under MLX, BudgetBar,
+   * Telemetry, Workloads and the Envelope all render a refusal — while this asserted their
+   * arithmetic was sound for a width nothing used.
+   */
+  it('stays silent when the runtime cannot drive the device at all', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Same runtime and same format throughout — only the device moves, so the gate is the one
+    // thing that can account for the marker going away.
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
+    expect(marker()).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    // Asserted, so this cannot go vacuous if the pairing ever stops being reachable — the point is
+    // that there are no figures, not merely that the marker is gone.
+    expect(screen.getByText(/no budget to show/i)).toBeInTheDocument();
+    expect(marker()).not.toBeInTheDocument();
+  });
+
+  /**
+   * The other side of that gate, and the one that makes it `wasEvaluated` rather than "does it
+   * run". A configuration measured and found far over still took every figure on screen from the
+   * stand-in's width, so it stays marked — dropping it here is the polarity error the Matrix
+   * legend had, one surface over.
+   */
+  it('keeps marking a configuration that was measured and did not fit', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
+
+    // Over the machine, but MLX does drive a Mac — so the bytes were counted, at Q4_K_M's width.
+    expect(screen.getByText(/over$/i)).toBeInTheDocument();
+    expect(marker()).toBeInTheDocument();
+  });
+
+  it('stays silent on runtimes that load what they are given', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // llama.cpp reads GGUF natively — the same Q4_K_M, no substitution.
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'llama.cpp');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
+
+    expect(marker()).not.toBeInTheDocument();
+  });
+
+  it('tags the format picker that caused it, without repeating the whole derivation', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
+
+    // The control's own description says it is a stand-in; the panel says what the stand-in is.
+    // Printing the same forty words in both taught people to skip both.
+    //
+    // The sentinel has to be a phrase that survives in the runtime's note, or this stops being an
+    // assertion. It was `4.5 bpw`, which was the note's distinctive tail until the note stopped
+    // naming a width — leaving a test that could not fail, guarding the thing it was written for.
+    const picker = screen.getByLabelText('Quantization');
+    expect(picker).toHaveAccessibleDescription(/stand-in for a format/i);
+    expect(picker).not.toHaveAccessibleDescription(/affine scheme/i);
+  });
+
+  it('marks the Matrix when any row on it was scored at a stand-in', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const matrix = () => screen.getByRole('region', { name: /every model on every machine/i });
+    const legend = () => within(matrix()).queryByText(/stand-in format .* cannot load/i);
+    // Reachable today only because the *selection* is a stand-in — the `SUBSTITUTE_QUANT_IDS`
+    // fallback cannot land on one with this catalog. The per-cell scan is defence for that route,
+    // not something this can drive.
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'llama.cpp');
+    expect(legend()).not.toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
+    expect(legend()).toBeInTheDocument();
+  });
+
+  /**
+   * The all-blocked grid, which is the state gating the legend on `runs` hid it in.
+   *
+   * At the longest context and the most users, every Apple cell under MLX fails placement, so a
+   * scan for a *running* substituted cell finds nothing — while the grid goes on publishing a
+   * verdict for every cell and, on some of them, "past the default allocation, which this machine
+   * lets you raise". Every one of those rests on Q4_K_M's 4.85 bpw standing in for MLX's ~4.5,
+   * and since the stand-in is the heavier of the two, a borderline "past the default" is the
+   * verdict most likely to flip. The mark is least dispensable exactly where it was dropped.
+   */
+  it('marks the Matrix when every cell was scored at a stand-in and none of them fit', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const matrix = () => screen.getByRole('region', { name: /every model on every machine/i });
+    const legend = () => within(matrix()).queryByText(/stand-in format .* cannot load/i);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
+
+    const context = screen.getByLabelText('Context per sequence') as HTMLInputElement;
+    fireEvent.change(context, { target: { value: String(Number(context.max)) } });
+    const users = screen.getByLabelText('Concurrent users') as HTMLInputElement;
+    fireEvent.change(users, { target: { value: String(Number(users.max)) } });
+
+    // Nothing on the grid runs — the precondition, asserted rather than assumed, since a catalog
+    // change that leaves one cell running would make the rest of this test vacuous.
+    expect(
+      within(matrix()).getByText(
+        (_, el) =>
+          el?.tagName === 'CAPTION' && /\b0 of \d+ combinations run/.test(el.textContent ?? '')
+      )
+    ).toBeInTheDocument();
+
+    expect(legend()).toBeInTheDocument();
+  });
+});

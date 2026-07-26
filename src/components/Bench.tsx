@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { DEVICES, MODELS, RUNTIMES, evaluateConfig, useConfig, type Config } from '@/store/config';
 import { useUrlSync } from '@/store/useUrlSync';
 import { configToShareSearch } from '@/store/url';
-import { getRuntime, runtimeDrives } from '@/data/runtimes';
-import { QUANTS } from '@/data/quants';
+import { getRuntime, runtimeDrives, substitutionFor } from '@/data/runtimes';
+import { QUANTS, getQuant } from '@/data/quants';
 import { CATALOG_GENERATED_AT, getDevice, getModel } from '@/data/catalog';
 import { BudgetBar } from './BudgetBar';
 import { Telemetry } from './Telemetry';
@@ -12,7 +12,12 @@ import { Envelope } from './Envelope';
 import { DETAIL_ANCHOR_ID, Matrix } from './Matrix';
 import { Segmented, Select, StopSlider } from './Controls';
 import { compact, gibLabel, params, percent, tokens } from '@/lib/format';
-import { canShard, maxAllocatablePerDevice, raisingCeilingWouldHelp } from '@/engine/placement';
+import {
+  canShard,
+  maxAllocatablePerDevice,
+  raisingCeilingWouldHelp,
+  wasEvaluated,
+} from '@/engine/placement';
 import { classifyDecode } from '@/lib/verdicts';
 import { quantApplies } from '@/lib/quantChoice';
 import {
@@ -85,10 +90,44 @@ export function Bench() {
       QUANTS.filter((q) => quantApplies(q, model, device, runtime)).map((q) => ({
         value: q.id,
         label: q.label,
-        note: q.qualityNote,
+        // A short claim, not the whole derivation — the panel below carries that, and printing the
+        // same forty words twice on one screen taught people to skip both. `Select` renders only
+        // the *selected* option's note, so this was never what informs a choice between formats
+        // anyway; what it does is tag the control that caused the panel.
+        note:
+          [
+            substitutionFor(runtime, q.id) && `Stand-in for a format ${runtime.label} cannot load.`,
+            q.qualityNote,
+          ]
+            .filter(Boolean)
+            .join(' ') || undefined,
       })),
     [model, device, runtime]
   );
+
+  /**
+   * Set when the memory and speed figures on this page derive from a format the runtime cannot
+   * actually load.
+   *
+   * The engine cannot tell — a roofline consumes bits per weight, and a stand-in of the right width
+   * produces plausible arithmetic either way — which is exactly why it has to be said out loud. The
+   * same rule `devices.json` already follows for pre-release specs: an approximation that is
+   * documented is a modelling choice, and an approximation that is invisible is invented data.
+   *
+   * Gated on `wasEvaluated`, because the banner's first clause promises "the figures below" and
+   * there are none when the runtime cannot drive the device: pick Q4_K_M on a 5090 under llama.cpp,
+   * switch to MLX, and BudgetBar, Telemetry, Workloads and the Envelope all render a refusal while
+   * this asserted their arithmetic was sound for a width nothing used.
+   *
+   * Not `runnable`, which is the trap on the other side. A configuration that was measured and came
+   * up short — DeepSeek V3 on a 256 GB Mac at Q4_K_M, drawn at 382 GiB over a 192 GiB bar — got
+   * every one of those figures from the stand-in's width and has to stay marked. That is the same
+   * distinction the Matrix legend draws, and gating on "does it run" is the polarity error that was
+   * fixed there earlier in this PR. Raised by Codex on PR #32.
+   */
+  const substitution = wasEvaluated(evaluation.placement)
+    ? substitutionFor(runtime, config.quantId)
+    : undefined;
 
   /** Whether the configuration runs at all. */
   const runnable = !evaluation.placement.unsupported && !evaluation.placement.impossible;
@@ -265,6 +304,27 @@ export function Bench() {
           no-op in every real browser while jsdom, which has no scrollIntoView at all, could never
           show it. Zero height with the flex `gap-5` cancelled costs no layout. */}
       <div id={DETAIL_ANCHOR_ID} aria-hidden="true" className="h-0 -mb-5" />
+
+      {/* Above every figure it applies to, rather than tucked under the picker that caused it.
+          The picker's note tells someone choosing a format; this tells someone *reading a number*,
+          which is a different person arriving at a different moment — usually from a shared link
+          that chose the format for them. Warning tone rather than critical: the arithmetic is sound
+          for the width it was given, and what is uncertain is whether the width is right. */}
+      {substitution && (
+        <p
+          role="note"
+          className="panel border-[var(--color-warning)] p-4 text-sm leading-relaxed text-[var(--color-text-muted)]"
+        >
+          <span aria-hidden="true" className="text-[var(--color-warning)]">
+            ◐{' '}
+          </span>
+          The memory and speed figures below are derived from a format {runtime.label} cannot load.{' '}
+          {substitution} They use {getQuant(config.quantId).label}’s {getQuant(config.quantId).bpw}{' '}
+          bpw, and the arithmetic is sound for that width; whether it is the width {runtime.label}{' '}
+          would really use is the approximation.
+        </p>
+      )}
+
       <BudgetBar evaluation={evaluation} canOffload={device.class === 'discrete-gpu'} />
       <Telemetry
         evaluation={evaluation}

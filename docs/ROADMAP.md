@@ -338,11 +338,32 @@ Correctness follow-ups live in [issues #12–#20](https://github.com/MrZoller/be
 section is for the questions those issues cannot settle.
 
 - **MLX has no native quantization entries** ([#18](https://github.com/MrZoller/bench/issues/18)).
-  GGUF K-quants stand in _by width_ — Q4_K_M's 4.83 bpw against MLX's ~4.5 — so every figure for an
-  Apple-silicon configuration derives from a format MLX does not load. Invented data, documented as
-  a modelling choice. The alternative, BF16 and INT8 only, makes Apple silicon unusable in a tool
-  where it is a headline case. Now entangled with the `weightFormats` check, whose MLX list
-  includes those K-quants precisely so the substitution keeps working.
+  Other catalogued formats stand in _by width_ — Q4_K_M's 4.85 bpw against MLX's ~4.5, and the
+  non-GGUF INT8 at a flat 8.0 — so every figure for an
+  Apple-silicon configuration derives from a format MLX does not load. The alternative, BF16 only,
+  makes Apple silicon unusable in a tool where it is a headline case, so the
+  substitution stays; it is entangled with the `weightFormats` check, whose MLX list includes those
+  formats precisely so it keeps working.
+
+  **What changed is that it is no longer invisible.** `substituted.nativeFormats` on the runtime
+  names the formats it genuinely loads — everything else in `weightFormats` is a stand-in and is
+  marked by default. The polarity is the point, and the reason to state it here: a format added to
+  a runtime later is marked until someone says otherwise, where a list of the stand-ins themselves
+  would leave that format silently unmarked. The Bench marks every figure derived from one; the
+  Matrix marks a grid containing any. That is the rule `devices.json` already followed for
+  pre-release specs, applied to the other kind of uncertain input: a documented approximation is a
+  modelling choice, and an invisible one is invented data. Note the marker is deliberately narrow —
+  BF16 is a real MLX format and carries none, because a warning on the majority case trains people
+  to ignore it where it matters. `int8` was on that list and should not have been: MLX's 8-bit is
+  affine like its 4-bit, while the catalogued `int8` row is LLM.int8() at a flat 8.0 bpw, aimed at
+  vLLM. Leaving it native inverted the two 8-bit stand-ins — the marked `q8_0` at 8.5 reported
+  13.7 GiB _heavier_ than the unmarked `int8` on a 235B, which is the asymmetry this exists to
+  abolish. Resolving it properly needs a measured MLX width; see #18.
+
+  **What would still resolve it** is measured bits-per-weight for MLX's affine 4- and 8-bit schemes,
+  at which point the substitution is deleted rather than explained. That needs real checkpoints on
+  Apple hardware; the marker is what makes the interim honest rather than what makes it right.
+
 - ~~Codex connector coverage is unconfirmed.~~ **Confirmed working**, and now well characterised.
   Reviews arrive roughly 40 minutes after a push, which is long enough to look like absence — don't
   conclude the connector is missing from a quiet first half-hour. Two further traps: it signals

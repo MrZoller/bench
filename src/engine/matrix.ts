@@ -1,5 +1,5 @@
 import type { ModelSpec, DeviceSpec, QuantSpec, RuntimeSpec, UsageSpec } from './types';
-import { planPlacement, raisingCeilingWouldHelp } from './placement';
+import { planPlacement, raisingCeilingWouldHelp, wasEvaluated } from './placement';
 import { estimateDecode, estimatePrefill } from './speed';
 
 /**
@@ -26,6 +26,18 @@ export interface MatrixCell {
   contextTokens: number;
   /** False when the pair cannot run at all — no measure is meaningful then. */
   runs: boolean;
+  /**
+   * Whether the pair was judged on its numbers, as against turned away on a categorical ground.
+   *
+   * `runs` collapses two unlike failures — a runtime that cannot load this model on this device
+   * at all, and one whose bytes were counted and did not fit — and `blockedBy` carries the
+   * difference only as prose, so a caller cannot read it. One caller has to: the stand-in warning
+   * asks whether any figure on this grid came from a format the runtime cannot really load, and a
+   * capacity failure *is* such a figure. Its verdict, its tooltip and its raise-the-ceiling
+   * recommendation all rest on the stand-in's bit width. Only a cell refused on a ground that
+   * never consulted the arithmetic rests on nothing at all. Raised by Codex on PR #32.
+   */
+  evaluated: boolean;
   /** Why not, when it does not. */
   blockedBy?: string;
   /**
@@ -91,16 +103,20 @@ export function computeMatrix(request: MatrixRequest): MatrixCell[][] {
       const placement = planPlacement(model, quant, cellUsage, rig, runtime);
 
       if (placement.unsupported || placement.impossible) {
+        // Shared with the Bench's banner, which asks the same question of a single placement — see
+        // `wasEvaluated`. Absent an `unsupported`, the bytes were counted and came up short, so the
+        // cell's verdict did come from whatever format the row was scored at.
+        const evaluated = wasEvaluated(placement);
         // Same call `raisingCeilingWouldHelp` serves in the Envelope and Telemetry, rather than a
         // third re-derivation of "is this a setting or a wall" — the two that already existed
         // disagreed once, which is why it lives in `placement.ts`.
         const raiseable =
-          placement.unsupported === undefined &&
-          raisingCeilingWouldHelp(device, placement.usedBytesPerDevice);
+          evaluated && raisingCeilingWouldHelp(device, placement.usedBytesPerDevice);
 
         return {
           ...base,
           runs: false,
+          evaluated,
           blockedBy:
             placement.unsupported ?? (raiseable ? 'Past the default allocation' : 'Does not fit'),
           ...(raiseable ? { raiseCeilingWouldHelp: true } : {}),
@@ -117,6 +133,7 @@ export function computeMatrix(request: MatrixRequest): MatrixCell[][] {
       return {
         ...base,
         runs: true,
+        evaluated: true,
         utilization: placement.utilization,
         offloadFraction: placement.offloadFraction,
         tokensPerSec: decode.perUserTokensPerSec,

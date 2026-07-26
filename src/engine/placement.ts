@@ -165,6 +165,25 @@ export function raisingCeilingWouldHelp(device: DeviceSpec, usedBytesPerDevice: 
   );
 }
 
+/**
+ * Whether a placement was judged on its bytes, as against turned away on a categorical ground.
+ *
+ * `unsupported` collects the refusals that never consult the arithmetic — wrong device class, no
+ * interconnect to shard over, a KV precision or weight format the runtime does not offer, an unmet
+ * requirement — where `impossible` is nothing but arithmetic. Anything that answers "did these
+ * numbers come from somewhere" has to split the two, and two surfaces now do: the Matrix's stand-in
+ * legend and the Bench's stand-in banner.
+ *
+ * One function rather than the expression written twice, for the reason `substitutionFor`'s own
+ * docblock gives about "is this a substitution" — the copies are fine until they disagree, and the
+ * failure mode here is silent. Note it is *not* `fits`: a configuration that was measured and came
+ * up short still got its verdict from the format it was scored at, and dropping the mark there is
+ * the polarity error #32 fixed on the Matrix. Raised by Codex on PR #32.
+ */
+export function wasEvaluated(placement: Placement): boolean {
+  return placement.unsupported === undefined;
+}
+
 /** Memory a single device can actually give the model, after the runtime takes its cut. */
 export function allocatablePerDevice(rig: Rig, runtime: RuntimeSpec): number {
   const { device } = rig;

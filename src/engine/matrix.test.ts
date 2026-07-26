@@ -57,6 +57,45 @@ describe('the model-by-device grid', () => {
   });
 
   /**
+   * `runs` and `evaluated` are different questions, and the stand-in warning turns on the
+   * difference: a cell whose bytes were counted and came up short was still scored at whatever
+   * format its row used, where one the runtime cannot drive was never scored at all. Only the
+   * first is a figure derived from a substitution.
+   *
+   * Pinned here rather than through the UI because it cannot be reached from there. `runs` implies
+   * `evaluated`, so the Matrix's predicate is strictly weaker than the one it replaced and can only
+   * ever add a legend — no rendered state distinguishes the two. That makes this the only gate
+   * standing between a later `unsupported` reason derived from capacity and a silent false
+   * positive on the grid.
+   */
+  it('separates a pair it measured and refused from one it never measured', () => {
+    const measured = matrix({
+      models: [DEEPSEEK_V3],
+      devices: [MAC_STUDIO_M3_ULTRA_256],
+      quantFor: () => getQuant('bf16'),
+      runtime: MLX,
+    })[0][0];
+    // Far beyond the machine, but MLX does drive a Mac, so the bytes were counted before refusing.
+    expect(measured.runs).toBe(false);
+    expect(measured.evaluated).toBe(true);
+
+    const categorical = matrix({
+      models: [DEEPSEEK_V3],
+      devices: [MAC_STUDIO_M3_ULTRA_256],
+      quantFor: () => getQuant('bf16'),
+      runtime: getRuntime('vllm'),
+    })[0][0];
+    // vLLM does not drive Apple silicon at all — refused on the class, whatever the memory says.
+    expect(categorical.runs).toBe(false);
+    expect(categorical.evaluated).toBe(false);
+
+    // And anything that runs was evaluated by construction.
+    const running = matrix({ models: [LLAMA_31_8B], devices: [RTX_5090] })[0][0];
+    expect(running.runs).toBe(true);
+    expect(running.evaluated).toBe(true);
+  });
+
+  /**
    * The comparison the whole tool exists to make. A Spark holds a 671B model a 5090 cannot, and
    * decodes it far slower — if either half of that stopped being true, the triangle would have
    * collapsed into a single "better hardware" axis.
