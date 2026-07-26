@@ -455,12 +455,34 @@ function ShareLink() {
 
   useEffect(() => () => window.clearTimeout(resetTimer.current), []);
 
-  const label =
-    state === 'copied'
-      ? 'Link copied'
-      : state === 'unavailable'
-        ? 'Copy it from here'
-        : 'Copy link to this scenario';
+  /**
+   * Which link the clipboard actually holds, as far as this component knows.
+   *
+   * The confirmation is a claim that the clipboard matches what is on screen, so it is *derived*
+   * from exactly that rather than stored as a flag and synchronised. `attempt.current` only
+   * advanced on a click, which closed the overlapping-click race and not the one a slider causes:
+   * `href` re-derives for the new scenario while the earlier `writeText` is still pending, the
+   * success passes `superseded()`, and the button beside the new scenario reads "Link copied"
+   * while the clipboard holds the previous one.
+   *
+   * Comparing the two is a stronger fix than resetting on change, and a smaller one — there is no
+   * effect to keep in step, and the stale state is unrepresentable rather than merely cleaned up
+   * afterwards. It also gets the odd case right for free: drag a slider away and back, and the
+   * clipboard really does hold what is on screen again.
+   *
+   * Deliberately does not touch `unavailable`. That is not a stale claim — the clipboard is still
+   * unavailable, and the field under it renders `href`, so it is already offering the new link.
+   * Withdrawing it would snatch the fallback away the moment the user nudged a control, which is a
+   * worse failure than the one being fixed.
+   */
+  const [copiedHref, setCopiedHref] = useState<string | null>(null);
+  const confirmed = state === 'copied' && copiedHref === href;
+
+  const label = confirmed
+    ? 'Link copied'
+    : state === 'unavailable'
+      ? 'Copy it from here'
+      : 'Copy link to this scenario';
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -479,8 +501,12 @@ function ShareLink() {
           window.clearTimeout(resetTimer.current);
           const id = ++attempt.current;
           const superseded = () => attempt.current !== id;
+          // The link as it stood at the click, not as it stands when the promise settles. What
+          // the clipboard ends up holding is this, and the confirmation compares it with whatever
+          // is on screen by then.
+          const writing = href;
 
-          const writer = navigator.clipboard?.writeText(href);
+          const writer = navigator.clipboard?.writeText(writing);
           if (writer === undefined) {
             setState('unavailable');
             return;
@@ -489,6 +515,7 @@ function ShareLink() {
           void writer.then(
             () => {
               if (superseded()) return;
+              setCopiedHref(writing);
               setState('copied');
               resetTimer.current = window.setTimeout(() => setState('idle'), 2000);
             },
