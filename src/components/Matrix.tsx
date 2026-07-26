@@ -11,6 +11,7 @@ import { getQuant } from '@/data/quants';
 import { getRuntime } from '@/data/runtimes';
 import { FALLBACK_QUANT_ID, quantApplies } from '@/lib/quantChoice';
 import { sequential } from '@/design/tokens';
+import { kvLabel } from '@/lib/stops';
 import { params, percent, rate, seconds, tokens } from '@/lib/format';
 import { useConfig, type Config } from '@/store/config';
 
@@ -71,6 +72,18 @@ export function Matrix({ config }: { config: Config }) {
 
   const quant = getQuant(config.quantId);
   const runtime = getRuntime(config.runtimeId);
+
+  /**
+   * What this runtime calls the selected cache precision.
+   *
+   * `kvPrecision` is an internal width, not a user-facing name: vLLM has no integer-Q8 cache, and
+   * the catalog maps that value to FP8 precisely because "Q8" names a flag its users cannot type.
+   * Upper-casing the internal value here described a vLLM setting that does not exist — in the
+   * heading, and so in any screenshot taken from this panel. The Bench's own control has always
+   * resolved it properly; this was the one place that did not, and the resolution is now one
+   * function so a third surface cannot invent a fourth answer.
+   */
+  const kv = kvLabel(runtime, config.kvPrecision);
 
   const models = useMemo(
     () =>
@@ -144,6 +157,24 @@ export function Matrix({ config }: { config: Config }) {
   const runnable = cells.flat().filter((c) => c.runs).length;
 
   /**
+   * Whether a cell is the scenario the Bench is currently showing.
+   *
+   * The device count is part of that question, and leaving it out made the mark a lie on any
+   * linked rig: every cell here is scored with `deviceCount: 1`, so with the Bench on 2–8 devices
+   * the ring and `aria-current` claimed it was showing a cell whose capacity and speed describe a
+   * different machine. Clicking the already-marked cell then silently reset the configuration to
+   * one device — the one thing a cell that says "you are here" should not do.
+   *
+   * One predicate rather than the two copies this had, which is the same rule as everywhere else
+   * here: a mark and the thing it marks are one claim, and two hand-written copies of it are how
+   * the ring and the screen-reader state come to disagree.
+   */
+  const isCurrent = (cell: MatrixCell) =>
+    cell.modelId === config.modelId &&
+    cell.deviceId === config.deviceId &&
+    config.deviceCount === 1;
+
+  /**
    * Tall enough for the longest label this grid actually renders.
    *
    * A fixed 96px was set for the names that existed then and is short for several shipping ones —
@@ -176,8 +207,12 @@ export function Matrix({ config }: { config: Config }) {
             {substitutes.length > 0 &&
               `, ${substitutes.join(' or ')} where it does not apply`}, {runtime.label} —{' '}
             {tokens(config.contextTokens)} context, {tokens(config.promptTokens)} prompt,{' '}
-            {config.concurrency} {config.concurrency === 1 ? 'user' : 'users'},{' '}
-            {config.kvPrecision.toUpperCase()} KV
+            {config.concurrency} {config.concurrency === 1 ? 'user' : 'users'}, {kv} KV
+            {/* Every cell is scored at one device, and until this said so a Bench configured for a
+                linked rig showed a grid describing hardware the user had not asked about — with
+                nothing on screen to reveal the substitution. Stated only when it differs from what
+                the Bench holds, since on a single-device configuration it is not news. */}
+            {config.deviceCount > 1 && ', one device per cell'}
           </span>
         </h2>
         <p className="text-sm whitespace-nowrap text-[var(--color-text-muted)]">
@@ -311,13 +346,9 @@ export function Matrix({ config }: { config: Config }) {
                           block: 'start',
                         });
                       }}
-                      title={tooltip(cell, measure, quant.id)}
-                      aria-label={tooltip(cell, measure, quant.id)}
-                      aria-current={
-                        cell.modelId === config.modelId && cell.deviceId === config.deviceId
-                          ? 'true'
-                          : undefined
-                      }
+                      title={tooltip(cell, measure, quant.id, config.deviceCount)}
+                      aria-label={tooltip(cell, measure, quant.id, config.deviceCount)}
+                      aria-current={isCurrent(cell) ? 'true' : undefined}
                       // 28px squares two pixels apart are under the 44px `marks.hitTarget` this
                       // repo declares, and with hundreds of neighbours a touch user loading the
                       // wrong scenario is the likely outcome rather than the unlucky one. Coarse
@@ -326,7 +357,7 @@ export function Matrix({ config }: { config: Config }) {
                       className={`h-7 w-full rounded-sm focus:ring-2 focus:ring-[var(--color-accent)] focus:outline-none [@media(pointer:coarse)]:h-11 ${
                         cell.runs ? '' : 'border border-dashed border-[var(--color-border)]'
                       } ${cell.raiseCeilingWouldHelp ? 'border-[var(--color-warning)]' : ''} ${
-                        cell.modelId === config.modelId && cell.deviceId === config.deviceId
+                        isCurrent(cell)
                           ? 'ring-2 ring-[var(--color-accent)] ring-offset-1 ring-offset-[var(--color-surface)]'
                           : ''
                       }`}
@@ -407,11 +438,27 @@ function fill(cell: MatrixCell, measure: MatrixMeasure, max: number): string {
   return RAMP[index];
 }
 
-/** What a cell says on hover, and to a screen reader. Never colour alone. */
-function tooltip(cell: MatrixCell, measure: MatrixMeasure, selectedQuantId: string): string {
+/**
+ * What a cell says on hover, and to a screen reader. Never colour alone.
+ *
+ * Both substitutions this grid makes are named here as well as in the heading, because the heading
+ * says which formats stand in *somewhere* while only the cell knows whether it is one of them. The
+ * device count is the same kind of claim: every cell is scored at one device, so on a linked rig
+ * the figures describe hardware the reader did not ask about — and clicking the cell adopts that
+ * substitution rather than merely displaying it.
+ */
+function tooltip(
+  cell: MatrixCell,
+  measure: MatrixMeasure,
+  selectedQuantId: string,
+  selectedDeviceCount: number
+): string {
   const model = getModel(cell.modelId).name;
   const device = getDevice(cell.deviceId).name;
-  if (!cell.runs) return `${model} on ${device}: ${cell.blockedBy ?? 'does not run'}.`;
+  // Stated even for a blocked cell: "does not run" is a claim about a machine, and on a linked rig
+  // it would otherwise read as a verdict on the rig the Bench is holding.
+  const rig = selectedDeviceCount > 1 ? `${device}, one device` : device;
+  if (!cell.runs) return `${model} on ${rig}: ${cell.blockedBy ?? 'does not run'}.`;
 
   const detail =
     measure === 'fit'
@@ -423,5 +470,5 @@ function tooltip(cell: MatrixCell, measure: MatrixMeasure, selectedQuantId: stri
         : `${seconds(cell.ttftSeconds)} to first token`;
 
   const at = cell.quantId === selectedQuantId ? '' : ` at ${getQuant(cell.quantId).label}`;
-  return `${model} on ${device}${at}: ${detail}.`;
+  return `${model} on ${rig}${at}: ${detail}.`;
 }
