@@ -1117,6 +1117,13 @@ describe('every numeric good bar is at least as strict as its own tight bar', ()
  * session already in the cache, and no other archetype does.
  */
 describe('only the agent grades its prompt against a resident session', () => {
+  /**
+   * `RESPONSE_ALLOWANCE` is private to `verdict.ts`, deliberately — it is an internal convention,
+   * not part of the contract. Restated here so this test fails if the two ever disagree, which is
+   * the whole point of asserting the occupancy closes on the window.
+   */
+  const RESPONSE_TOKENS = 512;
+
   /** Every `(prompt, context, prefix)` the verdict layer asks for, in order. */
   const scenariosAsked = () => {
     const asked: { promptTokens: number; contextTokens: number; cachedPrefixTokens: number }[] = [];
@@ -1163,9 +1170,16 @@ describe('only the agent grades its prompt against a resident session', () => {
     for (const scenario of asked) {
       if (scenario.cachedPrefixTokens === 0) continue;
       // The only scenario carrying a prefix is the agent's, and the prefix is exactly the part of
-      // the session the turn is not.
+      // the session the turn does not need — the turn *and its answer*, not the turn alone.
+      // Subtracting only the prompt spent the whole window and left the reply nowhere.
       expect(scenario.promptTokens).toBe(agentTurn);
-      expect(scenario.cachedPrefixTokens).toBe(scenario.contextTokens - agentTurn);
+      expect(scenario.cachedPrefixTokens).toBe(
+        scenario.contextTokens - agentTurn - RESPONSE_TOKENS
+      );
+      // The occupancy has to close exactly on the window, or one of these three is wrong.
+      expect(scenario.cachedPrefixTokens + agentTurn + RESPONSE_TOKENS).toBe(
+        scenario.contextTokens
+      );
     }
 
     // And it really does ask for one, or the loop above is vacuous.
@@ -1180,16 +1194,17 @@ describe('only the agent grades its prompt against a resident session', () => {
   });
 
   it('grades the agent slower for it, on a rig where that decides the tier', () => {
-    // 8B at Q4_K_M on one 5090: a 16K turn against the 48K already resident in a 64K session is
-    // ~15s where the turn alone is ~6s, and the good tier's latency bar is 10s. The tier moves
+    // 8B at Q4_K_M on one 5090: a 16K turn against the 47.5K already resident in a 64K session is
+    // ~14s where the turn alone is ~6s, and the good tier's latency bar is 10s. The tier moves
     // because the estimate finally describes what an agent does, not because a threshold changed.
     const agent = judge(LLAMA_31_8B, 'q4_k_m', { device: RTX_5090 }).get('agent')!;
 
     expect(agent.fitness).toBe('tight');
-    // 48K, not 64K: the prefix is the session minus the turn, and the sentence must name the
-    // figure the estimate was called with.
-    expect(agent.reason).toMatch(/against the 48K already in the cache/);
-    expect(agent.reason).not.toMatch(/against the 64K/);
+    // 47.5K, not 64K and not 48K: the prefix is the session minus the turn *and its answer*, and
+    // the sentence must name the figure the estimate was called with. The half-K is the room to
+    // answer in — house style here, matching the 16.5K, 32.5K and 128.5K the other tiers print.
+    expect(agent.reason).toMatch(/against the 47\.5K already in the cache/);
+    expect(agent.reason).not.toMatch(/against the (64K|48K)/);
     // Never "re-read": not re-reading the session is the whole point of a cached prefix.
     expect(agent.reason).not.toMatch(/re-read/);
   });

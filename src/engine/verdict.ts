@@ -400,13 +400,24 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
   /**
    * What is already in the cache when this archetype's prompt arrives.
    *
-   * The whole window minus the new tokens, for an archetype that declares its prefix cached — and
-   * nothing at all for one that does not, which is the standalone-prompt reading the calibration
-   * anchors are measured at. Both readings are now expressible; which one applies is the
-   * archetype's declaration rather than a default this file picks.
+   * The window minus what the turn itself needs, for an archetype that declares its prefix cached —
+   * and nothing at all for one that does not, which is the standalone-prompt reading the calibration
+   * anchors are measured at. Both readings are expressible; which one applies is the archetype's
+   * declaration rather than a default this file picks.
+   *
+   * Through `needs(id)`, which is the turn *and its answer*, not `typicalPromptTokens` alone.
+   * `contextTokens` is prompt plus generation, so subtracting only the prompt spent the whole
+   * window on prefix and turn and left the reply nowhere: at a 64K session the occupancy came to
+   * 66,048 in a 65,536 window. The tell is at the boundary — `cachedPrefix(id, needs(id))` returned
+   * 512, claiming the room to answer as cached history, for a scenario that by definition has no
+   * history at all.
+   *
+   * `needs` because this file already made that mistake with a hand-written copy of the same
+   * boundary and wrote a comment about it: a limit stated twice is a limit that will disagree with
+   * itself. Raised by Codex on PR #31.
    */
   const cachedPrefix = (id: string, contextTokens: number) =>
-    workload(id).prefixIsCached ? Math.max(0, contextTokens - workload(id).typicalPromptTokens) : 0;
+    workload(id).prefixIsCached ? Math.max(0, contextTokens - needs(id)) : 0;
 
   const at = (id: string) => {
     const contextTokens = Math.max(usage.contextTokens, needs(id));
@@ -485,9 +496,9 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
     holdsFullSession ? AGENT_SESSION_CONTEXT : AGENT_TIGHT_SESSION_CONTEXT
   );
   /**
-   * The prefix the agent's turn is actually measured against — the session *minus* the turn, since
-   * `agentSession` is the whole window and the 16K arriving into it is part of that window, not on
-   * top of it.
+   * The prefix the agent's turn is actually measured against — the session minus the turn *and the
+   * room to answer it*, since `agentSession` is the whole window and both the 16K arriving into it
+   * and the reply leaving it are part of that window, not on top of it.
    *
    * Bound rather than recomputed at each use, because the sentences below have to name this and not
    * `agentSession`. The first version of them said "against 64K already in the cache" for a prefix
@@ -602,10 +613,11 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
       // The agent declares `prefixIsCached`, so the turn is now 16K new tokens attending against
       // the resident session: `cachedPrefix('agent', agentSession)`. That is the reading the
       // archetype's `typicalPromptTokens: 16384` always implied and the estimator could not carry.
-      // It makes this term *slower*, not faster: the prefix is the session minus the turn — 48K
-      // inside a 64K window — and 16K attending against 48K is seven times the query-key pairs of
-      // 16K attending against itself. On an 8B at Q4_K_M on one 5090 that takes the turn from 6.0s
-      // to 15s, which is the difference between clearing the 10s bar and not.
+      // It makes this term *slower*, not faster: the prefix is the session minus what the turn
+      // needs — 47.5K inside a 64K window, the half-K being the room to answer — and 16K attending
+      // against 47.5K is about seven times the query-key pairs of 16K attending against itself. On
+      // an 8B at Q4_K_M on one 5090 that takes the turn from 6.0s to 14s, which is the difference
+      // between clearing the 10s bar and not.
       //
       // No other archetype declares it, so every single-prompt scenario, and every calibration
       // anchor, is evaluated exactly as before.

@@ -151,17 +151,29 @@ reading the test that guards them.
   test asserts that as an identity rather than inside the ±30% band, which would have absorbed the
   mistake silently.
 
-  **The prefix is the session minus the turn**, and every sentence has to say so. `agentSession` is
-  the whole window, so a 16K turn arriving into a 64K session attends against 48K, not 64K — and the
-  first draft of the reasons printed the window, claiming a cache holding 80K of working set in a
-  64K window. The same defect this file exists to prevent, reintroduced by the fix meant to be about
-  honesty, and caught in review rather than by the suite. The prefix is bound once now and every
-  sentence quotes that binding.
+  **The prefix is the session minus what the turn needs**, and every sentence has to say so. It took
+  two review rounds to state it correctly. `agentSession` is the whole window, so the first draft
+  printed the window itself — claiming a cache holding 80K of working set in a 64K window. The
+  second subtracted the turn but not its answer, spending the entire budget on prefix and prompt and
+  leaving the 512-token reply nowhere; the tell was at the boundary, where `cachedPrefix(needs(id))`
+  returned 512 and claimed the room to answer as cached history for a scenario with no history at
+  all. It goes through `needs(id)` now, which is the same boundary `fits` tests, because a limit
+  stated twice is a limit that will disagree with itself — a comment this file already carried about
+  a different copy of the same number.
 
-  The consequence is a real regrade: 8B at Q4_K_M on one 5090 goes from 6.0s to 15s on an agent turn
-  against the 48K resident in a 64K session — seven times the query-key pairs — which is the
+  The consequence is a real regrade: 8B at Q4_K_M on one 5090 goes from 6.0s to 14s on an agent turn
+  against the 47.5K resident in a 64K session — about seven times the query-key pairs — which is the
   difference between clearing the 10s bar and not. The threshold did not move; the estimate started
   describing what an agent does.
+
+  **The capacity bars were not part of it**, and the review's second claim — that a rig holding
+  exactly 64K is admitted for a request needing another 512 — does not hold. The session constants
+  are windows, not prompts, so they already include generation; the agent's prompt-level bar
+  (`fits`, at 16,896) does carry the allowance; and once the prefix is 47.5K the occupancy closes on
+  65,536 exactly. Long-context is the deliberate contrast: its bars _do_ add the allowance, because
+  its 131,072 is a `typicalPromptTokens` and needs room to answer on top. Same numeral, different
+  kind of quantity — and widening the session bars would have forced `holdsFullSession` to advertise
+  a "64.5K session".
 
   **Chat is the honest second candidate and is deliberately not declared.** It is back-and-forth by
   its own description and re-reads nothing under the same caching. Deferred rather than dismissed:
