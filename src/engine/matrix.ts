@@ -1,5 +1,5 @@
 import type { ModelSpec, DeviceSpec, QuantSpec, RuntimeSpec, UsageSpec } from './types';
-import { planPlacement, raisingCeilingWouldHelp } from './placement';
+import { planPlacement, raisingCeilingWouldHelp, wasEvaluated } from './placement';
 import { estimateDecode, estimatePrefill } from './speed';
 
 /**
@@ -103,13 +103,10 @@ export function computeMatrix(request: MatrixRequest): MatrixCell[][] {
       const placement = planPlacement(model, quant, cellUsage, rig, runtime);
 
       if (placement.unsupported || placement.impossible) {
-        // `unsupported` collects the categorical refusals — wrong device class, no interconnect to
-        // shard over, a KV precision or weight format the runtime does not offer, an unmet
-        // requirement — and not one of them consults the byte arithmetic, where `impossible` is
-        // nothing but. `planPlacement` computes both, so this is about which question was asked and
-        // not about which ran first: absent an `unsupported`, the bytes were counted and came up
-        // short. Both bindings below turn on that, and asking twice is how they would disagree.
-        const evaluated = placement.unsupported === undefined;
+        // Shared with the Bench's banner, which asks the same question of a single placement — see
+        // `wasEvaluated`. Absent an `unsupported`, the bytes were counted and came up short, so the
+        // cell's verdict did come from whatever format the row was scored at.
+        const evaluated = wasEvaluated(placement);
         // Same call `raisingCeilingWouldHelp` serves in the Envelope and Telemetry, rather than a
         // third re-derivation of "is this a setting or a wall" — the two that already existed
         // disagreed once, which is why it lives in `placement.ts`.

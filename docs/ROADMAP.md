@@ -338,11 +338,11 @@ Correctness follow-ups live in [issues #12–#20](https://github.com/MrZoller/be
 section is for the questions those issues cannot settle.
 
 - **MLX has no native quantization entries** ([#18](https://github.com/MrZoller/bench/issues/18)).
-  GGUF K-quants stand in _by width_ — Q4_K_M's 4.85 bpw against MLX's ~4.5 — so every figure for an
+  GGUF quants stand in _by width_ — Q4_K_M's 4.85 bpw against MLX's ~4.5 — so every figure for an
   Apple-silicon configuration derives from a format MLX does not load. The alternative, BF16 and
   INT8 only, makes Apple silicon unusable in a tool where it is a headline case, so the
   substitution stays; it is entangled with the `weightFormats` check, whose MLX list includes those
-  K-quants precisely so it keeps working.
+  formats precisely so it keeps working.
 
   **What changed is that it is no longer invisible.** `substituted.nativeFormats` on the runtime
   names the formats it genuinely loads — everything else in `weightFormats` is a stand-in and is

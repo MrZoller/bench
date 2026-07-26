@@ -397,7 +397,7 @@ export const MLX: RuntimeSpec = {
   // BF16 and INT8 are real MLX formats; every other entry above is a GGUF width standing in.
   substituted: {
     nativeFormats: ['bf16', 'int8'],
-    note: 'MLX quantizes with its own affine scheme and the catalog has no measured entry for it, so a GGUF K-quant of the same width stands in — MLX 4-bit is nearer 4.5 bpw than Q4_K_M’s 4.85.',
+    note: 'MLX quantizes with its own affine scheme and the catalog has no measured entry for it, so a GGUF quant of the same nominal width stands in.',
   },
   kvPrecisions: ['fp16', 'q8'],
   source: 'https://github.com/ml-explore/mlx',

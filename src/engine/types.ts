@@ -361,7 +361,7 @@ export interface RuntimeSpec {
    * The engine cannot tell the difference — a roofline consumes bits per weight, and a stand-in of
    * the right width produces plausible arithmetic either way. That is exactly what makes it worth
    * recording: MLX quantizes with its own affine scheme at 4 and 8 bits, the catalog has no MLX
-   * entries for those, and the GGUF K-quants fill in. So every memory and throughput figure for an
+   * entries for those, and the GGUF quants fill in. So every memory and throughput figure for an
    * Apple-silicon configuration derives from a format MLX does not read, while the vLLM and
    * llama.cpp figures do not — and nothing on screen said which was which.
    *
