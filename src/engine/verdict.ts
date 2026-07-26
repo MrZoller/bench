@@ -381,8 +381,12 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
    * Every serving predicate and every serving sentence is reached only after the user-count
    * conjunct, so at the default concurrency of 1 the serving scenario is never evaluated at all —
    * as it was not before this archetype gained a latency term. `evaluateOnce` memoises, so the
-   * repeated calls cost nothing; binding it here would add a whole `evaluateAt` (two binary
-   * searches, per #17) to every render of the common case, to grade a bar that case never sees.
+   * repeated calls cost nothing; binding it here would add a whole `evaluateAt` to every render of
+   * the common case, to grade a bar that case never sees.
+   *
+   * That used to be two binary searches on top of a placement and both speed estimates. Since #17
+   * the callback runs only the placement and the estimates, so the saving is smaller — but an
+   * estimate is not free, and the reason to keep this lazy is unchanged.
    */
   const servingTtft = () => ttftOf('serving');
   const ragPrefill = at('rag').prefill;

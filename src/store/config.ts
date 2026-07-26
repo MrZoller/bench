@@ -1,5 +1,11 @@
 import { create } from 'zustand';
-import { evaluate, type Evaluation } from '@/engine';
+import {
+  estimateScenario,
+  evaluate,
+  type Evaluation,
+  type Scenario,
+  type ScenarioEstimate,
+} from '@/engine';
 import { canShard } from '@/engine/placement';
 import { FALLBACK_QUANT_ID, quantApplies } from '@/lib/quantChoice';
 import { getDevice, getModel, MODELS, DEVICES } from '@/data/catalog';
@@ -125,15 +131,9 @@ function readInitialConfig(): Config {
   return searchToConfig(window.location.search);
 }
 
-/**
- * Resolve the config into engine inputs and evaluate.
- *
- * Called on every render rather than memoised: the engine is pure arithmetic over a handful of
- * numbers, so recomputing costs less than the bookkeeping to avoid it, and this is what lets a
- * slider feel like direct manipulation instead of a form.
- */
-export function evaluateConfig(config: Config): Evaluation {
-  return evaluate({
+/** The config as the engine wants it: catalogs resolved, usage gathered. */
+function scenarioFor(config: Config): Scenario {
+  return {
     model: getModel(config.modelId),
     quant: getQuant(config.quantId),
     runtime: getRuntime(config.runtimeId),
@@ -144,7 +144,30 @@ export function evaluateConfig(config: Config): Evaluation {
       promptTokens: config.promptTokens,
       kvPrecision: config.kvPrecision,
     },
-  });
+  };
+}
+
+/**
+ * Resolve the config into engine inputs and evaluate.
+ *
+ * Cheap enough to call freely: the engine is pure arithmetic over a handful of numbers, which is
+ * what lets a slider feel like direct manipulation instead of a form. The Bench memoises it on the
+ * config all the same, since every panel below reads the one result.
+ */
+export function evaluateConfig(config: Config): Evaluation {
+  return evaluate(scenarioFor(config));
+}
+
+/**
+ * Placement, decode and prefill for a config, without the two context-limit searches.
+ *
+ * "Cheap enough to call freely" holds for one evaluation per render and stops holding when the
+ * verdict layer asks for eight or nine of them, because each `evaluate` runs `maxContextThatFits`
+ * twice and each of those is a binary search over the model's whole context range. The archetype
+ * grades need none of that; they need the three answers here.
+ */
+export function estimateConfig(config: Config): ScenarioEstimate {
+  return estimateScenario(scenarioFor(config));
 }
 
 /** Re-exported so components import catalogs from one place. */

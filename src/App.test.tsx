@@ -7,6 +7,16 @@ import { configToShareSearch } from '@/store/url';
 import { getModel } from '@/data/catalog';
 import { tokens } from '@/lib/format';
 import { DETAIL_ANCHOR_ID } from '@/components/Matrix';
+import { judgeWorkloads } from '@/engine/verdict';
+
+/**
+ * Wrapped rather than replaced, so every other test in this file still exercises the real verdict
+ * layer. The spy exists only so the memoisation guard below can see whether grading ran at all.
+ */
+vi.mock('@/engine/verdict', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/engine/verdict')>();
+  return { ...actual, judgeWorkloads: vi.fn(actual.judgeWorkloads) };
+});
 
 afterEach(() => {
   cleanup();
@@ -206,6 +216,95 @@ describe('the Bench does not overclaim', () => {
   it('says when the catalog was generated', () => {
     render(<App />);
     expect(screen.getByText(/Model catalog generated/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * The verdict strip is now memoised on the scenario, so what needs guarding is the failure a memo
+ * introduces: grades that keep describing the configuration they were computed for. It had no
+ * coverage at this level at all before — the arithmetic is pinned in the engine's suite, but
+ * nothing checked that this surface re-renders it.
+ */
+describe('the workload strip keeps up with the scenario', () => {
+  const strip = () => screen.getByRole('region', { name: /what you could do with it/i });
+  const rows = () =>
+    within(strip())
+      .getAllByRole('listitem')
+      .map((li) => li.textContent ?? '');
+
+  it('re-grades when the hardware changes under it', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    const onCard = rows();
+
+    // A 671B model on the same card: every archetype has to move.
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
+    expect(rows()).not.toEqual(onCard);
+  });
+
+  it('re-grades when only a usage slider moves', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    const atOneUser = rows();
+
+    // Concurrency is not part of any archetype's prompt, but it is part of every placement.
+    act(() => useConfig.getState().set('concurrency', 128));
+    expect(rows()).not.toEqual(atOneUser);
+  });
+
+  /**
+   * And the toggle it exists to make free changes nothing but the prose. Each row keeps its grade
+   * and its reason, with the description prepended to the reason.
+   */
+  it('adds descriptions without disturbing a single grade', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Each row is [grade, label, reason] as three element children, so the parts can be compared
+    // separately — the row's own textContent interleaves the icon and would hide a moved grade.
+    const parts = () =>
+      within(strip())
+        .getAllByRole('listitem')
+        .map((li) => [...li.children].map((child) => (child.textContent ?? '').trim()));
+
+    const before = parts();
+    await user.click(screen.getByRole('button', { name: /what each workload means/i }));
+    const after = parts();
+
+    expect(after).toHaveLength(before.length);
+    for (const [i, [grade, label, reason]] of before.entries()) {
+      expect(after[i][0]).toBe(grade);
+      expect(after[i][1]).toBe(label);
+      // Grown at the front by the description, unchanged at the end.
+      expect(after[i][2].endsWith(reason)).toBe(true);
+      expect(after[i][2].length).toBeGreaterThan(reason.length);
+    }
+  });
+
+  /**
+   * And that the memo actually memoises, which nothing else here can tell.
+   *
+   * The saving rests entirely on `config` being reference-stable between renders that do not change
+   * the scenario. Narrowing the Bench's bare `useConfig()` to a selector returning a fresh object is
+   * the ordinary way to trim a zustand subscription, and it would silently turn this `useMemo` into
+   * a no-op with every assertion above still passing.
+   */
+  it('does not re-grade to render a description', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const graded = vi.mocked(judgeWorkloads);
+    graded.mockClear();
+    await user.click(screen.getByRole('button', { name: /what each workload means/i }));
+    expect(graded).not.toHaveBeenCalled();
+
+    // And the spy is wired to something that does fire, so the assertion above is not vacuous.
+    act(() => useConfig.getState().set('concurrency', 4));
+    expect(graded).toHaveBeenCalled();
   });
 });
 
