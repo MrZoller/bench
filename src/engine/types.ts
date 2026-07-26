@@ -399,6 +399,23 @@ export interface UsageSpec {
   concurrency: number;
   /** Prompt length used for time-to-first-token. Defaults to most of the context. */
   promptTokens?: number;
+  /**
+   * Tokens already in the cache that `promptTokens` attends against, rather than re-reads.
+   *
+   * Absent — the default, and every archetype but one — means a standalone prompt: `promptTokens`
+   * is the whole working set, which is what a single-shot request sends and what every published
+   * anchor measures. Present, it splits the two apart: a coding agent's turn sends ~16K *new*
+   * tokens into a session that is already resident, and prefix caching (vLLM's APC, llama.cpp's
+   * cache reuse) means it does not pay to read the session again.
+   *
+   * Opt-in rather than derived from `contextTokens - promptTokens`, because deriving it would
+   * change every archetype at once — including the single-prompt scenarios the calibration is
+   * pinned to. An archetype that re-reads its history says nothing here and gets the old answer.
+   *
+   * Note the direction: declaring a prefix makes prefill *slower*, not faster. It buys not
+   * re-reading the prefix, and it costs attending against it.
+   */
+  cachedPrefixTokens?: number;
   kvPrecision: KvPrecision;
 }
 

@@ -42,13 +42,13 @@ deployment, and the follow-up list in [issues #12–#20](https://github.com/MrZo
 | 7. URL state, responsive, a11y     | **mostly** (#6)   | Querystring round-trips a scenario. No browser-level test pass — #19; URL defects in #15, #16      |
 | 8. Weekly catalog refresh + deploy | **next**          | Scheduled `build-catalog` → PR on diff; static deploy to a zoller.ai subdomain                     |
 
-**Correctness debt is tracked as issues, not here.** Ten are open. #9 and #10, which graded a
-configuration as working when it is not, are fixed — together with #11, which printed a figure
-measured at a different scenario from the one its sentence described. Filed as three bugs, one
-class; written up under **Verdicts** below. What remains is labelling (#13, #20), UI state (#12,
-#15, #16), test and performance debt (#17, #19), the MLX question (#18), and one engine bug: prefill
-having no notion of a cached prefix (#23). The layer-split spill fraction (#14) is fixed; see
-**Engine** below.
+**Correctness debt is tracked as issues, not here.** Six are open once this lands. #9 and #10,
+which graded a configuration as working when it is not, are fixed — together with #11, which
+printed a figure measured at a different scenario from the one its sentence described. Filed as
+three bugs, one class; written up under **Verdicts** below. What remains is labelling (#13), UI
+state (#15), a browser-level test pass (#19), the MLX questions (#18, #33), and three touch targets
+too small for a coarse pointer (#29). Both engine bugs are fixed: the layer-split spill fraction
+(#14) and prefill having no notion of a cached prefix (#23); see **Engine** below.
 
 ## Decisions already made
 
@@ -134,6 +134,51 @@ reading the test that guards them.
   it then read "the cache and overhead alone need 19.1 GiB" under a header reading 23.0 GiB, and
   disproved the refusal beside it. The refusing floor is carried on `Placement` as
   `floorBytesPerDevice` instead, so the predicate and its sentence read one value. (#14.)
+
+- **A cached prefix is a declaration, not a default.** `estimatePrefill` took its linear _and_ its
+  attention work from `promptTokens`, so it could only express a standalone request — a prompt
+  attending over itself. Every multi-turn archetype describes something else: `n` new tokens
+  attending against a `P`-token prefix already resident. `attentionPairs` now takes the prefix and
+  charges `n * P + causal(n)` on a full-attention layer, with sliding layers capping the prefix at
+  their window on the same dispatch they already make.
+
+  Two things about it are easy to get backwards. **It makes prefill slower, not faster** — a prefix
+  cache saves _re-reading_ the prefix, which this function never charged for, and it does not make
+  the new tokens cheaper to attend. And **it is opt-in per archetype** (`Workload.prefixIsCached`,
+  declared on the agent alone) rather than derived from `contextTokens - promptTokens`: deriving it
+  would have moved every archetype at once, including the single-prompt scenarios the calibration
+  anchors are measured at. The prefix-0 path is bit-identical to the expression it replaced, and a
+  test asserts that as an identity rather than inside the ±30% band, which would have absorbed the
+  mistake silently.
+
+  **The prefix is the session minus what the turn needs**, and every sentence has to say so. It took
+  two review rounds to state it correctly. `agentSession` is the whole window, so the first draft
+  printed the window itself — claiming a cache holding 80K of working set in a 64K window. The
+  second subtracted the turn but not its answer, spending the entire budget on prefix and prompt and
+  leaving the 512-token reply nowhere; the tell was at the boundary, where `cachedPrefix(needs(id))`
+  returned 512 and claimed the room to answer as cached history for a scenario with no history at
+  all. It goes through `needs(id)` now, which is the same boundary `fits` tests, because a limit
+  stated twice is a limit that will disagree with itself — a comment this file already carried about
+  a different copy of the same number.
+
+  The consequence is a real regrade: 8B at Q4_K_M on one 5090 goes from 6.0s to 14s on an agent turn
+  against the 47.5K resident in a 64K session — about seven times the query-key pairs — which is the
+  difference between clearing the 10s bar and not. The threshold did not move; the estimate started
+  describing what an agent does.
+
+  **The capacity bars were not part of it**, and the review's second claim — that a rig holding
+  exactly 64K is admitted for a request needing another 512 — does not hold. The session constants
+  are windows, not prompts, so they already include generation; the agent's prompt-level bar
+  (`fits`, at 16,896) does carry the allowance; and once the prefix is 47.5K the occupancy closes on
+  65,536 exactly. Long-context is the deliberate contrast: its bars _do_ add the allowance, because
+  its 131,072 is a `typicalPromptTokens` and needs room to answer on top. Same numeral, different
+  kind of quantity — and widening the session bars would have forced `holdsFullSession` to advertise
+  a "64.5K session".
+
+  **Chat is the honest second candidate and is deliberately not declared.** It is back-and-forth by
+  its own description and re-reads nothing under the same caching. Deferred rather than dismissed:
+  at an 8K context a 1K turn against 7K resident is ~15x the pairs against a 2s bar, so it regrades
+  chat on slow rigs and wants its own evidence. (#23.)
 
 - **Offloaded weights read at the slower of host RAM and the bus to the host** —
   `min(hostBandwidth, device.hostLinkBytesPerSec)`. `interconnect` is the _device-to-device_ link
@@ -226,15 +271,12 @@ reading the test that guards them.
     Caught in review, not by the suite. If a sentence names a scenario, that name has to come from
     the same expression the estimate was called with.
 
-    What the session buys is on the decode axis, and only there. `estimatePrefill` derives its
-    linear and attention work from `promptTokens` alone, so the context reaches it through the
-    placement or not at all: on the 4090 above, turn and session TTFT differ by 1.5% — the
-    streaming term — and on a resident rig they are identical to the digit. The agent latency bars
-    are therefore a turn's prompt pass priced on the session's placement, which is right for an
-    agent whose prefix is cached and optimistic for one that resends its history. Fixing that needs
-    an estimator that can attend new tokens against a cached prefix
-    ([#23](https://github.com/MrZoller/bench/issues/23)) rather than anything in this file. Raised
-    by Codex as P1 on PR #22; the mechanism is exactly as reported.
+    What the session bought was, at first, on the decode axis and only there. `estimatePrefill`
+    derived its linear and attention work from `promptTokens` alone, so the context reached it
+    through the placement or not at all: on the 4090 above, turn and session TTFT differed by 1.5%
+    — the streaming term — and on a resident rig they were identical to the digit. The agent latency
+    bars were a turn's prompt pass priced on the session's placement, which is a 16K prompt
+    attending over _itself_. Fixed in #23; see **A cached prefix** under **Engine**.
 
   - **The RAG sentence printed a machine-wide rate beside one document's time.** See the
     `prefillTokensPerSec` note under **Engine**. Two figures in one sentence have to divide into

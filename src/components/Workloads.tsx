@@ -63,8 +63,8 @@ export function Workloads({ evaluation, config }: { evaluation: Evaluation; conf
          * forty `planPlacement` calls to use one, and on a layer-split rig each of those sorts the
          * model's layers.
          */
-        evaluateAt: (promptTokens, contextTokens) =>
-          estimateConfig({ ...config, promptTokens, contextTokens }),
+        evaluateAt: (promptTokens, contextTokens, cachedPrefixTokens) =>
+          estimateConfig({ ...config, promptTokens, contextTokens }, cachedPrefixTokens),
       }),
     [evaluation, config]
   );

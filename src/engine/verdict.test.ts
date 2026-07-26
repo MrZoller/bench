@@ -65,11 +65,11 @@ function judge(model: Parameters<typeof evaluate>[0]['model'], quantId: string, 
     maxContextTokens: evaluation.maxContextTokens,
     runnableContextTokens: evaluation.runnableContextTokens,
     // Each archetype is graded at its own scenario, decode included.
-    evaluateAt: (promptTokens, contextTokens) => {
+    evaluateAt: (promptTokens, contextTokens, cachedPrefixTokens) => {
       const e = evaluate({
         model,
         quant: getQuant(quantId),
-        usage: { ...usage, promptTokens, contextTokens },
+        usage: { ...usage, promptTokens, contextTokens, cachedPrefixTokens },
         rig: { device: rig.device, count: rig.count ?? 1 },
         runtime: rig.runtime ?? LLAMA_CPP,
       });
@@ -261,11 +261,17 @@ describe('context limits and workload fit', () => {
         usage: { contextTokens: 4096, concurrency: 1, promptTokens: 2048, kvPrecision: 'fp16' },
         maxContextTokens: 4096,
         runnableContextTokens: 4096, // Far short of the 32K a RAG query sends.
-        evaluateAt: (promptTokens, contextTokens) => {
+        evaluateAt: (promptTokens, contextTokens, cachedPrefixTokens) => {
           const e = evaluate({
             model: LLAMA_31_8B,
             quant: getQuant('q4_k_m'),
-            usage: { contextTokens, concurrency: 1, promptTokens, kvPrecision: 'fp16' },
+            usage: {
+              contextTokens,
+              concurrency: 1,
+              promptTokens,
+              cachedPrefixTokens,
+              kvPrecision: 'fp16',
+            },
             rig: { device: RTX_5090, count: 1 },
             runtime: LLAMA_CPP,
           });
@@ -1103,5 +1109,103 @@ describe('every numeric good bar is at least as strict as its own tight bar', ()
         expect(goodBar).toBeGreaterThanOrEqual(tight[axis]);
       }
     }
+  });
+});
+
+/**
+ * #23's decision, asserted rather than left in a comment: a coding-agent turn attends against a
+ * session already in the cache, and no other archetype does.
+ */
+describe('only the agent grades its prompt against a resident session', () => {
+  /**
+   * `RESPONSE_ALLOWANCE` is private to `verdict.ts`, deliberately — it is an internal convention,
+   * not part of the contract. Restated here so this test fails if the two ever disagree, which is
+   * the whole point of asserting the occupancy closes on the window.
+   */
+  const RESPONSE_TOKENS = 512;
+
+  /** Every `(prompt, context, prefix)` the verdict layer asks for, in order. */
+  const scenariosAsked = () => {
+    const asked: { promptTokens: number; contextTokens: number; cachedPrefixTokens: number }[] = [];
+    const usage = {
+      contextTokens: 8192,
+      concurrency: 4,
+      promptTokens: 2048,
+      kvPrecision: 'fp16' as const,
+    };
+    const rig = { device: RTX_5090, count: 1 };
+    const evaluation = evaluate({
+      model: LLAMA_31_8B,
+      quant: getQuant('q4_k_m'),
+      usage,
+      rig,
+      runtime: LLAMA_CPP,
+    });
+
+    judgeWorkloads({
+      selectedPlacement: evaluation.placement,
+      usage,
+      maxContextTokens: evaluation.maxContextTokens,
+      runnableContextTokens: evaluation.runnableContextTokens,
+      evaluateAt: (promptTokens, contextTokens, cachedPrefixTokens) => {
+        asked.push({ promptTokens, contextTokens, cachedPrefixTokens });
+        const e = evaluate({
+          model: LLAMA_31_8B,
+          quant: getQuant('q4_k_m'),
+          usage: { ...usage, promptTokens, contextTokens, cachedPrefixTokens },
+          rig,
+          runtime: LLAMA_CPP,
+        });
+        return { placement: e.placement, decode: e.decode, prefill: e.prefill };
+      },
+    });
+    return asked;
+  };
+
+  it('asks for a prefix on the agent turn and nowhere else', () => {
+    const asked = scenariosAsked();
+    expect(asked.length).toBeGreaterThan(1);
+
+    const agentTurn = WORKLOADS.find((w) => w.id === 'agent')!.typicalPromptTokens;
+    for (const scenario of asked) {
+      if (scenario.cachedPrefixTokens === 0) continue;
+      // The only scenario carrying a prefix is the agent's, and the prefix is exactly the part of
+      // the session the turn does not need — the turn *and its answer*, not the turn alone.
+      // Subtracting only the prompt spent the whole window and left the reply nowhere.
+      expect(scenario.promptTokens).toBe(agentTurn);
+      expect(scenario.cachedPrefixTokens).toBe(
+        scenario.contextTokens - agentTurn - RESPONSE_TOKENS
+      );
+      // The occupancy has to close exactly on the window, or one of these three is wrong.
+      expect(scenario.cachedPrefixTokens + agentTurn + RESPONSE_TOKENS).toBe(
+        scenario.contextTokens
+      );
+    }
+
+    // And it really does ask for one, or the loop above is vacuous.
+    expect(asked.some((s) => s.cachedPrefixTokens > 0)).toBe(true);
+  });
+
+  it('declares the reading on the archetype rather than assuming it', () => {
+    // The flag is what makes the six single-prompt archetypes safe from this change, so it has to
+    // be exactly one archetype and it has to be the agent.
+    const declared = WORKLOADS.filter((w) => w.prefixIsCached);
+    expect(declared.map((w) => w.id)).toEqual(['agent']);
+  });
+
+  it('grades the agent slower for it, on a rig where that decides the tier', () => {
+    // 8B at Q4_K_M on one 5090: a 16K turn against the 47.5K already resident in a 64K session is
+    // ~14s where the turn alone is ~6s, and the good tier's latency bar is 10s. The tier moves
+    // because the estimate finally describes what an agent does, not because a threshold changed.
+    const agent = judge(LLAMA_31_8B, 'q4_k_m', { device: RTX_5090 }).get('agent')!;
+
+    expect(agent.fitness).toBe('tight');
+    // 47.5K, not 64K and not 48K: the prefix is the session minus the turn *and its answer*, and
+    // the sentence must name the figure the estimate was called with. The half-K is the room to
+    // answer in — house style here, matching the 16.5K, 32.5K and 128.5K the other tiers print.
+    expect(agent.reason).toMatch(/against the 47\.5K already in the cache/);
+    expect(agent.reason).not.toMatch(/against the (64K|48K)/);
+    // Never "re-read": not re-reading the session is the whole point of a cached prefix.
+    expect(agent.reason).not.toMatch(/re-read/);
   });
 });

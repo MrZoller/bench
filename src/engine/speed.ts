@@ -375,8 +375,16 @@ export function estimatePrefill(
   // `promptTokens * batch`: sixteen users sending 2K each is sixteen quadratics over 2K, not one
   // over 32K. Folding the batch into the length would overstate a concurrent chat workload by
   // the batch factor again on the term that already dominates long prompts.
+  //
+  // `cachedPrefixTokens` is what lets this express a multi-turn scenario at all: `promptTokens` new
+  // tokens attending against a resident prefix, rather than a standalone prompt attending only over
+  // itself. Absent — every archetype but the agent — it is zero and this is the expression it has
+  // always been, which is what keeps the single-prompt anchors where they were.
   const attentionFlops =
-    4 * attentionPairs(model, promptTokens) * model.attention.projectionWidth * batch;
+    4 *
+    attentionPairs(model, promptTokens, usage.cachedPrefixTokens ?? 0) *
+    model.attention.projectionWidth *
+    batch;
 
   /**
    * Expert-only schemes compute at two rates, not one.

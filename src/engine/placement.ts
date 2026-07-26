@@ -192,12 +192,25 @@ function positiveInt(value: number, fallback = 1): number {
   return Number.isFinite(value) ? Math.max(1, Math.floor(value)) : fallback;
 }
 
+/**
+ * The same guard for a count where zero is a real answer rather than a degenerate one.
+ *
+ * `positiveInt` floors at 1 because a scenario with no context or no devices is nonsense. An empty
+ * cached prefix is not nonsense — it is the standalone-prompt case, and every archetype but one.
+ */
+function nonNegativeInt(value: number, fallback = 0): number {
+  return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : fallback;
+}
+
 export function normalizeUsage(usage: UsageSpec): UsageSpec {
   return {
     ...usage,
     contextTokens: positiveInt(usage.contextTokens),
     concurrency: positiveInt(usage.concurrency),
     ...(usage.promptTokens === undefined ? {} : { promptTokens: positiveInt(usage.promptTokens) }),
+    ...(usage.cachedPrefixTokens === undefined
+      ? {}
+      : { cachedPrefixTokens: nonNegativeInt(usage.cachedPrefixTokens) }),
   };
 }
 

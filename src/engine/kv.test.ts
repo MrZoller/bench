@@ -182,6 +182,98 @@ describe('prefill attention pairs', () => {
 });
 
 /**
+ * `n` new tokens attending against a `P`-token prefix already in the cache — the scenario every
+ * multi-turn archetype describes and that this function could not express before #23.
+ *
+ * The load-bearing property is the *first* test, not the arithmetic: at `P = 0` every branch has to
+ * reduce to the expression it replaced, exactly. The published anchors are single-prompt, and a
+ * calibration that shifted because a parameter was threaded through would stop being evidence.
+ */
+describe('prefill attention against a cached prefix', () => {
+  const MODELS = [
+    ['dense (Llama 3.1 8B)', LLAMA_31_8B],
+    ['hybrid (gpt-oss-20b)', GPT_OSS_20B],
+  ] as const;
+
+  it.each(MODELS)('is bit-identical to the standalone path at prefix 0 — %s', (_label, model) => {
+    for (const n of [0, 1, 2, 127, 128, 129, 512, 16384, 131072]) {
+      expect(attentionPairs(model, n, 0)).toBe(attentionPairs(model, n));
+    }
+  });
+
+  /**
+   * The same position-by-position count as the block above, now with the prefix occupying
+   * positions `0..P-1` and the new tokens starting at `P`. An off-by-one in the closed form —
+   * particularly in `k`, the count of new tokens still inside a filling window — survives every
+   * algebraic assertion and dies here.
+   */
+  const bruteForce = (layers: readonly (number | null)[], n: number, prefix: number) => {
+    let pairs = 0;
+    for (const window of layers) {
+      for (let i = 0; i < n; i++) {
+        const visible = prefix + i + 1;
+        pairs += window === null ? visible : Math.min(visible, window);
+      }
+    }
+    return pairs;
+  };
+
+  it('matches a position-by-position count on a dense model', () => {
+    const dense = Array.from({ length: LLAMA_31_8B.layers }, () => null);
+    for (const prefix of [0, 1, 1024, 65536]) {
+      for (const n of [0, 1, 2, 513, 16384]) {
+        expect(attentionPairs(LLAMA_31_8B, n, prefix)).toBe(bruteForce(dense, n, prefix));
+      }
+    }
+  });
+
+  it('matches a position-by-position count across a sliding window boundary', () => {
+    const windows = GPT_OSS_20B.attention.layerWindows!;
+    // Straddling the 128-token window from both sides: a prefix that has not filled it, one that
+    // has filled it exactly, and one that filled it long ago.
+    for (const prefix of [0, 1, 63, 127, 128, 129, 4096]) {
+      for (const n of [0, 1, 2, 63, 127, 128, 129, 300, 1024]) {
+        expect(attentionPairs(GPT_OSS_20B, n, prefix), `prefix=${prefix} n=${n}`).toBe(
+          bruteForce(windows, n, prefix)
+        );
+      }
+    }
+  });
+
+  it('costs more than the standalone pass, not less', () => {
+    // The counter-intuitive direction, and the one a reader will assume backwards: a prefix cache
+    // saves *re-reading* the prefix, which this function never charged for. It does not make the
+    // new tokens cheaper to attend — 16K against a resident 64K is nine times 16K against itself.
+    const alone = attentionPairs(LLAMA_31_8B, 16384);
+    const against = attentionPairs(LLAMA_31_8B, 16384, 65536);
+    expect(against).toBeGreaterThan(alone);
+    expect(against / alone).toBeCloseTo(9, 0);
+  });
+
+  it('caps the prefix at a sliding layer’s window, however long the session gets', () => {
+    // A pure sliding layer cannot see past its window, so beyond that point the prefix stops
+    // costing anything at all. Isolated to one layer, because gpt-oss's full-attention layers do
+    // keep growing and would mask it.
+    const slidingOnly = {
+      ...GPT_OSS_20B,
+      layers: 1,
+      attention: { ...GPT_OSS_20B.attention, layerWindows: [128] },
+    };
+    const atWindow = attentionPairs(slidingOnly, 512, 128);
+    for (const prefix of [128, 4096, 1_000_000]) {
+      expect(attentionPairs(slidingOnly, 512, prefix)).toBe(atWindow);
+    }
+    // And below the window it still grows, or the cap would be hiding a constant.
+    expect(attentionPairs(slidingOnly, 512, 64)).toBeLessThan(atWindow);
+  });
+
+  it('treats a negative or absent prefix as none', () => {
+    expect(attentionPairs(LLAMA_31_8B, 512, -1)).toBe(attentionPairs(LLAMA_31_8B, 512));
+    expect(attentionPairs(LLAMA_31_8B, 512, undefined)).toBe(attentionPairs(LLAMA_31_8B, 512));
+  });
+});
+
+/**
  * A cache is charged what the runtime really stores, which is not always the nominal width.
  */
 describe('effective KV element width', () => {

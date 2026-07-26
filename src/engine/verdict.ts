@@ -61,6 +61,26 @@ export interface Workload {
    * send — a completion popup sees a few hundred tokens, a RAG query tens of thousands.
    */
   typicalPromptTokens: number;
+  /**
+   * Whether `typicalPromptTokens` is *new* tokens arriving into a session already in the cache.
+   *
+   * The modelling decision behind #23, declared per archetype rather than assumed for all of them.
+   * A coding agent's turn sends ~16K new tokens and re-reads nothing: prefix caching is on by
+   * default in vLLM and available in llama.cpp, and a client that re-sent its whole history every
+   * turn would be paying quadratically for nothing. A RAG query is a fresh document and a
+   * completion popup is the current buffer, so neither has a prefix to speak of.
+   *
+   * Chat is the honest second candidate and is deliberately not declared: it is back-and-forth by
+   * its own description, and under the same prefix caching it re-reads nothing either. Deferred
+   * rather than dismissed, because it is not free — at an 8K context a 1K turn against 7K resident
+   * is ~15x the pairs, judged against a 2s bar, so it would regrade chat on slow rigs and wants its
+   * own evidence rather than a change of one flag.
+   *
+   * Opt-in, so the six that say nothing are evaluated exactly as before. That is not tidiness: the
+   * calibration anchors are single-prompt measurements, and a flag that quietly applied to all
+   * seven would have moved them.
+   */
+  prefixIsCached?: true;
 }
 
 export interface WorkloadVerdict {
@@ -88,6 +108,9 @@ export const WORKLOADS: readonly Workload[] = [
     label: 'Coding agent',
     description: 'Long multi-turn sessions over a large codebase.',
     typicalPromptTokens: 16384,
+    // The only archetype whose prompt is an increment rather than a whole request. See
+    // `prefixIsCached` — this is the declaration #23 says has to come before the arithmetic.
+    prefixIsCached: true,
   },
   {
     id: 'rag',
@@ -239,7 +262,13 @@ export interface VerdictInputs {
    */
   evaluateAt: (
     promptTokens: number,
-    contextTokens: number
+    contextTokens: number,
+    /**
+     * Tokens already resident that `promptTokens` attends against rather than re-reads. Zero for
+     * every archetype that sends a standalone prompt, which is all of them but the agent — see
+     * `Workload.prefixIsCached`.
+     */
+    cachedPrefixTokens: number
   ) => {
     placement: Placement;
     decode: DecodeEstimate;
@@ -357,16 +386,47 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
    * judged leniently.
    */
   const cache = new Map<string, ReturnType<typeof evaluateAt>>();
-  const evaluateOnce = (promptTokens: number, contextTokens: number) => {
-    const key = `${promptTokens}:${contextTokens}`;
+  const evaluateOnce = (promptTokens: number, contextTokens: number, cachedPrefixTokens = 0) => {
+    // The prefix is part of the key: the same prompt at the same context is a different pass
+    // depending on whether it arrives into an empty cache or a full one.
+    const key = `${promptTokens}:${contextTokens}:${cachedPrefixTokens}`;
     const existing = cache.get(key);
     if (existing) return existing;
-    const fresh = evaluateAt(promptTokens, contextTokens);
+    const fresh = evaluateAt(promptTokens, contextTokens, cachedPrefixTokens);
     cache.set(key, fresh);
     return fresh;
   };
-  const at = (id: string) =>
-    evaluateOnce(workload(id).typicalPromptTokens, Math.max(usage.contextTokens, needs(id)));
+
+  /**
+   * What is already in the cache when this archetype's prompt arrives.
+   *
+   * The window minus what the turn itself needs, for an archetype that declares its prefix cached —
+   * and nothing at all for one that does not, which is the standalone-prompt reading the calibration
+   * anchors are measured at. Both readings are expressible; which one applies is the archetype's
+   * declaration rather than a default this file picks.
+   *
+   * Through `needs(id)`, which is the turn *and its answer*, not `typicalPromptTokens` alone.
+   * `contextTokens` is prompt plus generation, so subtracting only the prompt spent the whole
+   * window on prefix and turn and left the reply nowhere: at a 64K session the occupancy came to
+   * 66,048 in a 65,536 window. The tell is at the boundary — `cachedPrefix(id, needs(id))` returned
+   * 512, claiming the room to answer as cached history, for a scenario that by definition has no
+   * history at all.
+   *
+   * `needs` because this file already made that mistake with a hand-written copy of the same
+   * boundary and wrote a comment about it: a limit stated twice is a limit that will disagree with
+   * itself. Raised by Codex on PR #31.
+   */
+  const cachedPrefix = (id: string, contextTokens: number) =>
+    workload(id).prefixIsCached ? Math.max(0, contextTokens - needs(id)) : 0;
+
+  const at = (id: string) => {
+    const contextTokens = Math.max(usage.contextTokens, needs(id));
+    return evaluateOnce(
+      workload(id).typicalPromptTokens,
+      contextTokens,
+      cachedPrefix(id, contextTokens)
+    );
+  };
 
   const rateOf = (id: string) => at(id).decode.perUserTokensPerSec;
   const ttftOf = (id: string) => at(id).prefill.ttftSeconds;
@@ -435,7 +495,23 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
     usage.contextTokens,
     holdsFullSession ? AGENT_SESSION_CONTEXT : AGENT_TIGHT_SESSION_CONTEXT
   );
-  const agentMeasured = evaluateOnce(workload('agent').typicalPromptTokens, agentSession);
+  /**
+   * The prefix the agent's turn is actually measured against — the session minus the turn *and the
+   * room to answer it*, since `agentSession` is the whole window and both the 16K arriving into it
+   * and the reply leaving it are part of that window, not on top of it.
+   *
+   * Bound rather than recomputed at each use, because the sentences below have to name this and not
+   * `agentSession`. The first version of them said "against 64K already in the cache" for a prefix
+   * of 48K — claiming a cache holding the whole window *before* the turn arrives, which is 80K of
+   * working set in a window the placement sized at 64K. That is this file's own most-repeated
+   * defect, reintroduced by the fix that was supposed to be about honesty.
+   */
+  const agentPrefix = cachedPrefix('agent', agentSession);
+  const agentMeasured = evaluateOnce(
+    workload('agent').typicalPromptTokens,
+    agentSession,
+    agentPrefix
+  );
   const agentRate = agentMeasured.decode.perUserTokensPerSec;
   const agentTtft = agentMeasured.prefill.ttftSeconds;
 
@@ -528,16 +604,23 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
       // buys is almost all on the decode side, and that is where the defect was — 8B BF16 on one
       // 4090 goes 49.7 -> 8.6 tok/s between the two, because a 64K cache spills the weights.
       //
-      // It buys much less on the prefill side, and an earlier version of this comment claimed
-      // otherwise. `estimatePrefill` takes its linear and attention work from `promptTokens`
-      // alone, so the context reaches it only through the placement: on that same 4090 the turn
-      // and the session differ by 1.5%, the streaming term, and on a resident rig they are
-      // identical. So this term is the turn's prompt pass priced on the session's placement —
-      // which is what the sentences below say, and is the right figure for an agent whose prefix
-      // is cached. Charging a re-read of the session instead needs an estimator that can attend
-      // new tokens against a cached prefix, which is #23. Passing the whole session as the prompt
-      // is the option available today and is wrong in the other direction: it models an agent
-      // with no prefix cache at all.
+      // It buys on the prefill side too, now that `estimatePrefill` can express the scenario. It
+      // could not before #23: the linear and attention work both came from `promptTokens` alone,
+      // so the session reached prefill only through the placement — on that same 4090 the turn and
+      // the session differed by 1.5%, the streaming term, and on a resident rig they were identical
+      // to the digit. The latency bars were being graded on a 16K prompt attending over *itself*.
+      //
+      // The agent declares `prefixIsCached`, so the turn is now 16K new tokens attending against
+      // the resident session: `cachedPrefix('agent', agentSession)`. That is the reading the
+      // archetype's `typicalPromptTokens: 16384` always implied and the estimator could not carry.
+      // It makes this term *slower*, not faster: the prefix is the session minus what the turn
+      // needs — 47.5K inside a 64K window, the half-K being the room to answer — and 16K attending
+      // against 47.5K is about seven times the query-key pairs of 16K attending against itself. On
+      // an 8B at Q4_K_M on one 5090 that takes the turn from 6.0s to 14s, which is the difference
+      // between clearing the 10s bar and not.
+      //
+      // No other archetype declares it, so every single-prompt scenario, and every calibration
+      // anchor, is evaluated exactly as before.
       pass:
         fits('agent') &&
         agentRate >= BARS.agent.good.rate &&
@@ -556,7 +639,7 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
             runnableContextTokens < BARS.agent.tight.session
             ? `${ctx(runnableContextTokens)} of context holds a turn but not a session — an agent needs ${ctx(BARS.agent.tight.session)} to keep its history across steps.`
             : agentTtft > BARS.agent.tight.ttft
-              ? `${secs(agentTtft)}s to re-read a 16K prompt with a ${ctx(agentSession)} session behind it makes every step a wait.`
+              ? `${secs(agentTtft)}s to read a 16K turn against the ${ctx(agentPrefix)} already in the cache makes every step a wait.`
               : agentRate < BARS.agent.tight.rate
                 ? `${fmt(agentRate)} tok/s once a ${ctx(agentSession)} session is in the cache makes a multi-step run take minutes per step.`
                 : // All three good-tier bars. The capacity one is the easiest to hit and was the
@@ -568,7 +651,7 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
                     agentRate < BARS.agent.good.rate &&
                       `${fmt(agentRate)} tok/s with a ${ctx(agentSession)} session in the cache is under the ${BARS.agent.good.rate} tok/s that keeps a step brisk`,
                     agentTtft > BARS.agent.good.ttft &&
-                      `${secs(agentTtft)}s to re-read a 16K prompt with ${ctx(agentSession)} in the cache is longer than a brisk step allows`
+                      `${secs(agentTtft)}s to read a 16K turn against the ${ctx(agentPrefix)} already in the cache is longer than a brisk step allows`
                   ) ??
                   // Capacity and rate are stated as separate clauses on purpose. "49 tok/s over
                   // 128K of context" reads as a rate that holds at 128K, which is the claim this
