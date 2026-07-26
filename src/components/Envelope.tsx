@@ -13,6 +13,7 @@ import { colors, marks, withAlpha } from '@/design/tokens';
 import {
   CAPACITY_TIGHT,
   DECODE_USABLE,
+  HOST_RAM_UNCHECKED,
   TTFT_RESPONSIVE,
   parseDisplayedSeconds,
 } from '@/lib/verdicts';
@@ -54,12 +55,15 @@ const STATE_STYLE: Record<CellState, { fill: string; label: string; hint: string
     fill: colors.serious,
     label: 'Spilling to RAM',
     /**
-     * Conditional, because the engine cannot check the condition. `planPlacement` sizes the spill
-     * but has no host-RAM input at all, so a cell needing hundreds of GiB of it is coloured
-     * exactly like one needing two. "Loads" stated flatly promised something never verified —
-     * the same caveat `Telemetry` already carries, which this panel was quietly dropping.
+     * Conditional, because the engine cannot check the condition — the qualifier is
+     * `HOST_RAM_UNCHECKED`, which this legend and Telemetry now share rather than each keeping a
+     * near-copy. Theirs had already drifted to "the spilled *part*". "Loads" stated flatly promised
+     * something never verified.
+     *
+     * A swatch caption, so the tail this appends is one clause. Telemetry's is longer because its
+     * tile is where someone goes to ask why the thing is slow.
      */
-    hint: 'Loads only if the host has RAM for the spilled weights, which is not checked here — and they cross the bus every token.',
+    hint: `${HOST_RAM_UNCHECKED} What does spill crosses the bus every token.`,
   },
   over: { fill: colors.critical, label: 'Will not run', hint: 'Past what this hardware can hold.' },
   unsupported: {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { judgeWorkloads, WORKLOADS, type VerdictInputs } from './verdict';
+import { judgeWorkloads, WORKLOADS, WORKLOAD_BARS, type VerdictInputs } from './verdict';
 import { evaluate } from './index';
 import type { Placement } from './placement';
 import {
@@ -1065,5 +1065,43 @@ describe('a tier is graded on the measurement it recommends', () => {
     expect(agent.fitness).toBe('fail');
     expect(agent.reason).toMatch(/64K session/);
     expect(agent.reason).not.toMatch(/49/);
+  });
+});
+
+/**
+ * The bars now live in one structure, which is what makes this assertable at all.
+ *
+ * Every `good` bar used to be written down twice — once in a predicate, once in the sentence that
+ * explains missing it — and every `tight` bar sat forty lines from its `good` counterpart. Nothing
+ * was wrong; nothing *made* it right either, and this file's history is a list of the times two
+ * copies of one number stopped matching.
+ */
+describe('every numeric good bar is at least as strict as its own tight bar', () => {
+  // Numeric, because serving has one `good` bar that is not a number and has no `tight` counterpart
+  // by design — `headroomOf('serving') > 0`. Everything expressible as a threshold is in the
+  // structure; that one is a predicate about the placement and stays in the tier.
+  //
+  // Latency is an upper bound, so `good` is the smaller number. Everything else is a lower bound,
+  // so `good` is the larger. Getting the direction wrong on one axis is the failure this catches —
+  // it would silently make a tier unreachable, or make `good` pass where `tight` fails. An axis
+  // that is an upper bound and not named here fails loudly rather than silently, which is the right
+  // way round for a default.
+  const UPPER_BOUND = new Set(['ttft']);
+
+  it.each(Object.keys(WORKLOAD_BARS))('holds for %s', (id) => {
+    const bars = WORKLOAD_BARS[id as keyof typeof WORKLOAD_BARS];
+    const good = bars.good as Record<string, number>;
+    const tight = bars.tight as Record<string, number>;
+
+    // Both tiers describe the same axes, or one of them is grading something the other ignores.
+    expect(Object.keys(good).sort()).toEqual(Object.keys(tight).sort());
+
+    for (const [axis, goodBar] of Object.entries(good)) {
+      if (UPPER_BOUND.has(axis)) {
+        expect(goodBar).toBeLessThanOrEqual(tight[axis]);
+      } else {
+        expect(goodBar).toBeGreaterThanOrEqual(tight[axis]);
+      }
+    }
   });
 });
