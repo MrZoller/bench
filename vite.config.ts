@@ -25,7 +25,7 @@ export default defineConfig({
       // a wrong roofline would, and neither was measured while this listed only the engine.
       include: ['src/engine/**', 'src/store/**', 'src/lib/**', 'src/data/**'],
     },
-    // Playwright specs live in e2e/ and run via `npm run screenshots`.
+    // Playwright specs live in e2e/ and run via `npm run test:e2e`.
     exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**'],
   },
 });

@@ -63,9 +63,10 @@ jobs:
           key: playwright-${{ hashFiles('package-lock.json') }}
 
       - name: Install browsers
-        # Both declared projects are Chromium — `Desktop Chrome` and `Pixel 5` name no channel, so
-        # they use the bundled build rather than a system Chrome. `--with-deps` is still run on a
-        # cache hit, because it installs system libraries rather than the browser.
+        # All three declared projects are Chromium — `Desktop Chrome`, `Pixel 5` and the retina
+        # variant of `Desktop Chrome` name no channel, so they use the bundled build rather than a
+        # system Chrome. `--with-deps` is still run on a cache hit, because it installs system
+        # libraries rather than the browser.
         run: npx playwright install --with-deps chromium
 
       - name: Browser tests
