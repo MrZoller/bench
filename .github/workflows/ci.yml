@@ -71,10 +71,17 @@ jobs:
       - name: Browser tests
         run: npm run test:e2e
 
-      - name: Upload the report when the browser run fails
-        if: failure()
+      # Not `if: failure()`. A test that fails once and passes the retry leaves this step green, so
+      # a failure-only upload discards the report exactly when a trace exists to read — `trace:
+      # 'on-first-retry'` produces one for the flaky case and nothing else. That run is the one
+      # worth keeping evidence from, because it is green and the next one may not be.
+      - name: Upload the browser report
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
           path: playwright-report/
           retention-days: 7
+          # The report is only written once the run starts; if an earlier step failed there is
+          # nothing to upload and that is not itself worth a warning.
+          if-no-files-found: ignore

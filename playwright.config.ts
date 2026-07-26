@@ -62,7 +62,17 @@ export default defineConfig({
     // dies on a webServer timeout that says nothing about why.
     command: 'npm run build && npm run preview -- --port 4173 --strictPort --host 127.0.0.1',
     url: 'http://127.0.0.1:4173',
-    reuseExistingServer: !process.env.CI,
+    /**
+     * Never reused, not even locally. The usual `!process.env.CI` reuses whatever already answers
+     * on 4173 — and because this command *builds* before it serves, reuse skips the build too. An
+     * earlier `vite preview` left running over a stale `dist` then gets tested in place of the
+     * current checkout, silently, which defeats the reason these specs are served from a
+     * production build at all. It is not hypothetical: it happened during this PR.
+     *
+     * With reuse off, `--strictPort` turns that same occupied port into an immediate failure
+     * naming the conflict, which is the outcome worth having. Cost is one build per local run.
+     */
+    reuseExistingServer: false,
     timeout: 120_000,
   },
 });
