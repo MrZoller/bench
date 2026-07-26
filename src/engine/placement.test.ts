@@ -486,6 +486,176 @@ describe('layer splits are sized, not divided', () => {
     }
   });
 
+  /**
+   * `offloadFraction` is charged against the *whole model's* active weights by both speed
+   * estimators, so it has to be a rig-wide quantity. Derived from the busiest device it was a
+   * per-device fraction, and a layer split is exactly where those two differ: the cards hold
+   * different amounts, so one can be over its ceiling while the remaining serial stages stay
+   * resident — and every one of them was billed host-bus time all the same.
+   */
+  describe('the spill fraction is the rig’s, not the busiest device’s', () => {
+    // What the old code computed: the busiest device's overflow over the busiest device's weights.
+    const perDeviceFraction = (p: ReturnType<typeof planPlacement>) =>
+      Math.min(1, Math.max(0, -p.headroomBytes) / Math.max(p.weightBytesPerDevice, 1));
+
+    it('charges only the devices that are over, not every serial stage', () => {
+      // Gemma 3 12B at 128K over 8 users is cache-dominated, and its 8 full-attention layers cache
+      // ~128x what a sliding one does. Eight of them over five cards is three cards holding two and
+      // two holding one, so the split is lopsided by construction: three cards sit at the top load
+      // and two sit well under it. Lower the ceiling just below that top load and exactly three of
+      // the five spill — which is the shape the issue describes, and which a fraction taken from
+      // one device cannot express.
+      const scenario = { contextTokens: 131072, concurrency: 8, kvPrecision: 'fp16' as const };
+      const plan = (device: DeviceSpec) =>
+        planPlacement(GEMMA_3_12B, getQuant('q4_k_m'), scenario, { device, count: 5 }, LLAMA_CPP);
+
+      const roomy = plan(RTX_5090);
+      expect(roomy.fits).toBe(true);
+
+      const deficit = 0.25 * GIB;
+      const tight: DeviceSpec = {
+        ...RTX_5090,
+        allocatableBytes: roomy.usedBytesPerDevice - deficit,
+        capacityBytes: 200 * GIB,
+      };
+      const spilling = plan(tight);
+
+      expect(spilling.fits).toBe(false);
+      // Offload genuinely rescues this: the cache still fits, it is the weights on top that do not.
+      expect(spilling.impossible).toBe(false);
+
+      // Three cards over by `deficit` each, two resident — and every spilled byte is a weight,
+      // since none of the three is over by more than the ~0.29 GiB of weights it holds.
+      expect(spilling.offloadFraction * spilling.totalWeightBytes).toBeCloseTo(3 * deficit, -6);
+
+      // What the two readings say about the same rig. The busiest card holds 4% of the model's
+      // weights, so expressing its overflow as a fraction of *those* put almost the whole model on
+      // the host bus — eight times the streamed volume, straight onto decode and TTFT together.
+      expect(perDeviceFraction(spilling)).toBeGreaterThan(0.85);
+      expect(spilling.offloadFraction).toBeLessThan(0.12);
+    });
+
+    it('holds on real hardware, where every card spills but by different amounts', () => {
+      // No synthetic ceiling: gpt-oss-120b at Q4_K_M over four 4090s at 128K and 16 users. Every
+      // card is over, so this is the milder half of the defect — the busiest card's ratio is still
+      // not the rig's, and it overstates the streamed volume by 14%.
+      const p = planPlacement(
+        GPT_OSS_120B,
+        getQuant('q4_k_m'),
+        { contextTokens: 131072, concurrency: 16, kvPrecision: 'fp16' },
+        { device: RTX_4090, count: 4 },
+        LLAMA_CPP
+      );
+
+      expect(p.fits).toBe(false);
+      expect(p.impossible).toBe(false);
+      expect(p.offloadFraction).toBeGreaterThan(0);
+      expect(p.offloadFraction).toBeLessThan(perDeviceFraction(p));
+    });
+
+    it('never claims more spills than the rig is over by, or than the model has', () => {
+      for (const count of [1, 2, 3, 4, 5, 8]) {
+        for (const context of [32768, 131072]) {
+          const p = planPlacement(
+            GEMMA_3_12B,
+            getQuant('q4_k_m'),
+            { contextTokens: context, concurrency: 8, kvPrecision: 'fp16' },
+            { device: RTX_4090, count },
+            LLAMA_CPP
+          );
+          if (p.unsupported) continue;
+
+          expect(p.offloadFraction).toBeGreaterThanOrEqual(0);
+          expect(p.offloadFraction).toBeLessThanOrEqual(1);
+          // A resident rig spills nothing, whatever the packing looks like.
+          if (p.fits) expect(p.offloadFraction).toBe(0);
+
+          // And the bytes it claims are on the host bus cannot exceed what the rig is over by —
+          // the sum of every card's deficit, which the busiest card's deficit times the card count
+          // bounds from above.
+          const spilled = p.offloadFraction * p.totalWeightBytes;
+          expect(spilled).toBeLessThanOrEqual(Math.max(0, -p.headroomBytes) * count + 1);
+        }
+      }
+    });
+
+    it('leaves the uniform case exactly where it was', () => {
+      // Tensor parallelism hands every rank the same load, so summing n identical overflows over n
+      // identical shards has to give back the per-device ratio. This is the regression guard on the
+      // path that was never wrong.
+      //
+      // FP8, not IQ4_XS: `VLLM.weightFormats` does not include the GGUF K-quants, so every
+      // iteration of the first attempt returned `unsupported` and skipped, and the guard on this
+      // change's load-bearing claim asserted nothing while reporting green. Hence the counter
+      // below — the same `continue` will hollow this out again the next time a fixture moves.
+      let asserted = 0;
+      for (const count of [1, 2, 4, 8]) {
+        const p = planPlacement(
+          DEEPSEEK_V3,
+          getQuant('fp8'),
+          { contextTokens: 32768, concurrency: 4, kvPrecision: 'fp16' },
+          { device: RTX_5090, count },
+          VLLM
+        );
+        if (p.unsupported || p.impossible) continue;
+        expect(p.offloadFraction).toBeGreaterThan(0);
+        expect(p.offloadFraction).toBeCloseTo(perDeviceFraction(p), 6);
+        asserted += 1;
+      }
+      expect(asserted).toBe(4);
+    });
+
+    /**
+     * The predicate and its sentence are one claim, which is this repo's most-repeated lesson.
+     * Widening `impossible` to every device broke an implication the panels were relying on: it
+     * used to be true by construction that an impossible offloadable rig had *the busiest device's*
+     * cache over the ceiling, so BudgetBar could rebuild the figure from `kvBytesPerDevice`.
+     */
+    it('names the device that made it impossible, not the one the readout describes', () => {
+      // Gemma 3 12B over three 4090s at 128K and 8 users: the packing gives two cards three
+      // full-attention layers each and the third the remaining 42 layers, so the busiest card by
+      // combined load is the one with the *least* cache.
+      const p = planPlacement(
+        GEMMA_3_12B,
+        getQuant('q4_k_m'),
+        { contextTokens: 131072, concurrency: 8, kvPrecision: 'fp16' },
+        { device: RTX_4090, count: 3 },
+        LLAMA_CPP
+      );
+
+      expect(p.impossible).toBe(true);
+      // The floor that actually refused it is over the ceiling...
+      expect(p.floorBytesPerDevice).toBeGreaterThan(p.allocatableBytesPerDevice);
+      // ...and it is not the floor of the device this readout describes, which is comfortably
+      // under it. Rebuilding the sentence from these two fields printed a figure that disproved
+      // the refusal beside it.
+      expect(p.kvBytesPerDevice + p.activationBytesPerDevice).toBeLessThan(
+        p.allocatableBytesPerDevice
+      );
+    });
+
+    it('keeps the floor and the busiest device together whenever every device holds the same', () => {
+      // Tensor parallelism, and any single-device rig: there is only one load, so the two figures
+      // are the same number and the distinction above cannot arise.
+      for (const runtime of [VLLM, LLAMA_CPP]) {
+        for (const count of runtime === VLLM ? [1, 2, 4] : [1]) {
+          const p = planPlacement(
+            GEMMA_3_12B,
+            getQuant(runtime === VLLM ? 'fp8' : 'q4_k_m'),
+            { contextTokens: 131072, concurrency: 8, kvPrecision: 'fp16' },
+            { device: RTX_4090, count },
+            runtime
+          );
+          if (p.unsupported) continue;
+          expect(p.floorBytesPerDevice).toBeCloseTo(
+            p.kvBytesPerDevice + p.activationBytesPerDevice,
+            6
+          );
+        }
+      }
+    });
+  });
+
   it('does not grant a serial split aggregate bandwidth', () => {
     // Whole layers run in sequence for one token, so a single stream sees one card's bandwidth
     // however many cards there are. Tensor parallelism really does add channels.

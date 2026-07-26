@@ -66,9 +66,15 @@ function capacityReading(
        * there is nowhere to spill, but because KV and activations alone overflow the card, and
        * those cannot be offloaded at all. Explaining that as "shared memory has no faster tier"
        * misdiagnoses a high-context 5090 as a Mac.
+       *
+       * "a card in this rig", not "the card": under a layer split the cards hold different amounts,
+       * and the one whose cache overflows need not be the one whose overage is printed above. No
+       * figure is quoted here so this could not contradict itself the way BudgetBar's could, but a
+       * definite singular attaches the claim to whichever card the reader has in mind — which is
+       * the one the bar a few pixels up just drew.
        */
       detail: canOffload
-        ? 'The cache and workspace alone overflow the card, and those cannot be offloaded. Lower the context, the concurrency, or the KV precision.'
+        ? 'The cache and workspace alone overflow a card in this rig, and those cannot be offloaded. Lower the context, the concurrency, or the KV precision.'
         : tunableCeiling
           ? // The ceiling is a default, not a hardware limit: macOS caps wired GPU memory near
             // 75% and AMD exposes a Variable Graphics Memory setting. Reporting a flat "will
