@@ -1433,8 +1433,8 @@ describe('the Envelope says what a region does, not only what it fails', () => {
 });
 
 /**
- * MLX quantizes with its own affine scheme, the catalog has no measured entry for it, and the GGUF
- * quants stand in *by width*. The engine cannot tell the difference — a roofline consumes bits
+ * MLX quantizes with its own affine scheme, the catalog has no measured entry for it, and other
+ * catalogued formats stand in *by width*. The engine cannot tell the difference — a roofline consumes bits
  * per weight, and a stand-in of the right width produces plausible arithmetic — so every figure for
  * an Apple-silicon configuration derived from a format MLX does not read, with nothing on screen
  * saying which figures those were. The same rule `devices.json` already follows for pre-release

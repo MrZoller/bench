@@ -398,7 +398,7 @@ export const MLX: RuntimeSpec = {
   // included, since MLX's 8-bit is affine and the catalogued row is LLM.int8() at a flat 8.0.
   substituted: {
     nativeFormats: ['bf16'],
-    note: 'MLX quantizes with its own affine scheme and the catalog has no measured entry for it, so a GGUF quant of the same nominal width stands in.',
+    note: 'MLX quantizes with its own affine scheme and the catalog has no measured entry for it, so another catalogued format of the same nominal width stands in.',
   },
   kvPrecisions: ['fp16', 'q8'],
   source: 'https://github.com/ml-explore/mlx',

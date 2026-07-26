@@ -84,8 +84,8 @@ export const RUNTIMES: readonly RuntimeSpec[] = [
     // because the field is required, and a layer split is what a multi-device MLX would do.
     parallelism: 'layer',
     // MLX quantizes with its own affine scheme at 4 and 8 bits, and the catalog has no
-    // MLX-native entries for those — so the GGUF quants stand in *by width*, which is what a
-    // roofline over bits-per-weight actually consumes. Not exact: MLX 4-bit is nearer 4.5 bpw
+    // MLX-native entries for those — so other catalogued formats stand in *by width*, which is
+    // what a roofline over bits-per-weight actually consumes. Not exact: MLX 4-bit is nearer 4.5 bpw
     // than Q4_K_M's 4.85. Recorded as a modelling choice rather than a claim that MLX reads
     // GGUF, which it does not. What it genuinely cannot do is AWQ or the vendor formats.
     weightFormats: ['bf16', 'int8', 'q8_0', 'q6_k', 'q5_k_m', 'q4_k_m', 'iq4_xs', 'q3_k_m'],
@@ -100,7 +100,7 @@ export const RUNTIMES: readonly RuntimeSpec[] = [
       // lighter than the marked `q8_0` and carried no mark at all. BF16 has no groups, no scales
       // and no biases, so 16 bpw is exact and it stays. Raised by Codex on PR #32.
       nativeFormats: ['bf16'],
-      note: 'MLX quantizes with its own affine scheme and the catalog has no measured entry for it, so a GGUF quant of the same nominal width stands in.',
+      note: 'MLX quantizes with its own affine scheme and the catalog has no measured entry for it, so another catalogued format of the same nominal width stands in.',
     },
     kvPrecisions: ['fp16', 'q8'],
     source: 'https://github.com/ml-explore/mlx',
