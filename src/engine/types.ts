@@ -366,7 +366,7 @@ export interface RuntimeSpec {
    * llama.cpp figures do not — and nothing on screen said which was which.
    *
    * Kept in `weightFormats` rather than removed from it: dropping the substitution restricts Apple
-   * silicon to BF16 and INT8, which makes a headline case largely unusable. A documented
+   * silicon to BF16 alone, which makes a headline case largely unusable. A documented
    * approximation beats an honest refusal here; an *undocumented* one beats neither.
    *
    * **The list is of the formats that are real, not of the stand-ins**, and the polarity is the

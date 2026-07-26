@@ -394,9 +394,10 @@ export const MLX: RuntimeSpec = {
   supports: [{ class: 'unified-soc', vendor: 'Apple' }],
   parallelism: 'layer',
   weightFormats: ['bf16', 'int8', 'q8_0', 'q6_k', 'q5_k_m', 'q4_k_m', 'iq4_xs', 'q3_k_m'],
-  // BF16 and INT8 are real MLX formats; every other entry above is a GGUF width standing in.
+  // BF16 is the one real MLX format here; every other entry above is a width standing in — `int8`
+  // included, since MLX's 8-bit is affine and the catalogued row is LLM.int8() at a flat 8.0.
   substituted: {
-    nativeFormats: ['bf16', 'int8'],
+    nativeFormats: ['bf16'],
     note: 'MLX quantizes with its own affine scheme and the catalog has no measured entry for it, so a GGUF quant of the same nominal width stands in.',
   },
   kvPrecisions: ['fp16', 'q8'],

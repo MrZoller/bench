@@ -90,9 +90,16 @@ export const RUNTIMES: readonly RuntimeSpec[] = [
     // GGUF, which it does not. What it genuinely cannot do is AWQ or the vendor formats.
     weightFormats: ['bf16', 'int8', 'q8_0', 'q6_k', 'q5_k_m', 'q4_k_m', 'iq4_xs', 'q3_k_m'],
     substituted: {
-      // The two MLX genuinely loads. Everything else above is a GGUF width standing in, and stays
-      // that way by default if a format is added and nobody says otherwise.
-      nativeFormats: ['bf16', 'int8'],
+      // The one MLX genuinely loads. Everything else above is a stand-in, and stays that way by
+      // default if a format is added and nobody says otherwise.
+      //
+      // `int8` is not on this list, and the comment above is why: MLX's 8-bit is affine at 8 bits
+      // too, and the catalogued `int8` row is LLM.int8() — per-channel, no group metadata, 8.0 bpw
+      // exactly, cited to arXiv 2208.07339 and offered to vLLM. It is a stand-in for MLX exactly as
+      // Q8_0 is, and leaving it native inverted the two: on a 235B, `int8` reported 13.7 GiB
+      // lighter than the marked `q8_0` and carried no mark at all. BF16 has no groups, no scales
+      // and no biases, so 16 bpw is exact and it stays. Raised by Codex on PR #32.
+      nativeFormats: ['bf16'],
       note: 'MLX quantizes with its own affine scheme and the catalog has no measured entry for it, so a GGUF quant of the same nominal width stands in.',
     },
     kvPrecisions: ['fp16', 'q8'],

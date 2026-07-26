@@ -1447,11 +1447,11 @@ describe('a figure derived from a stand-in format says so', () => {
   /**
    * The width named has to be the width the figures beside it were computed at.
    *
-   * MLX substitutes six GGUF formats, from Q3_K_M's 3.91 bpw to Q8_0's 8.5, and the note on the
-   * runtime is one static string — so a sentence naming a particular quant was true of exactly one
-   * of them and off by up to a factor of two on the rest, while claiming "the arithmetic is sound
-   * for that width". Both cases are asserted because the Q4_K_M one passes either way; only Q8_0
-   * distinguishes a composed width from a hardcoded one.
+   * MLX substitutes seven formats — six GGUF plus INT8 — from Q3_K_M's 3.91 bpw to Q8_0's 8.5, and
+   * the note on the runtime is one static string. So a sentence naming a particular quant was true
+   * of exactly one of them and off by up to a factor of two on the rest, while claiming "the
+   * arithmetic is sound for that width". Both cases are asserted because the Q4_K_M one passes
+   * either way; only Q8_0 distinguishes a composed width from a hardcoded one.
    */
   it.each([
     ['q4_k_m', /4\.85 bpw/],
@@ -1479,10 +1479,37 @@ describe('a figure derived from a stand-in format says so', () => {
     await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
     await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
 
-    // BF16 is a real MLX format, so a marker here would be crying wolf on the majority case and
-    // would train people to ignore it where it matters.
+    // BF16 is a real MLX format — no groups, no scales, no biases, so 16 bpw is exact — and a
+    // marker here would be crying wolf on the majority case and train people to ignore it where it
+    // matters. It is also the landing state: switching the runtime to MLX coerces to BF16.
     await user.selectOptions(screen.getByLabelText('Quantization'), 'bf16');
     expect(marker()).not.toBeInTheDocument();
+  });
+
+  /**
+   * INT8 is a stand-in under MLX, and the catalog said otherwise until PR #32.
+   *
+   * MLX's 8-bit is affine at 8 bits just as its 4-bit is, while the catalogued `int8` row is
+   * LLM.int8() — per-channel, no group metadata, 8.0 bpw exactly, cited to arXiv 2208.07339 and
+   * offered to vLLM. Listing it as native inverted the two 8-bit stand-ins against each other: on
+   * a 235B, the *marked* Q8_0 at 8.5 bpw reported 13.7 GiB heavier than the unmarked INT8, so the
+   * lighter and more optimistic of the two was the one carrying no provenance at all.
+   *
+   * Pinned because nothing asserted MLX + INT8 in either direction, which is how a modelling call
+   * gets reversed by a one-word catalog edit and nobody notices.
+   */
+  it('marks INT8 under MLX, which quantizes 8-bit its own way too', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'int8');
+
+    expect(marker()).toBeInTheDocument();
+    // At the row's own width, not Q4_K_M's — the composed clause has to follow the selection here
+    // as it does for every other stand-in.
+    expect(marker()).toHaveTextContent(/8 bpw/);
   });
 
   /**
