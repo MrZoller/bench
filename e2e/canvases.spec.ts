@@ -108,15 +108,30 @@ test('the Envelope bitmap matches its laid-out size', async ({ page }) => {
   const canvas = page.getByRole('region', { name: /how much room/i }).locator('canvas');
   await expect(canvas).toBeVisible();
 
-  const { cssWidth, bitmapWidth, dpr } = await page.evaluate(() => {
-    const el = document.querySelector<HTMLCanvasElement>('canvas')!;
-    return {
-      cssWidth: el.getBoundingClientRect().width,
-      bitmapWidth: el.width,
-      dpr: window.devicePixelRatio || 1,
-    };
-  });
+  // Measured through the locator asserted visible above, not a fresh `document.querySelector`:
+  // there is one canvas today, but the two would silently diverge the moment a second one lands
+  // earlier in the DOM, and this test would then assert about an element it never checked.
+  const { cssWidth, cssHeight, bitmapWidth, bitmapHeight, dpr } = await canvas.evaluate(
+    (el: HTMLCanvasElement) => {
+      const rect = el.getBoundingClientRect();
+      return {
+        cssWidth: rect.width,
+        cssHeight: rect.height,
+        bitmapWidth: el.width,
+        bitmapHeight: el.height,
+        dpr: window.devicePixelRatio || 1,
+      };
+    }
+  );
 
   expect(bitmapWidth).toBeGreaterThan(0);
+  expect(bitmapHeight).toBeGreaterThan(0);
   expect(Math.abs(bitmapWidth - cssWidth * dpr)).toBeLessThanOrEqual(2);
+  /**
+   * Height as well as width, which is the half that actually catches the stretch described above.
+   * The CSS box is a fixed `h-48`, so a bitmap height left at the 150px default — or stale from a
+   * previous layout — while the width keeps tracking the rect scales the plot vertically. Every
+   * assertion in this file still finds nonzero, multicoloured, repainting pixels in that state.
+   */
+  expect(Math.abs(bitmapHeight - cssHeight * dpr)).toBeLessThanOrEqual(2);
 });

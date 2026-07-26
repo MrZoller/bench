@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 
 /**
  * The Matrix's device headers are rotated 45 degrees and taken out of flow, so the row's height is
- * a *computed guess* — `ceil(longest * 6.5 * sin(45)) + 20`, where 6.5px per character is an
+ * a *computed guess* — `ceil(longest * 8 * sin(45)) + 20`, where 8px per character is an
  * estimate at this type size rather than a measurement. The comment in the component says it errs
  * long on purpose, because the cost of erring short is a header that clips.
  *
@@ -86,14 +86,50 @@ test('does not reserve more header height than the labels need', async ({ page }
 test('every device column is distinguishable by its label', async ({ page }) => {
   await page.goto('/');
 
-  const labels = await page
+  const headers = page
     .getByRole('region', { name: /every model on every machine/i })
-    .locator('thead th span')
-    .allInnerTexts();
+    .locator('thead th');
+  await expect(headers.first()).toBeVisible();
 
-  const visible = labels.filter((l) => l.trim().length > 0);
+  // The first cell is the row-header stub, and its only span is `sr-only` — deliberately clipped to
+  // a 1px box, so it would read as truncated on the geometry check below.
+  const labels = await headers.evaluateAll((cells) =>
+    cells.slice(1).map((cell) => {
+      const span = cell.querySelector('span');
+      if (!span) return { text: '', display: 'none', clipped: false };
+      return {
+        text: span.textContent ?? '',
+        /**
+         * Both properties return 0 on an element with no layout box, and Blink gives an inline box
+         * no `clientWidth` at all — so `0 > 0 + 1` is false and the clipping check below silently
+         * becomes a tautology. That is not a hypothetical shape: the regression this test guards
+         * against is a revert to truncated in-flow headers, which is exactly what would put the
+         * label back to `display: inline`. Asserted so the measurement fails loudly rather than
+         * degrading into one that cannot fail — the defect this whole test was rewritten to escape.
+         */
+        display: getComputedStyle(span).display,
+        /**
+         * Clipping has to be read off the layout, not the text. `text-overflow: ellipsis` paints a
+         * glyph the browser never writes back into the DOM, so `textContent` stays whole while the
+         * column becomes unreadable — the assertion this replaces could not fail.
+         *
+         * A 1px tolerance because both properties are integers: a shrink-to-fit box whose content
+         * measures 198.6px can round its scroll and client widths apart by one. Real truncation
+         * overflows by a whole character, 6–8px at this type size.
+         */
+        clipped: span.scrollWidth > span.clientWidth + 1,
+      };
+    })
+  );
+
+  const visible = labels.filter((l) => l.text.trim().length > 0);
   expect(visible.length).toBeGreaterThan(1);
-  expect(new Set(visible).size).toBe(visible.length);
-  // Nothing truncated to an ellipsis by CSS.
-  for (const label of visible) expect(label).not.toContain('…');
+  expect(new Set(visible.map((l) => l.text)).size).toBe(visible.length);
+  for (const label of visible) {
+    expect(
+      label.display,
+      `the header "${label.text}" is inline, so the clipping check cannot measure it`
+    ).not.toBe('inline');
+    expect(label.clipped, `the header "${label.text}" is clipped by its own box`).toBe(false);
+  }
 });
