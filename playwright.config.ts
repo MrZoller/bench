@@ -20,6 +20,16 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './e2e',
+  /**
+   * Named explicitly rather than left to discovery. Playwright takes the nearest `tsconfig.json`,
+   * and this repo's root file is a solution-style one — project references, no `compilerOptions`
+   * — so the `@/*` mapping the specs import through lives in `tsconfig.e2e.json`.
+   *
+   * Resolution does work without this: Playwright follows project references, and the pinned
+   * 1.62 does so. But the dependency range is `^1.60.0`, and relying on a transitive lookup that
+   * a minor bump could tighten is a needless bet when naming the file costs one line.
+   */
+  tsconfig: './tsconfig.e2e.json',
   // Playwright's own default is 50% of cores in both environments; this only says that the specs
   // are independent, which they are — each drives a fresh page from a fresh store.
   fullyParallel: true,
@@ -38,8 +48,8 @@ export default defineConfig({
       name: 'desktop',
       use: { ...devices['Desktop Chrome'] },
       // The touch specs assert the coarse-pointer branch, which a mouse run cannot reach. Without
-      // this they ran here too and failed on the branch they are not about — `testMatch` on the
-      // other project narrows what *it* takes, not what everyone else leaves alone.
+      // this they ran here too and failed on the branch they are not about — `testMatch` on a
+      // sibling project narrows what *it* takes, not what everyone else leaves alone.
       testIgnore: /touch-targets\.spec\.ts/,
     },
     {
@@ -53,6 +63,24 @@ export default defineConfig({
       name: 'touch',
       use: { ...devices['Pixel 5'] },
       testMatch: /touch-targets\.spec\.ts/,
+    },
+    {
+      /**
+       * The canvas specs again, at a device pixel ratio that is not 1.
+       *
+       * `Desktop Chrome` has a `deviceScaleFactor` of 1, and that makes the bitmap assertions
+       * vacuous in the direction they most need to hold: `cssSize * dpr` is `cssSize * 1`, so
+       * dropping the dpr multiplication from the sizing effect entirely would still satisfy
+       * every one of them, and only a retina user would see the resulting half-resolution plot.
+       * The stretch this guards is the same defect the height assertion was added for — it just
+       * hides on this project rather than in the DOM.
+       *
+       * A separate project rather than raising `desktop`'s scale factor, so the sizing is checked
+       * at both ratios and the other specs keep laying out at the size they were written for.
+       */
+      name: 'retina',
+      use: { ...devices['Desktop Chrome'], deviceScaleFactor: 2 },
+      testMatch: /canvases\.spec\.ts/,
     },
   ],
 

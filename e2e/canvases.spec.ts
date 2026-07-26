@@ -82,21 +82,48 @@ test('the Envelope repaints when the scenario changes', async ({ page }) => {
   // Checked here as well as in the test above: without it a zero-sized bitmap surfaces below as an
   // uninformative poll timeout rather than as the thing that actually went wrong.
   expect(before, 'the canvas could not be read back').not.toHaveProperty('error');
+  if ('error' in before) return; // unreachable past that assertion; narrows the union for TS
+
+  /**
+   * And that the baseline was painted in the first place — the symmetric case of the blank-`after`
+   * hole closed below. `painted` only reports an error for a *zero*-sized bitmap, so a canvas read
+   * before its first draw (300×150 and fully transparent, the HTML default) clears the check above,
+   * after which any subsequent paint reads as a successful repaint and the `selectOption` has
+   * proven nothing. Unreachable today, since `goto` waits for load and `toBeVisible` adds another
+   * round trip, but it costs a line to stop it becoming reachable.
+   */
+  expect(before.opaque, 'the canvas was already blank before the scenario changed').toBeGreaterThan(
+    0
+  );
 
   // A model that changes the field wholesale rather than by one cell.
   // `exact`, because the Matrix section's accessible name is "Every model on every machine…" and a
   // loose label match resolves to two elements.
   await page.getByLabel('Model', { exact: true }).selectOption('deepseek-ai/DeepSeek-V3');
 
+  /**
+   * A changed digest is necessary but not sufficient. Clearing the canvas and then failing to
+   * redraw changes it too — a transparent bitmap hashes differently from a painted one — so a
+   * digest comparison on its own accepts a blank Envelope as a successful repaint. The paint test
+   * above only ever sees a fresh page, which leaves a draw that fails for one particular model
+   * with nothing watching it.
+   *
+   * Reported as a state name rather than a boolean because these fail in different ways, and a
+   * poll timeout reading `expected true, received false` distinguishes none of them.
+   */
   await expect
     .poll(
       async () => {
         const after = await painted(page, 'canvas');
-        return 'digest' in after && 'digest' in before ? after.digest !== before.digest : false;
+        if ('error' in after || 'error' in before) return 'unreadable';
+        if (after.digest === before.digest) return 'unchanged';
+        if (after.opaque === 0) return 'cleared';
+        if (after.colours <= 1) return 'flat';
+        return 'repainted';
       },
-      { message: 'the canvas never repainted after the model changed' }
+      { message: 'the canvas never repainted into a painted state after the model changed' }
     )
-    .toBe(true);
+    .toBe('repainted');
 });
 
 /**
