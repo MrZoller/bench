@@ -42,13 +42,13 @@ deployment, and the follow-up list in [issues #12–#20](https://github.com/MrZo
 | 7. URL state, responsive, a11y     | **mostly** (#6)   | Querystring round-trips a scenario. No browser-level test pass — #19; URL defects in #15, #16      |
 | 8. Weekly catalog refresh + deploy | **next**          | Scheduled `build-catalog` → PR on diff; static deploy to a zoller.ai subdomain                     |
 
-**Correctness debt is tracked as issues, not here.** Ten are open. #9 and #10, which graded a
-configuration as working when it is not, are fixed — together with #11, which printed a figure
-measured at a different scenario from the one its sentence described. Filed as three bugs, one
-class; written up under **Verdicts** below. What remains is labelling (#13, #20), UI state (#12,
-#15, #16), test and performance debt (#17, #19), and the MLX question (#18). Both engine bugs are
-fixed: the layer-split spill fraction (#14) and prefill having no notion of a cached prefix (#23);
-see **Engine** below.
+**Correctness debt is tracked as issues, not here.** Six are open once this lands. #9 and #10,
+which graded a configuration as working when it is not, are fixed — together with #11, which
+printed a figure measured at a different scenario from the one its sentence described. Filed as
+three bugs, one class; written up under **Verdicts** below. What remains is labelling (#13), UI
+state (#15), a browser-level test pass (#19), the MLX questions (#18, #33), and three touch targets
+too small for a coarse pointer (#29). Both engine bugs are fixed: the layer-split spill fraction
+(#14) and prefill having no notion of a cached prefix (#23); see **Engine** below.
 
 ## Decisions already made
 
