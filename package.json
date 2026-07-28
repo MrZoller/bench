@@ -16,7 +16,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "catalog": "tsx scripts/build-catalog.ts",
-    "screenshots": "playwright test --config=playwright.config.ts"
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "react": "^19.2.7",

@@ -39,16 +39,18 @@ deployment, and the follow-up list in [issues #12–#20](https://github.com/MrZo
 | 4. Design tokens + the Bench       | **done** (#5)     | Hero surface. Load the `dataviz` skill before any chart/meter/palette code                         |
 | 5. Verdict + explain layers        | **done** (#4)     | Seven workload archetypes. See **Verdicts**, below                                                 |
 | 6. Envelope + Matrix surfaces      | **done** (#7, #8) | Context × concurrency feasibility field; model × device heatmap                                    |
-| 7. URL state, responsive, a11y     | **mostly** (#6)   | Querystring round-trips a scenario. No browser-level test pass — #19; URL defects in #15, #16      |
+| 7. URL state, responsive, a11y     | **mostly** (#6)   | Querystring round-trips a scenario. Browser-level pass in `e2e/` (#19); URL defect in #15          |
 | 8. Weekly catalog refresh + deploy | **next**          | Scheduled `build-catalog` → PR on diff; static deploy to a zoller.ai subdomain                     |
 
-**Correctness debt is tracked as issues, not here.** Six are open once this lands. #9 and #10,
+**Correctness debt is tracked as issues, not here.** Four are open once this lands. #9 and #10,
 which graded a configuration as working when it is not, are fixed — together with #11, which
 printed a figure measured at a different scenario from the one its sentence described. Filed as
 three bugs, one class; written up under **Verdicts** below. What remains is labelling (#13), UI
-state (#15), a browser-level test pass (#19), the MLX questions (#18, #33), and three touch targets
-too small for a coarse pointer (#29). Both engine bugs are fixed: the layer-split spill fraction
-(#14) and prefill having no notion of a cached prefix (#23); see **Engine** below.
+state (#15), MLX's unmeasured 8-bit KV (#33), and three touch targets too small for a coarse
+pointer (#29). Both engine bugs are fixed: the layer-split spill fraction (#14) and prefill having
+no notion of a cached prefix (#23); see **Engine** below. The browser-level test gap (#19) is
+closed, and with it the legend overflow (#34) that only a browser could falsify; see **Tests**
+below.
 
 ## Decisions already made
 
@@ -234,6 +236,60 @@ reading the test that guards them.
   The knobs were left alone deliberately. Re-centring right after removing what a fudge factor was
   masking is how the next error gets hidden. All three sit inside the ±30% band the tests assert.
 
+**Tests**
+
+- **`e2e/` covers what jsdom structurally cannot, and nothing else.** Layout, scrolling,
+  `@media (pointer: coarse)`, and canvas actually painting — everything else stays in Vitest, where
+  it runs in a second. The rule is not tidiness: the gap shipped a bug. The Matrix's click-to-scroll
+  was anchored on a `display: contents` element, which generates no principal box, so
+  `scrollIntoView` returned early in every real browser — and jsdom has no `scrollIntoView` at all,
+  so the guarded call passed every test. Caught in review; the replacement was believed correct and
+  had never been observed working. All three scroll specs now fail if the anchor is put back.
+- **A spec that measures the wrong element is worse than no spec**, and this suite produced three
+  of them on the first run: a region-wide button locator that caught the measure toggles instead of
+  the grid cells, `getByLabel('Model')` matching the Matrix's own section name, and
+  `getByRole('button', { selected })`, which Playwright rejects outright. Each looked like an app
+  bug for a few minutes. Mutation-check anything asserting geometry.
+- **The touch project is emulation, so it asserts the emulation first.**
+  `matchMedia('(pointer: coarse)').matches` is checked in its own test before any size is measured,
+  or a change in how Playwright emulates a device silently moves every other assertion onto the
+  mouse branch, where they all pass.
+- **`vite preview` binds `localhost`, which is `::1` on an IPv6 host** — so the config passes
+  `--host 127.0.0.1` to match the URL Playwright probes. Without it the run dies on a `webServer`
+  timeout that says nothing about why.
+- **Pin the state a conditional defect needs, and assert you reached it before measuring.** The
+  Matrix legend's overflow (#34) needed three keys at once, two of them conditional, and on a fresh
+  page only one renders — so a spec written against `/` passes with the bug intact. The scenario is
+  in the querystring (`?r=mlx&q=q5_k_m`) and the three keys are asserted in their own test. Deleting
+  the query params leaves all four geometry assertions green and fails only that one, which is what
+  it is for.
+- **Measure the viewport the defect actually needs.** The same spec was first written at 390px,
+  where there is no overflow at all: the prose keys wrap their own text and the panel's padding
+  absorbs the rest. It appears at 360 and escapes to the document at 320. Four assertions passed
+  against unfixed markup before the widths were probed rather than assumed.
+- **And the fix that closes the filed issue is rarely the whole defect.** The ramp is `flex-1`, so
+  its flex basis is 0 and it is the only item in the row that yields. On the filed markup that put
+  it at **zero width at every viewport from 320 to 1024px** — the legend's entire subject missing
+  on a laptop, while the prose about the exceptions sat at full size, and nothing reported it.
+  `flex-wrap` alone does not fix that: a zero-basis item still takes only the free space left on
+  its own line, so it survives wherever a line breaks early (139.8px at 390, 373.8 at 640) and
+  collapses wherever the keys nearly fill one (69.8px at 320, **13.6px at 1024**). A floor on the
+  ramp group is the other half — `min-width` is resolved into the hypothetical main size, which is
+  what both line-breaking and shrinking are measured against, so the ramp claims a width or takes a
+  line of its own. The two halves are separately mutation-checked, and the desktop layout is
+  unchanged by either.
+- **A `rem` floor is a floor the viewport cannot argue with.** The obvious `min-w-48` fixes the
+  ramp and quietly reopens the overflow: browser text scaling grows the root font size without
+  shrinking the viewport, so at 320px with a 24px root the 12rem floor alone took the document to
+  343/320 — the sideways scroll the wrap was added to remove, returning in the one setting a reader
+  most needs it gone. `min-w-[min(12rem,100%)]` yields instead, and is identical at the default
+  root. Worth checking on any `min-w-`/`w-` in rem that a narrow layout depends on.
+- **Reflow at 200% text is not clean yet, and the legend was not the only offender.** Probing the
+  above at a 32px root found `Matrix.tsx`'s "N of M combinations run" line — an explicit
+  `whitespace-nowrap` — taking the document to 409/320 on its own. It predates the legend work and
+  is filed rather than fixed here; the point for next time is that the probe which proves your fix
+  is also the cheapest audit of its neighbours.
+
 **Verdicts**
 
 - **Grade a tier on the measurement its own sentence quotes, and on the scenario it recommends.**
@@ -382,6 +438,7 @@ section is for the questions those issues cannot settle.
 
 ```
 npm test && npm run lint && npm run format:check && npm run build
+npm run test:e2e                # Playwright; builds and serves on 127.0.0.1:4173 itself
 npm run catalog -- --dry-run    # re-derive the model catalog without writing
 ```
 
