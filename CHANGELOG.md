@@ -19,9 +19,9 @@ bug, and on the one accessibility axis with no spec behind it.
   ([#51](https://github.com/MrZoller/bench/issues/51)). It was the only device carrying a
   _measured_ bandwidth — 213 GB/s against AMD's 256 rating — and the engine then applied
   `bandwidthEfficiency` and `CLASS_BANDWIDTH_UTILIZATION` on top, the constants that exist to model
-  that very gap. Every Strix Halo throughput figure was understated by 20.2% against the treatment
-  the other 24 devices get, on the surface whose whole purpose is ranking hardware against
-  hardware. The catalog is theoretical peak throughout now, as the roadmap says it should be, and
+  that very gap. Every Strix Halo throughput figure read 16.8% low against the treatment the other
+  24 devices get — removing the double discount raises each one by 20.2% — on the surface whose
+  whole purpose is ranking hardware against hardware. The catalog is theoretical peak throughout now, as the roadmap says it should be, and
   the measured field is deleted rather than deprecated — a field is an invitation, and its docblock
   was accepting.
 - **Every Apple row claimed 100% of its RAM could be wired to the GPU**
