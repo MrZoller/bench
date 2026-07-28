@@ -28,8 +28,10 @@ Three things are the moat, in order:
 
 ## Status
 
-Seven of eight phases are on `main` as of 25 July 2026. What remains is the weekly refresh job,
-deployment, and the follow-up list in [issues #12–#20](https://github.com/MrZoller/bench/issues).
+All eight phases are built as of 27 July 2026. The one thing not finished is **publishing**: the
+deploy workflow is written and correct, and it cannot run until GitHub Pages is enabled for the
+repository — which needs a paid plan while the repo is private, and a decision about the
+subdomain. See **Deployment**, below.
 
 | Phase                              | State             | Notes                                                                                              |
 | ---------------------------------- | ----------------- | -------------------------------------------------------------------------------------------------- |
@@ -40,7 +42,7 @@ deployment, and the follow-up list in [issues #12–#20](https://github.com/MrZo
 | 5. Verdict + explain layers        | **done** (#4)     | Seven workload archetypes. See **Verdicts**, below                                                 |
 | 6. Envelope + Matrix surfaces      | **done** (#7, #8) | Context × concurrency feasibility field; model × device heatmap                                    |
 | 7. URL state, responsive, a11y     | **mostly** (#6)   | Querystring round-trips a scenario. Browser-level pass in `e2e/` (#19); URL defect in #15          |
-| 8. Weekly catalog refresh + deploy | **next**          | Scheduled `build-catalog` → PR on diff; static deploy to a zoller.ai subdomain                     |
+| 8. Weekly catalog refresh + deploy | **built**         | Refresh opens a PR on a _substantive_ diff. Deploy waits on Pages being enabled — see below        |
 
 **Correctness debt is tracked as issues, not here.** #9 and #10, which graded a configuration as
 working when it is not, are fixed — together with #11, which printed a figure measured at a
@@ -54,6 +56,46 @@ turned out to have been fixed in passing by #25 and #26 and were closed on the e
 
 What remains open is MLX's unmeasured 8-bit KV (#33), which wants a measurement this repo cannot
 take.
+
+## Deployment
+
+Two workflows, and the interesting decisions are in what each refuses to do.
+
+**`catalog-refresh.yml`** regenerates the catalog every Monday and opens a pull request rather
+than pushing to `main` — a model whose KV heads changed overnight is exactly the case a human
+should see, and it is indistinguishable, to the job, from Hugging Face returning plausible
+nonsense. Three things about it are easy to get wrong and are already wrong once elsewhere:
+
+- **`git diff --quiet` is the wrong question.** `build-catalog.ts` stamps `generatedAt` on every
+  write, so the file differs after every run whether or not a figure moved. Wired to that, the job
+  would open an empty pull request every week for the rest of the project's life — and people who
+  stop reading a bot that is right one week in fifty also stop reading it the week it matters.
+  `scripts/catalog-diff.ts` compares `models` and `failures` only, and is unit-tested in both
+  directions.
+- **No `--allow-partial` on a schedule.** The generator refuses a partial write by design; a
+  scheduled job is exactly where a 503 on five of seventeen seeds would silently delete 29% of the
+  product. A red run is the intended outcome of a bad fetch.
+- **The whole gate runs inside the refresh job, before the PR is opened.** GitHub deliberately does
+  not trigger workflows on a push made with `GITHUB_TOKEN`, so the pull request it opens gets no CI
+  of its own. Verifying in the same job is what stops a new model with an attention shape the
+  engine cannot price arriving in a green-looking PR.
+
+**`deploy.yml`** publishes `dist/` to GitHub Pages on every push to `main`. It is written, valid,
+and **has never run**, because Pages is not enabled for the repository — the same GitHub Pro
+constraint that blocks the branch ruleset. Rather than fail red on every push and say nothing about
+the commit that triggered it, a preflight job checks whether Pages exists and skips the deploy with
+an explanatory notice.
+
+Two settings are deliberately variables rather than committed values, because both are still
+undecided and both fail _quietly_ when wrong:
+
+| Variable              | Default | What it is for                                                                               |
+| --------------------- | ------- | -------------------------------------------------------------------------------------------- |
+| `PAGES_BASE_PATH`     | `/`     | Vite's `base`. A Pages _project_ site serves from `/bench/`; a custom domain serves from `/` |
+| `PAGES_CUSTOM_DOMAIN` | unset   | Written to `dist/CNAME` each deploy, since Pages drops the domain otherwise                  |
+
+A wrong `base` produces a blank page with 404s in the console, not a build error — which is why it
+is an input with a documented default rather than something inferred from the environment.
 
 ## Decisions already made
 
@@ -490,7 +532,12 @@ section is for the questions those issues cannot settle.
 - **Device specs need a verification pass before publishing.** Bandwidth is the number that
   governs everything and the one vendors bury. The `rumored` row (M5 Ultra) is press-rumour grade
   and must stay visibly labelled in the UI.
-- **Final subdomain** on zoller.ai.
+- **Final subdomain** on zoller.ai, and **Pages is not enabled**, which blocks publishing
+  regardless of the domain. Both are account-level decisions rather than code: enabling Pages on a
+  private repo needs a paid plan, and making the repo public would do it for free while also
+  restoring the branch ruleset above. The workflow is written and waits on whichever is chosen; the
+  domain then becomes the `PAGES_CUSTOM_DOMAIN` variable and `PAGES_BASE_PATH` stays `/`. Tracked
+  as an issue so it is not carried only here.
 
 ## Verification
 

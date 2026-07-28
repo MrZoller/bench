@@ -6,6 +6,18 @@ import { fileURLToPath, URL } from 'node:url';
 
 // https://vite.dev/config/
 export default defineConfig({
+  /**
+   * Where the built site will be served from.
+   *
+   * `/` is right for a custom domain, which is the plan — and wrong for the GitHub Pages project
+   * URL the site lands on before one is attached, where everything sits under `/<repo>/`. Baking
+   * either in makes the other deploy serve a blank page with four 404s in the console: a failure
+   * that reads as a broken build and is not one.
+   *
+   * So it is an input, set by the deploy workflow from a repository variable, and `/` by default
+   * because that is what `npm run dev`, `npm run preview` and the Playwright suite all assume.
+   */
+  base: process.env.BASE_PATH || '/',
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {

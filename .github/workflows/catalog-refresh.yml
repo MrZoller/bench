@@ -1,0 +1,176 @@
+name: Catalog refresh
+
+# The catalog is derived, never typed — so it goes stale the moment a publisher edits a
+# `config.json` or ships a new revision, and nothing in the repo would notice. This is the job
+# that notices.
+#
+# It opens a pull request rather than pushing to `main`, for the reason the seed list carries
+# its own comment about: a wrong architecture figure silently costs someone a GPU. A model
+# whose KV heads changed overnight is exactly the case a human should look at, and it is
+# indistinguishable — to this job — from a Hugging Face outage returning plausible nonsense.
+on:
+  schedule:
+    # Monday 06:17 UTC. Off the hour deliberately: GitHub queues scheduled jobs hardest at
+    # :00, and a delayed weekly refresh is worse than a slightly odd-looking cron.
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+# One at a time. Two overlapping runs would race on the same branch, and the loser's push
+# either fails or silently reverts the winner's figures.
+concurrency:
+  group: catalog-refresh
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Kept before the regeneration overwrites it, since the comparison below needs both.
+      - name: Keep the committed catalog
+        run: cp src/data/models.generated.json "$RUNNER_TEMP/committed.json"
+
+      # No `--allow-partial`. The generator refuses to write a partial catalog by design — a
+      # transient 503 on five of seventeen seeds would otherwise delete 29% of the product — and
+      # a scheduled job is precisely where that would go unnoticed. A red run here is the
+      # intended outcome of a bad fetch, and re-running it is one click.
+      - name: Regenerate from Hugging Face
+        env:
+          # Optional. The gated seeds point at open mirrors, so the run works without it; the
+          # token just allows the originals.
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: npm run catalog
+
+      - name: Compare on substance, not on the timestamp
+        id: diff
+        run: npx tsx scripts/catalog-diff.ts "$RUNNER_TEMP/committed.json" src/data/models.generated.json
+
+      # `generatedAt` moves on every write, so the working tree is dirty even when nothing about
+      # any model changed. Putting the file back keeps "no change" meaning no change.
+      - name: Discard a timestamp-only rewrite
+        if: steps.diff.outputs.changed != 'true'
+        run: git checkout -- src/data/models.generated.json
+
+      # Runs *before* the PR is opened, and that is the point rather than an optimisation.
+      # GitHub deliberately does not trigger workflows on a push made with `GITHUB_TOKEN`, so
+      # the pull request this job opens gets no CI run of its own. Verifying here is what stops
+      # it arriving unchecked — a new model with an attention shape the engine cannot price
+      # would otherwise sit in a green-looking PR.
+      - name: Verify the new catalog
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          npm run lint
+          npm run format:check
+          npm test
+          npm run build
+
+      - name: Open or update the pull request
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SUMMARY: ${{ steps.diff.outputs.summary }}
+        run: |
+          set -euo pipefail
+          BRANCH=catalog/refresh
+          CATALOG=src/data/models.generated.json
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          # The regenerated file has to survive the branch switch below, so it is stashed aside and
+          # the worktree put back. Without the restore, `git checkout` of an existing refresh
+          # branch refuses to move — that branch differs from `main` in exactly this file, which
+          # is the definition of a change that would be overwritten — and `set -e` kills the run.
+          # Only the first refresh, which creates the branch, would ever have worked.
+          cp "$CATALOG" "$RUNNER_TEMP/fresh.json"
+          git checkout -- "$CATALOG"
+
+          # Commit *on top of* an open refresh branch rather than resetting it. A force-push
+          # would be tidier and would discard any review already left on the PR, which is the
+          # one thing this job exists to invite.
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            git fetch origin "$BRANCH"
+            git checkout -B "$BRANCH" "origin/$BRANCH"
+          else
+            git checkout -b "$BRANCH"
+          fi
+
+          # Whether the branch already carries these figures — asked on substance, for the same
+          # reason the comparison against `main` was. `git diff --quiet` cannot answer it: the
+          # fresh file always differs, because `generatedAt` moves on every write. Wired to that,
+          # an unchanged catalog would push a timestamp-only commit to the open PR every Monday —
+          # the exact noise this job avoids on `main` and would then reintroduce on the branch.
+          if npx tsx scripts/catalog-diff.ts "$CATALOG" "$RUNNER_TEMP/fresh.json" --exit-code; then
+            echo "::notice::The open refresh branch already carries these figures."
+            exit 0
+          fi
+          cp "$RUNNER_TEMP/fresh.json" "$CATALOG"
+
+          # Written to files, never inlined. Both carry markdown, and a heredoc indented to match
+          # the surrounding YAML would prefix every line with spaces — which turns the summary
+          # table into a code block on GitHub.
+          {
+            printf 'chore(catalog): refresh model figures from Hugging Face\n\n'
+            printf '%s\n\n' "$SUMMARY"
+            printf 'Generated by .github/workflows/catalog-refresh.yml.\n'
+          } > "$RUNNER_TEMP/message.txt"
+
+          git add "$CATALOG"
+          git commit -F "$RUNNER_TEMP/message.txt"
+          git push origin "$BRANCH"
+
+          {
+            printf "Regenerated by \`npm run catalog\` from each repo's own \`config.json\` and safetensors index.\n\n"
+            printf '%s\n' "$SUMMARY"
+            cat <<'BODY_EOF'
+
+          ### Before merging
+
+          Every figure here was derived, not typed — so the question is not whether the numbers
+          look plausible but whether the *source* moved for a reason. A changed `layers` or
+          `attention` means the publisher edited the architecture; a changed `totalParams` against
+          an unchanged revision means something is wrong upstream.
+
+          `npm run lint`, `npm run format:check`, `npm test` and `npm run build` all passed against
+          this catalog inside the refresh job. They ran there rather than here because a push made
+          with `GITHUB_TOKEN` does not trigger workflows, so this pull request has no checks of its
+          own by design.
+
+          🤖 Generated with [Claude Code](https://claude.com/claude-code)
+          BODY_EOF
+          } > "$RUNNER_TEMP/body.md"
+
+          # `gh pr list --state open`, never `gh pr view`. `view` resolves a branch name to *any*
+          # pull request that ever had it as its head, including merged ones on branches that no
+          # longer exist — verified against this repo, where a long-deleted branch still resolves
+          # to its merged PR. So once the first refresh PR merged, every later run would have
+          # found it, edited the body of a merged pull request, logged "Updated the open refresh
+          # PR" and exited green, having opened nothing. A scheduled job that silently stops
+          # working is the worst outcome available here.
+          OPEN=$(gh pr list --head "$BRANCH" --base main --state open --json number --jq 'length')
+          if [ "$OPEN" -gt 0 ]; then
+            gh pr edit "$BRANCH" --body-file "$RUNNER_TEMP/body.md"
+            echo "Updated the open refresh PR."
+          else
+            gh pr create --base main --head "$BRANCH" \
+              --title 'chore(catalog): refresh model figures from Hugging Face' \
+              --body-file "$RUNNER_TEMP/body.md"
+          fi
+
+      - name: Say so when nothing moved
+        if: steps.diff.outputs.changed != 'true'
+        run: echo "::notice::Catalog is current — no pull request opened."
