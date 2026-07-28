@@ -1,0 +1,97 @@
+name: Deploy
+
+# Publishes the built site to GitHub Pages.
+#
+# The build is static by design — the catalog is baked in at build time rather than fetched on
+# load, which is what keeps the site offline-safe and means a Hugging Face outage cannot change
+# what a visitor sees. So "deploy" really is "upload a directory", and freshness comes from
+# `catalog-refresh.yml` opening a pull request, not from anything happening at runtime.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One deploy at a time, and never cancel one midway: a half-uploaded artifact is a broken site.
+# In-progress runs finish; queued ones collapse to the newest, since only the newest commit is
+# worth publishing.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  # Pages has to be turned on for the repository before anything can be uploaded to it, and on a
+  # private repo that needs a paid plan. Until then every push would end in a red X that says
+  # nothing about the commit that triggered it — so the state is checked first and the deploy is
+  # skipped with an explanation instead of failing.
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.check.outputs.enabled }}
+    steps:
+      - name: Is Pages enabled for this repository?
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          if gh api "repos/$GITHUB_REPOSITORY/pages" >/dev/null 2>&1; then
+            echo 'enabled=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'enabled=false' >> "$GITHUB_OUTPUT"
+            echo "::notice::GitHub Pages is not enabled for $GITHUB_REPOSITORY, so there is nothing to deploy to. Enable it under Settings → Pages with 'GitHub Actions' as the source. On a private repository that needs a paid plan; making the repository public also works."
+          fi
+
+  build:
+    needs: preflight
+    if: needs.preflight.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - uses: actions/configure-pages@v5
+
+      # `PAGES_BASE_PATH` is a repository variable, and `/` is the right default because that is
+      # what a custom domain serves from. A Pages *project* site is served from `/<repo>/`
+      # instead, so set the variable to `/bench/` if the site is reachable at
+      # `<owner>.github.io/bench` rather than at a domain of its own. Getting this wrong produces
+      # a blank page rather than an error, which is why it is stated here rather than inferred.
+      - name: Build
+        env:
+          BASE_PATH: ${{ vars.PAGES_BASE_PATH || '/' }}
+        run: npm run build
+
+      # A `CNAME` in the published directory is what tells Pages to answer on a custom domain, and
+      # it has to be re-uploaded with every deploy or the domain is dropped. Kept as a variable
+      # rather than a committed file so the subdomain — still undecided — is one setting rather
+      # than a commit, and so a fork does not inherit a domain it cannot serve.
+      - name: Claim the custom domain, if one is configured
+        if: vars.PAGES_CUSTOM_DOMAIN != ''
+        run: echo "${{ vars.PAGES_CUSTOM_DOMAIN }}" > dist/CNAME
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
