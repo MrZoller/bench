@@ -28,10 +28,13 @@ Three things are the moat, in order:
 
 ## Status
 
-All eight phases are built as of 27 July 2026. The one thing not finished is **publishing**: the
-deploy workflow is written and correct, and it cannot run until GitHub Pages is enabled for the
-repository — which needs a paid plan while the repo is private, and a decision about the
-subdomain. See **Deployment**, below.
+**All eight phases are done, and the site is live** at
+<https://mrzoller.github.io/bench/> as of 28 July 2026. The repository went public to get there —
+Pages is not available on a private repo without a paid plan — which also restored the branch
+ruleset that had been convention rather than enforcement since the start.
+
+What remains is a naming decision, not work: the site serves from the Pages project URL, and a
+zoller.ai subdomain is one repository variable away. See **Deployment**, below.
 
 | Phase                              | State             | Notes                                                                                               |
 | ---------------------------------- | ----------------- | --------------------------------------------------------------------------------------------------- |
@@ -82,28 +85,33 @@ nonsense. Three things about it are easy to get wrong and are already wrong once
   of its own. Verifying in the same job is what stops a new model with an attention shape the
   engine cannot price arriving in a green-looking PR.
 
-**`deploy.yml`** publishes `dist/` to GitHub Pages on every push to `main`. It is written, valid,
-and **has never run**, because Pages cannot be enabled on this repository. That is confirmed rather
-than assumed — `POST /repos/MrZoller/bench/pages` returns:
+**`deploy.yml`** publishes `dist/` to GitHub Pages on every push to `main`, and does. The first
+deploy ran on 28 July 2026.
 
-```
-422 Your current plan does not support GitHub Pages for this repository.
-```
+Getting there needed a decision rather than code. Pages on a private repo requires a paid plan —
+`POST /repos/MrZoller/bench/pages` returned `422 Your current plan does not support GitHub Pages
+for this repository`, which is a hard block and not a settings toggle. The repo went public
+instead, which also lifted the ruleset limitation recorded below. The workflow itself needed no
+change.
 
-The same paid-plan constraint that blocks the branch ruleset. Making the repo public lifts both at
-once. Rather than fail red on every push and say nothing about the commit that triggered it, a
-preflight job checks whether Pages exists and skips the deploy with an explanatory notice.
+Its preflight job stays, and is still worth having: it checks whether Pages exists and skips the
+deploy with a notice rather than failing red. A fork with no Pages gets a green run and an
+explanation instead of a broken-looking one.
 
-Two settings are deliberately variables rather than committed values, because both are still
-undecided and both fail _quietly_ when wrong:
+Two settings are repository variables rather than committed values, because they describe where
+the site is served rather than what it is, and both fail _quietly_ when wrong:
 
 | Variable              | Default | What it is for                                                                               |
 | --------------------- | ------- | -------------------------------------------------------------------------------------------- |
 | `PAGES_BASE_PATH`     | `/`     | Vite's `base`. A Pages _project_ site serves from `/bench/`; a custom domain serves from `/` |
 | `PAGES_CUSTOM_DOMAIN` | unset   | Written to `dist/CNAME` each deploy, since Pages drops the domain otherwise                  |
 
-A wrong `base` produces a blank page with 404s in the console, not a build error — which is why it
-is an input with a documented default rather than something inferred from the environment.
+`PAGES_BASE_PATH` is set to `/bench/` today, because a Pages _project_ site serves from the repo
+name. Attaching a custom domain means setting `PAGES_CUSTOM_DOMAIN` **and** returning
+`PAGES_BASE_PATH` to `/` — changing one without the other is the failure mode this pair exists to
+make visible, since a wrong `base` produces a blank page with 404s in the console rather than a
+build error. Verified after the first deploy: the served HTML references `/bench/assets/…` and both
+assets return 200.
 
 ## Decisions already made
 
@@ -641,9 +649,11 @@ section is for the questions those issues cannot settle.
   "no findings" with a 👍 _reaction_ rather than a comment, and that reaction survives later pushes,
   so merge-readiness needs the reaction's `created_at` to postdate the head commit. Zero unresolved
   threads right after a push usually means the review has not posted yet.
-- **`main` is unprotected.** Rulesets need GitHub Pro on a private repo, so the "PRs only, all
-  threads resolved" rule is convention rather than enforcement. Re-run the ruleset POST if the
-  repo goes public.
+- ~~`main` is unprotected.~~ **Enforced since 28 July 2026**, when the repo went public. The
+  ruleset requires a pull request, squash merges only, both CI checks green, and every review
+  thread resolved; deletion and force-push are blocked, with no bypass actors. What had been
+  convention for the whole build is now the rule — including for whoever writes the next commit,
+  who can no longer push to `main` even by accident.
 - ~~Device specs need a verification pass before publishing.~~ **Done, 28 July 2026.** All 25 rows
   checked against vendor documentation. Bandwidth — the number that governs everything — is
   confirmed on every one: the four CPU rows are exact by arithmetic (12 channels × DDR5-4800 × 8
@@ -667,12 +677,11 @@ section is for the questions those issues cannot settle.
 
   The `rumored` row (M5 Ultra) is still press-rumour grade and must stay visibly labelled in the UI.
 
-- **Final subdomain** on zoller.ai, and **Pages is not enabled**, which blocks publishing
-  regardless of the domain. Both are account-level decisions rather than code: enabling Pages on a
-  private repo needs a paid plan, and making the repo public would do it for free while also
-  restoring the branch ruleset above. The workflow is written and waits on whichever is chosen; the
-  domain then becomes the `PAGES_CUSTOM_DOMAIN` variable and `PAGES_BASE_PATH` stays `/`. Tracked
-  as an issue so it is not carried only here.
+- **Final subdomain** on zoller.ai. The only thing genuinely left, and it is a naming decision
+  rather than work: the site is live at the Pages project URL, and moving it is two repository
+  variables — `PAGES_CUSTOM_DOMAIN` to the chosen host and `PAGES_BASE_PATH` back to `/` — plus a
+  CNAME record. Both variables have to change together, which is why they are documented as a pair
+  above.
 
 ## Verification
 

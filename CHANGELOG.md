@@ -4,11 +4,13 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow
 [semver](https://semver.org/).
 
-## [Unreleased]
+## [0.1.0] — 2026-07-28
 
-Everything below is on `main` and has never been published — the deploy workflow is written and
-waits on GitHub Pages being enabled for the repository ([#40](https://github.com/MrZoller/bench/issues/40)).
-This section becomes 0.1.0 on the first deploy.
+First public release. Live at <https://mrzoller.github.io/bench/>.
+
+The repository went public to publish: GitHub Pages is not available on a private repo without a
+paid plan. That also restored the branch ruleset, which had been convention rather than enforcement
+for the whole build.
 
 ### Added
 
@@ -70,4 +72,4 @@ This section becomes 0.1.0 on the first deploy.
 - Reduced motion is respected in the stylesheet, and separately in the one scroll JavaScript asks
   for, which the stylesheet cannot reach.
 
-[unreleased]: https://github.com/MrZoller/bench/commits/main
+[0.1.0]: https://github.com/MrZoller/bench/commits/main
