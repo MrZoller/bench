@@ -11,33 +11,63 @@ import { expect, test } from '@playwright/test';
  * change is exactly the kind of thing that breaks silently.
  */
 
-test('the header row is tall enough for the longest rotated device label', async ({ page }) => {
-  await page.goto('/');
+/**
+ * At the default root, and again at 200% text.
+ *
+ * The second case is the one that was broken (#44). The labels are `text-xs`, so their width — and
+ * therefore the height their rotation needs — scales with the root font size, while the reserved
+ * height was a character count times a constant in *CSS pixels*. At a 32px root the text doubled
+ * and the row it has to fit in did not, so the `overflow-x-auto` wrapper clipped the device names:
+ * precisely the failure the rotation was introduced to prevent, reappearing at the one setting a
+ * low-vision reader would be using. `headerHeight` is in `rem` now.
+ *
+ * Parameterised rather than copied, because the first version of this check existed only at the
+ * default root and passed throughout — the estimate was never wrong at 16px.
+ */
+for (const root of [16, 32]) {
+  test(`the header row is tall enough for the longest rotated label at a ${root}px root`, async ({
+    page,
+  }) => {
+    await page.goto('/');
+    if (root !== 16) {
+      await page.evaluate((px) => {
+        document.documentElement.style.fontSize = `${px}px`;
+      }, root);
+      // Confirms the scaling landed before anything is measured against it — otherwise the 32px
+      // case silently re-runs the 16px one and passes for the wrong reason.
+      await page.waitForFunction(
+        (px) => getComputedStyle(document.documentElement).fontSize === `${px}px`,
+        root
+      );
+    }
 
-  const headers = page
-    .getByRole('region', { name: /every model on every machine/i })
-    .locator('thead th');
-  await expect(headers.first()).toBeVisible();
+    const headers = page
+      .getByRole('region', { name: /every model on every machine/i })
+      .locator('thead th');
+    await expect(headers.first()).toBeVisible();
 
-  const count = await headers.count();
-  expect(count).toBeGreaterThan(1);
+    const count = await headers.count();
+    expect(count).toBeGreaterThan(1);
 
-  const headerBox = await headers.nth(1).boundingBox();
-  expect(headerBox).not.toBeNull();
+    const headerBox = await headers.nth(1).boundingBox();
+    expect(headerBox).not.toBeNull();
 
-  // Every rotated label has to sit inside the row it belongs to. The labels are absolutely
-  // positioned and rotated, so their painted box is what matters, not their text length.
-  for (let i = 1; i < count; i++) {
-    const label = headers.nth(i).locator('span');
-    const box = await label.boundingBox();
-    expect(box, `header ${i} has no laid-out label`).not.toBeNull();
+    // Every rotated label has to sit inside the row it belongs to. The labels are absolutely
+    // positioned and rotated, so their painted box is what matters, not their text length.
+    for (let i = 1; i < count; i++) {
+      const label = headers.nth(i).locator('span');
+      const box = await label.boundingBox();
+      expect(box, `header ${i} has no laid-out label`).not.toBeNull();
 
-    // The rotation origin is the label's bottom-left, so it extends *upward* from the bottom of
-    // the cell. Clipping shows up as the label's top escaping above the header row's top.
-    expect(box!.y, `header ${i} label overflows the row`).toBeGreaterThanOrEqual(headerBox!.y - 1);
-    expect(box!.height).toBeGreaterThan(0);
-  }
-});
+      // The rotation origin is the label's bottom-left, so it extends *upward* from the bottom of
+      // the cell. Clipping shows up as the label's top escaping above the header row's top.
+      expect(box!.y, `header ${i} label overflows the row`).toBeGreaterThanOrEqual(
+        headerBox!.y - 1
+      );
+      expect(box!.height).toBeGreaterThan(0);
+    }
+  });
+}
 
 /**
  * And that erring long has not turned into erring *absurdly* long — a header taking half the

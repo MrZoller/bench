@@ -376,6 +376,59 @@ reading the test that guards them.
   because 1.4.4 stops at 200% and "the bar is met" is a different claim from "the layout is
   unbreakable".
 
+- **Absolute pixel type does not scale, and the precondition meant to catch it only checked a
+  heading.** Both Envelope axes were `text-[10px]`, so at 200% every other figure doubled while
+  they stayed put — a 1.4.4 failure outright, and worse than the numbers suggest, since the labels
+  became _relatively_ half the size on the surface a low-vision reader had just asked to enlarge.
+  They are `text-[0.625rem]` now, identical at the default root. Two neighbours went with them, and
+  all three are one shape — **a length derived from a glyph width, written in pixels**: the
+  Envelope's `MIN_COLUMN_PX` (the column those labels sit inside) and the Matrix's `headerHeight`
+  (a character count times a pixel constant, sizing a `text-xs` label whose rotation clips when the
+  row is short). The general form is the thing to keep: a length measured from text belongs in the
+  same units as the text. (#42, #44.)
+
+- **Simulating text zoom by setting the root font size is not text zoom, and a test built on it
+  reports layouts nobody can reach.** Widening the reflow sweep to the `sm` and `lg` boundaries —
+  640 and 1024 — produced six red tests and three plausible-looking layout bugs, all artifacts.
+  Tailwind v4's breakpoints are `rem`, and **`rem` inside a media query resolves against the
+  browser's _initial_ root font size, not an author-set one** — measured, not assumed: with
+  `documentElement.style.fontSize` at 32px, `(min-width: 40rem)` still matches at 640px. So the
+  simulation grows the text and leaves every breakpoint where it was, and the page lands in states
+  real zoom never produces: three columns crushed into 213px each at a width that, for an actual
+  reader at 200%, is a single stacked column.
+
+  **The fix was to stop simulating.** `--blink-settings=defaultFontSize=32` changes the browser
+  default — the thing a reader actually changes — so the breakpoints move with the text: `sm`
+  becomes 1280px and `lg` 2048px, both verified. The `reflow` Playwright project launches with it
+  and the spec asserts both that the root is 32px and that 640px is now _below_ `sm`, so a
+  Blink-internal switch silently ceasing to work fails loudly instead of quietly re-testing at
+  100%. The sweep then covers 320/640/1280/1920 honestly.
+
+  Worth recording that the first attempt concluded the opposite. `--default-font-size` — a
+  plausible flag name that does not exist — was tried, had no effect, and became a written claim
+  that faithful emulation was impossible, with a carefully-reasoned model built around the
+  limitation. The model was correct and the reason for it was false. A negative result about a
+  tool is worth one more minute of checking than a positive one, because nothing later contradicts
+  it. (#41.)
+
+- **`pointer: coarse` does not mean "this user can touch the screen".** It describes the _primary_
+  pointing device, so a touchscreen laptop, a Surface, or an iPad with a keyboard case reports
+  `fine` — and the disclosure toggles dropped back to 16px for someone who can still put a thumb on
+  the glass. They use `any-pointer: coarse` now; the Matrix grid deliberately does not, because
+  widening it there buys 44px rows on every laptop that merely has a touchscreen, multiplied across
+  hundreds of cells, while the toggles cost 28px once per panel and are the accessibility
+  affordance.
+
+  **The asymmetry is asserted against the stylesheet rather than the layout**, which is a limitation
+  worth recording. A true hybrid cannot be emulated: Playwright's `hasTouch` makes Chromium report a
+  touch-_only_ device — both queries true, `any-pointer: fine` absent — and `Emulation.setEmulatedMedia`
+  over CDP with explicit pointer features is silently ignored. Both measured. So
+  `e2e/hybrid-targets.spec.ts` reads the shipped CSSOM and checks the query, the selector and the
+  declaration, which is falsifiable and covers the failure an arbitrary Tailwind variant really has:
+  compiling to nothing. It has to descend through `CSSGroupingRule` to do it — v4 nests utilities
+  inside `@layer`, and a walk that only recursed through `CSSMediaRule` found nothing and passed.
+  (#43.)
+
 - **The numeral pair's nowrap cannot be falsified by geometry, and the spec says so.** "67 of 408"
   is short enough that it never breaks on its own at any root size from 32px to 64px — measured,
   not assumed — so `getClientRects().length === 1` is true with the class and true without it. The

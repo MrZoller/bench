@@ -50,7 +50,35 @@ export default defineConfig({
       // The touch specs assert the coarse-pointer branch, which a mouse run cannot reach. Without
       // this they ran here too and failed on the branch they are not about — `testMatch` on a
       // sibling project narrows what *it* takes, not what everyone else leaves alone.
-      testIgnore: /touch-targets\.spec\.ts/,
+      testIgnore: /(touch-targets|reflow)\.spec\.ts/,
+    },
+    {
+      /**
+       * Text-only zoom at 200%, performed rather than modelled.
+       *
+       * `--blink-settings=defaultFontSize=32` changes the browser's *default* font size, which is
+       * what a reader actually changes in Firefox's font preference or Chrome's appearance
+       * settings. That matters beyond the root size: `rem` inside a media query resolves against
+       * the browser default and ignores an author-set `documentElement.style.fontSize`, so
+       * simulating zoom by setting the root leaves Tailwind's rem-based breakpoints where they
+       * were — and a spec written that way puts the page into layout states no reader can reach.
+       * It did: 640px with a scaled root reported three columns crushed into 213px each, a state
+       * that only exists because the breakpoint did not move with the text.
+       *
+       * With the switch, it does: `sm` (40rem) becomes 1280px and `lg` 2048px, both verified.
+       * `reflow.spec.ts` asserts that before measuring anything, so if the switch ever stops
+       * working the suite fails loudly instead of quietly re-testing at 100%.
+       *
+       * A project rather than a launch argument on `desktop`, because every other spec wants a
+       * normal browser — and because the flag is a Blink-internal switch with no stability
+       * promise, so its blast radius is worth confining to the one file that needs it.
+       */
+      name: 'reflow',
+      use: {
+        ...devices['Desktop Chrome'],
+        launchOptions: { args: ['--blink-settings=defaultFontSize=32'] },
+      },
+      testMatch: /reflow\.spec\.ts/,
     },
     {
       /**

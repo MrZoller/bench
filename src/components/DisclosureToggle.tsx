@@ -23,6 +23,17 @@ import type { ReactNode } from 'react';
  * `inline-flex` rather than a bare `min-height`, because a min-height on the default inline-block
  * grows the box downward and leaves the label riding at the top of a 44px target — the text and
  * the underline would sit outside where a thumb aims.
+ *
+ * **`any-pointer: coarse`, not `pointer: coarse`** (#43). `pointer` describes the *primary*
+ * pointing device, so on a touchscreen laptop, a Surface, or an iPad with a mouse attached it
+ * reports `fine` — and these buttons dropped straight back to 16px for a user who can still put a
+ * thumb on the screen. `any-pointer` asks whether *any* available pointer is coarse, which is the
+ * condition the rule actually cares about.
+ *
+ * The Matrix grid deliberately stays on `pointer: coarse`, and the asymmetry is the decision
+ * rather than an oversight. Widening it there gives 44px rows to every laptop that happens to have
+ * a touchscreen, multiplied across hundreds of cells — a real desktop cost. Here the cost is 28px
+ * once per panel, and these are the accessibility affordance, so the trade goes the other way.
  */
 export function DisclosureToggle({
   expanded,
@@ -42,7 +53,7 @@ export function DisclosureToggle({
       onClick={onToggle}
       aria-expanded={expanded}
       aria-controls={controls}
-      className="mt-4 inline-flex items-center text-xs text-[var(--color-accent)] underline underline-offset-2 [@media(pointer:coarse)]:min-h-11"
+      className="mt-4 inline-flex items-center text-xs text-[var(--color-accent)] underline underline-offset-2 [@media(any-pointer:coarse)]:min-h-11"
     >
       {children}
     </button>

@@ -223,10 +223,17 @@ export function Matrix({ config }: { config: Config }) {
    * `--font-sans` resolves to `system-ui`, which is SF on macOS and whatever fontconfig picks on a
    * CI runner. A metrics difference of 1% either way decided whether the header clipped. The spec
    * now asserts the clearance directly, so this constant cannot quietly go short again.
+   *
+   * **The result is in `rem`, and that is the second time this number has been wrong for the same
+   * reason.** The labels are `text-xs`, so their width scales with the root font size — while a
+   * height in CSS pixels does not. At a 32px root the text doubled and the row it has to fit in
+   * did not, so the container clipped the names again: the exact failure the rotation exists to
+   * prevent, reintroduced at the one setting a low-vision reader would be using. 0.5rem per
+   * character is 8px at the default root, so nothing moves there. Raised by Codex on PR #36 (#44).
    */
   const headerHeight = useMemo(() => {
     const longest = Math.max(0, ...devices.map((d) => shortName(d.name).length));
-    return Math.ceil(longest * 8 * Math.SQRT1_2) + 20;
+    return `${longest * 0.5 * Math.SQRT1_2 + 1.25}rem`;
   }, [devices]);
 
   return (
