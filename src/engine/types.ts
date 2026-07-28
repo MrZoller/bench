@@ -254,13 +254,20 @@ export interface DeviceSpec {
   /**
    * Highest the allocation ceiling can actually be raised to, in bytes.
    *
-   * Absent means "as far as physical memory allows" — true of Apple's `iogpu.wired_limit_mb`,
-   * where the catalogued figure is a 75% default rather than a limit. Present where the platform
-   * states a real maximum: AMD's Variable Graphics Memory exposes 96 of the Ryzen AI Max+'s
-   * 128 GB, so its default *is* its maximum and raising the setting buys nothing.
+   * Required in practice wherever `allocatableTunable` is set: `catalog.ts` refuses a tunable row
+   * without it, and `maxAllocatablePerDevice` reads an absent value as "not raiseable" rather than
+   * as physical capacity.
    *
-   * Without this the UI told a Ryzen owner that a 117 GiB configuration would fit once they
-   * raised the ceiling, which the platform does not permit.
+   * It used to mean "as far as physical memory allows", which is the claim `iogpu.wired_limit_mb`
+   * appears to support and does not. The sysctl *accepts* a value up to physical memory; what
+   * actually loads is bounded by what macOS needs to keep running, and the distance between those
+   * two is the entire subject of this field. Left absent, every Apple row resolved to 100% of RAM,
+   * and the app told the owner of a 96 GiB Mac Studio that a 95.5 GiB configuration would fit once
+   * they raised the ceiling.
+   *
+   * Both platforms exposing a setting now state their own figure: AMD's Variable Graphics Memory
+   * exposes 96 of the Ryzen AI Max+'s 128 GB, so its default *is* its maximum and raising the
+   * setting buys nothing, and the Apple rows reserve room for the OS.
    */
   maxAllocatableBytes?: number;
 

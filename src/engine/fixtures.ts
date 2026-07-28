@@ -269,6 +269,9 @@ export const MAC_STUDIO_M3_ULTRA_256: DeviceSpec = {
   capacityBytes: 256 * GIB,
   allocatableBytes: Math.floor(0.75 * 256 * GIB),
   allocatableTunable: true,
+  // Raising the wired limit stops short of physical memory: the sysctl accepts more, but the OS
+  // still has to run. 16 GiB reserved here, matching the catalog row.
+  maxAllocatableBytes: 240 * GIB,
   bandwidthBytesPerSec: 819 * GB,
   flops: { fp16: 54 * TFLOP },
   tdpWatts: 270,
@@ -280,6 +283,9 @@ export const MAC_STUDIO_M3_ULTRA_256: DeviceSpec = {
  * The big one, and the clearest case of a ceiling that is not a limit: 512 GiB of memory with
  * 384 GiB handed out by default. A configuration between those two figures does not run today
  * and runs after one `sysctl`, which is a different answer from "will not run".
+ *
+ * It is also the clearest case of the *other* half: the ceiling raises to 480, not to 512. A
+ * machine wired to the last byte of its own RAM is not a configuration anyone can run.
  */
 export const MAC_STUDIO_M3_ULTRA_512: DeviceSpec = {
   id: 'mac-studio-m3-ultra-512',
@@ -290,6 +296,7 @@ export const MAC_STUDIO_M3_ULTRA_512: DeviceSpec = {
   capacityBytes: 512 * GIB,
   allocatableBytes: Math.floor(0.75 * 512 * GIB),
   allocatableTunable: true,
+  maxAllocatableBytes: 480 * GIB,
   bandwidthBytesPerSec: 819 * GB,
   flops: { fp16: 54 * TFLOP },
   tdpWatts: 270,
@@ -298,8 +305,9 @@ export const MAC_STUDIO_M3_ULTRA_512: DeviceSpec = {
 };
 
 /**
- * Cheap capacity, modest everything else. Sticker bandwidth is 256 GB/s; measured lands
- * around 213 GB/s, and that 17% is the difference between a right and a wrong tok/s figure.
+ * Cheap capacity, modest everything else. Bandwidth is AMD's 256 GB/s rating; real workloads land
+ * near 213, and that gap is charged by `bandwidthEfficiency` and `CLASS_BANDWIDTH_UTILIZATION`
+ * rather than folded in here, which would discount it twice.
  */
 export const STRIX_HALO_395: DeviceSpec = {
   id: 'ryzen-ai-max-395',

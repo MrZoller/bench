@@ -14,6 +14,7 @@ import { getQuant } from './quants';
 import { evaluate } from '@/engine';
 import { LLAMA_CPP, GPT_OSS_120B, DEEPSEEK_V3, QWEN3_32B } from '@/engine/fixtures';
 import { GIB } from '@/engine/types';
+import { maxAllocatablePerDevice, raisingCeilingWouldHelp } from '@/engine/placement';
 
 describe('device catalog', () => {
   it('covers all three hardware classes', () => {
@@ -497,5 +498,125 @@ describe('a hand-typed device row is validated, not trusted', () => {
     for (const dtype of ['fp16', 'bf16', 'fp8', 'fp4', 'int8'] as const) {
       expect(toDevice({ ...ROW, tflops: { [dtype]: 100 } }).flops[dtype]).toBeGreaterThan(0);
     }
+  });
+});
+
+/**
+ * A ceiling that can be raised has to say how far, and the answer is never all of physical memory.
+ *
+ * Every Apple row was `allocatableTunable` with no stated maximum, so `maxAllocatablePerDevice`
+ * fell back to capacity and all six resolved to 100% of RAM. The app then told the owner of a
+ * 96 GiB Mac Studio that a 95.5 GiB configuration would fit once they raised the ceiling — a
+ * machine with nothing left for the OS, the window server, or the inference process's own unwired
+ * allocations. `iogpu.wired_limit_mb` *accepts* that value; the distance between what the sysctl
+ * parses and what the machine survives is the whole subject of the field.
+ */
+describe('a raiseable allocation ceiling states how far it raises', () => {
+  const tunable = DEVICES.filter((d) => d.allocatableTunable);
+
+  it('covers every machine with a setting to raise', () => {
+    // Six Apple rows and the Ryzen. A sweep that silently matched nothing would prove nothing.
+    expect(tunable.length).toBeGreaterThanOrEqual(7);
+  });
+
+  it.each(tunable.map((d) => [d.id, d] as const))('%s reserves room for the OS', (_id, device) => {
+    const max = maxAllocatablePerDevice(device);
+
+    expect(device.maxAllocatableBytes).toBeDefined();
+    // Strictly below capacity: this is the assertion the whole issue turns on.
+    expect(max).toBeLessThan(device.capacityBytes);
+    // And never below the default it is supposed to be a ceiling for.
+    expect(max).toBeGreaterThanOrEqual(device.allocatableBytes);
+    // The reason is written down, since the reserve is a judgement rather than a datasheet figure.
+    expect(device.note).toBeTruthy();
+  });
+
+  /**
+   * The distinction must survive the fix. A ceiling that reserved so much that nothing sat between
+   * the default and the maximum would satisfy every assertion above while quietly turning
+   * "raiseable" into "will not run" — the failure in the other direction, which the Envelope,
+   * Telemetry and Matrix legends all describe to the user.
+   */
+  it('leaves a band between the default and the ceiling on every Apple machine', () => {
+    const apple = tunable.filter((d) => d.vendor === 'Apple');
+    expect(apple).toHaveLength(6);
+
+    for (const device of apple) {
+      expect(maxAllocatablePerDevice(device)).toBeGreaterThan(device.allocatableBytes);
+      expect(raisingCeilingWouldHelp(device, device.allocatableBytes + 1)).toBe(true);
+    }
+  });
+
+  it('refuses to promise the last byte of RAM on any of them', () => {
+    for (const device of tunable) {
+      expect(raisingCeilingWouldHelp(device, device.capacityBytes)).toBe(false);
+      expect(raisingCeilingWouldHelp(device, device.capacityBytes - 1)).toBe(false);
+    }
+  });
+
+  /**
+   * The case from the issue, named rather than swept: the 96 GiB Mac Studio and a 95.5 GiB
+   * configuration, which the app offered to make fit.
+   */
+  it('no longer offers a 96 GiB Mac Studio a 95.5 GiB configuration', () => {
+    const studio = getDevice('mac-studio-m3-ultra-96');
+    expect(raisingCeilingWouldHelp(studio, 95.5 * GIB)).toBe(false);
+    // But the configurations the setting really does rescue still say so.
+    expect(raisingCeilingWouldHelp(studio, 80 * GIB)).toBe(true);
+  });
+});
+
+/**
+ * The pairing is enforced at load, not left to the curator: the failure is silent on every surface
+ * and reads as generosity, which is why it survived a 25-row manual verification pass.
+ */
+describe('the catalog refuses a ceiling it cannot justify', () => {
+  const TUNABLE_ROW: DeviceRow = {
+    id: 'mac-studio-m3-ultra-96',
+    name: 'Mac Studio M3 Ultra (96 GB)',
+    vendor: 'Apple',
+    class: 'unified-soc',
+    status: 'shipping',
+    capacityGiB: 96,
+    allocatableGiB: 72,
+    allocatableTunable: true,
+    maxAllocatableGiB: 88,
+    bandwidthGBs: 819,
+    tflops: { fp16: 54 },
+    source: 'https://www.apple.com/mac-studio/specs/',
+  };
+
+  it('accepts the row the catalog ships', () => {
+    expect(toDevice(TUNABLE_ROW).maxAllocatableBytes).toBe(88 * GIB);
+  });
+
+  /** The shape every Apple row had: tunable, with nothing saying how far. */
+  const withoutMax = (): DeviceRow => {
+    const row = { ...TUNABLE_ROW };
+    delete row.maxAllocatableGiB;
+    return row;
+  };
+
+  it('refuses a tunable row that states no maximum', () => {
+    expect(() => toDevice(withoutMax())).toThrow(/no maxAllocatableGiB/i);
+  });
+
+  it('refuses a ceiling at or above physical memory', () => {
+    expect(() => toDevice({ ...TUNABLE_ROW, maxAllocatableGiB: 96 })).toThrow(/reserve room/i);
+    expect(() => toDevice({ ...TUNABLE_ROW, maxAllocatableGiB: 128 })).toThrow(/reserve room/i);
+  });
+
+  it('refuses a ceiling below the default it is meant to raise', () => {
+    expect(() => toDevice({ ...TUNABLE_ROW, maxAllocatableGiB: 64 })).toThrow(/below its own/i);
+  });
+
+  it('leaves a fixed-ceiling row alone', () => {
+    // A card whose ceiling cannot be raised states no maximum, and must not be asked for one —
+    // otherwise the guard would reject 18 of the 25 committed rows.
+    const fixed = withoutMax();
+    delete fixed.allocatableTunable;
+
+    expect(() => toDevice(fixed)).not.toThrow();
+    expect(toDevice(fixed).maxAllocatableBytes).toBeUndefined();
   });
 });
