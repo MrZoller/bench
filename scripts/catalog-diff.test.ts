@@ -613,6 +613,32 @@ describe('a repeated id is reported wherever it appears', () => {
     expect(result.summary).toMatch(/beneath the one the app loads/i);
   });
 
+  it('does not blame a shadowed row when the loaded one moved', () => {
+    // `[base, v1] -> [base, v2]` is also 2 -> 2, and there the row that changed is the one the
+    // app loads — so a same-count report that always says "beneath" is wrong half the time, and
+    // wrong about the only thing a reviewer is trying to establish: what the product will show.
+    const base = one('a/One');
+    const result = compare(
+      catalog([base, one('a/One', { layers: 40 })]),
+      catalog([base, one('a/One', { layers: 48 })])
+    );
+
+    expect(result.changed).toBe(true);
+    expect(result.summary).toMatch(/the row the app loads/i);
+    expect(result.summary).not.toMatch(/beneath the one the app loads/i);
+    // And the fields table still names it, since `byId` did see this one.
+    expect(result.summary).toMatch(/\| `a\/One` \| layers \|/);
+  });
+
+  it('says so when both the loaded row and a shadowed one moved', () => {
+    const result = compare(
+      catalog([one('a/One', { layers: 8 }), one('a/One', { layers: 40 })]),
+      catalog([one('a/One', { layers: 9 }), one('a/One', { layers: 48 })])
+    );
+
+    expect(result.summary).toMatch(/the row the app loads, and one beneath it/i);
+  });
+
   it('describes a resolved duplicate as one row, not two', () => {
     const result = compare(
       catalog([one('a/One'), one('a/One', { layers: 40 })]),
@@ -620,7 +646,7 @@ describe('a repeated id is reported wherever it appears', () => {
     );
 
     expect(result.summary).toMatch(/\| `a\/One` \| 2 \| 1 \|/);
-    expect(result.summary).toMatch(/1 fewer row under this id/i);
+    expect(result.summary).toMatch(/1 fewer row/i);
     expect(result.summary).not.toMatch(/twice/i);
   });
 
@@ -631,7 +657,7 @@ describe('a repeated id is reported wherever it appears', () => {
     );
 
     expect(result.summary).toMatch(/\| `a\/One` \| 1 \| 3 \|/);
-    expect(result.summary).toMatch(/2 more rows under this id/i);
+    expect(result.summary).toMatch(/2 more rows/i);
   });
 
   it('does not call a row gaining a duplicate a reordering', () => {

@@ -321,13 +321,39 @@ export function compare(
         const was = rowsFor(oldRows, id).length;
         const now = rowsFor(newRows, id).length;
         const plural = (n: number) => (n === 1 ? 'row' : 'rows');
-        const what =
-          was === now
+
+        // Which row moved is a separate question from how many there are, and answering only the
+        // second one gets the first wrong half the time: `[base, v1] -> [base, v2]` is also 2 → 2,
+        // and there the row that changed is the one the app loads. Asked by taking the loaded row
+        // out of each side and comparing what is left.
+        const loadedBefore = oldById.has(id) ? canonical(oldById.get(id)) : undefined;
+        const loadedAfter = newById.has(id) ? canonical(newById.get(id)) : undefined;
+        const loadedMoved = loadedBefore !== loadedAfter;
+        const shadowOf = (rows: string[], loaded: string | undefined) => {
+          const rest = [...rows];
+          const at = loaded === undefined ? -1 : rest.indexOf(loaded);
+          if (at >= 0) rest.splice(at, 1);
+          return canonical(rest);
+        };
+        const shadowMoved =
+          shadowOf(rowsFor(oldRows, id), loadedBefore) !==
+          shadowOf(rowsFor(newRows, id), loadedAfter);
+
+        const moved = loadedMoved
+          ? shadowMoved
+            ? 'the row the app loads, and one beneath it'
+            : 'the row the app loads — its fields are in the table above'
+          : shadowMoved
             ? "a row's figures, beneath the one the app loads"
+            : 'how many rows carry this id';
+        const count =
+          was === now
+            ? ''
             : now > was
-              ? `${now - was} more ${plural(now - was)} under this id`
-              : `${was - now} fewer ${plural(was - now)} under this id`;
-        lines.push(`| \`${id}\` | ${was} | ${now} | ${what} |`);
+              ? `, ${now - was} more ${plural(now - was)}`
+              : `, ${was - now} fewer ${plural(was - now)}`;
+
+        lines.push(`| \`${id}\` | ${was} | ${now} | ${moved}${count} |`);
       }
       lines.push('');
       // Per row rather than "twice", which is wrong in both directions: a refresh that *resolves*
