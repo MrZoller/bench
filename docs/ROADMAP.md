@@ -671,9 +671,21 @@ section is for the questions those issues cannot settle.
     which is below the true figure in every case (139 and 79). The headline stays as vendors quote
     it; the number that decides a fit is conservative.
   - **Bandwidth is theoretical peak, never measured.** Strix Halo's 256 GB/s is AMD's rating and
-    real workloads see ~215. That gap belongs to `bandwidthEfficiency` and
+    real workloads see ~213. That gap belongs to `bandwidthEfficiency` and
     `CLASS_BANDWIDTH_UTILIZATION`, which exist to model it — folding it into the catalog would
     double-count it and quietly break the calibration anchors.
+
+    **This rule was written down here and broken in the same week** ([#51](https://github.com/MrZoller/bench/issues/51)).
+    The Ryzen row carried `measuredBandwidthGBs: 213` against its 256 rating, and
+    `effectiveBandwidth()` preferred it — so the constants discounted an already-discounted
+    figure and every Strix Halo throughput number came out 20.2% under the treatment the other 24
+    devices get, on the one surface whose purpose is ranking hardware against hardware. The field
+    and `effectiveBandwidth()` are both gone now rather than deprecated: `types.ts` had a docblock
+    arguing _for_ preferring measured, naming Strix Halo as the case for it, which is how a stated
+    convention and the catalog came apart without either looking wrong on its own. A field is an
+    invitation. `catalog.test.ts` now pins the convention itself rather than the ordering — the old
+    check only asserted measured ≤ theoretical, which passes just as happily with the override
+    present.
 
   The `rumored` row (M5 Ultra) is still press-rumour grade and must stay visibly labelled in the UI.
 

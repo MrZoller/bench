@@ -201,9 +201,10 @@ export function Bench() {
         // last of those was being dropped entirely — including the 3090's note that estimates
         // assume PCIe and do not model its optional NVLink bridge, which is precisely the
         // caveat an owner of a bridged pair needs.
-        // Combined rather than ranked: the Ryzen AI Max+ is both tunable *and* carries a note
-        // that the engine uses its measured 213 GB/s instead of the 256 GB/s sticker — a 17%
-        // difference in every throughput figure. Ranking these dropped the provenance.
+        // Combined rather than ranked: the Ryzen AI Max+ is both tunable *and* carries a note —
+        // that its 256 GB/s is AMD's rating, real workloads land near 213, and the engine charges
+        // that gap through its calibration constants rather than the catalog. Ranking these
+        // dropped the provenance.
         note:
           [
             d.status !== 'shipping'

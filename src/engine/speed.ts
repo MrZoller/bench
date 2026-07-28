@@ -7,7 +7,6 @@ import type {
   RuntimeSpec,
   UsageSpec,
 } from './types';
-import { effectiveBandwidth } from './types';
 import { attentionPairs, kvReadBytesPerToken } from './kv';
 import {
   activeWeightBytes,
@@ -121,10 +120,15 @@ function tpEfficiency(rig: Rig): number {
  * bandwidth, which is the opposite of what that rig buys you: capacity, not single-stream speed.
  * Nothing here models a pipeline scheduler that would overlap requests, so nothing here should
  * grant the speedup one would produce.
+ *
+ * The catalogued figure is the vendor's rating, always — the sticker-to-real gap is what the two
+ * constants below *are*. This read through an `effectiveBandwidth` that preferred a measured
+ * figure where one was catalogued, which meant the one row carrying one had that gap applied to
+ * it twice.
  */
 export function achievedBandwidth(rig: Rig, runtime: RuntimeSpec): number {
   const perDevice =
-    effectiveBandwidth(rig.device) *
+    rig.device.bandwidthBytesPerSec *
     runtime.bandwidthEfficiency *
     CLASS_BANDWIDTH_UTILIZATION[rig.device.class];
 
