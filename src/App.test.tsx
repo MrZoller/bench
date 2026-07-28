@@ -8,6 +8,7 @@ import { getModel } from '@/data/catalog';
 import { tokens } from '@/lib/format';
 import { DETAIL_ANCHOR_ID } from '@/components/Matrix';
 import { judgeWorkloads } from '@/engine/verdict';
+import { kvSubstitutionFor } from '@/data/runtimes';
 
 /**
  * Wrapped rather than replaced, so every other test in this file still exercises the real verdict
@@ -16,6 +17,21 @@ import { judgeWorkloads } from '@/engine/verdict';
 vi.mock('@/engine/verdict', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/engine/verdict')>();
   return { ...actual, judgeWorkloads: vi.fn(actual.judgeWorkloads) };
+});
+
+/**
+ * Same treatment for `kvSubstitutionFor`, and for a reason worth stating.
+ *
+ * Every cache precision in the shipped catalog now has an established width (#38), so the KV
+ * marker has no trigger — and an unreachable branch is one nobody notices breaking. The mechanism
+ * is not dead: it fires for the next precision added without a width, which is exactly the case it
+ * exists for and exactly the case no fixture can reach. Wrapping the real function lets one test
+ * force that future state and check the surfaces still render it, while every other test in this
+ * file goes on exercising the real catalog.
+ */
+vi.mock('@/data/runtimes', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/data/runtimes')>();
+  return { ...actual, kvSubstitutionFor: vi.fn(actual.kvSubstitutionFor) };
 });
 
 afterEach(() => {
@@ -1648,21 +1664,18 @@ describe('a figure derived from a stand-in format says so', () => {
 });
 
 /**
- * The same rule on the cache axis — #33.
+ * The cache axis — #33, and then #38, which changed the answer.
  *
- * `kvElementBytes` falls back to the nominal width when a runtime declares no
- * `kvBytesPerElement`, which is exact for a float format and not for an affine one. MLX's
- * `--kv-bits 8` quantizes the cache with the same affine scheme its weights use, carrying a scale
- * and a bias per group, so one byte per element is an underestimate of unknown size — in the
- * direction that reports a long-context configuration fitting when it does not.
+ * `kvElementBytes` falls back to a precision's nominal figure when a runtime declares no
+ * `kvBytesPerElement`, and MLX's 8-bit cache used to have none: it was charged one byte per
+ * element on no authority, and marked on screen because of it.
  *
- * The asymmetry that made it worth fixing rather than shrugging at: the weight marker fired and
- * this one did not, so an Apple-silicon configuration at 8-bit KV showed a warning describing half
- * of what was substituted. **And the configuration below is worse than that** — native BF16
- * weights with an 8-bit cache carried no marker at all, while every memory figure on the page
- * included a byte nobody measured.
+ * That width is now derived from `mlx-lm`'s own source — `QuantizedKVCache(group_size=64, bits=8)`
+ * with an fp16 scale *and* bias per group, so 8.5 bits — which means **the marker correctly no
+ * longer fires anywhere in the shipped catalog.** These tests pin both halves: that it is silent
+ * where a width is established, and that it still renders where one is not.
  */
-describe('a cache charged an unmeasured width says so', () => {
+describe('the cache-width marker', () => {
   const cacheMarker = () => screen.queryByText(/cache is charged .* at its nominal width/i);
   const weightMarker = () => screen.queryByText(/derived from a format .* cannot load/i);
 
@@ -1673,26 +1686,29 @@ describe('a cache charged an unmeasured width says so', () => {
   };
 
   /**
-   * The case the issue names, and the reason the two axes are separate values rather than one.
+   * The configuration this whole marker was built for, now correctly unmarked.
    *
-   * BF16 is a real MLX format, so the weight marker is correctly silent — and before this the page
-   * said nothing at all. Both halves are asserted: a fix that lit the cache marker by folding it
-   * into the weight one would light *both* here, which is a different and wrong claim.
+   * Native BF16 weights with an 8-bit cache was the case that carried no warning at all before
+   * #33 and a warning after it. Both are now wrong answers: the width is established, so there is
+   * nothing to caveat, and a marker here would be warning about a figure nobody is guessing at.
    */
-  it('marks an 8-bit cache even where the weights are native', async () => {
+  it('is silent on MLX at 8-bit, whose width is derived rather than assumed', async () => {
     const user = userEvent.setup();
     render(<App />);
 
     await mlxAt(user, 'bf16');
     act(() => useConfig.getState().set('kvPrecision', 'q8'));
 
-    expect(cacheMarker()).toBeInTheDocument();
-    expect(cacheMarker()).toHaveTextContent(/affine scheme/i);
+    expect(cacheMarker()).not.toBeInTheDocument();
     expect(weightMarker()).not.toBeInTheDocument();
   });
 
-  /** And both, when both are substituted — two claims, stated as two. */
-  it('marks both axes when both are standing in', async () => {
+  /**
+   * And the *weight* marker is untouched by that, which is the point of the two being separate
+   * values. MLX still has no catalogued native quantization (#18), so a stand-in format is still
+   * a stand-in — only the cache stopped being one.
+   */
+  it('leaves the weight marker alone, which is still a real substitution', async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -1700,95 +1716,98 @@ describe('a cache charged an unmeasured width says so', () => {
     act(() => useConfig.getState().set('kvPrecision', 'q8'));
 
     expect(weightMarker()).toBeInTheDocument();
-    expect(cacheMarker()).toBeInTheDocument();
-  });
-
-  /**
-   * FP16 is exact — no groups, no scales, no biases — so the cache marker goes quiet while the
-   * weight one stays. The inverse of the first test, and together they show the two are
-   * independent rather than one value rendered twice.
-   */
-  it('stays silent on an FP16 cache, whose width is exact', async () => {
-    const user = userEvent.setup();
-    render(<App />);
-
-    await mlxAt(user, 'q4_k_m');
-    act(() => useConfig.getState().set('kvPrecision', 'fp16'));
-
-    expect(weightMarker()).toBeInTheDocument();
     expect(cacheMarker()).not.toBeInTheDocument();
   });
 
   /**
-   * llama.cpp's `q8_0` cache also costs more than its nominal byte — and is *not* marked, because
-   * the catalog states the real figure instead. A marker here would describe an approximation
-   * nobody is making, which is the distinction between a documented width and an invented one.
+   * The surfaces still render a cache substitution when there is one to render.
+   *
+   * Forced, because no shipped precision can reach this state and an unreachable branch is one
+   * nobody notices breaking. This is the case the mechanism exists for — a precision added later
+   * with no established width — and it has to keep working across the two surfaces that show it.
    */
-  it('stays silent where the runtime declares a measured width instead', async () => {
-    const user = userEvent.setup();
-    render(<App />);
+  describe('when a precision has no established width', () => {
+    beforeEach(() => {
+      vi.mocked(kvSubstitutionFor).mockReturnValue(
+        'A stand-in width, forced by the test so the surfaces can be checked.'
+      );
+    });
 
-    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
-    await user.selectOptions(screen.getByLabelText('Runtime'), 'llama.cpp');
-    act(() => useConfig.getState().set('kvPrecision', 'q8'));
+    afterEach(() => {
+      vi.mocked(kvSubstitutionFor).mockReset();
+    });
 
-    expect(cacheMarker()).not.toBeInTheDocument();
+    it('says so on the Bench, beside the figures it applies to', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+
+      await mlxAt(user, 'bf16');
+      act(() => useConfig.getState().set('kvPrecision', 'q8'));
+
+      expect(cacheMarker()).toBeInTheDocument();
+      expect(cacheMarker()).toHaveTextContent(/forced by the test/i);
+      // The weight axis stays independent even here: BF16 is native, so only one marker shows.
+      expect(weightMarker()).not.toBeInTheDocument();
+    });
+
+    /**
+     * And both at once, which neither single-marker test covers.
+     *
+     * The panel holds two paragraphs and either may appear without the other, so "each fires
+     * alone" does not establish that both fire together — a conditional rendering one *or* the
+     * other would satisfy every other test here. Worth pinning because the defect that started
+     * this was the mirror image: one axis marked, the other silent, on a page where both applied.
+     */
+    it('shows both markers when the weights are standing in too', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+
+      await mlxAt(user, 'q4_k_m');
+      act(() => useConfig.getState().set('kvPrecision', 'q8'));
+
+      expect(weightMarker()).toBeInTheDocument();
+      expect(cacheMarker()).toBeInTheDocument();
+    });
+
+    it('says so on the Matrix, for every scored cell', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+
+      const matrix = () => screen.getByRole('region', { name: /every model on every machine/i });
+      await mlxAt(user, 'bf16');
+      act(() => useConfig.getState().set('kvPrecision', 'q8'));
+
+      const legend = within(matrix()).queryByText(/cache charged at .* nominal width/i);
+      expect(legend).toBeInTheDocument();
+      // Neither "some rows" nor "every cell": under MLX the grid still carries every shipping
+      // device while only the Apple columns are scored at all.
+      expect(legend).toHaveTextContent(/every scored cell/i);
+      expect(legend).not.toHaveTextContent(/every cell\u2019s/i);
+    });
+
+    /**
+     * And it goes quiet when there are no figures to caveat, exactly as the weight marker does.
+     * The sentence promises something about the readouts below it, and on a runtime that cannot
+     * drive the device there are none.
+     */
+    it('stays silent when the runtime cannot drive the device at all', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+
+      await mlxAt(user, 'bf16');
+      act(() => useConfig.getState().set('kvPrecision', 'q8'));
+      expect(cacheMarker()).toBeInTheDocument();
+
+      await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+      expect(screen.getByText(/no budget to show/i)).toBeInTheDocument();
+      expect(cacheMarker()).not.toBeInTheDocument();
+    });
   });
 
   /**
-   * The same gate the weight marker has. The sentence promises something about the figures below,
-   * so with no figures it has nothing to qualify.
-   */
-  it('stays silent when the runtime cannot drive the device at all', async () => {
-    const user = userEvent.setup();
-    render(<App />);
-
-    await mlxAt(user, 'bf16');
-    act(() => useConfig.getState().set('kvPrecision', 'q8'));
-    expect(cacheMarker()).toBeInTheDocument();
-
-    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
-    expect(screen.getByText(/no budget to show/i)).toBeInTheDocument();
-    expect(cacheMarker()).not.toBeInTheDocument();
-  });
-
-  /**
-   * The Matrix says it too, and says it about the whole grid rather than "some rows".
-   *
-   * The cache precision comes from the scenario, not from the per-row format substitution, so when
-   * it applies it applies to every cell that was *scored* — a stronger quantifier than the weight
-   * legend's "some rows" beside it, and a weaker one than "every cell".
-   *
-   * That middle term is the whole finding. Under MLX the grid still carries every shipping device
-   * while only the Apple columns are evaluated at all, so "every cell" describes NVIDIA and AMD
-   * columns that were never priced — on a legend whose job is saying which figures rest on an
-   * unmeasured width. Raised by Codex on PR #37.
-   */
-  it('marks the Matrix for every scored cell, which is neither "some" nor "every"', async () => {
-    const user = userEvent.setup();
-    render(<App />);
-
-    const matrix = () => screen.getByRole('region', { name: /every model on every machine/i });
-    const legend = () => within(matrix()).queryByText(/cache charged at .* nominal width/i);
-
-    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
-    await user.selectOptions(screen.getByLabelText('Runtime'), 'llama.cpp');
-    act(() => useConfig.getState().set('kvPrecision', 'q8'));
-    expect(legend()).not.toBeInTheDocument();
-
-    await mlxAt(user, 'bf16');
-    act(() => useConfig.getState().set('kvPrecision', 'q8'));
-    expect(legend()).toBeInTheDocument();
-    expect(legend()).toHaveTextContent(/every scored cell/i);
-    expect(legend()).not.toHaveTextContent(/every cell’s/i);
-  });
-
-  /**
-   * The precondition that makes the qualifier necessary rather than pedantic.
-   *
-   * Asserted rather than assumed: if MLX ever drove every device in the catalog, "every scored
-   * cell" and "every cell" would be the same claim and the test above would stop distinguishing
-   * them — passing, while guarding nothing.
+   * The precondition behind the Matrix's quantifier, asserted so it cannot go vacuous: if MLX ever
+   * drove every device in the catalog, "every scored cell" and "every cell" would be the same
+   * claim and the assertion above would stop distinguishing them.
    */
   it('has unscored cells under MLX, which is why the qualifier is there', async () => {
     const user = userEvent.setup();
@@ -1807,8 +1826,6 @@ describe('a cache charged an unmeasured width says so', () => {
     expect(unscored.length, 'every cell was scored, so the qualifier is vacuous').toBeGreaterThan(
       0
     );
-    // And the filter discriminates rather than matching everything handed to it — without this, a
-    // regex that matched every label would satisfy the assertion above while proving nothing.
     expect(unscored.length, 'the filter matched every cell').toBeLessThan(cells.length);
   });
 });

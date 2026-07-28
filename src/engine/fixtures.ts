@@ -399,12 +399,17 @@ export const MLX: RuntimeSpec = {
   substituted: {
     nativeFormats: ['bf16'],
     note: 'MLX quantizes with its own affine scheme and the catalog has no measured entry for it, so another catalogued format of the same nominal width stands in.',
-    // FP16 only: `--kv-bits 8` is a real MLX flag, but its affine scheme carries a scale and a bias
-    // per group, and the width that costs was never measured. See `runtimes.ts`.
-    nativeKvPrecisions: ['fp16'],
+    // Both widths are established, so neither is marked — FP16 is a plain float, and the 8-bit
+    // cache is derived from `mlx-lm`'s own source below. The *weight* formats are still stand-ins.
+    measuredKvPrecisions: ['fp16', 'q8'],
     kvNote:
-      'MLX quantizes the cache with the same affine scheme, which carries a scale and a bias per group, and the catalog has no measured width for it — so it is charged its nominal byte, which understates the cache rather than overstating it.',
+      'MLX quantizes the cache with the same affine scheme its weights use, which carries a scale and a bias per group, and the catalog has no established width for this precision — so it is charged its nominal figure, which understates the cache rather than overstating it.',
   },
   kvPrecisions: ['fp16', 'q8'],
-  source: 'https://github.com/ml-explore/mlx',
+  // `QuantizedKVCache(group_size=64, bits=8)`, with an fp16 scale *and* an fp16 bias per group:
+  // 8 + 16/64 + 16/64 = 8.5 bits. Lands on llama.cpp's 34/32 by coincidence, not kinship — see
+  // the derivation in `runtimes.ts`.
+  kvBytesPerElement: { q8: 17 / 16 },
+  source:
+    'https://github.com/ml-explore/mlx-lm/blob/main/mlx_lm/models/cache.py (QuantizedKVCache: group_size=64, bits=8; scales and biases at keys.dtype), https://github.com/ml-explore/mlx',
 };
