@@ -43,16 +43,59 @@ function byId(models: Record<string, unknown>[]): Map<string, Record<string, unk
 }
 
 /**
+ * A row as a string that ignores key order but nothing else.
+ *
+ * Key order is a serialization artifact — `changedFields` is already blind to it, and a run that
+ * emitted the same figures with the keys shuffled has not changed the catalog. Everything else,
+ * including array order inside a row, is substance.
+ */
+function canonical(row: unknown): string {
+  return JSON.stringify(row, (_key, value: unknown) =>
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? Object.fromEntries(
+          Object.entries(value as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : 1))
+        )
+      : value
+  );
+}
+
+/**
+ * Every row an id carries, canonicalised and ordered — the unit the comparison actually works in.
+ *
+ * `byId` is last-wins, so it cannot see a repeated id at all: two rows sharing one id collapse to
+ * the later, and a change to the earlier is invisible to `changedFields`, to `added`, and to
+ * `removed` alike. Comparing an id's whole row multiset instead makes the duplicate question and
+ * the edited question one question, which is what stops the answer to one from having a blind spot
+ * the other is expected to cover.
+ */
+function rowsById(models: Record<string, unknown>[]): Map<string, string[]> {
+  const rows = new Map<string, string[]>();
+  for (const row of models) {
+    const id = String(row.id);
+    const list = rows.get(id) ?? [];
+    list.push(canonical(row));
+    rows.set(id, list);
+  }
+  for (const list of rows.values()) list.sort();
+  return rows;
+}
+
+/**
  * Which top-level fields of a model row differ.
  *
  * Deliberately shallow-with-JSON rather than a recursive walk: the rows are flat apart from
  * `attention` and `popularity`, and naming the field is enough to send a reader to the diff.
  * A per-leaf path would be more precise and less readable, and the PR carries the real diff
  * anyway.
+ *
+ * Through `canonical` so this agrees with every other comparison in the file about what a change
+ * is. Raw `JSON.stringify` is key-order sensitive, and `attention` and `popularity` are the two
+ * nested objects here — either re-emitted with its keys shuffled and every value intact would be
+ * named as a changed field, which is a pull request reporting an edit that did not happen.
  */
 function changedFields(a: Record<string, unknown>, b: Record<string, unknown>): string[] {
   const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-  return [...keys].filter((k) => JSON.stringify(a[k]) !== JSON.stringify(b[k])).sort();
+  return [...keys].filter((k) => canonical(a[k]) !== canonical(b[k])).sort();
 }
 
 /**
@@ -73,22 +116,161 @@ export function compare(
   const before = substance(oldCatalog);
   const after = substance(newCatalog);
 
-  const changed = JSON.stringify(before) !== JSON.stringify(after);
+  const oldById = byId(before.models);
+  const newById = byId(after.models);
+  const oldRows = rowsById(before.models);
+  const newRows = rowsById(after.models);
+
+  const added = [...newRows.keys()].filter((id) => !oldRows.has(id));
+  const removed = [...oldRows.keys()].filter((id) => !newRows.has(id));
+
+  /** Every id either side carries, and whether its rows are the same rows. */
+  const allIds = [...new Set([...oldRows.keys(), ...newRows.keys()])];
+  const rowsFor = (rows: Map<string, string[]>, id: string) => rows.get(id) ?? [];
+  const differing = allIds.filter(
+    (id) => canonical(rowsFor(oldRows, id)) !== canonical(rowsFor(newRows, id))
+  );
+
+  /**
+   * The fields that moved on the row the app actually loads.
+   *
+   * Asked of `byId`, which is last-wins — deliberately, because that is the row the product uses
+   * when an id is repeated. So this stays sensitive to two rows sharing an id merely swapping
+   * places: the multiset is unchanged, but which of them wins is not.
+   */
+  const edited = [...newById.keys()]
+    .filter((id) => oldById.has(id))
+    .map((id) => ({ id, fields: changedFields(oldById.get(id)!, newById.get(id)!) }))
+    .filter((m) => m.fields.length > 0);
+
+  /**
+   * Ids the generator wrote more than once, on either side, whose rows moved.
+   *
+   * The other half of the question `edited` answers, and the half last-wins cannot reach: a change
+   * to a *shadowed* row is invisible to `changedFields`, to `added` and to `removed` alike, so
+   * without this the catalog could stop tracking a row with nothing said.
+   *
+   * Asked as a difference rather than as a property of the new document alone. A duplicate that is
+   * already committed and faithfully reproduced is not this week's news, and reporting it would
+   * open a pull request every Monday for as long as it survives — the weekly-noise failure this
+   * file exists to prevent. Reported when one appears, when one is resolved, and when a row
+   * changes underneath one.
+   *
+   * Over every id rather than only the ones both sides share, because a *newly added* seed written
+   * twice is absent from the old side entirely: it would be reported as one added model with no
+   * mention that the generator emitted it twice.
+   */
+  const repeated = differing.filter(
+    (id) => rowsFor(oldRows, id).length > 1 || rowsFor(newRows, id).length > 1
+  );
+
+  /**
+   * Failures are compared as a multiset, not by length and not as a set.
+   *
+   * Length alone let a same-size change of contents through silently — one seed starting to fail
+   * as another stops is exactly the week someone needs to be told, and it read as a quiet week.
+   * Set differences alone miss the other half: `['a','a','b']` becoming `['a','b','b']` has the
+   * same length *and* the same set, so both tests agree nothing happened while the seed that is
+   * failing twice has changed. Counting occurrences is the comparison that has neither blind
+   * spot, and the two lists below still make the line say *which*.
+   */
+  const counts = (values: string[]): Map<string, number> => {
+    const tally = new Map<string, number>();
+    for (const value of values) tally.set(value, (tally.get(value) ?? 0) + 1);
+    return tally;
+  };
+  const differingCounts = (a: Map<string, number>, b: Map<string, number>): boolean =>
+    [...new Set([...a.keys(), ...b.keys()])].some((key) => (a.get(key) ?? 0) !== (b.get(key) ?? 0));
+
+  const failuresBefore = counts(before.failures);
+  const failuresAfter = counts(after.failures);
+  const failuresChanged = differingCounts(failuresBefore, failuresAfter);
+  /**
+   * Named from the counts, not from `includes`.
+   *
+   * A set difference is empty in exactly the multiset case above, so a summary built from one
+   * would decide on evidence it then declines to state — the failure this whole change is about,
+   * one level down. Counts say both that something moved and which seed moved.
+   */
+  const failureMoves = [...new Set([...failuresBefore.keys(), ...failuresAfter.keys()])]
+    .map((seed) => ({
+      seed,
+      from: failuresBefore.get(seed) ?? 0,
+      to: failuresAfter.get(seed) ?? 0,
+    }))
+    .filter((f) => f.from !== f.to)
+    .sort((a, b) => (a.seed < b.seed ? -1 : 1));
+
+  /**
+   * The same rows, in a different order.
+   *
+   * Kept as a change rather than folded away, because the file really did move and a future sort
+   * by popularity or name should land visibly. What it must not do is set `changed` *silently* —
+   * that is the defect — so it gets a line of its own saying no figure moved.
+   *
+   * Only asked once the membership is settled: when models are added or removed the order differs
+   * as a matter of course, and saying so as well would be noise. Not guarded on `edited`, because
+   * a seed-order edit really can land in the same week as an upstream figure change — the summary
+   * says both, and the wording below is what stops the two lines contradicting each other.
+   *
+   * The case this does *not* have to carry is two rows sharing an id swapping places: the id
+   * sequence is `[a, a]` either way, but `byId` is last-wins, so the swap changes which row the
+   * app loads and `edited` reports it as the fields that moved.
+   */
+  // Compared as arrays rather than joined strings: any delimiter can in principle appear inside
+  // an id or a row, and one that did would make a real reordering compare equal.
+  const sequence = (values: string[]) => JSON.stringify(values);
+  const idsBefore = before.models.map((m) => String(m.id));
+  const idsAfter = after.models.map((m) => String(m.id));
+  const rowsBefore = before.models.map(canonical);
+  const rowsAfter = after.models.map(canonical);
+
+  // Guarded on the id *multiset*, not on `added`/`removed` being empty. Those track only whether
+  // an id is present at all, so `[a] → [a, a]` passes both while the id sequence differs in
+  // length — and the catalog gaining a duplicate row is not a reordering of anything. The multiset
+  // test subsumes the membership one and closes that case.
+  const sameIds = sequence([...idsBefore].sort()) === sequence([...idsAfter].sort());
+
+  const reordered =
+    sameIds &&
+    (sequence(idsBefore) !== sequence(idsAfter) ||
+      // The remaining case, once the ids line up: rows sharing an id permuting among themselves.
+      // Only meaningful when the rows are otherwise the same rows — if the multiset moved, that
+      // is an edit, and `edited` or `repeated` is the line that says so.
+      (sequence([...rowsBefore].sort()) === sequence([...rowsAfter].sort()) &&
+        sequence(rowsBefore) !== sequence(rowsAfter)));
+
+  /**
+   * Decided from the same evidence the summary is built from, so the two cannot disagree.
+   *
+   * This was whole-document `JSON.stringify` equality, which is sensitive to array order and key
+   * order while every line of the summary below is blind to both. Any reordering that left the
+   * figures alone — reordering the seed list in `build-catalog.ts` is enough, since rows are
+   * written in seed order — therefore set `changed` with nothing at all to say, and the job
+   * committed and opened a pull request whose statement of what moved was a blank line.
+   *
+   * A reordering is still a change — see `reordered` above, which now says so in the summary
+   * rather than leaving it to be inferred from a blank one. What does become a no-op is a row
+   * whose *keys* moved with every value intact, which is a serialization artifact and not an
+   * ordering anyone chose.
+   */
+  const changed =
+    added.length > 0 ||
+    removed.length > 0 ||
+    edited.length > 0 ||
+    repeated.length > 0 ||
+    failuresChanged ||
+    reordered;
 
   const lines: string[] = [];
+  /** A blank separator only once there is something to separate from, so no summary opens on one. */
+  const gap = () => {
+    if (lines.length) lines.push('');
+  };
+
   if (!changed) {
     lines.push('No change: every model resolves to the figures already committed.');
   } else {
-    const oldById = byId(before.models);
-    const newById = byId(after.models);
-
-    const added = [...newById.keys()].filter((id) => !oldById.has(id));
-    const removed = [...oldById.keys()].filter((id) => !newById.has(id));
-    const edited = [...newById.keys()]
-      .filter((id) => oldById.has(id))
-      .map((id) => ({ id, fields: changedFields(oldById.get(id)!, newById.get(id)!) }))
-      .filter((m) => m.fields.length > 0);
-
     if (added.length) lines.push(`**Added** (${added.length}): ${added.join(', ')}`);
     /**
      * Called out hard, because it is the one outcome that silently shrinks the product. The
@@ -102,7 +284,7 @@ export function compare(
       lines.push('> A removed model disappears from the product. Confirm this was intended.');
     }
     if (edited.length) {
-      lines.push('');
+      gap();
       lines.push('**Changed**');
       lines.push('');
       lines.push('| Model | Fields |');
@@ -110,12 +292,101 @@ export function compare(
       for (const { id, fields } of edited) lines.push(`| \`${id}\` | ${fields.join(', ')} |`);
     }
 
-    if (before.failures.length !== after.failures.length) {
+    if (reordered) {
+      gap();
+      // "No figure changed" only when none did. A seed-order edit landing in the same week as an
+      // upstream figure update would otherwise print that sentence directly beneath the table of
+      // fields that changed, and a summary that contradicts itself is no better than a blank one.
+      lines.push(
+        edited.length || repeated.length
+          ? '**Reordered**: the models are also written in a different order, beyond the changes above.'
+          : [...newRows.values()].some((rows) => rows.length > 1)
+            ? '**Reordered**: the same rows, written in a different order — and one id carries ' +
+              'more than one row, so the order decides which of them the app loads.'
+            : '**Reordered**: the same models, written in a different order. No figure changed.'
+      );
+    }
+
+    if (repeated.length) {
+      gap();
+      lines.push('**Repeated ids**');
       lines.push('');
+      /**
+       * A fourth column, because the counts alone can be identical while the rows are not: an id
+       * carrying two rows on both sides where one of them changed reads "2 → 2" and names nothing.
+       *
+       * It counts rows in and rows out, and deliberately says nothing about *which* of them the
+       * app loads. Three rounds of review went into inferring that, and each phrasing was wrong in
+       * a case the last one had not considered — most recently, resolving `[base, v1]` to `[base]`
+       * makes `base` change roles from shadowed to loaded, so a role-aware reading called it two
+       * rows moving when one row was removed. Roles are a property of position, and this table is
+       * about content; conflating them is what kept producing confident wrong sentences. Which row
+       * the app loads is `edited`'s question, and it is answered in the fields table.
+       */
+      lines.push('| Model | Rows before | Rows after | What moved |');
+      lines.push('| --- | --- | --- | --- |');
+      for (const id of repeated) {
+        const before = rowsFor(oldRows, id);
+        const after = rowsFor(newRows, id);
+        const plural = (n: number) => (n === 1 ? 'row' : 'rows');
+
+        // Multiset difference over canonical rows: an unchanged row cancels whichever position it
+        // sits in, so only rows that genuinely arrived or left are counted.
+        const remaining = [...before];
+        const arrived: string[] = [];
+        for (const row of after) {
+          const at = remaining.indexOf(row);
+          if (at >= 0) remaining.splice(at, 1);
+          else arrived.push(row);
+        }
+        const left = remaining;
+
+        const parts: string[] = [];
+        if (arrived.length && left.length) {
+          parts.push(
+            `${Math.min(arrived.length, left.length)} ${plural(Math.min(arrived.length, left.length))} replaced`
+          );
+        }
+        const netIn = arrived.length - Math.min(arrived.length, left.length);
+        const netOut = left.length - Math.min(arrived.length, left.length);
+        if (netIn) parts.push(`${netIn} ${plural(netIn)} added`);
+        if (netOut) parts.push(`${netOut} ${plural(netOut)} removed`);
+
+        lines.push(
+          `| \`${id}\` | ${before.length} | ${after.length} | ${parts.join(', ') || 'nothing'} |`
+        );
+      }
+      lines.push('');
+      // Per row rather than "twice", which is wrong in both directions: a refresh that *resolves*
+      // a duplicate leaves one row, and a generator emitting three leaves three.
+      lines.push(
+        '> `MODELS` keeps every row, so the model picker and the comparison grid each list an id ' +
+          'once per row it carries, while `getModel` resolves it to whichever row comes last. ' +
+          'Wherever that count is above one the two surfaces disagree about the same model.' +
+          // Only when there is one. A shadowed row changing populates `repeated` and leaves
+          // `edited` empty, so the fields table is not printed and pointing at it sends a reviewer
+          // looking for something that is not there.
+          (edited.length ? ' The fields table above describes only the row that wins.' : '')
+      );
+    }
+
+    if (failuresChanged) {
+      gap();
       lines.push(
         `**Seed failures**: ${before.failures.length} → ${after.failures.length}. ` +
           'A non-empty list means the catalog was written without those models.'
       );
+      // Stated per seed, because the totals can be equal while the list is not — and a reader
+      // looking at "3 → 3" has been told a decision was made on evidence they cannot see.
+      for (const { seed, from, to } of failureMoves) {
+        lines.push(
+          to === 0
+            ? `- No longer failing: ${seed}`
+            : from === 0
+              ? `- Now failing: ${seed}`
+              : `- ${seed}: ${from} → ${to}`
+        );
+      }
     }
   }
 
