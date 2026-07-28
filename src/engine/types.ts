@@ -282,9 +282,9 @@ export interface DeviceSpec {
    *
    * This field used to have a `measuredBandwidthBytesPerSec` sibling that `effectiveBandwidth`
    * preferred, and Strix Halo was the one row to carry it: 213 against a 256 rating, which the
-   * constants then discounted again. Every Strix Halo throughput figure was understated by 20.2%
-   * against the treatment the other 24 devices get — on a surface whose whole purpose is ranking
-   * hardware against hardware. The sibling is gone rather than deprecated, because a field is an
+   * constants then discounted again. Every Strix Halo throughput figure read 16.8% low against the
+   * treatment the other 24 devices get, and removing the double discount raises each one by 20.2% —
+   * on a surface whose whole purpose is ranking hardware against hardware. The sibling is gone rather than deprecated, because a field is an
    * invitation and its docblock argued for accepting.
    */
   bandwidthBytesPerSec: number;

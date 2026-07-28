@@ -719,7 +719,7 @@ section is for the questions those issues cannot settle.
     **This rule was written down here and broken in the same week** ([#51](https://github.com/MrZoller/bench/issues/51)).
     The Ryzen row carried `measuredBandwidthGBs: 213` against its 256 rating, and
     `effectiveBandwidth()` preferred it — so the constants discounted an already-discounted
-    figure and every Strix Halo throughput number came out 20.2% under the treatment the other 24
+    figure and every Strix Halo throughput number read 16.8% under the treatment the other 24
     devices get, on the one surface whose purpose is ranking hardware against hardware. The field
     and `effectiveBandwidth()` are both gone now rather than deprecated: `types.ts` had a docblock
     arguing _for_ preferring measured, naming Strix Halo as the case for it, which is how a stated

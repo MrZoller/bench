@@ -39,7 +39,7 @@ describe('device catalog', () => {
    * passed just as happily with a measured figure present as absent — and one row had one. The
    * engine then applied `bandwidthEfficiency` and `CLASS_BANDWIDTH_UTILIZATION` on top of it, so
    * Strix Halo was charged the sticker-to-real gap twice and every one of its throughput figures
-   * came out 20.2% under the treatment the other 24 devices get. On a grid whose purpose is
+   * read 16.8% under the treatment the other 24 devices get. On a grid whose purpose is
    * ranking hardware against hardware, one row was being ranked on a different basis.
    *
    * Both calibration anchors are pinned against theoretical peaks — the DGX Spark at 273 GB/s and
