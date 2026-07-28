@@ -2,6 +2,7 @@ import { useId, useState } from 'react';
 import type { Evaluation } from '@/engine';
 import { gibLabel, percent } from '@/lib/format';
 import { marks } from '@/design/tokens';
+import { DisclosureToggle } from './DisclosureToggle';
 
 /**
  * The memory budget, as a stacked bar against the allocatable ceiling.
@@ -143,11 +144,22 @@ export function BudgetBar({
           Memory budget
           <span className="ml-2 font-normal text-[var(--color-text-faint)]">per device</span>
         </h2>
-        <p className="tabular text-sm whitespace-nowrap text-[var(--color-text-muted)]">
-          <span className={overflows ? 'text-[var(--color-critical)]' : 'text-[var(--color-text)]'}>
+        {/* Same shape as `PanelCount`, and deliberately not that component: this is two
+            quantities rather than a count out of a total, and the unbreakable unit is each
+            figure — "120 GiB" — rather than the pair. Breaking at the slash keeps both readable
+            at a scaled root, where the blanket `whitespace-nowrap` this replaces was a floor on
+            the whole line and scrolled the page sideways (#35). */}
+        <p className="tabular text-sm text-[var(--color-text-muted)]">
+          <span
+            className={`whitespace-nowrap ${
+              overflows ? 'text-[var(--color-critical)]' : 'text-[var(--color-text)]'
+            }`}
+          >
             {gibLabel(used)}
+          </span>{' '}
+          <span className="whitespace-nowrap text-[var(--color-text-faint)]">
+            / {gibLabel(ceiling)}
           </span>
-          <span className="text-[var(--color-text-faint)]"> / {gibLabel(ceiling)}</span>
         </p>
       </header>
 
@@ -253,15 +265,13 @@ export function BudgetBar({
         {hovered ? segments.find((s) => s.key === hovered)?.hint : ''}
       </p>
 
-      <button
-        type="button"
-        onClick={() => setShowTable((v) => !v)}
-        aria-expanded={showTable}
-        aria-controls={tableId}
-        className="mt-4 text-xs text-[var(--color-accent)] underline underline-offset-2"
+      <DisclosureToggle
+        expanded={showTable}
+        onToggle={() => setShowTable((v) => !v)}
+        controls={tableId}
       >
         {showTable ? 'Hide' : 'Show'} figures as a table
-      </button>
+      </DisclosureToggle>
 
       {showTable && (
         <table id={tableId} className="mt-3 w-full text-left text-sm">

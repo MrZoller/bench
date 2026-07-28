@@ -18,6 +18,8 @@ import {
   parseDisplayedSeconds,
 } from '@/lib/verdicts';
 import { rate, seconds, tokens, uniqueLabels } from '@/lib/format';
+import { PanelCount } from './PanelCount';
+import { DisclosureToggle } from './DisclosureToggle';
 import type { Config } from '@/store/scenario';
 
 /**
@@ -225,10 +227,9 @@ export function Envelope({ config }: { config: Config }) {
             context against concurrent users
           </span>
         </h2>
-        <p className="text-sm whitespace-nowrap text-[var(--color-text-muted)]">
-          <span className="tabular text-[var(--color-text)]">{counts.comfortable ?? 0}</span> of{' '}
-          {total} comfortable
-        </p>
+        <PanelCount count={counts.comfortable ?? 0} total={total}>
+          comfortable
+        </PanelCount>
       </header>
 
       <div className="mt-4 flex gap-2">
@@ -333,14 +334,9 @@ export function Envelope({ config }: { config: Config }) {
           })}
       </ul>
 
-      <button
-        type="button"
-        onClick={() => setShowTable((v) => !v)}
-        aria-expanded={showTable}
-        className="mt-4 text-xs text-[var(--color-accent)] underline underline-offset-2"
-      >
+      <DisclosureToggle expanded={showTable} onToggle={() => setShowTable((v) => !v)}>
         {showTable ? 'Hide' : 'Show'} the region as a table
-      </button>
+      </DisclosureToggle>
 
       {showTable && (
         <div className="mt-3 overflow-x-auto">

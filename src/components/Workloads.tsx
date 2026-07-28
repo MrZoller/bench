@@ -2,6 +2,8 @@ import { useId, useMemo, useState } from 'react';
 import type { Evaluation } from '@/engine';
 import { judgeWorkloads, type Fitness } from '@/engine/verdict';
 import { estimateConfig, type Config } from '@/store/config';
+import { PanelCount } from './PanelCount';
+import { DisclosureToggle } from './DisclosureToggle';
 
 /**
  * What the setup can actually be used for.
@@ -87,10 +89,9 @@ export function Workloads({ evaluation, config }: { evaluation: Evaluation; conf
         <h2 id={headingId} className="text-sm font-semibold tracking-wide">
           What you could do with it
         </h2>
-        <p className="text-sm whitespace-nowrap text-[var(--color-text-muted)]">
-          <span className="tabular text-[var(--color-text)]">{usable}</span> of {verdicts.length}{' '}
+        <PanelCount count={usable} total={verdicts.length}>
           workloads
-        </p>
+        </PanelCount>
       </header>
 
       {sharedReason && (
@@ -135,14 +136,9 @@ export function Workloads({ evaluation, config }: { evaluation: Evaluation; conf
         })}
       </ul>
 
-      <button
-        type="button"
-        onClick={() => setExpanded((v) => !v)}
-        aria-expanded={expanded}
-        className="mt-4 text-xs text-[var(--color-accent)] underline underline-offset-2"
-      >
+      <DisclosureToggle expanded={expanded} onToggle={() => setExpanded((v) => !v)}>
         {expanded ? 'Hide' : 'Show'} what each workload means
-      </button>
+      </DisclosureToggle>
     </section>
   );
 }
