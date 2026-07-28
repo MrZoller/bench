@@ -6,6 +6,8 @@ import {
   getDevice,
   getModel,
   modelsByPopularity,
+  toDevice,
+  type DeviceRow,
 } from './catalog';
 import { getQuant } from './quants';
 import { evaluate } from '@/engine';
@@ -380,5 +382,79 @@ describe('every catalogued model evaluates on every catalogued device', () => {
     expect(gpu.placement.fits).toBe(false);
     // ~61 GiB of weights against a 32 GiB card.
     expect(spark.weights.totalBytes / GIB).toBeCloseTo(61, 0);
+  });
+});
+
+/**
+ * `devices.json` is the hand-edited catalog of the two, and the JSON import types every string
+ * field as `string` — so the casts narrowing them to the engine's unions were the only thing
+ * between a typo and the engine, and a cast checks nothing. `toModel` makes this argument for the
+ * generated catalog. These are the same argument for the file that needs it more.
+ *
+ * Each case below is what the typo actually produced before the guard, not a hypothetical.
+ */
+describe('a hand-typed device row is validated, not trusted', () => {
+  // The RTX 5090's row, copied from `devices.json` rather than retyped, so a reader diffing the
+  // two finds them identical.
+  const ROW: DeviceRow = {
+    id: 'rtx-5090',
+    name: 'GeForce RTX 5090',
+    vendor: 'NVIDIA',
+    class: 'discrete-gpu',
+    status: 'shipping',
+    capacityGiB: 32,
+    allocatableGiB: 31,
+    bandwidthGBs: 1792,
+    tflops: { fp16: 419, fp8: 838, fp4: 1676 },
+    interconnect: 'PCIe 5.0 x16',
+    hostLinkGBs: 63.0,
+    tdpWatts: 575,
+    msrpUsd: 1999,
+    releasedAt: '2025-01-30',
+    source: 'https://www.techpowerup.com/gpu-specs/geforce-rtx-5090.c4216',
+  };
+
+  it('is the row the catalog actually ships', () => {
+    // Pins the fixture to the file. A guard demonstrated on an invented row proves less than one
+    // demonstrated on a real one, and this is the assertion that keeps the two from drifting.
+    expect(toDevice(ROW)).toEqual(getDevice('rtx-5090'));
+  });
+
+  it('refuses a misspelled class rather than reporting hardware nothing can drive', () => {
+    // Every runtime's `supports` check misses, and `CLASS_BANDWIDTH_UTILIZATION[class]` is
+    // undefined underneath, which takes decode to zero.
+    expect(() => toDevice({ ...ROW, class: 'discrete_gpu' })).toThrow(/unsupported class/i);
+    expect(() => toDevice({ ...ROW, class: 'discrete_gpu' })).toThrow(/rtx-5090/);
+  });
+
+  it('refuses a misspelled status rather than dropping the device out of the Matrix', () => {
+    // The Matrix filters to `shipping`, so this one is silent: the device simply stops appearing.
+    expect(() => toDevice({ ...ROW, status: 'shiping' })).toThrow(/unsupported status/i);
+  });
+
+  it('refuses a misspelled compute dtype rather than dividing by a zero rate', () => {
+    // The loudest of the three: `peakFlops` has no fp16 to fall back to, so prefill reports a
+    // time to first token of Infinity for a device whose datasheet is otherwise intact.
+    expect(() => toDevice({ ...ROW, tflops: { fp61: 209.5, fp8: 419 } })).toThrow(
+      /unsupported compute dtype/i
+    );
+  });
+
+  it('names what it expected, since a human is the one fixing the row', () => {
+    expect(() => toDevice({ ...ROW, class: 'gpu' })).toThrow(/discrete-gpu, unified-soc, cpu-ram/);
+  });
+
+  it('still accepts every member of each union', () => {
+    // Guards the check against being satisfied by a list narrower than the type — `announced` has
+    // no row in the catalog today, so nothing else would notice it being rejected.
+    for (const cls of ['discrete-gpu', 'unified-soc', 'cpu-ram'] as const) {
+      expect(toDevice({ ...ROW, class: cls }).class).toBe(cls);
+    }
+    for (const status of ['shipping', 'announced', 'rumored'] as const) {
+      expect(toDevice({ ...ROW, status }).status).toBe(status);
+    }
+    for (const dtype of ['fp16', 'bf16', 'fp8', 'fp4', 'int8'] as const) {
+      expect(toDevice({ ...ROW, tflops: { [dtype]: 100 } }).flops[dtype]).toBeGreaterThan(0);
+    }
   });
 });

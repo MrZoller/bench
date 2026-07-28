@@ -12,7 +12,7 @@ import modelsJson from './models.generated.json';
  * here, once, rather than being duplicated at every call site.
  */
 
-interface DeviceRow {
+export interface DeviceRow {
   id: string;
   name: string;
   vendor: string;
@@ -41,19 +41,87 @@ export interface CatalogDevice extends DeviceSpec {
   note?: string;
 }
 
-function toDevice(row: DeviceRow): CatalogDevice {
+/**
+ * The string fields whose values the engine narrows to a union, and the members it accepts.
+ *
+ * Written as records keyed by the union rather than as arrays, so adding a member to `DeviceClass`
+ * or `DeviceStatus` without listing it here is a compile error. A list of accepted values that can
+ * silently fall behind the type it guards is the same class of defect as no list at all.
+ */
+const DEVICE_CLASSES: Record<DeviceSpec['class'], true> = {
+  'discrete-gpu': true,
+  'unified-soc': true,
+  'cpu-ram': true,
+};
+
+const DEVICE_STATUSES: Record<DeviceSpec['status'], true> = {
+  shipping: true,
+  announced: true,
+  rumored: true,
+};
+
+const FLOPS_DTYPES: Record<keyof DeviceSpec['flops'], true> = {
+  fp16: true,
+  bf16: true,
+  fp8: true,
+  fp4: true,
+  int8: true,
+};
+
+/**
+ * Narrow a hand-typed string to the union the engine expects, or fail at load saying so.
+ *
+ * The JSON import types every one of these as `string`, so the cast is the only thing standing
+ * between a typo and the engine — and a cast checks nothing. `toModel` makes this argument for the
+ * *generated* catalog, which is machine-written from one script that always emits the same shape.
+ * `devices.json` is edited by hand, a row at a time, against datasheets. It needs it more.
+ *
+ * What a typo buys without this, in each field:
+ *
+ *   - **`class`** — every runtime's `supports` check misses, so the device reports as driven by
+ *     nothing at all, and `CLASS_BANDWIDTH_UTILIZATION[class]` is `undefined` underneath, which
+ *     takes decode to zero. A confident wrong sentence on every surface, for every runtime.
+ *   - **`status`** — the Matrix filters to `shipping`, so the device silently vanishes from the
+ *     comparison grid, and the Bench picker labels it "Announced — specs may change".
+ *   - **a `tflops` key** — the loudest of the three and the one the issue did not name: a
+ *     misspelled `fp16` leaves `peakFlops` with nothing to fall back to, and prefill divides by a
+ *     zero rate. The catalogued RTX 5090 reports a time to first token of `Infinity`.
+ */
+function narrow<T extends string>(
+  value: string,
+  allowed: Record<T, true>,
+  field: string,
+  rowId: string
+): T {
+  if (!Object.hasOwn(allowed, value)) {
+    throw new Error(
+      `Catalog device ${rowId || '<unknown>'} has unsupported ${field} "${value}". ` +
+        `Expected one of: ${Object.keys(allowed).join(', ')}.`
+    );
+  }
+  return value as T;
+}
+
+/**
+ * Exported alongside `DeviceRow` so the guard above is reachable from a test.
+ *
+ * `DEVICES` cannot exercise it: every committed row is correct today, which is exactly why a
+ * defensive check here would otherwise ship untested. Proving it rejects anything means building a
+ * row that should be rejected.
+ */
+export function toDevice(row: DeviceRow): CatalogDevice {
   const flops: DeviceSpec['flops'] = {};
   for (const [dtype, value] of Object.entries(row.tflops)) {
     if (value === undefined) continue;
-    flops[dtype as keyof DeviceSpec['flops']] = value * TFLOP;
+    flops[narrow(dtype, FLOPS_DTYPES, 'compute dtype', row.id)] = value * TFLOP;
   }
 
   return {
     id: row.id,
     name: row.name,
     vendor: row.vendor,
-    class: row.class as DeviceSpec['class'],
-    status: row.status as DeviceSpec['status'],
+    class: narrow(row.class, DEVICE_CLASSES, 'class', row.id),
+    status: narrow(row.status, DEVICE_STATUSES, 'status', row.id),
     capacityBytes: row.capacityGiB * GIB,
     allocatableBytes: row.allocatableGiB * GIB,
     ...(row.allocatableTunable ? { allocatableTunable: true } : {}),
