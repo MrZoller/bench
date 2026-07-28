@@ -1,5 +1,5 @@
 {
-  "$comment": "Hand-curated, unlike models.generated.json — no vendor publishes machine-readable specs, and this landscape moves slowly enough that curation is tractable. Units are the ones datasheets use: capacity in GiB (binary, as memory is sold), bandwidth in GB/s (decimal), compute in dense TFLOPS. NVIDIA and AMD headline 'AI TOPS' figures are sparse; these are halved to dense, because inference does not use structured sparsity. Every row carries a source and a status. allocatableGiB is what a model can actually have, which is below capacity on shared-memory machines.",
+  "$comment": "Hand-curated, unlike models.generated.json — no vendor publishes machine-readable specs, and this landscape moves slowly enough that curation is tractable. Units are the ones datasheets use: capacity in GiB (binary, as memory is sold), bandwidth in GB/s (decimal), compute in dense TFLOPS. NVIDIA and AMD headline 'AI TOPS' figures are sparse; these are halved to dense, because inference does not use structured sparsity. Every row carries a source and a status. allocatableGiB is what a model can actually have, which is below capacity on shared-memory machines. Where a platform lets the user raise that ceiling, maxAllocatableGiB is how far it can actually go, and it is never physical capacity: AMD's Variable Graphics Memory states its own maximum, and the Apple rows reserve max(8 GiB, 1/16 of RAM) for the OS.",
 
   "devices": [
     {
@@ -248,12 +248,14 @@
       "capacityGiB": 96,
       "allocatableGiB": 72,
       "allocatableTunable": true,
+      "maxAllocatableGiB": 88,
       "bandwidthGBs": 819,
       "tflops": { "fp16": 54 },
       "tdpWatts": 270,
       "msrpUsd": 3999,
       "releasedAt": "2025-03-12",
-      "source": "https://www.apple.com/mac-studio/specs/"
+      "source": "https://www.apple.com/mac-studio/specs/",
+      "note": "The allocation ceiling reserves 8 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives."
     },
     {
       "id": "mac-studio-m3-ultra-256",
@@ -264,12 +266,14 @@
       "capacityGiB": 256,
       "allocatableGiB": 192,
       "allocatableTunable": true,
+      "maxAllocatableGiB": 240,
       "bandwidthGBs": 819,
       "tflops": { "fp16": 54 },
       "tdpWatts": 270,
       "msrpUsd": 5599,
       "releasedAt": "2025-03-12",
-      "source": "https://www.apple.com/mac-studio/specs/"
+      "source": "https://www.apple.com/mac-studio/specs/",
+      "note": "The allocation ceiling reserves 16 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives."
     },
     {
       "id": "mac-studio-m3-ultra-512",
@@ -280,12 +284,14 @@
       "capacityGiB": 512,
       "allocatableGiB": 384,
       "allocatableTunable": true,
+      "maxAllocatableGiB": 480,
       "bandwidthGBs": 819,
       "tflops": { "fp16": 54 },
       "tdpWatts": 270,
       "msrpUsd": 9499,
       "releasedAt": "2025-03-12",
-      "source": "https://www.apple.com/mac-studio/specs/"
+      "source": "https://www.apple.com/mac-studio/specs/",
+      "note": "The allocation ceiling reserves 32 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives."
     },
     {
       "id": "macbook-pro-m4-max-128",
@@ -296,12 +302,14 @@
       "capacityGiB": 128,
       "allocatableGiB": 96,
       "allocatableTunable": true,
+      "maxAllocatableGiB": 120,
       "bandwidthGBs": 546,
       "tflops": { "fp16": 34 },
       "tdpWatts": 140,
       "msrpUsd": 4699,
       "releasedAt": "2024-11-08",
-      "source": "https://support.apple.com/en-us/121553"
+      "source": "https://support.apple.com/en-us/121553",
+      "note": "The allocation ceiling reserves 8 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives."
     },
     {
       "id": "mac-mini-m4-pro-64",
@@ -312,12 +320,14 @@
       "capacityGiB": 64,
       "allocatableGiB": 48,
       "allocatableTunable": true,
+      "maxAllocatableGiB": 56,
       "bandwidthGBs": 273,
       "tflops": { "fp16": 17 },
       "tdpWatts": 65,
       "msrpUsd": 1999,
       "releasedAt": "2024-11-08",
-      "source": "https://support.apple.com/en-us/121555"
+      "source": "https://support.apple.com/en-us/121555",
+      "note": "The allocation ceiling reserves 8 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives."
     },
     {
       "id": "ryzen-ai-max-395",
@@ -346,12 +356,13 @@
       "capacityGiB": 512,
       "allocatableGiB": 384,
       "allocatableTunable": true,
+      "maxAllocatableGiB": 480,
       "bandwidthGBs": 1000,
       "tflops": { "fp16": 90 },
       "tdpWatts": 270,
       "releasedAt": "2026-10-01",
       "source": "https://www.macrumors.com/2026/06/25/m5-ultra-mac-studio-2026/",
-      "note": "Unreleased. Specs are press-rumour grade and must stay labelled as such in the UI — included because it is the machine people are waiting on, not because the numbers are trustworthy."
+      "note": "Unreleased. Specs are press-rumour grade and must stay labelled as such in the UI — included because it is the machine people are waiting on, not because the numbers are trustworthy. The allocation ceiling reserves 32 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives."
     },
 
     {

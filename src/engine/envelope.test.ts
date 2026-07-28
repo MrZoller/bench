@@ -179,8 +179,10 @@ describe('the feasibility region', () => {
     // ceiling away from running, and the far corner is past the machine however it is tuned.
     expect(closed.some((c) => c.overBecause === 'allocation')).toBe(true);
     expect(closed.some((c) => c.overBecause === 'capacity')).toBe(true);
-    // And the distinction tracks the physical pool rather than being cosmetic: raising the
-    // ceiling can only ever help the cells that fit inside the machine.
+    // And the distinction tracks a real boundary rather than being cosmetic: raising the ceiling
+    // can only ever help the cells below it. That boundary is the platform maximum — 480 of the
+    // machine's 512 GiB — not the physical pool, since the last 32 GiB are what macOS needs to
+    // keep running and are never handed to the model.
     const allocation = closed.filter((c) => c.overBecause === 'allocation');
     const capacity = closed.filter((c) => c.overBecause === 'capacity');
     expect(Math.max(...allocation.map((c) => c.utilization))).toBeLessThan(

@@ -115,6 +115,48 @@ export function toDevice(row: DeviceRow): CatalogDevice {
     flops[narrow(dtype, FLOPS_DTYPES, 'compute dtype', row.id)] = value * TFLOP;
   }
 
+  /**
+   * A raiseable ceiling has to say how far, and it can never be all of physical memory.
+   *
+   * Two fields that only mean something together, and the pairing was unenforced: every Apple row
+   * declared `allocatableTunable` and stated no maximum, so `maxAllocatablePerDevice` fell back to
+   * physical capacity and the app offered the owner of a 96 GiB Mac Studio a 95.5 GiB
+   * configuration — a machine with nothing left for the OS, the window server, or the inference
+   * process's own unwired allocations. Enforced here rather than left to the curator, because the
+   * failure is silent on every surface and reads as generosity.
+   */
+  if (row.allocatableTunable) {
+    if (row.maxAllocatableGiB === undefined) {
+      throw new Error(
+        `Catalog device ${row.id || '<unknown>'} is allocatableTunable with no maxAllocatableGiB. ` +
+          'State how far the ceiling actually raises; it is never all of physical memory.'
+      );
+    }
+    if (row.maxAllocatableGiB >= row.capacityGiB) {
+      throw new Error(
+        `Catalog device ${row.id || '<unknown>'} raises its allocation ceiling to ` +
+          `${row.maxAllocatableGiB} of ${row.capacityGiB} GiB. The platform accepts that value; ` +
+          'the machine does not — reserve room for the OS.'
+      );
+    }
+    if (row.maxAllocatableGiB < row.allocatableGiB) {
+      throw new Error(
+        `Catalog device ${row.id || '<unknown>'} states a maximum (${row.maxAllocatableGiB} GiB) ` +
+          `below its own default (${row.allocatableGiB} GiB).`
+      );
+    }
+  } else if (row.maxAllocatableGiB !== undefined) {
+    // The same pairing, enforced from the other side. A row stating a ceiling without the flag
+    // that gives it meaning has its figure dropped by `maxAllocatablePerDevice` and shows up
+    // nowhere — silently, and as the failure of a curator who did the work rather than one who
+    // skipped it. That is the worse of the two to swallow.
+    throw new Error(
+      `Catalog device ${row.id || '<unknown>'} states maxAllocatableGiB without ` +
+        'allocatableTunable. The two only mean anything together: without the flag nothing reads ' +
+        'the ceiling.'
+    );
+  }
+
   return {
     id: row.id,
     name: row.name,

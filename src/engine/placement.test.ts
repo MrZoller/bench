@@ -370,13 +370,40 @@ describe('offload crosses a real bus', () => {
 describe('a ceiling is only raiseable as far as the platform allows', () => {
   const ryzen: DeviceSpec = { ...STRIX_HALO_395, allocatableTunable: true };
 
-  it('treats a Mac default as raiseable up to physical memory', () => {
-    // `iogpu.wired_limit_mb` is a default at 75%, not a hardware limit.
-    expect(maxAllocatablePerDevice(MAC_STUDIO_M3_ULTRA_256)).toBe(
-      MAC_STUDIO_M3_ULTRA_256.capacityBytes
-    );
+  /**
+   * This test used to assert the opposite, and was the reason the claim survived: `iogpu.wired_
+   * limit_mb` is indeed a default rather than a hardware limit, so "raiseable up to physical
+   * memory" reads as correct. It confuses what the sysctl *accepts* with what the machine
+   * survives. macOS, the window server and the inference process's own unwired allocations still
+   * need room, so the ceiling raises to 240 of 256 GiB, not to 256.
+   */
+  it('treats a Mac default as raiseable, but never to the last byte of RAM', () => {
+    const max = maxAllocatablePerDevice(MAC_STUDIO_M3_ULTRA_256);
+
+    expect(max).toBeGreaterThan(MAC_STUDIO_M3_ULTRA_256.allocatableBytes);
+    expect(max).toBeLessThan(MAC_STUDIO_M3_ULTRA_256.capacityBytes);
+
+    // The band between the default and the real ceiling is still rescued by raising it — that is
+    // the distinction this whole function exists to draw, and it must not be lost to the fix.
     const between = MAC_STUDIO_M3_ULTRA_256.allocatableBytes + 1;
     expect(raisingCeilingWouldHelp(MAC_STUDIO_M3_ULTRA_256, between)).toBe(true);
+
+    // Above the ceiling it is not, however much physical memory the box has left.
+    const wired = MAC_STUDIO_M3_ULTRA_256.capacityBytes - 1;
+    expect(raisingCeilingWouldHelp(MAC_STUDIO_M3_ULTRA_256, wired)).toBe(false);
+  });
+
+  /**
+   * The defensive floor behind the catalog guard. A tunable row that states no maximum is read as
+   * not raiseable, rather than as raiseable to physical capacity — the assumption that made every
+   * Apple row claim 100% of RAM. Wrong in the safe direction now: it under-promises.
+   */
+  it('promises nothing for a tunable ceiling that states no maximum', () => {
+    const unstated: DeviceSpec = { ...MAC_STUDIO_M3_ULTRA_256 };
+    delete (unstated as { maxAllocatableBytes?: number }).maxAllocatableBytes;
+
+    expect(maxAllocatablePerDevice(unstated)).toBe(unstated.allocatableBytes);
+    expect(raisingCeilingWouldHelp(unstated, unstated.allocatableBytes + 1)).toBe(false);
   });
 
   it('refuses to promise more than Variable Graphics Memory exposes', () => {

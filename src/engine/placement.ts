@@ -142,18 +142,26 @@ function unmetRequirement(quant: QuantSpec, device: DeviceSpec): string | undefi
 /**
  * The most memory this device could ever hand the model, after any tuning its platform allows.
  *
- * `allocatableBytes` is the *default*; this is the ceiling on raising it. Apple's
- * `iogpu.wired_limit_mb` goes as far as physical memory, so those are capped by capacity — but
- * AMD's Variable Graphics Memory tops out at 96 of the Ryzen AI Max+'s 128 GB, which is already
- * its default. Treating physical capacity as everyone's maximum told a Ryzen owner that a
- * 117 GiB configuration would fit once they raised a setting the platform will not raise.
+ * `allocatableBytes` is the *default*; this is the ceiling on raising it. AMD's Variable Graphics
+ * Memory tops out at 96 of the Ryzen AI Max+'s 128 GB, which is already its default. Treating
+ * physical capacity as everyone's maximum told a Ryzen owner that a 117 GiB configuration would
+ * fit once they raised a setting the platform will not raise.
+ *
+ * **A device that states no maximum is treated as not raiseable at all**, rather than as raiseable
+ * to physical capacity, which is what this used to assume. That assumption was wrong in the
+ * direction that says "this will work": every Apple row was tunable with no stated maximum, so all
+ * six resolved to 100% of RAM, and the app told the owner of a 96 GiB Mac Studio that a 95.5 GiB
+ * configuration would fit once they raised the ceiling. `iogpu.wired_limit_mb` will *accept* that
+ * value — it is bounded by what macOS needs to keep running, not by what the sysctl parses. The
+ * rows now state their own ceilings and `catalog.ts` refuses a tunable row that does not, so the
+ * absent case is a defensive floor rather than a live path.
  *
  * Shared so the "you could raise this" claim is made in one place. The Bench and the Envelope
  * each had their own version of it, which is how one of them came to be wrong.
  */
 export function maxAllocatablePerDevice(device: DeviceSpec): number {
   if (device.allocatableTunable !== true) return device.allocatableBytes;
-  return Math.min(device.maxAllocatableBytes ?? device.capacityBytes, device.capacityBytes);
+  return Math.min(device.maxAllocatableBytes ?? device.allocatableBytes, device.capacityBytes);
 }
 
 /** Whether raising the ceiling would actually buy this configuration anything. */

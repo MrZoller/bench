@@ -663,8 +663,21 @@ section is for the questions those issues cannot settle.
   1400W liquid-cooled bin at 2400 MHz — 2500/5000/10000 — and the row now cites the part's own
   page. Same silicon and same memory, so nothing else moved.
 
-  Two conventions worth writing down, since both look like bugs and are not:
+  Three conventions worth writing down, since all three look like bugs and are not:
 
+  - **A raiseable allocation ceiling states how far it raises, and it is never physical capacity**
+    ([#53](https://github.com/MrZoller/bench/issues/53)). `allocatableTunable` and
+    `maxAllocatableGiB` only mean anything together, and the pairing went unenforced: every Apple
+    row declared the first and omitted the second, so `maxAllocatablePerDevice` fell back to
+    capacity and all six claimed 100% of RAM could be wired to the GPU. The app offered the owner
+    of a 96 GiB Mac Studio a 95.5 GiB configuration. The trap is that `iogpu.wired_limit_mb` really
+    will _accept_ that value — what loads is bounded by what macOS needs to keep running, not by
+    what the sysctl parses, and the distance between those two is the whole subject of the field.
+    The Apple rows now reserve `max(8 GiB, 1/16 of RAM)` with the reason in each `note`; the
+    reserve is a judgement rather than a datasheet figure, which is exactly why it is written down.
+    `catalog.ts` refuses a tunable row that states no maximum or states one at capacity, and
+    `maxAllocatablePerDevice` reads an absent value as "not raiseable" — under-promising rather
+    than over-promising, which is the direction this class of error keeps failing in.
   - **Marketed HBM capacities run ~0.4% above true binary capacity.** H200's "141 GB" is 143,771
     MiB — 140.4 GiB — against a stored `capacityGiB: 141`; H100's "80 GB" is 79.65 GiB against 80.
     It does not reach the engine, because what the engine budgets against is `allocatableGiB`,
