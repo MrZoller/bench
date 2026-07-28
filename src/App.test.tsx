@@ -1829,3 +1829,151 @@ describe('the cache-width marker', () => {
     expect(unscored.length, 'the filter matched every cell').toBeLessThan(cells.length);
   });
 });
+
+/**
+ * The Matrix is 408 cells, each a `<button>` carrying a full-sentence `aria-label`, and it sits
+ * above the Usage controls in DOM order. Every one of those cells in the tab sequence put 422 Tab
+ * presses between the top of the page and the context slider that drives every figure on the page,
+ * and a screen-reader user heard 408 sentences on the way.
+ *
+ * The counting lives here rather than in `e2e/` because the tab *sequence* is a DOM property —
+ * `tabindex="-1"` is reachable by script and never by Tab — and jsdom can answer it in a second.
+ * What jsdom cannot answer is whether pressing Tab actually lands where the sequence says, since
+ * it implements no sequential focus navigation at all; that assertion is in `e2e/matrix-grid.spec.ts`.
+ */
+describe('the comparison grid is one tab stop, not four hundred', () => {
+  /** Tabbable, not merely focusable — the distinction the whole fix turns on. */
+  const TABBABLE = [
+    'a[href]',
+    'button:not([disabled])',
+    'input:not([disabled])',
+    'select:not([disabled])',
+    'textarea:not([disabled])',
+    '[tabindex]',
+  ]
+    .map((selector) => `${selector}:not([tabindex="-1"])`)
+    .join(', ');
+
+  const grid = (container: HTMLElement) =>
+    container.querySelector<HTMLTableElement>('table[role="grid"]')!;
+  const cellsOf = (container: HTMLElement) => [
+    ...grid(container).querySelectorAll<HTMLButtonElement>('td button'),
+  ];
+
+  it('offers exactly one of its cells to Tab', () => {
+    const { container } = render(<App />);
+    const cells = cellsOf(container);
+
+    // The grid really is the size the issue describes, so a fix that emptied it would not pass.
+    expect(cells.length).toBeGreaterThan(300);
+    expect(cells.filter((c) => c.tabIndex === 0)).toHaveLength(1);
+    expect(cells.filter((c) => c.tabIndex === -1)).toHaveLength(cells.length - 1);
+  });
+
+  it('leaves the Usage controls a short walk from the top of the page', () => {
+    const { container } = render(<App />);
+    const stops = [...container.querySelectorAll<HTMLElement>(TABBABLE)];
+    const usage = container.querySelector<HTMLElement>('section[aria-label="Usage"]')!;
+    const firstControl = usage.querySelector<HTMLElement>(TABBABLE)!;
+
+    // 422 before this. The bound is deliberately loose — what matters is the order of magnitude,
+    // and pinning the exact figure would fail on any unrelated control being added.
+    expect(stops.indexOf(firstControl)).toBeLessThan(30);
+    expect(stops.indexOf(firstControl)).toBeGreaterThan(0);
+  });
+
+  it('moves between cells with the arrow keys', async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+    const cells = cellsOf(container);
+    const columns = grid(container).querySelectorAll('tbody tr')[0].querySelectorAll('td').length;
+
+    cells[0].focus();
+    expect(document.activeElement).toBe(cells[0]);
+
+    await user.keyboard('{ArrowRight}');
+    expect(document.activeElement).toBe(cells[1]);
+
+    await user.keyboard('{ArrowDown}');
+    expect(document.activeElement).toBe(cells[columns + 1]);
+
+    await user.keyboard('{ArrowLeft}');
+    expect(document.activeElement).toBe(cells[columns]);
+
+    await user.keyboard('{ArrowUp}');
+    expect(document.activeElement).toBe(cells[0]);
+  });
+
+  it('carries the tab stop with the reader rather than resetting it', async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+    const cells = cellsOf(container);
+
+    cells[0].focus();
+    await user.keyboard('{ArrowRight}{ArrowDown}');
+
+    // Returning to the grid returns to where they were, which is the point of a roving index.
+    const moved = document.activeElement as HTMLButtonElement;
+    expect(moved.tabIndex).toBe(0);
+    expect(cells.filter((c) => c.tabIndex === 0)).toEqual([moved]);
+  });
+
+  it('stops at the edges rather than wrapping into another row', async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+    const cells = cellsOf(container);
+
+    cells[0].focus();
+    await user.keyboard('{ArrowLeft}{ArrowUp}');
+    // A wrap here would move the reader to the far end of the grid for a keypress that should do
+    // nothing at all — and the event must stay unhandled so the page can still scroll.
+    expect(document.activeElement).toBe(cells[0]);
+  });
+
+  it('jumps to the ends of a row, and of the grid', async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+    const rows = grid(container).querySelectorAll('tbody tr');
+    const columns = rows[0].querySelectorAll('td').length;
+    const cells = cellsOf(container);
+
+    cells[0].focus();
+    await user.keyboard('{End}');
+    expect(document.activeElement).toBe(cells[columns - 1]);
+
+    await user.keyboard('{Home}');
+    expect(document.activeElement).toBe(cells[0]);
+
+    await user.keyboard('{Control>}{End}{/Control}');
+    expect(document.activeElement).toBe(cells[cells.length - 1]);
+
+    await user.keyboard('{Control>}{Home}{/Control}');
+    expect(document.activeElement).toBe(cells[0]);
+  });
+
+  it('still loads a cell into the Bench from the keyboard', async () => {
+    // The navigation must not have cost the grid its actual purpose.
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+    const cells = cellsOf(container);
+
+    cells[0].focus();
+    await user.keyboard('{ArrowDown}{ArrowRight}');
+    const target = document.activeElement as HTMLButtonElement;
+    const label = target.getAttribute('aria-label')!;
+
+    await user.keyboard('{Enter}');
+    await waitFor(() => {
+      const config = useConfig.getState();
+      expect(label).toContain(getModel(config.modelId).name);
+    });
+  });
+
+  it('tells a screen reader how to drive it', () => {
+    const { container } = render(<App />);
+    const caption = grid(container).querySelector('caption')!;
+
+    expect(caption.textContent).toMatch(/single tab stop/i);
+    expect(caption.textContent).toMatch(/arrow keys/i);
+  });
+});

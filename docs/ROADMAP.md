@@ -427,6 +427,34 @@ reading the test that guards them.
   tool is worth one more minute of checking than a positive one, because nothing later contradicts
   it. (#41.)
 
+- **A grid of buttons is one tab stop, not four hundred** ([#52](https://github.com/MrZoller/bench/issues/52)).
+  The Matrix is 408 cells, each a `<button>` with a full-sentence `aria-label`, and it sits _above_
+  the Usage panel in DOM order — so reaching the context slider that drives every figure on the page
+  took 422 presses of Tab, and a screen-reader user heard 408 sentences on the way. The ARIA grid
+  pattern is what that is for: `role="grid"`, a roving `tabIndex` so exactly one cell is in the tab
+  sequence, arrows to move between cells, Home/End and Ctrl+Home/End for the ends. 422 becomes 15.
+
+  **Why this one survived when the other four axes did not**: touch targets, reflow at 200%,
+  coarse-pointer queries and palette contrast all have tokens and specs behind them, and focus order
+  had nothing looking at it. An axis with no spec is not an axis anyone is checking.
+
+  A skip link was the cheaper alternative and is deliberately absent: past the roving index it saves
+  a single keypress, and it never addressed the screen-reader traversal at all — which was the
+  larger half of the problem.
+
+  **The counting splits across both suites, deliberately.** The tab _sequence_ is a DOM property —
+  `tabindex="-1"` is reachable by script and never by Tab — so `App.test.tsx` asserts it in a
+  second. Whether pressing Tab actually lands where the sequence says is something jsdom cannot
+  answer at all: it implements no sequential focus navigation, so a Tab keydown moves nothing and
+  `document.activeElement` stays put. That half is `e2e/matrix-grid.spec.ts`. Both were checked
+  against a reinjected defect, and the two that fail in the browser are exactly the two jsdom
+  cannot see.
+
+  Left alone deliberately: **the Usage controls stay below the two grids in DOM order.** They are
+  the primary input and there is a real argument for moving them, but that is a layout decision
+  about what the page leads with rather than a keyboard-reachability bug, and the fix above already
+  takes the walk from 422 presses to 15.
+
 - **`pointer: coarse` does not mean "this user can touch the screen".** It describes the _primary_
   pointing device, so a touchscreen laptop, a Surface, or an iPad with a keyboard case reports
   `fine` — and the disclosure toggles dropped back to 16px for someone who can still put a thumb on

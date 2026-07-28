@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from 'react';
+import { useCallback, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import {
   computeMatrix,
   measureMax,
@@ -176,6 +176,91 @@ export function Matrix({ config }: { config: Config }) {
     config.deviceCount === 1;
 
   /**
+   * The grid is one tab stop, and the arrow keys move within it.
+   *
+   * Every cell is a `<button>` with a full-sentence `aria-label`, so before this the grid was 408
+   * tab stops — and it sits *above* the Usage controls in DOM order, which meant 422 presses of
+   * Tab between the top of the page and the context slider that drives every figure on it. A
+   * screen-reader user heard 408 sentences on the way. That is the one accessibility affordance
+   * this repo had no spec behind, which is exactly why it survived: touch targets, reflow at 200%,
+   * coarse-pointer queries and palette contrast all have tokens and tests, and nothing was looking
+   * at focus order.
+   *
+   * The ARIA grid pattern is what this is for: one element in the tab sequence, arrows to move
+   * between cells, Home/End for the ends of a row and Ctrl+Home/End for the ends of the grid.
+   * 408 stops becomes 1.
+   *
+   * A skip link was the cheaper alternative and is deliberately not here as well — past this fix
+   * it would save a single keypress, and it never addressed the screen-reader traversal at all.
+   */
+  const [active, setActive] = useState<[row: number, col: number]>([0, 0]);
+  const cellRefs = useRef(new Map<string, HTMLButtonElement | null>());
+
+  const rowCount = cells.length;
+  const colCount = devices.length;
+  // Clamped on read rather than reset in an effect: the grid's size follows the catalog and the
+  // runtime filter, so a remembered position can fall outside it between renders.
+  const activeRow = Math.min(active[0], Math.max(0, rowCount - 1));
+  const activeCol = Math.min(active[1], Math.max(0, colCount - 1));
+
+  const focusCell = useCallback((row: number, col: number) => {
+    setActive([row, col]);
+    // Focus moved here rather than in an effect keyed on `active`, which would pull focus into
+    // the grid on first render and on every unrelated re-render that reset it.
+    cellRefs.current.get(`${row}:${col}`)?.focus();
+  }, []);
+
+  const onCellKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLButtonElement>, row: number, col: number) => {
+      // A page is most of a screenful of rows without being the whole grid; the catalog is 17
+      // models, so five keeps PageUp/PageDown meaningful rather than equivalent to Ctrl+Home.
+      const PAGE = 5;
+      let nextRow = row;
+      let nextCol = col;
+
+      switch (event.key) {
+        case 'ArrowRight':
+          nextCol = Math.min(colCount - 1, col + 1);
+          break;
+        case 'ArrowLeft':
+          nextCol = Math.max(0, col - 1);
+          break;
+        case 'ArrowDown':
+          nextRow = Math.min(rowCount - 1, row + 1);
+          break;
+        case 'ArrowUp':
+          nextRow = Math.max(0, row - 1);
+          break;
+        case 'Home':
+          nextCol = 0;
+          if (event.ctrlKey) nextRow = 0;
+          break;
+        case 'End':
+          nextCol = colCount - 1;
+          if (event.ctrlKey) nextRow = rowCount - 1;
+          break;
+        case 'PageDown':
+          nextRow = Math.min(rowCount - 1, row + PAGE);
+          break;
+        case 'PageUp':
+          nextRow = Math.max(0, row - PAGE);
+          break;
+        default:
+          // Enter and Space are the button's own business, and everything else belongs to the
+          // page — swallowing keys a grid does not use is how Tab stops working.
+          return;
+      }
+
+      // Only once a key this grid owns has been recognised, so the arrow keys still scroll the
+      // page when the grid has no cell to move to.
+      if (nextRow === row && nextCol === col) return;
+      event.preventDefault();
+      focusCell(nextRow, nextCol);
+    },
+    [colCount, rowCount, focusCell]
+  );
+
+  /**
    * Whether any cell on this grid was scored at a format the runtime cannot actually load.
    *
    * Two routes reach it: the *selected* format may itself be a stand-in (every Apple-silicon row
@@ -310,11 +395,16 @@ export function Matrix({ config }: { config: Config }) {
       </fieldset>
 
       <div className="mt-4 overflow-x-auto">
-        <table className="w-full border-separate border-spacing-0.5 text-left text-xs">
+        {/* `role="grid"` rather than the native table role, because the cells are widgets a
+            keyboard drives rather than data a reader browses — which is the distinction the two
+            roles exist to draw, and what tells a screen reader to hand the arrow keys over. */}
+        <table role="grid" className="w-full border-separate border-spacing-0.5 text-left text-xs">
           <caption className="sr-only">
             Every catalogued model against every shipping device, coloured by{' '}
             {MEASURES.find((m) => m.value === measure)?.label}. {runnable} of {cells.flat().length}{' '}
-            combinations run.
+            combinations run. This grid is a single tab stop: use the arrow keys to move between
+            cells, Home and End for the ends of a row, and Control with Home or End for the ends of
+            the grid.
           </caption>
           <thead>
             <tr>
@@ -357,9 +447,18 @@ export function Matrix({ config }: { config: Config }) {
                   {model.name}
                 </th>
                 {cells[r].map((cell, c) => (
-                  <td key={devices[c].id} className="p-0">
+                  <td key={devices[c].id} role="gridcell" className="p-0">
                     <button
                       type="button"
+                      ref={(node) => {
+                        cellRefs.current.set(`${r}:${c}`, node);
+                      }}
+                      // The roving half of the pattern: exactly one cell is in the tab sequence,
+                      // and it is wherever the reader last was. `activeRow`/`activeCol` are the
+                      // clamped pair, so a grid that shrank under a remembered position still
+                      // offers a stop rather than none at all.
+                      tabIndex={r === activeRow && c === activeCol ? 0 : -1}
+                      onKeyDown={(event) => onCellKeyDown(event, r, c)}
                       /**
                        * Loads the *whole* scenario the cell was scored under, not just the pair.
                        *
@@ -370,6 +469,9 @@ export function Matrix({ config }: { config: Config }) {
                        * same reason.
                        */
                       onClick={() => {
+                        // So the tab stop follows the reader: leaving the grid and coming back
+                        // returns to the cell they last used, not to the top-left corner.
+                        setActive([r, c]);
                         set('modelId', cell.modelId);
                         set('deviceId', cell.deviceId);
                         set('quantId', cell.quantId);
