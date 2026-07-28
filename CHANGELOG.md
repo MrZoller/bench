@@ -4,6 +4,66 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow
 [semver](https://semver.org/).
 
+## [Unreleased]
+
+The first post-release bug sweep: six issues from an end-to-end review, all closed. Not one was a
+wrong sum — a sweep of the whole catalog cross-product had already found zero non-finite,
+negative or self-contradictory outputs, and a second found zero disagreements across thirteen
+cross-surface invariants. Heavily-reviewed code pushes its bugs to the edges, and that is where
+these were: in the curated data, in the periphery nothing exercises, in a latent sibling of a fixed
+bug, and on the one accessibility axis with no spec behind it.
+
+### Fixed
+
+- **Strix Halo was charged the bandwidth gap twice**
+  ([#51](https://github.com/MrZoller/bench/issues/51)). It was the only device carrying a
+  _measured_ bandwidth — 213 GB/s against AMD's 256 rating — and the engine then applied
+  `bandwidthEfficiency` and `CLASS_BANDWIDTH_UTILIZATION` on top, the constants that exist to model
+  that very gap. Every Strix Halo throughput figure was understated by 20.2% against the treatment
+  the other 24 devices get, on the surface whose whole purpose is ranking hardware against
+  hardware. The catalog is theoretical peak throughout now, as the roadmap says it should be, and
+  the measured field is deleted rather than deprecated — a field is an invitation, and its docblock
+  was accepting.
+- **Every Apple row claimed 100% of its RAM could be wired to the GPU**
+  ([#53](https://github.com/MrZoller/bench/issues/53)). All six were tunable with no stated
+  maximum, so the app offered the owner of a 96 GiB Mac Studio a 95.5 GiB configuration.
+  `iogpu.wired_limit_mb` will _accept_ that value; what loads is bounded by what macOS needs to
+  keep running, and the distance between the two is the whole subject of the field. Each row now
+  reserves `max(8 GiB, 1/16 of RAM)` with the reason written down, and the catalog refuses a
+  raiseable ceiling that does not say how far it raises.
+- **The weekly refresh bot could open a pull request that stated no change at all**
+  ([#54](https://github.com/MrZoller/bench/issues/54)). `changed` was decided by whole-document
+  string equality while the summary was built from set differences, so any reordering satisfied one
+  with nothing for the other to say — and that summary is interpolated into both the commit message
+  and the pull request body. Both answers come from the same evidence now, and three further routes
+  to a misleading summary closed with it.
+- **The cached prefix was not clamped to each cell**
+  ([#55](https://github.com/MrZoller/bench/issues/55)), where the prompt beside it was. Prefill
+  charges every new token for attending over the resident prefix, so a 2K column was timed against
+  a 49K session, and a prefix past a model's own limit took one Matrix cell from 16 s to 273 s.
+  Latent rather than live — nothing in the app supplies a prefix to either grid — but both are
+  exported engine API.
+- **`toDevice` cast three fields into narrow types without checking any of them**
+  ([#56](https://github.com/MrZoller/bench/issues/56)), on the hand-edited catalog of the two,
+  while `toModel` below it validated the generated one. No committed row was ever wrong — but
+  injecting the typos showed what one would buy: a misspelled `class` makes a device report as
+  driven by nothing at all, and a misspelled compute dtype makes the RTX 5090 report a time to
+  first token of `Infinity`.
+
+### Accessibility
+
+- **The Matrix is one tab stop instead of 408**
+  ([#52](https://github.com/MrZoller/bench/issues/52)). Every cell is a button with a full-sentence
+  accessible name, and the grid sits above the Usage controls — so 422 presses of Tab stood between
+  the top of the page and the context slider that drives every figure on it, and a screen-reader
+  user heard 408 sentences on the way. The ARIA grid pattern applies now: one tab stop, arrows to
+  move between cells, Home and End for the ends of a row, Control with either for the ends of the
+  grid. **422 becomes 15.**
+
+  This was the one accessibility axis with no spec behind it, which is why a gap here outlived the
+  four that have one: touch targets, reflow, pointer queries and contrast all have tokens and
+  tests, and nothing was looking at focus order.
+
 ## [0.1.0] — 2026-07-28
 
 First public release. Live at <https://mrzoller.github.io/bench/>.
@@ -72,4 +132,5 @@ for the whole build.
 - Reduced motion is respected in the stylesheet, and separately in the one scroll JavaScript asks
   for, which the stylesheet cannot reach.
 
+[unreleased]: https://github.com/MrZoller/bench/compare/4de0fa6...HEAD
 [0.1.0]: https://github.com/MrZoller/bench/commits/main
