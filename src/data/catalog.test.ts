@@ -610,6 +610,18 @@ describe('the catalog refuses a ceiling it cannot justify', () => {
     expect(() => toDevice({ ...TUNABLE_ROW, maxAllocatableGiB: 64 })).toThrow(/below its own/i);
   });
 
+  it('refuses a maximum on a row whose ceiling does not move', () => {
+    // The pairing from the other side. `maxAllocatablePerDevice` ignores a maximum without the
+    // flag, so the stated ceiling would vanish from every surface without a word.
+    const untunable = { ...TUNABLE_ROW };
+    delete untunable.allocatableTunable;
+
+    expect(() => toDevice(untunable)).toThrow(/without allocatableTunable/i);
+    expect(() => toDevice({ ...TUNABLE_ROW, allocatableTunable: false })).toThrow(
+      /without allocatableTunable/i
+    );
+  });
+
   it('leaves a fixed-ceiling row alone', () => {
     // A card whose ceiling cannot be raised states no maximum, and must not be asked for one —
     // otherwise the guard would reject 18 of the 25 committed rows.

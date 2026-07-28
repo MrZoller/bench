@@ -145,6 +145,16 @@ export function toDevice(row: DeviceRow): CatalogDevice {
           `below its own default (${row.allocatableGiB} GiB).`
       );
     }
+  } else if (row.maxAllocatableGiB !== undefined) {
+    // The same pairing, enforced from the other side. A row stating a ceiling without the flag
+    // that gives it meaning has its figure dropped by `maxAllocatablePerDevice` and shows up
+    // nowhere — silently, and as the failure of a curator who did the work rather than one who
+    // skipped it. That is the worse of the two to swallow.
+    throw new Error(
+      `Catalog device ${row.id || '<unknown>'} states maxAllocatableGiB without ` +
+        'allocatableTunable. The two only mean anything together: without the flag nothing reads ' +
+        'the ceiling.'
+    );
   }
 
   return {
