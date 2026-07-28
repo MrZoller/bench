@@ -311,19 +311,32 @@ export function compare(
       gap();
       lines.push('**Repeated ids**');
       lines.push('');
-      lines.push('| Model | Rows before | Rows after |');
-      lines.push('| --- | --- | --- |');
+      // A fourth column, because the counts alone can be identical while the rows are not: an id
+      // carrying two rows on both sides where the *shadowed* one changed reads "2 → 2" against a
+      // claimed change and names nothing that moved. `edited` cannot cover that case — `byId` is
+      // last-wins, so the row it compares is precisely the row that did not move.
+      lines.push('| Model | Rows before | Rows after | What moved |');
+      lines.push('| --- | --- | --- | --- |');
       for (const id of repeated) {
-        lines.push(
-          `| \`${id}\` | ${rowsFor(oldRows, id).length} | ${rowsFor(newRows, id).length} |`
-        );
+        const was = rowsFor(oldRows, id).length;
+        const now = rowsFor(newRows, id).length;
+        const plural = (n: number) => (n === 1 ? 'row' : 'rows');
+        const what =
+          was === now
+            ? "a row's figures, beneath the one the app loads"
+            : now > was
+              ? `${now - was} more ${plural(now - was)} under this id`
+              : `${was - now} fewer ${plural(was - now)} under this id`;
+        lines.push(`| \`${id}\` | ${was} | ${now} | ${what} |`);
       }
       lines.push('');
+      // Per row rather than "twice", which is wrong in both directions: a refresh that *resolves*
+      // a duplicate leaves one row, and a generator emitting three leaves three.
       lines.push(
-        '> The generator wrote one id more than once. `MODELS` keeps every row, so the model ' +
-          'picker and the comparison grid will each list it twice — while `getModel` resolves the ' +
-          'id to whichever row comes last. The two surfaces will disagree about the same model, ' +
-          'and the fields table above describes only the row that wins.'
+        '> `MODELS` keeps every row, so the model picker and the comparison grid each list an id ' +
+          'once per row it carries, while `getModel` resolves it to whichever row comes last. ' +
+          'Wherever that count is above one the two surfaces disagree about the same model, and ' +
+          'the fields table above describes only the row that wins.'
       );
     }
 

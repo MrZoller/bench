@@ -589,10 +589,49 @@ describe('a repeated id is reported wherever it appears', () => {
     );
 
     expect(result.summary).toMatch(/picker/i);
-    expect(result.summary).toMatch(/twice/i);
+    expect(result.summary).toMatch(/once per row/i);
     expect(result.summary).toMatch(/disagree/i);
-    // The claim that was wrong: the extra rows are not invisible, they are duplicated on screen.
+    // Two claims that were wrong, in opposite directions. The extra rows are not invisible — they
+    // are duplicated on screen — and the count is not always two: a refresh that *resolves* a
+    // duplicate leaves one row, and a generator emitting three leaves three.
     expect(result.summary).not.toMatch(/invisible in the product/i);
+    expect(result.summary).not.toMatch(/list it twice/i);
+  });
+
+  it('says what moved when only a shadowed row changed', () => {
+    // Two rows on both sides, and the one the app does *not* load is the one that changed. `byId`
+    // is last-wins, so `edited` compares the row that stayed put and finds nothing — leaving a
+    // claimed change whose only evidence read "2 → 2".
+    const loaded = one('a/One', { layers: 40 });
+    const result = compare(
+      catalog([one('a/One'), loaded]),
+      catalog([one('a/One', { layers: 32, totalParams: 9e9 }), loaded])
+    );
+
+    expect(result.changed).toBe(true);
+    expect(result.summary).toMatch(/\| `a\/One` \| 2 \| 2 \|/);
+    expect(result.summary).toMatch(/beneath the one the app loads/i);
+  });
+
+  it('describes a resolved duplicate as one row, not two', () => {
+    const result = compare(
+      catalog([one('a/One'), one('a/One', { layers: 40 })]),
+      catalog([one('a/One')])
+    );
+
+    expect(result.summary).toMatch(/\| `a\/One` \| 2 \| 1 \|/);
+    expect(result.summary).toMatch(/1 fewer row under this id/i);
+    expect(result.summary).not.toMatch(/twice/i);
+  });
+
+  it('counts three rows as three, not as a duplicate', () => {
+    const result = compare(
+      catalog([one('a/One')]),
+      catalog([one('a/One'), one('a/One'), one('a/One')])
+    );
+
+    expect(result.summary).toMatch(/\| `a\/One` \| 1 \| 3 \|/);
+    expect(result.summary).toMatch(/2 more rows under this id/i);
   });
 
   it('does not call a row gaining a duplicate a reordering', () => {
