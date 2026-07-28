@@ -315,6 +315,216 @@ describe('what changed and what it says cannot disagree', () => {
     const result = compare(catalog([model('a/One')]), catalog([model('a/One'), model('a/One')]));
 
     expect(result.changed).toBe(true);
-    expect(result.summary).toMatch(/duplicate ids/i);
+    expect(result.summary).toMatch(/repeated ids/i);
+  });
+});
+
+/**
+ * The three cases Codex raised on PR #59, each a way for the two halves to disagree again.
+ *
+ * All three share a shape: a check that asks about the *new* document alone, or about a coarser
+ * property than the one it claims to test, and so either fires on a week where nothing happened
+ * or stays silent on a week where something did.
+ */
+describe('a claim about a refresh is a claim about the difference', () => {
+  it('does not re-report a duplicate id the committed catalog already had', () => {
+    // Nothing happened this week: the generator reproduced exactly what is committed, duplicate
+    // and all. Asking "does the new side contain a duplicate" would open a pull request every
+    // Monday for as long as the duplicate survives — the weekly noise this file exists to avoid.
+    const both = catalog([model('a/One'), model('a/One')]);
+    const result = compare(both, catalog([model('a/One'), model('a/One')]));
+
+    expect(result.changed).toBe(false);
+    expect(result.summary).toMatch(/no change/i);
+  });
+
+  it('still reports a duplicate the moment one appears', () => {
+    const result = compare(catalog([model('a/One')]), catalog([model('a/One'), model('a/One')]));
+
+    expect(result.changed).toBe(true);
+    expect(result.summary).toMatch(/repeated ids/i);
+    expect(result.summary).toMatch(/a\/One/);
+  });
+
+  it('reports a duplicate being resolved, which is also a difference', () => {
+    const result = compare(catalog([model('a/One'), model('a/One')]), catalog([model('a/One')]));
+
+    expect(result.changed).toBe(true);
+    expect(result.summary).toMatch(/repeated ids/i);
+  });
+
+  it('does not claim a duplicate when a model is merely added', () => {
+    // An addition takes an id from zero occurrences to one, which a naive count difference reads
+    // as a multiplicity change. `added` is the line that explains it.
+    const result = compare(catalog([model('a/One')]), catalog([model('a/One'), model('b/Two')]));
+
+    expect(result.summary).toMatch(/\*\*Added\*\*/);
+    expect(result.summary).not.toMatch(/repeated ids/i);
+  });
+
+  /**
+   * A seed-order edit landing in the same week as an upstream figure change is the collision that
+   * makes the two lines contradict each other. The commit message and the PR body both carry this
+   * text, so a summary asserting "No figure changed" above a table of changed fields is worse than
+   * either line alone.
+   */
+  it('does not deny the edits it just listed when the order moved too', () => {
+    const result = compare(
+      catalog([model('a/One'), model('b/Two')]),
+      catalog([model('b/Two', { layers: 40 }), model('a/One')])
+    );
+
+    expect(result.changed).toBe(true);
+    expect(result.summary).toMatch(/\| `b\/Two` \| layers \|/);
+    expect(result.summary).toMatch(/reordered/i);
+    expect(result.summary).not.toMatch(/no figure changed/i);
+  });
+
+  it('still says no figure changed when none did', () => {
+    const result = compare(
+      catalog([model('a/One'), model('b/Two')]),
+      catalog([model('b/Two'), model('a/One')])
+    );
+
+    expect(result.summary).toMatch(/no figure changed/i);
+  });
+
+  /**
+   * `['a','a','b']` → `['a','b','b']`: same length, same set, different multiset. Both the length
+   * check and the two set differences agree nothing happened, while the seed failing twice has
+   * changed. The comment on that code claimed to handle multiplicity; only counting occurrences
+   * actually does.
+   */
+  it('sees a failure list whose multiplicity moved under a constant length and set', () => {
+    const result = compare(
+      catalog([model('a/One')], ['x: 401', 'x: 401', 'y: 404']),
+      catalog([model('a/One')], ['x: 401', 'y: 404', 'y: 404'])
+    );
+
+    expect(result.changed).toBe(true);
+    expect(result.summary).toMatch(/seed failures/i);
+  });
+
+  it('leaves an unchanged failure list alone, however it repeats', () => {
+    const failures = ['x: 401', 'x: 401', 'y: 404'];
+    const result = compare(
+      catalog([model('a/One')], [...failures]),
+      catalog([model('a/One')], [...failures])
+    );
+
+    expect(result.changed).toBe(false);
+  });
+});
+
+/**
+ * The invariants, swept exhaustively rather than sampled.
+ *
+ * Every hand-written case above encodes a failure someone already found. This is the check that
+ * does not depend on having thought of the case: it enumerates every catalog of up to three rows
+ * drawn from a pool that includes two rows sharing an id, compares all 1,600 ordered pairs, and
+ * asserts the four properties the workflow actually relies on.
+ *
+ * It was worth the trouble. Three of the bugs this file has now fixed — a committed duplicate
+ * re-reported every week, a change to a shadowed row going silent, a summary asserting "No figure
+ * changed" above a table of changed fields — were each found by a reviewer reading the code rather
+ * than by a test, and each was invisible to the cases written at the time.
+ */
+describe('the invariants hold across every small catalog', () => {
+  const POOL = [
+    { id: 'a/One', layers: 1 },
+    // Same id, different figures: the shape that makes `byId`'s last-wins collapse observable.
+    { id: 'a/One', layers: 2 },
+    { id: 'b/Two', layers: 1 },
+  ];
+
+  const CATALOGS: Record<string, unknown>[][] = [];
+  for (let size = 0; size <= 3; size++) {
+    const build = (prefix: Record<string, unknown>[]) => {
+      if (prefix.length === size) return void CATALOGS.push([...prefix]);
+      for (const row of POOL) build([...prefix, row]);
+    };
+    build([]);
+  }
+
+  /** Substance: row order matters, key order does not — the same reading `compare` uses. */
+  const canonical = (models: Record<string, unknown>[]) =>
+    JSON.stringify(models.map((m) => JSON.stringify(m, Object.keys(m).sort())));
+
+  it('decides identically to a byte comparison that ignores only key order', () => {
+    const falseNegatives: string[] = [];
+    const falsePositives: string[] = [];
+
+    for (const before of CATALOGS) {
+      for (const after of CATALOGS) {
+        const { changed } = compare(
+          { models: before, failures: [] },
+          { models: after, failures: [] }
+        );
+        const differs = canonical(before) !== canonical(after);
+
+        if (differs && !changed) falseNegatives.push(`${canonical(before)} -> ${canonical(after)}`);
+        if (!differs && changed) falsePositives.push(`${canonical(before)} -> ${canonical(after)}`);
+      }
+    }
+
+    // A false negative is a catalog that silently stopped tracking what it claims to derive from;
+    // a false positive is the weekly empty pull request. Both are named in the file's own header.
+    expect(falseNegatives, `reported unchanged: ${falseNegatives.slice(0, 3).join(' | ')}`).toEqual(
+      []
+    );
+    expect(falsePositives, `reported changed: ${falsePositives.slice(0, 3).join(' | ')}`).toEqual(
+      []
+    );
+  });
+
+  it('never claims a change it cannot describe, and never describes one it did not claim', () => {
+    for (const before of CATALOGS) {
+      for (const after of CATALOGS) {
+        const { changed, summary } = compare(
+          { models: before, failures: [] },
+          { models: after, failures: [] }
+        );
+
+        expect(summary.trim()).not.toBe('');
+        expect(/^no change/i.test(summary)).toBe(!changed);
+      }
+    }
+  });
+
+  it('never prints a summary that contradicts itself', () => {
+    for (const before of CATALOGS) {
+      for (const after of CATALOGS) {
+        const { summary } = compare(
+          { models: before, failures: [] },
+          { models: after, failures: [] }
+        );
+
+        // "No figure changed" beneath a table of changed figures — the collision Codex raised.
+        if (/no figure changed/i.test(summary)) {
+          expect(summary).not.toMatch(/\*\*Changed\*\*/);
+          expect(summary).not.toMatch(/\*\*Repeated ids\*\*/);
+        }
+      }
+    }
+  });
+
+  it('decides the failure list on the same multiset the summary names', () => {
+    const LISTS = [[], ['x'], ['y'], ['x', 'x'], ['x', 'y'], ['x', 'x', 'y'], ['x', 'y', 'y']];
+    const models = [POOL[0]];
+
+    for (const before of LISTS) {
+      for (const after of LISTS) {
+        const { changed, summary } = compare(
+          { models, failures: before },
+          { models, failures: after }
+        );
+        const differs = JSON.stringify([...before].sort()) !== JSON.stringify([...after].sort());
+
+        expect(changed, `${JSON.stringify(before)} -> ${JSON.stringify(after)}`).toBe(differs);
+        // And when it did change, the line says which seed moved rather than only a total —
+        // `['x','x','y']` to `['x','y','y']` is 3 → 3 and has to name `x` and `y`.
+        if (differs) expect(summary).toMatch(/seed failures/i);
+      }
+    }
   });
 });
