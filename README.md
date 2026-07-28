@@ -57,8 +57,9 @@ Current status and what's next: [docs/ROADMAP.md](docs/ROADMAP.md).
 
 The engine under `src/engine/` is pure — no React imports — so it can be pinned to published
 reference values. Those tests are the point: `src/engine/*.test.ts` asserts against llama.cpp's
-own published file sizes, DeepSeek's stated KV footprint, and measured throughput on a DGX Spark
-and an EPYC 9654. Treat a failure there as the numbers being wrong, not the test.
+published 4.58 GiB for Llama 3.1 8B at Q4_K_M, DeepSeek's stated KV footprint, and measured
+throughput on a DGX Spark and an EPYC 9654. Treat a failure there as the numbers being wrong, not
+the test.
 
 `e2e/` covers only what jsdom structurally cannot — layout, scrolling, coarse-pointer media
 queries, canvas actually painting, and text scaled to 200%. That boundary is deliberate rather
