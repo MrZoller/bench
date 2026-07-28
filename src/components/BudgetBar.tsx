@@ -48,7 +48,7 @@ export function BudgetBar({
    */
   if (placement.unsupported) {
     return (
-      <section className="panel p-5">
+      <section className="panel p-[min(1.25rem,5vw)]">
         <h2 className="text-sm font-semibold tracking-wide">
           Memory budget
           <span className="ml-2 font-normal text-[var(--color-text-faint)]">per device</span>
@@ -138,7 +138,7 @@ export function BudgetBar({
       : '';
 
   return (
-    <section aria-labelledby={`${tableId}-title`} className="panel p-5">
+    <section aria-labelledby={`${tableId}-title`} className="panel p-[min(1.25rem,5vw)]">
       <header className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <h2 id={`${tableId}-title`} className="text-sm font-semibold tracking-wide">
           Memory budget

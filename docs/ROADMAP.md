@@ -304,10 +304,35 @@ reading the test that guards them.
   symptom; the probe that proved the first fix is what found the second, which is the general
   lesson worth keeping.
 
-  `e2e/reflow.spec.ts` holds it, and holds it at 200% only. Past a 40px root the page is **not**
-  clean — long single words like "Unsupported" and the slider labels start escaping — and that is
-  recorded rather than fixed, because 1.4.4 stops at 200% and "the bar is met" is a different claim
-  from "the layout is unbreakable".
+  **The third offender was padding, and only CI could see it.** Both fixes above passed locally
+  with 18px to spare and failed on the Linux runner by 4px, on markup neither run had changed. The
+  cause is that the app's font stack — `ui-sans-serif, system-ui, -apple-system, 'Segoe UI', …` —
+  resolves to SF on a Mac and to fontconfig's default sans on a runner, which is wider. **The
+  overflow was real, not an artefact**: the page genuinely scrolled sideways for anyone whose
+  system sans is wider than SF, which is most Linux users and any Windows machine not reaching
+  Segoe UI. Measuring on one machine's typography is measuring the machine.
+
+  The lever was padding, because at a 32px root the shell consumed **146 of 320px — 46% of the
+  viewport** before any content was laid out. `p-4`/`p-5` are rem-derived, so they grow with the
+  text while the viewport does not. Every one is now `p-[min(1rem,4vw)]` / `p-[min(1.25rem,5vw)]`,
+  which is identical at the default root and yields only when the root font has outgrown the
+  screen — the same shape as the `min-w-[min(12rem,100%)]` fix in #34, and the general form of that
+  lesson: **a rem length in a layout a narrow viewport depends on wants a viewport term beside it.**
+
+  `e2e/reflow.spec.ts` now runs every scenario twice, once at the host's own fonts and once at
+  `'Courier New', monospace` — deliberately wider than any UI sans, and present or metric-aliased
+  on all three platforms. That is what makes the verdict portable rather than a description of the
+  machine that ran it, and reverting the padding fix now fails on a Mac. Two details that cost a
+  round each: Verdana is **not** wide enough to reproduce the CI failure locally, so a spec written
+  at Verdana would have shipped the same green-here-red-there result again; and the font has to be
+  set through `--font-sans`, because `body` sets `font-family: var(--font-sans)` and an inline
+  `style.fontFamily` on `<html>` loses to it silently. The spec asserts the stress font really is
+  wider than the host's before trusting any of it.
+
+  It holds at 200% only. Past a 40px root the page is **not** clean — long single words like
+  "Unsupported" and the slider labels start escaping — and that is recorded rather than fixed,
+  because 1.4.4 stops at 200% and "the bar is met" is a different claim from "the layout is
+  unbreakable".
 
 - **The numeral pair's nowrap cannot be falsified by geometry, and the spec says so.** "67 of 408"
   is short enough that it never breaks on its own at any root size from 32px to 64px — measured,

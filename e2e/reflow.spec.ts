@@ -42,6 +42,32 @@ const NARROW = { width: 320, height: 900 };
 const ROOT_200 = 32;
 
 /**
+ * A font deliberately wider than any the app will actually resolve.
+ *
+ * **Without this the spec measures the host's fonts, not the app**, and the two disagree. The app
+ * asks for `ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, …`; a Mac resolves that
+ * to SF, and a CI runner has none of them and falls through to whatever fontconfig calls sans —
+ * which is wider. The first version of this file passed on macOS with 18px to spare and failed on
+ * CI by 4px, on markup neither run had changed. The overflow was real: the page genuinely scrolled
+ * sideways for anyone whose system sans is wider than SF, which is most Linux users.
+ *
+ * So the layout is measured against an upper bound instead of against one machine's typography.
+ * Courier New is chosen because it is *much* wider than any realistic UI sans and is present, or
+ * metric-aliased, on all three platforms — Liberation Mono stands in on Linux. It is not a claim
+ * about what anyone runs; it is a claim that the layout holds however wide the text turns out to
+ * be.
+ *
+ * Verdana was tried first and is not enough: on macOS it does not reproduce the CI failure even
+ * with the fix reverted, so a spec written at Verdana would have shipped the same green-here,
+ * red-there result again.
+ *
+ * Applied through `--font-sans` rather than an inline `font-family`. `body` sets
+ * `font-family: var(--font-sans)`, so a `style.fontFamily` on `<html>` loses to that rule and
+ * changes nothing — which it silently did, in the draft before this one.
+ */
+const WIDE_FONT = "'Courier New', monospace";
+
+/**
  * Scenarios that put materially different content on the page, because the offending line is
  * built from the numbers in it. The default page and MLX/Q5_K_M are the two the issue was
  * measured at; the rest vary count width, runtime label and the conditional panels.
@@ -89,15 +115,38 @@ async function assertScenarioLoaded(page: Page, expected: RegExp) {
   ).toContainText(expected);
 }
 
-async function scaleRoot(page: Page, px: number) {
-  await page.evaluate((v) => {
-    document.documentElement.style.fontSize = `${v}px`;
-  }, px);
+async function scaleRoot(page: Page, px: number, font?: string) {
+  await page.evaluate(
+    ({ v, f }) => {
+      document.documentElement.style.fontSize = `${v}px`;
+      if (f) document.documentElement.style.setProperty('--font-sans', f);
+    },
+    { v: px, f: font }
+  );
   // The scaled root relayouts everything; wait for it to settle before measuring.
   await page.waitForFunction(
     (v) => getComputedStyle(document.documentElement).fontSize === `${v}px`,
     px
   );
+}
+
+/**
+ * How wide a fixed string renders, used to prove the stress font is doing something.
+ *
+ * `WIDE_FONT` is a request, not a guarantee — a host with neither Courier New nor a metric alias
+ * falls back to its default sans and the stress silently becomes an ordinary run. That is the
+ * shape of failure this whole file keeps hitting, so it is measured rather than trusted.
+ */
+async function probeTextWidth(page: Page) {
+  return page.evaluate(() => {
+    const probe = document.createElement('span');
+    probe.textContent = 'Inline code completion';
+    probe.style.cssText = 'position:absolute;white-space:nowrap;visibility:hidden;font-size:32px';
+    document.body.append(probe);
+    const width = probe.getBoundingClientRect().width;
+    probe.remove();
+    return width;
+  });
 }
 
 /**
@@ -159,24 +208,55 @@ test.describe('at 200% text size on a 320px viewport', () => {
     expect(after / before, 'scaling the root did not scale rem-derived text').toBeCloseTo(2, 1);
   });
 
+  /**
+   * The second precondition: that the stress font is actually wider than the host's own.
+   *
+   * Without it, a runner missing Courier New and every metric alias falls back to its default
+   * sans, and the four stress runs below quietly become duplicates of the four ordinary ones —
+   * green, and testing nothing they do not already test.
+   */
+  test('the stress font is wider than whatever this host resolves', async ({ page }) => {
+    await page.goto('/');
+    const native = await probeTextWidth(page);
+
+    await scaleRoot(page, ROOT_200, WIDE_FONT);
+    const stressed = await probeTextWidth(page);
+
+    expect(native, 'nothing was measured').toBeGreaterThan(0);
+    expect(stressed / native, 'the stress font did not widen the text').toBeGreaterThan(1.05);
+  });
+
+  /**
+   * Each scenario twice: once at the fonts this host happens to have, and once at an upper bound
+   * on width.
+   *
+   * The first is what a reader on this machine gets. The second is what makes the verdict portable
+   * — and it is the one that would have caught the CI failure on a Mac, since the layout was
+   * within 4px of the edge under a font neither this file nor its author had measured.
+   */
   for (const { name, url, heading } of SCENARIOS) {
-    test(`the page does not scroll sideways on ${name}`, async ({ page }) => {
-      await page.goto(url);
-      await assertScenarioLoaded(page, heading);
-      await scaleRoot(page, ROOT_200);
+    for (const [typography, font] of [
+      ['this host’s own fonts', undefined],
+      ['a font wider than any it will resolve', WIDE_FONT],
+    ] as const) {
+      test(`the page does not scroll sideways on ${name}, at ${typography}`, async ({ page }) => {
+        await page.goto(url);
+        await assertScenarioLoaded(page, heading);
+        await scaleRoot(page, ROOT_200, font);
 
-      // Named before the numeric assertion, so a failure says which element to fix rather than
-      // only by how much the document is too wide.
-      expect(await escapees(page), 'elements escaping the document').toEqual([]);
+        // Named before the numeric assertion, so a failure says which element to fix rather than
+        // only by how much the document is too wide.
+        expect(await escapees(page), 'elements escaping the document').toEqual([]);
 
-      const doc = await page.evaluate(() => ({
-        scrollWidth: document.documentElement.scrollWidth,
-        clientWidth: document.documentElement.clientWidth,
-      }));
-      expect(doc.scrollWidth, 'the page scrolls sideways at 200% text').toBeLessThanOrEqual(
-        doc.clientWidth + 1
-      );
-    });
+        const doc = await page.evaluate(() => ({
+          scrollWidth: document.documentElement.scrollWidth,
+          clientWidth: document.documentElement.clientWidth,
+        }));
+        expect(doc.scrollWidth, 'the page scrolls sideways at 200% text').toBeLessThanOrEqual(
+          doc.clientWidth + 1
+        );
+      });
+    }
   }
 
   /**

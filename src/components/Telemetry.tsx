@@ -265,7 +265,7 @@ export function Telemetry({
       {readings.map((reading) => {
         const tone = TONE_STYLE[reading.tone];
         return (
-          <article key={reading.key} className="panel flex flex-col gap-1 p-4">
+          <article key={reading.key} className="panel flex flex-col gap-1 p-[min(1rem,4vw)]">
             <h3 className="text-xs font-medium tracking-wide text-[var(--color-text-faint)] uppercase">
               {reading.label}
             </h3>
