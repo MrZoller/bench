@@ -314,7 +314,6 @@ export const STRIX_HALO_395: DeviceSpec = {
   // already as high as it goes. The comment above said this and the data did not.
   maxAllocatableBytes: 96 * GIB,
   bandwidthBytesPerSec: 256 * GB,
-  measuredBandwidthBytesPerSec: 213 * GB,
   flops: { fp16: 59 * TFLOP },
   tdpWatts: 120,
   msrpUsd: 1999,

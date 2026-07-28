@@ -264,13 +264,23 @@ export interface DeviceSpec {
    */
   maxAllocatableBytes?: number;
 
-  /** Theoretical peak memory bandwidth, bytes/sec. */
-  bandwidthBytesPerSec: number;
   /**
-   * Measured bandwidth where a credible benchmark exists. Preferred over theoretical when
-   * present — Strix Halo's 256 GB/s sticker versus ~213 GB/s real is 17% of the answer.
+   * Theoretical peak memory bandwidth, bytes/sec. **Never a measured figure.**
+   *
+   * The distance between a vendor's rating and what a real workload achieves is exactly what
+   * `bandwidthEfficiency` and `CLASS_BANDWIDTH_UTILIZATION` model, and both calibration anchors —
+   * the DGX Spark at 273 GB/s, the EPYC 9654 at 460.8 — were fitted against theoretical peaks. So
+   * a measured figure in the catalog is not a second effect to charge; it is the same effect
+   * charged twice.
+   *
+   * This field used to have a `measuredBandwidthBytesPerSec` sibling that `effectiveBandwidth`
+   * preferred, and Strix Halo was the one row to carry it: 213 against a 256 rating, which the
+   * constants then discounted again. Every Strix Halo throughput figure was understated by 20.2%
+   * against the treatment the other 24 devices get — on a surface whose whole purpose is ranking
+   * hardware against hardware. The sibling is gone rather than deprecated, because a field is an
+   * invitation and its docblock argued for accepting.
    */
-  measuredBandwidthBytesPerSec?: number;
+  bandwidthBytesPerSec: number;
 
   /** Dense FLOPS at the precision used for prefill, by dtype id. */
   flops: Partial<Record<'fp16' | 'bf16' | 'fp8' | 'fp4' | 'int8', number>>;
@@ -290,11 +300,6 @@ export interface DeviceSpec {
   msrpUsd?: number;
   releasedAt?: string;
   source: string;
-}
-
-/** The bandwidth figure the roofline should actually use. */
-export function effectiveBandwidth(device: DeviceSpec): number {
-  return device.measuredBandwidthBytesPerSec ?? device.bandwidthBytesPerSec;
 }
 
 // ---------------------------------------------------------------------------

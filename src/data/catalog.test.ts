@@ -9,6 +9,7 @@ import {
   toDevice,
   type DeviceRow,
 } from './catalog';
+import devicesJson from './devices.json';
 import { getQuant } from './quants';
 import { evaluate } from '@/engine';
 import { LLAMA_CPP, GPT_OSS_120B, DEEPSEEK_V3, QWEN3_32B } from '@/engine/fixtures';
@@ -30,14 +31,54 @@ describe('device catalog', () => {
     expect(device.source).toMatch(/^https:\/\//);
   });
 
-  it('never claims measured bandwidth above theoretical', () => {
+  /**
+   * The convention, not the ordering.
+   *
+   * The check here used to be that a measured figure never exceeded the theoretical one, which
+   * passed just as happily with a measured figure present as absent — and one row had one. The
+   * engine then applied `bandwidthEfficiency` and `CLASS_BANDWIDTH_UTILIZATION` on top of it, so
+   * Strix Halo was charged the sticker-to-real gap twice and every one of its throughput figures
+   * came out 20.2% under the treatment the other 24 devices get. On a grid whose purpose is
+   * ranking hardware against hardware, one row was being ranked on a different basis.
+   *
+   * Both calibration anchors are pinned against theoretical peaks — the DGX Spark at 273 GB/s and
+   * the EPYC 9654 at 460.8 — so the constants *are* that gap. A measured figure in the catalog is
+   * not a second effect to charge.
+   */
+  it('carries a theoretical peak for every device and a measured figure for none', () => {
     for (const device of DEVICES) {
-      if (device.measuredBandwidthBytesPerSec) {
-        expect(device.measuredBandwidthBytesPerSec).toBeLessThanOrEqual(
-          device.bandwidthBytesPerSec
-        );
-      }
+      expect(device.bandwidthBytesPerSec).toBeGreaterThan(0);
+      expect(device).not.toHaveProperty('measuredBandwidthBytesPerSec');
     }
+  });
+
+  /**
+   * Asserted against the raw rows, not only the loaded devices.
+   *
+   * `toDevice` no longer maps `measuredBandwidthGBs`, and the `as DeviceRow[]` cast tolerates
+   * excess JSON properties — so a curator re-adding the key by hand passes both `tsc` and the
+   * check above, and leaves a figure sitting in the catalog implying it is used. That is the
+   * misleading provenance this convention exists to prevent, one step short of the arithmetic.
+   */
+  it('states no measured figure anywhere in the raw catalog either', () => {
+    for (const row of devicesJson.devices as Record<string, unknown>[]) {
+      const measured = Object.keys(row).filter((k) => /measured/i.test(k));
+      expect(measured, `${String(row.id)} states ${measured.join(', ')}`).toEqual([]);
+    }
+  });
+
+  /**
+   * Named rather than swept, because it is the row that had the override and the one a future
+   * curator is most likely to re-add it to: AMD rates the part at 256 GB/s and real workloads land
+   * near 213, which is a tempting 17% to fold in. The note carries the provenance instead.
+   */
+  it('rates Strix Halo at the sticker, and says where the real figure went', () => {
+    const strix = getDevice('ryzen-ai-max-395');
+
+    expect(strix.bandwidthBytesPerSec).toBe(256 * 1e9);
+    expect(strix.note).toMatch(/256 GB\/s/);
+    expect(strix.note).toMatch(/213/);
+    expect(strix.note).toMatch(/bandwidthEfficiency|CLASS_BANDWIDTH_UTILIZATION/);
   });
 
   /**

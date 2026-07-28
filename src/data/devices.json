@@ -330,13 +330,12 @@
       "allocatableTunable": true,
       "maxAllocatableGiB": 96,
       "bandwidthGBs": 256,
-      "measuredBandwidthGBs": 213,
       "tflops": { "fp16": 59 },
       "tdpWatts": 120,
       "msrpUsd": 1999,
       "releasedAt": "2025-02-25",
       "source": "https://www.amd.com/en/products/processors/laptop/ryzen/ai-max.html",
-      "note": "Variable Graphics Memory exposes 96 of 128 GB. Sticker bandwidth is 256 GB/s; measured lands near 213, and that 17% is the difference between a right and a wrong throughput figure."
+      "note": "Variable Graphics Memory exposes 96 of 128 GB. Bandwidth is AMD's 256 GB/s rating; measured runs near 213, and that gap is charged by bandwidthEfficiency and CLASS_BANDWIDTH_UTILIZATION rather than folded in here — see the catalog convention."
     },
     {
       "id": "mac-studio-m5-ultra-512",

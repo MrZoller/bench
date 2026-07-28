@@ -23,7 +23,6 @@ export interface DeviceRow {
   allocatableTunable?: boolean;
   maxAllocatableGiB?: number;
   bandwidthGBs: number;
-  measuredBandwidthGBs?: number;
   // Rows list only the dtypes their datasheet publishes, so TypeScript widens the absent keys
   // to `undefined` across the union of row shapes. Modelled honestly rather than cast away.
   tflops: Record<string, number | undefined>;
@@ -129,9 +128,6 @@ export function toDevice(row: DeviceRow): CatalogDevice {
       ? {}
       : { maxAllocatableBytes: row.maxAllocatableGiB * GIB }),
     bandwidthBytesPerSec: row.bandwidthGBs * GB,
-    ...(row.measuredBandwidthGBs
-      ? { measuredBandwidthBytesPerSec: row.measuredBandwidthGBs * GB }
-      : {}),
     flops,
     ...(row.interconnect ? { interconnect: row.interconnect } : {}),
     ...(row.hostLinkGBs === undefined ? {} : { hostLinkBytesPerSec: row.hostLinkGBs * 1e9 }),
