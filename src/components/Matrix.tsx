@@ -12,6 +12,7 @@ import { getRuntime, kvSubstitutionFor, substitutionFor } from '@/data/runtimes'
 import { FALLBACK_QUANT_ID, quantApplies } from '@/lib/quantChoice';
 import { sequential } from '@/design/tokens';
 import { kvLabel } from '@/lib/stops';
+import { PanelCount } from './PanelCount';
 import { params, percent, rate, seconds, tokens } from '@/lib/format';
 import { useConfig, type Config } from '@/store/config';
 
@@ -241,7 +242,7 @@ export function Matrix({ config }: { config: Config }) {
   }, [devices]);
 
   return (
-    <section aria-labelledby={headingId} className="panel p-5">
+    <section aria-labelledby={headingId} className="panel p-[min(1.25rem,5vw)]">
       <header className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
         {/* The grid moves materially with context, concurrency, prompt and KV precision — the fit
             counts and the throughput colours all change — and the heading named only the format
@@ -263,10 +264,9 @@ export function Matrix({ config }: { config: Config }) {
             {config.deviceCount > 1 && ', one device per cell'}
           </span>
         </h2>
-        <p className="text-sm whitespace-nowrap text-[var(--color-text-muted)]">
-          <span className="tabular text-[var(--color-text)]">{runnable}</span> of{' '}
-          {cells.flat().length} combinations run
-        </p>
+        <PanelCount count={runnable} total={cells.flat().length}>
+          combinations run
+        </PanelCount>
         {/* Outside the h2, which is this section's `aria-labelledby` target — the accessible name
             is computed from its whole subtree, so a sentence nested in there is read out every
             time the landmark is announced. The workload belongs in the name; the caveat does not. */}

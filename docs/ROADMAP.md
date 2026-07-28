@@ -28,31 +28,75 @@ Three things are the moat, in order:
 
 ## Status
 
-Seven of eight phases are on `main` as of 25 July 2026. What remains is the weekly refresh job,
-deployment, and the follow-up list in [issues #12–#20](https://github.com/MrZoller/bench/issues).
+All eight phases are built as of 27 July 2026. The one thing not finished is **publishing**: the
+deploy workflow is written and correct, and it cannot run until GitHub Pages is enabled for the
+repository — which needs a paid plan while the repo is private, and a decision about the
+subdomain. See **Deployment**, below.
 
-| Phase                              | State             | Notes                                                                                              |
-| ---------------------------------- | ----------------- | -------------------------------------------------------------------------------------------------- |
-| 1. Scaffold                        | **done**          | React 19 + TS strict + Vite + Tailwind v4 + Zustand. CI: lint → format:check → test → build        |
-| 2. Engine                          | **done**          | `src/engine/`, pure, no React. Pinned to published measurements at both ends of the hardware range |
-| 3. Catalogs                        | **done** (#1)     | 17 models derived from HF, 25 devices curated. `npm run catalog` regenerates it.                   |
-| 4. Design tokens + the Bench       | **done** (#5)     | Hero surface. Load the `dataviz` skill before any chart/meter/palette code                         |
-| 5. Verdict + explain layers        | **done** (#4)     | Seven workload archetypes. See **Verdicts**, below                                                 |
-| 6. Envelope + Matrix surfaces      | **done** (#7, #8) | Context × concurrency feasibility field; model × device heatmap                                    |
-| 7. URL state, responsive, a11y     | **mostly** (#6)   | Querystring round-trips a scenario. Browser-level pass in `e2e/` (#19); URL defect in #15          |
-| 8. Weekly catalog refresh + deploy | **next**          | Scheduled `build-catalog` → PR on diff; static deploy to a zoller.ai subdomain                     |
+| Phase                              | State             | Notes                                                                                               |
+| ---------------------------------- | ----------------- | --------------------------------------------------------------------------------------------------- |
+| 1. Scaffold                        | **done**          | React 19 + TS strict + Vite + Tailwind v4 + Zustand. CI: lint → format:check → test → build         |
+| 2. Engine                          | **done**          | `src/engine/`, pure, no React. Pinned to published measurements at both ends of the hardware range  |
+| 3. Catalogs                        | **done** (#1)     | 17 models derived from HF, 25 devices curated. `npm run catalog` regenerates it.                    |
+| 4. Design tokens + the Bench       | **done** (#5)     | Hero surface. Load the `dataviz` skill before any chart/meter/palette code                          |
+| 5. Verdict + explain layers        | **done** (#4)     | Seven workload archetypes. See **Verdicts**, below                                                  |
+| 6. Envelope + Matrix surfaces      | **done** (#7, #8) | Context × concurrency feasibility field; model × device heatmap                                     |
+| 7. URL state, responsive, a11y     | **done** (#6)     | Querystring round-trips a scenario. Browser pass in `e2e/` (#19); reflow and hit targets (#35, #29) |
+| 8. Weekly catalog refresh + deploy | **built**         | Refresh opens a PR on a _substantive_ diff. Deploy waits on Pages being enabled — see below         |
 
-**Correctness debt is tracked as issues, not here.** Four are open once this lands. #9 and #10,
-which graded a configuration as working when it is not, are fixed — together with #11, which
-printed a figure measured at a different scenario from the one its sentence described. Filed as
-three bugs, one class; written up under **Verdicts** below. MLX's unmeasured 8-bit KV (#33) is
-closed the way #18 was — marked rather than guessed, since the width it wants cannot be measured
-from here; what that leaves open is the measurement itself. What remains is labelling (#13), UI
-state (#15), and three touch targets too small for a coarse pointer (#29). Both engine bugs are
-fixed: the layer-split spill fraction (#14) and prefill having
-no notion of a cached prefix (#23); see **Engine** below. The browser-level test gap (#19) is
-closed, and with it the legend overflow (#34) that only a browser could falsify; see **Tests**
-below.
+**Correctness debt is tracked as issues, not here.** #9 and #10, which graded a configuration as
+working when it is not, are fixed — together with #11, which printed a figure measured at a
+different scenario from the one its sentence described. Filed as three bugs, one class; written up
+under **Verdicts** below. Both engine bugs are fixed: the layer-split spill fraction (#14) and
+prefill having no notion of a cached prefix (#23); see **Engine** below. The browser-level test gap
+(#19) is closed, and with it the legend overflow (#34) that only a browser could falsify; see
+**Tests** below. Reflow at 200% text (#35) and the coarse-pointer targets (#29) are fixed, both by
+sweeping the class rather than the named instance. The labelling (#13) and clipboard (#15) bugs
+turned out to have been fixed in passing by #25 and #26 and were closed on the evidence.
+
+MLX's unmeasured 8-bit KV (#33) is closed the way #18 was — **marked rather than guessed**, since
+the width it wants cannot be derived from here. What that leaves open is the measurement itself
+(#38), and a contract question that only bites when the measurement lands (#45).
+
+## Deployment
+
+Two workflows, and the interesting decisions are in what each refuses to do.
+
+**`catalog-refresh.yml`** regenerates the catalog every Monday and opens a pull request rather
+than pushing to `main` — a model whose KV heads changed overnight is exactly the case a human
+should see, and it is indistinguishable, to the job, from Hugging Face returning plausible
+nonsense. Three things about it are easy to get wrong and are already wrong once elsewhere:
+
+- **`git diff --quiet` is the wrong question.** `build-catalog.ts` stamps `generatedAt` on every
+  write, so the file differs after every run whether or not a figure moved. Wired to that, the job
+  would open an empty pull request every week for the rest of the project's life — and people who
+  stop reading a bot that is right one week in fifty also stop reading it the week it matters.
+  `scripts/catalog-diff.ts` compares `models` and `failures` only, and is unit-tested in both
+  directions.
+- **No `--allow-partial` on a schedule.** The generator refuses a partial write by design; a
+  scheduled job is exactly where a 503 on five of seventeen seeds would silently delete 29% of the
+  product. A red run is the intended outcome of a bad fetch.
+- **The whole gate runs inside the refresh job, before the PR is opened.** GitHub deliberately does
+  not trigger workflows on a push made with `GITHUB_TOKEN`, so the pull request it opens gets no CI
+  of its own. Verifying in the same job is what stops a new model with an attention shape the
+  engine cannot price arriving in a green-looking PR.
+
+**`deploy.yml`** publishes `dist/` to GitHub Pages on every push to `main`. It is written, valid,
+and **has never run**, because Pages is not enabled for the repository — the same GitHub Pro
+constraint that blocks the branch ruleset. Rather than fail red on every push and say nothing about
+the commit that triggered it, a preflight job checks whether Pages exists and skips the deploy with
+an explanatory notice.
+
+Two settings are deliberately variables rather than committed values, because both are still
+undecided and both fail _quietly_ when wrong:
+
+| Variable              | Default | What it is for                                                                               |
+| --------------------- | ------- | -------------------------------------------------------------------------------------------- |
+| `PAGES_BASE_PATH`     | `/`     | Vite's `base`. A Pages _project_ site serves from `/bench/`; a custom domain serves from `/` |
+| `PAGES_CUSTOM_DOMAIN` | unset   | Written to `dist/CNAME` each deploy, since Pages drops the domain otherwise                  |
+
+A wrong `base` produces a blank page with 404s in the console, not a build error — which is why it
+is an input with a documented default rather than something inferred from the environment.
 
 ## Decisions already made
 
@@ -286,11 +330,66 @@ reading the test that guards them.
   343/320 — the sideways scroll the wrap was added to remove, returning in the one setting a reader
   most needs it gone. `min-w-[min(12rem,100%)]` yields instead, and is identical at the default
   root. Worth checking on any `min-w-`/`w-` in rem that a narrow layout depends on.
-- **Reflow at 200% text is not clean yet, and the legend was not the only offender.** Probing the
-  above at a 32px root found `Matrix.tsx`'s "N of M combinations run" line — an explicit
-  `whitespace-nowrap` — taking the document to 409/320 on its own. It predates the legend work and
-  is filed rather than fixed here; the point for next time is that the probe which proves your fix
-  is also the cheapest audit of its neighbours.
+- **Reflow at 200% text is a different test from reflow at 320px, and the page passed one while
+  failing the other by 89px.** WCAG 1.4.10 asks about a narrow viewport at the default text size,
+  which this app already satisfied; 1.4.4 asks about text scaled to 200%, which browsers do by
+  growing the root font size and leaving the viewport alone. So every rem-derived width and every
+  `whitespace-nowrap` line grows and nothing gives them more room. Fixed in #35, and the shape of
+  the fix is the point: the filed instance was one of four identical `whitespace-nowrap` panel
+  headers, now one `PanelCount` that protects the numeral pair — "12 of 425" broken across a line
+  reads as two unrelated numbers — and lets the noun after it wrap like the prose it is.
+
+  **The second offender was not a nowrap at all, and would not have been found by fixing the first
+  one.** A non-wrapping flex row's min-content is the _sum_ of its children, and the segmented KV
+  control sets the width of its grid column — so four options at a 32px root widened three `w-full`
+  sliders in a panel the control is not part of, and it was the _sliders_ that left the viewport.
+  `flex-wrap` makes the floor the widest single option instead. Two separate mechanisms, one
+  symptom; the probe that proved the first fix is what found the second, which is the general
+  lesson worth keeping.
+
+  **The third offender was padding, and only CI could see it.** Both fixes above passed locally
+  with 18px to spare and failed on the Linux runner by 4px, on markup neither run had changed. The
+  cause is that the app's font stack — `ui-sans-serif, system-ui, -apple-system, 'Segoe UI', …` —
+  resolves to SF on a Mac and to fontconfig's default sans on a runner, which is wider. **The
+  overflow was real, not an artefact**: the page genuinely scrolled sideways for anyone whose
+  system sans is wider than SF, which is most Linux users and any Windows machine not reaching
+  Segoe UI. Measuring on one machine's typography is measuring the machine.
+
+  The lever was padding, because at a 32px root the shell consumed **146 of 320px — 46% of the
+  viewport** before any content was laid out. `p-4`/`p-5` are rem-derived, so they grow with the
+  text while the viewport does not. Every one is now `p-[min(1rem,4vw)]` / `p-[min(1.25rem,5vw)]`,
+  which is identical at the default root and yields only when the root font has outgrown the
+  screen — the same shape as the `min-w-[min(12rem,100%)]` fix in #34, and the general form of that
+  lesson: **a rem length in a layout a narrow viewport depends on wants a viewport term beside it.**
+
+  `e2e/reflow.spec.ts` now runs every scenario twice, once at the host's own fonts and once at
+  `'Courier New', monospace` — deliberately wider than any UI sans, and present or metric-aliased
+  on all three platforms. That is what makes the verdict portable rather than a description of the
+  machine that ran it, and reverting the padding fix now fails on a Mac. Two details that cost a
+  round each: Verdana is **not** wide enough to reproduce the CI failure locally, so a spec written
+  at Verdana would have shipped the same green-here-red-there result again; and the font has to be
+  set through `--font-sans`, because `body` sets `font-family: var(--font-sans)` and an inline
+  `style.fontFamily` on `<html>` loses to it silently. The spec asserts the stress font really is
+  wider than the host's before trusting any of it.
+
+  It holds at 200% only. Past a 40px root the page is **not** clean — long single words like
+  "Unsupported" and the slider labels start escaping — and that is recorded rather than fixed,
+  because 1.4.4 stops at 200% and "the bar is met" is a different claim from "the layout is
+  unbreakable".
+
+- **The numeral pair's nowrap cannot be falsified by geometry, and the spec says so.** "67 of 408"
+  is short enough that it never breaks on its own at any root size from 32px to 64px — measured,
+  not assumed — so `getClientRects().length === 1` is true with the class and true without it. The
+  spec asserts the computed style instead. Worth stating because writing the geometry version is
+  the obvious move and it would pass against markup with the protection deleted.
+
+- **A touch-target spec that names its controls will always be out of date.** The old one measured
+  the three Matrix toggles it knew about, and three 16px buttons on other surfaces went unnoticed
+  until someone looked (#29). It sweeps now: every pointer target on the page, with the `sr-only`
+  radios resolved to the label that actually receives the tap, and both disclosures opened first —
+  half the page's controls do not exist until something opens them, including the Envelope's table.
+  Exemptions are data with a written reason, and each is asserted to still match an element, since
+  an exception list is the one part of a sweep that fails open.
 
 **Verdicts**
 
@@ -452,7 +551,12 @@ section is for the questions those issues cannot settle.
 - **Device specs need a verification pass before publishing.** Bandwidth is the number that
   governs everything and the one vendors bury. The `rumored` row (M5 Ultra) is press-rumour grade
   and must stay visibly labelled in the UI.
-- **Final subdomain** on zoller.ai.
+- **Final subdomain** on zoller.ai, and **Pages is not enabled**, which blocks publishing
+  regardless of the domain. Both are account-level decisions rather than code: enabling Pages on a
+  private repo needs a paid plan, and making the repo public would do it for free while also
+  restoring the branch ruleset above. The workflow is written and waits on whichever is chosen; the
+  domain then becomes the `PAGES_CUSTOM_DOMAIN` variable and `PAGES_BASE_PATH` stays `/`. Tracked
+  as an issue so it is not carried only here.
 
 ## Verification
 

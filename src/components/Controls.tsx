@@ -135,7 +135,15 @@ export function Segmented<T extends string>({
       <legend className="text-xs font-medium tracking-wide text-[var(--color-text-faint)] uppercase">
         {label}
       </legend>
-      <div className="flex gap-1 rounded-md border border-[var(--color-control-border)] bg-[var(--color-surface-raised)] p-1">
+      {/* `flex-wrap`, because a non-wrapping row's min-content is the *sum* of its options and
+          that is a floor the viewport cannot argue with. It is not the control that overflowed:
+          the row sets the width of its grid column, and every `w-full` slider sharing that column
+          inherits it — so at a 32px root the whole Usage panel scrolled the page sideways on the
+          strength of four KV options. Wrapping makes the floor the widest single option instead.
+          The labels keep `flex-1`, whose zero basis is safe here only because each has a
+          `min-width: auto` floor of its own text; that is what stops a wrapped line collapsing
+          the way the Matrix legend's ramp did (#35). */}
+      <div className="flex flex-wrap gap-1 rounded-md border border-[var(--color-control-border)] bg-[var(--color-surface-raised)] p-1">
         {options.map((option) => {
           const active = option.value === value;
           return (

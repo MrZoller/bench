@@ -257,7 +257,7 @@ export function Bench() {
   );
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-5 p-4 sm:p-6">
+    <div className="mx-auto flex max-w-6xl flex-col gap-5 p-[min(1rem,4vw)] sm:p-6">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">bench</h1>
@@ -277,7 +277,10 @@ export function Bench() {
       </header>
 
       {/* Setup: what you are running, and on what. */}
-      <section aria-label="Configuration" className="panel grid gap-4 p-5 sm:grid-cols-2">
+      <section
+        aria-label="Configuration"
+        className="panel grid gap-4 p-[min(1.25rem,5vw)] sm:grid-cols-2"
+      >
         <Select
           label="Model"
           value={config.modelId}
@@ -325,7 +328,7 @@ export function Bench() {
       {(substitution || kvSubstitution) && (
         <div
           role="note"
-          className="panel flex flex-col gap-2 border-[var(--color-warning)] p-4 text-sm leading-relaxed text-[var(--color-text-muted)]"
+          className="panel flex flex-col gap-2 border-[var(--color-warning)] p-[min(1rem,4vw)] text-sm leading-relaxed text-[var(--color-text-muted)]"
         >
           {substitution && (
             <p>
@@ -366,7 +369,7 @@ export function Bench() {
       <Matrix config={config} />
 
       {/* Usage: the half of the question that is about you, not the hardware. */}
-      <section aria-label="Usage" className="panel grid gap-5 p-5 sm:grid-cols-2">
+      <section aria-label="Usage" className="panel grid gap-5 p-[min(1.25rem,5vw)] sm:grid-cols-2">
         <StopSlider
           label="Context per sequence"
           stops={contextStops}
@@ -416,7 +419,7 @@ export function Bench() {
        * small per-token read. Shown only when the distinction exists.
        */}
       {model.expertParams > 0 && (
-        <aside className="panel p-5 text-sm leading-relaxed text-[var(--color-text-muted)]">
+        <aside className="panel p-[min(1.25rem,5vw)] text-sm leading-relaxed text-[var(--color-text-muted)]">
           <h2 className="mb-1 text-sm font-semibold text-[var(--color-text)]">
             {/*
               The heading follows the verdict, and `fits` alone is not the verdict: it is computed
