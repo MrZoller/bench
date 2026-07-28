@@ -320,8 +320,10 @@ export function compare(
       }
       lines.push('');
       lines.push(
-        '> The generator wrote one id more than once. Whichever row comes last is the one the ' +
-          'app loads, so the others are invisible in the product and in the fields table above.'
+        '> The generator wrote one id more than once. `MODELS` keeps every row, so the model ' +
+          'picker and the comparison grid will each list it twice — while `getModel` resolves the ' +
+          'id to whichever row comes last. The two surfaces will disagree about the same model, ' +
+          'and the fields table above describes only the row that wins.'
       );
     }
 

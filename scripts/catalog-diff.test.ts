@@ -575,6 +575,26 @@ describe('a repeated id is reported wherever it appears', () => {
     expect(result.summary).toMatch(/\| `a\/One` \| 0 \| 2 \|/);
   });
 
+  /**
+   * The warning has to describe what a duplicate actually does, or it is worse than no warning:
+   * it sends a reviewer looking for a row that vanished when what really happens is that the same
+   * model appears twice. `MODELS` is `modelsJson.models.map(toModel)` and keeps every row, so both
+   * the Bench picker and the Matrix — which spread `MODELS` — list it twice; only `getModel`, via
+   * `MODELS_BY_ID`, is last-wins. That disagreement is the thing to look for.
+   */
+  it('describes what a duplicate really does to the product', () => {
+    const result = compare(
+      catalog([one('a/One')]),
+      catalog([one('a/One'), one('a/One', { layers: 40 })])
+    );
+
+    expect(result.summary).toMatch(/picker/i);
+    expect(result.summary).toMatch(/twice/i);
+    expect(result.summary).toMatch(/disagree/i);
+    // The claim that was wrong: the extra rows are not invisible, they are duplicated on screen.
+    expect(result.summary).not.toMatch(/invisible in the product/i);
+  });
+
   it('does not call a row gaining a duplicate a reordering', () => {
     // `added` and `removed` track presence only, so `[a] → [a, a]` passes both while the id
     // sequences differ in length. Nothing was reordered; a row was duplicated.
