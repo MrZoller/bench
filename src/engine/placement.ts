@@ -238,6 +238,62 @@ export function normalizeRig(rig: Rig): Rig {
 }
 
 /**
+ * The prompt a scenario is actually timed at, including the default when none is stated.
+ *
+ * Stated here rather than inline in `estimatePrefill` because it is no longer only prefill's
+ * business: `clampUsageToContext` has to know how much of the window the prompt will occupy in
+ * order to work out what is left for a cached prefix. A boundary written down twice is a boundary
+ * that will disagree with itself — the mistake `cachedPrefix` in `verdict.ts` already carries a
+ * comment about.
+ */
+export function effectivePromptTokens(usage: UsageSpec): number {
+  return Math.max(1, usage.promptTokens ?? Math.floor(Math.max(1, usage.contextTokens) * 0.9));
+}
+
+/**
+ * Narrow a scenario to one cell's own context.
+ *
+ * The Envelope and the Matrix both evaluate a grid of contexts against usage chosen for a single
+ * point, so both have to answer the same question: what does this scenario mean in a column
+ * narrower than the one it was written for. The answer is that a cell's figures must describe a
+ * request that cell can actually hold, which is a property of the whole working set and not of any
+ * one field.
+ *
+ * `promptTokens` is capped at the context because the prompt is *part* of the context — a 32K
+ * prompt in a 2K column describes a request that cannot be made. `cachedPrefixTokens` is part of
+ * it in exactly the same way, and is capped at whatever room the prompt leaves rather than at the
+ * context itself: a prefix is tokens already resident when the prompt arrives, so a prompt and a
+ * prefix that each fit alone but not together still overflow the window. This is the same
+ * arithmetic `verdict.ts` does from the other side, deriving a prefix as the window minus what the
+ * turn needs.
+ *
+ * The prefix clamp is the one that was missing, and it is the more expensive omission of the two:
+ * decode ignores the prefix, but prefill charges every new token for attending over it, so an
+ * unclamped prefix inflates time-to-first-token without bound — a 2K column was timed against a
+ * 49K resident session, and a prefix past the model's own limit took one Matrix cell from 16 s to
+ * 273 s.
+ */
+export function clampUsageToContext(usage: UsageSpec, contextTokens: number): UsageSpec {
+  const promptTokens =
+    usage.promptTokens === undefined ? undefined : Math.min(usage.promptTokens, contextTokens);
+  // Against the effective prompt, not the stated one, so a scenario that leaves `promptTokens`
+  // unset is held to the same bound as one that spells it out. The Envelope leaves it unset.
+  const room = Math.max(
+    0,
+    contextTokens - effectivePromptTokens({ ...usage, contextTokens, promptTokens })
+  );
+
+  return {
+    ...usage,
+    contextTokens,
+    ...(promptTokens === undefined ? {} : { promptTokens }),
+    ...(usage.cachedPrefixTokens === undefined
+      ? {}
+      : { cachedPrefixTokens: Math.min(usage.cachedPrefixTokens, room) }),
+  };
+}
+
+/**
  * How many ways the KV cache actually divides across a tensor-parallel rig.
  *
  * Weights shard cleanly to any degree; KV does not, and assuming it does is optimistic in the

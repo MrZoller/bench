@@ -1,5 +1,5 @@
 import type { ModelSpec, QuantSpec, Rig, RuntimeSpec, UsageSpec } from './types';
-import { planPlacement, raisingCeilingWouldHelp } from './placement';
+import { clampUsageToContext, planPlacement, raisingCeilingWouldHelp } from './placement';
 import { estimateDecode, estimatePrefill } from './speed';
 
 /**
@@ -122,7 +122,7 @@ export function computeEnvelope(request: EnvelopeRequest): EnvelopeGrid {
   const cells = concurrencies.map((concurrency) =>
     contexts.map((contextTokens) => {
       /**
-       * The prompt is clamped to the cell's own context, not carried across from the slider.
+       * The working set is clamped to the cell's own context, not carried across from the slider.
        *
        * `coerce` already enforces this for the selected scenario, and for the same reason: the
        * prompt is *part* of the context, so a 32K prompt in a 2K column describes a request that
@@ -130,15 +130,12 @@ export function computeEnvelope(request: EnvelopeRequest): EnvelopeGrid {
        * until prefill was added here — at which point every column was timed for a prompt six of
        * seven of them cannot hold, and the whole region went amber at 41 s the moment the prompt
        * slider passed 16K.
+       *
+       * `clampUsageToContext` rather than a clamp written out here, because the same reasoning
+       * covers `cachedPrefixTokens` and this function applied it to only one of the two for as
+       * long as both existed. See its docblock.
        */
-      const cellUsage: UsageSpec = {
-        ...usage,
-        contextTokens,
-        concurrency,
-        ...(usage.promptTokens === undefined
-          ? {}
-          : { promptTokens: Math.min(usage.promptTokens, contextTokens) }),
-      };
+      const cellUsage: UsageSpec = clampUsageToContext({ ...usage, concurrency }, contextTokens);
       const placement = planPlacement(model, quant, cellUsage, rig, runtime);
 
       // A runtime that cannot drive this hardware is a different failure from running out of

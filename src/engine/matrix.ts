@@ -1,5 +1,10 @@
 import type { ModelSpec, DeviceSpec, QuantSpec, RuntimeSpec, UsageSpec } from './types';
-import { planPlacement, raisingCeilingWouldHelp, wasEvaluated } from './placement';
+import {
+  clampUsageToContext,
+  planPlacement,
+  raisingCeilingWouldHelp,
+  wasEvaluated,
+} from './placement';
 import { estimateDecode, estimatePrefill } from './speed';
 
 /**
@@ -87,11 +92,15 @@ export function computeMatrix(request: MatrixRequest): MatrixCell[][] {
        * that cell then produced different numbers in the Bench, where `coerce` does clamp.
        */
       const contextTokens = Math.min(usage.contextTokens, model.maxContext);
-      const cellUsage: UsageSpec = {
-        ...usage,
-        contextTokens,
-        promptTokens: Math.min(usage.promptTokens ?? contextTokens, contextTokens),
-      };
+      // Through `clampUsageToContext` so `cachedPrefixTokens` is held to the row's context too —
+      // it is part of the working set in the same way the prompt is, and left unclamped a prefix
+      // past the model's own limit took one cell from 16 s to 273 s. The prompt still defaults to
+      // the whole context here, which is this grid's reading and not the Envelope's: a row is
+      // scored for the largest request it can accept.
+      const cellUsage: UsageSpec = clampUsageToContext(
+        { ...usage, promptTokens: usage.promptTokens ?? contextTokens },
+        contextTokens
+      );
 
       const base = {
         modelId: model.id,

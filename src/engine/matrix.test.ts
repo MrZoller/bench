@@ -278,3 +278,47 @@ describe('a tunable allocation ceiling is not a hardware limit', () => {
     expect(cell.blockedBy).toMatch(/vLLM/);
   });
 });
+
+/**
+ * A row is capped at its own model's context, and the working set has to be capped with it. The
+ * prompt was; the cached prefix was not, so a prefix past a model's own limit was charged against
+ * every new token — one cell went from 16 s to 273 s on a figure the row cannot hold.
+ */
+describe('per-row working-set limits', () => {
+  const grid = (usage: Parameters<typeof computeMatrix>[0]['usage']) =>
+    computeMatrix({
+      models: [LLAMA_31_8B],
+      devices: [RTX_5090],
+      quantFor: () => getQuant('q4_k_m'),
+      runtime: LLAMA_CPP,
+      usage,
+      deviceCount: 1,
+    })[0][0];
+
+  it('ignores a cached prefix past the context of its own row', () => {
+    const base = { contextTokens: 65536, concurrency: 1, kvPrecision: 'fp16' as const };
+
+    // The prompt defaults to the whole row context here, so there is no room for a prefix beside
+    // it — and a prefix eight times the model's own limit is not a request anyone can make.
+    const without = grid(base);
+    const beyond = grid({ ...base, cachedPrefixTokens: 1_000_000 });
+
+    expect(beyond.ttftSeconds).toBe(without.ttftSeconds);
+    expect(beyond.contextTokens).toBe(without.contextTokens);
+  });
+
+  it('still charges for a prefix the row has room to hold', () => {
+    // Guards the clamp against being satisfied by discarding the prefix outright: a resident
+    // session that fits beside the prompt is real work, and prefill has to price it.
+    const base = {
+      contextTokens: 65536,
+      concurrency: 1,
+      promptTokens: 2048,
+      kvPrecision: 'fp16' as const,
+    };
+
+    expect(grid({ ...base, cachedPrefixTokens: 32768 }).ttftSeconds).toBeGreaterThan(
+      grid(base).ttftSeconds
+    );
+  });
+});

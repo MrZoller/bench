@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_HOST_BANDWIDTH,
   allocatablePerDevice,
+  clampUsageToContext,
+  effectivePromptTokens,
   maxAllocatablePerDevice,
   raisingCeilingWouldHelp,
   canShard,
@@ -705,5 +707,77 @@ describe('a rig is only sharded when its devices can talk to each other', () => 
   it('leaves a single device of unshardable hardware alone', () => {
     const plan = planPlacement(LLAMA_31_8B, getQuant('q4_k_m'), usage(4096), macRig(1), MLX);
     expect(plan.unsupported).toBeUndefined();
+  });
+});
+
+/**
+ * The grids evaluate a scenario chosen at one point against a whole row of contexts, so every
+ * field that describes the working set has to be narrowed to the cell being drawn. The prompt was;
+ * the cached prefix was not, for as long as both existed.
+ */
+describe('a scenario narrowed to one cell holds its whole working set', () => {
+  const scenario = (over: Partial<UsageSpec> = {}): UsageSpec => ({
+    contextTokens: 65536,
+    concurrency: 1,
+    kvPrecision: 'fp16',
+    ...over,
+  });
+
+  it('caps the prompt at the context it is being asked about', () => {
+    const narrowed = clampUsageToContext(scenario({ promptTokens: 32768 }), 2048);
+
+    expect(narrowed.contextTokens).toBe(2048);
+    expect(narrowed.promptTokens).toBe(2048);
+  });
+
+  it('caps the cached prefix at the room the prompt leaves, not at the context', () => {
+    // Both fit the window alone. Together they are three times it, which is a session that
+    // cannot be resident while that prompt is being read.
+    const narrowed = clampUsageToContext(
+      scenario({ promptTokens: 2048, cachedPrefixTokens: 4096 }),
+      2048
+    );
+
+    expect(narrowed.promptTokens).toBe(2048);
+    expect(narrowed.cachedPrefixTokens).toBe(0);
+  });
+
+  it('never lets the prompt and the prefix exceed the window between them', () => {
+    for (const contextTokens of [512, 2048, 8192, 65536]) {
+      for (const promptTokens of [1, 1024, 40000, 200000]) {
+        for (const cachedPrefixTokens of [0, 1024, 50000, 1_000_000]) {
+          const narrowed = clampUsageToContext(
+            scenario({ promptTokens, cachedPrefixTokens }),
+            contextTokens
+          );
+
+          expect(
+            effectivePromptTokens(narrowed) + (narrowed.cachedPrefixTokens ?? 0)
+          ).toBeLessThanOrEqual(contextTokens);
+        }
+      }
+    }
+  });
+
+  it('holds an unstated prompt to the same bound as a stated one', () => {
+    // The Envelope leaves `promptTokens` unset, so the prefix has to be measured against the
+    // default prefill uses — 90% of the window — rather than against the whole window.
+    const narrowed = clampUsageToContext(scenario({ cachedPrefixTokens: 1_000_000 }), 8192);
+
+    expect(narrowed.promptTokens).toBeUndefined();
+    expect(narrowed.cachedPrefixTokens).toBe(8192 - Math.floor(8192 * 0.9));
+  });
+
+  it('leaves a working set that already fits entirely alone', () => {
+    const fits = scenario({ contextTokens: 8192, promptTokens: 2048, cachedPrefixTokens: 4096 });
+
+    expect(clampUsageToContext(fits, 8192)).toEqual(fits);
+  });
+
+  it('does not invent fields the scenario did not state', () => {
+    const narrowed = clampUsageToContext(scenario(), 4096);
+
+    expect(narrowed.promptTokens).toBeUndefined();
+    expect(narrowed.cachedPrefixTokens).toBeUndefined();
   });
 });
