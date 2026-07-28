@@ -78,13 +78,34 @@ const STATE_STYLE: Record<CellState, { fill: string; label: string; hint: string
 };
 
 /**
- * Narrowest a column may be, in CSS pixels.
+ * Narrowest a column may be, in `rem`.
  *
  * Set by the widest label the axis can produce: `uniqueLabels` falls back to an exact count like
- * "131,072" when two columns would otherwise share a header, and that needs about 50px at 10px
- * type. Below this the container scrolls rather than the labels overlapping.
+ * "131,072" when two columns would otherwise share a header, and that needs about 50px at the
+ * label's own size. Below this the container scrolls rather than the labels overlapping.
+ *
+ * **In `rem` rather than pixels, because it is a floor on text.** 3.25rem is 52px at the default
+ * root, which is what this was written as — and when the labels were made to scale (#42) a pixel
+ * floor would have left 200% text overlapping inside a column sized for 100%. A length derived
+ * from a glyph width is only correct at the root size it was measured at, and this one is derived
+ * from a glyph width.
  */
-const MIN_COLUMN_PX = 52;
+const MIN_COLUMN_REM = 3.25;
+
+/**
+ * The axis labels' size.
+ *
+ * 0.625rem is 10px at the default root — identical to the `text-[10px]` it replaces, and unlike
+ * it, responsive to the browser's text-size setting. Absolute pixel type does not scale at all,
+ * so at 200% every other figure on the page doubled while these stayed put: a WCAG 1.4.4 failure
+ * outright, and worse than the raw numbers suggest, because the labels became *relatively* half
+ * the size on the surface a low-vision reader had just asked to enlarge (#42).
+ *
+ * Still the smallest type in the app, deliberately. Density is real — the column floor above is
+ * set by this size, and larger labels mean fewer columns before the axis scrolls — but that is a
+ * trade against the viewport, not against the reader's own setting, and the two were conflated.
+ */
+const AXIS_LABEL = 'text-[0.625rem]';
 
 export function Envelope({ config }: { config: Config }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -240,7 +261,7 @@ export function Envelope({ config }: { config: Config }) {
         */}
         <ol
           aria-hidden="true"
-          className="tabular grid h-48 text-[10px] text-[var(--color-text-faint)]"
+          className={`tabular grid h-48 ${AXIS_LABEL} text-[var(--color-text-faint)]`}
           style={{ gridTemplateRows: `repeat(${grid.concurrencies.length}, 1fr)` }}
         >
           {[...grid.concurrencies].reverse().map((n) => (
@@ -261,7 +282,7 @@ export function Envelope({ config }: { config: Config }) {
           aligned with their headers.
         */}
         <div className="min-w-0 flex-1 overflow-x-auto">
-          <div style={{ minWidth: `${grid.contexts.length * MIN_COLUMN_PX}px` }}>
+          <div style={{ minWidth: `${grid.contexts.length * MIN_COLUMN_REM}rem` }}>
             <canvas
               ref={canvasRef}
               role="img"
@@ -270,7 +291,7 @@ export function Envelope({ config }: { config: Config }) {
             />
             <ol
               aria-hidden="true"
-              className="tabular mt-1 grid text-[10px] text-[var(--color-text-faint)]"
+              className={`tabular mt-1 grid ${AXIS_LABEL} text-[var(--color-text-faint)]`}
               style={{ gridTemplateColumns: `repeat(${grid.contexts.length}, 1fr)` }}
             >
               {grid.contexts.map((c, i) => (

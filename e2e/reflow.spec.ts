@@ -31,13 +31,41 @@ import { expect, test, type Page } from '@playwright/test';
 const NARROW = { width: 320, height: 900 };
 
 /**
- * 32px, because the browser default is 16px and this is a 200% test.
+ * The widths where the layout is a different layout.
  *
- * Stated as a doubling of the default rather than as an absolute, since that is the thing the
- * success criterion actually asks for. Past this the page is *not* clean — at a 40px root
- * ("250%") long single words like "Unsupported" and the slider labels start escaping. That is
- * filed rather than fixed: 1.4.4 stops at 200%, and the honest statement is that the bar is met
- * rather than that the layout is unbreakable.
+ * 320 was the only one this file measured at first, which is below every breakpoint — so **every
+ * `sm:` rule was inactive in the entire suite** (#41). The stacked single-column layout was proven
+ * to reflow and the multi-column grids were never tested at 200% at all, which is a different
+ * question: `sm:grid-cols-2` and `sm:grid-cols-3` divide the viewport among two or three tracks,
+ * so each has less room than the single column had, not more.
+ *
+ * Under real 200% text these widths straddle the boundaries rather than sitting near them. `sm` is
+ * 40rem, which is **1280px** once the browser default is 32px, and `lg` is 2048px — so 640 is a
+ * stacked column here, 1280 is `sm`'s three columns at their tightest reachable size, and 1920 is
+ * still `sm` with room. All four are ordinary devices, and the run does not have to reason about
+ * which layout each produces, because the project performs the zoom rather than imitating it —
+ * see `playwright.config.ts`.
+ *
+ * **This list assumes `sm:` is the only breakpoint the app uses**, which is true today and is not
+ * self-maintaining: `1280` is chosen as `sm`'s tightest reachable width, and an `lg:` rule added
+ * later would activate at 2048px under real zoom, which nothing here measures. Add a width when a
+ * breakpoint is added, or the sweep goes back to reporting on layouts it never rendered.
+ */
+const VIEWPORTS = [
+  { name: '320px, a phone', size: NARROW },
+  { name: '640px, a small tablet', size: { width: 640, height: 900 } },
+  { name: '1280px, a laptop — sm at 200%', size: { width: 1280, height: 900 } },
+  { name: '1920px, a desktop', size: { width: 1920, height: 1080 } },
+] as const;
+
+/**
+ * 32px, because the browser default is 16px and this is a 200% test. Set by the `reflow`
+ * project's launch switch, not by this file — see `playwright.config.ts`.
+ *
+ * Named as a doubling of the default rather than as an absolute, since that is what the success
+ * criterion asks for. Past this the page is *not* clean — around 250% long single words like
+ * "Unsupported" and the slider labels start escaping. That is recorded rather than fixed: 1.4.4
+ * stops at 200%, and "the bar is met" is a different claim from "the layout is unbreakable".
  */
 const ROOT_200 = 32;
 
@@ -115,19 +143,19 @@ async function assertScenarioLoaded(page: Page, expected: RegExp) {
   ).toContainText(expected);
 }
 
-async function scaleRoot(page: Page, px: number, font?: string) {
-  await page.evaluate(
-    ({ v, f }) => {
-      document.documentElement.style.fontSize = `${v}px`;
-      if (f) document.documentElement.style.setProperty('--font-sans', f);
-    },
-    { v: px, f: font }
-  );
-  // The scaled root relayouts everything; wait for it to settle before measuring.
-  await page.waitForFunction(
-    (v) => getComputedStyle(document.documentElement).fontSize === `${v}px`,
-    px
-  );
+/**
+ * Applies the stress font, if one is asked for. The root font size is not touched — the browser
+ * is already at 32px by the time the page loads, which is the whole point of the project.
+ *
+ * Through `--font-sans` rather than an inline `font-family`: `body` sets
+ * `font-family: var(--font-sans)`, so a `style.fontFamily` on `<html>` loses to that rule and
+ * changes nothing — which it silently did, in an earlier draft.
+ */
+async function useStressFont(page: Page, font?: string) {
+  if (!font) return;
+  await page.evaluate((f) => {
+    document.documentElement.style.setProperty('--font-sans', f);
+  }, font);
 }
 
 /**
@@ -180,7 +208,7 @@ async function escapees(page: Page) {
   });
 }
 
-test.describe('at 200% text size on a 320px viewport', () => {
+test.describe('at 200% text size', () => {
   test.beforeEach(async ({ page }) => {
     await page.setViewportSize(NARROW);
   });
@@ -189,23 +217,90 @@ test.describe('at 200% text size on a 320px viewport', () => {
    * The precondition, asserted before any width is.
    *
    * Same reasoning as the touch project asserting `(pointer: coarse)` matches before measuring a
-   * hit target: if the root never scaled, every assertion below runs at the default text size,
-   * where the defect does not exist and all of them pass. A test that cannot fail is worse than
-   * no test, and this suite has already produced three.
+   * hit target: if the launch switch stopped working, every assertion below would run at the
+   * default text size, where the defects do not exist and all of them pass. `--blink-settings` is
+   * a Blink-internal switch with no stability promise, so this is the test that turns a silent
+   * downgrade into a loud one.
    */
-  test('the probe actually scales the root font size', async ({ page }) => {
+  test('the browser really is at 200% text', async ({ page }) => {
     await page.goto('/');
-    const before = await page.evaluate(() =>
-      parseFloat(getComputedStyle(document.querySelector('h1')!).fontSize)
-    );
 
-    await scaleRoot(page, ROOT_200);
+    const sizes = await page.evaluate(() => ({
+      root: parseFloat(getComputedStyle(document.documentElement).fontSize),
+      heading: parseFloat(getComputedStyle(document.querySelector('h1')!).fontSize),
+    }));
 
-    const after = await page.evaluate(() =>
-      parseFloat(getComputedStyle(document.querySelector('h1')!).fontSize)
+    expect(sizes.root, 'the launch switch did not take — this is a 100% run').toBe(ROOT_200);
+    // `text-xl` is 1.25rem, so 40px at this root and 20px at the default. Asserted so a change
+    // that pinned the root while leaving rem-derived text alone would still fail here.
+    expect(sizes.heading, 'rem-derived text did not follow the root').toBeCloseTo(
+      ROOT_200 * 1.25,
+      0
     );
-    expect(before, 'the page does not start at the 16px default root').toBeGreaterThan(0);
-    expect(after / before, 'scaling the root did not scale rem-derived text').toBeCloseTo(2, 1);
+  });
+
+  /**
+   * And that the **breakpoints moved with the text**, which is the reason this project exists.
+   *
+   * Tailwind's breakpoints are `rem`, and `rem` inside a media query resolves against the
+   * browser's default font size — not against an author-set `documentElement.style.fontSize`. So
+   * simulating zoom by setting the root leaves every breakpoint where it was, and the page ends up
+   * in layout states no reader can reach: an earlier draft of this file reported three columns
+   * crushed into 213px each at 640px, a state that exists only because the breakpoint did not
+   * move.
+   *
+   * Performing the zoom fixes that, and this is the assertion that says so. `sm` is 40rem, which
+   * is 1280px at this root rather than 640px — so 640 must be *below* it and 1280 at it.
+   */
+  test('the breakpoints moved with the text, not just the type', async ({ page }) => {
+    const sm = () => page.evaluate(() => matchMedia('(min-width: 40rem)').matches);
+
+    await page.setViewportSize({ width: 640, height: 900 });
+    await page.goto('/');
+    expect(await sm(), '640px is still past sm — the media queries did not scale').toBe(false);
+
+    await page.setViewportSize({ width: 1280, height: 900 });
+    expect(await sm(), '1280px is not past sm — the breakpoint moved too far').toBe(true);
+  });
+
+  /**
+   * And that the *smallest* text scales too, which the heading above does not establish.
+   *
+   * The precondition originally checked only the `<h1>`, proving that rem-derived text responds —
+   * which it always did. Text sized in absolute pixels does not respond at all, and both Envelope
+   * axes were `text-[10px]`: at 200% every other figure doubled while the axis labels stayed at
+   * 10px, failing WCAG 1.4.4 outright and leaving them *relatively* half the size on the surface a
+   * low-vision reader had just asked to enlarge (#42).
+   *
+   * So the assertion is on the axis labels specifically, and it is the check that would have found
+   * them. A page-wide "nothing is absolute" sweep was the alternative and is worse: it would have
+   * to exempt borders, hairlines and icon boxes, and the exemption list is where the next 10px
+   * label would go to hide.
+   */
+  test('the smallest text on the page scales too, not just the headings', async ({ page }) => {
+    await page.goto('/');
+
+    const axisLabel = page
+      .getByRole('region', { name: /how much room is left/i })
+      .locator('ol li')
+      .first();
+    await expect(axisLabel).toBeVisible();
+
+    const measured = await axisLabel.evaluate((el) => ({
+      label: parseFloat(getComputedStyle(el).fontSize),
+      root: parseFloat(getComputedStyle(document.documentElement).fontSize),
+    }));
+
+    expect(measured.label, 'no axis label was measured').toBeGreaterThan(0);
+    // Derived from the root rather than fixed: 0.625rem, which is the 10px it used to be, at the
+    // default root only.
+    expect(measured.label / measured.root, 'the axis label is not rem-derived').toBeCloseTo(
+      0.625,
+      2
+    );
+    // And therefore actually bigger here. This is the assertion a regression to `text-[10px]`
+    // fails, since that renders 10px at every root there is.
+    expect(measured.label, 'the axis labels ignore the text-size setting').toBeGreaterThan(10);
   });
 
   /**
@@ -219,7 +314,7 @@ test.describe('at 200% text size on a 320px viewport', () => {
     await page.goto('/');
     const native = await probeTextWidth(page);
 
-    await scaleRoot(page, ROOT_200, WIDE_FONT);
+    await useStressFont(page, WIDE_FONT);
     const stressed = await probeTextWidth(page);
 
     expect(native, 'nothing was measured').toBeGreaterThan(0);
@@ -227,35 +322,40 @@ test.describe('at 200% text size on a 320px viewport', () => {
   });
 
   /**
-   * Each scenario twice: once at the fonts this host happens to have, and once at an upper bound
-   * on width.
+   * Every scenario, at every breakpoint, at both typographies.
    *
-   * The first is what a reader on this machine gets. The second is what makes the verdict portable
-   * — and it is the one that would have caught the CI failure on a Mac, since the layout was
-   * within 4px of the edge under a font neither this file nor its author had measured.
+   * The two axes cover different failures and neither implies the other. **Font** is what made the
+   * verdict portable — the first version passed on macOS with 18px to spare and failed on CI by
+   * 4px, on markup neither run had changed. **Width** is what stops the suite testing one layout
+   * and reporting on three: below `sm` the page is a single stacked column, and above it the same
+   * content is divided among two or three grid tracks, each with less room than the single column
+   * had. Passing at 320 says nothing about either grid (#41).
    */
-  for (const { name, url, heading } of SCENARIOS) {
-    for (const [typography, font] of [
-      ['this host’s own fonts', undefined],
-      ['a font wider than any it will resolve', WIDE_FONT],
-    ] as const) {
-      test(`the page does not scroll sideways on ${name}, at ${typography}`, async ({ page }) => {
-        await page.goto(url);
-        await assertScenarioLoaded(page, heading);
-        await scaleRoot(page, ROOT_200, font);
+  for (const { name: at, size } of VIEWPORTS) {
+    for (const { name, url, heading } of SCENARIOS) {
+      for (const [typography, font] of [
+        ['this host’s own fonts', undefined],
+        ['a font wider than any it will resolve', WIDE_FONT],
+      ] as const) {
+        test(`no sideways scroll at ${at} on ${name}, at ${typography}`, async ({ page }) => {
+          await page.setViewportSize(size);
+          await page.goto(url);
+          await assertScenarioLoaded(page, heading);
+          await useStressFont(page, font);
 
-        // Named before the numeric assertion, so a failure says which element to fix rather than
-        // only by how much the document is too wide.
-        expect(await escapees(page), 'elements escaping the document').toEqual([]);
+          // Named before the numeric assertion, so a failure says which element to fix rather than
+          // only by how much the document is too wide.
+          expect(await escapees(page), 'elements escaping the document').toEqual([]);
 
-        const doc = await page.evaluate(() => ({
-          scrollWidth: document.documentElement.scrollWidth,
-          clientWidth: document.documentElement.clientWidth,
-        }));
-        expect(doc.scrollWidth, 'the page scrolls sideways at 200% text').toBeLessThanOrEqual(
-          doc.clientWidth + 1
-        );
-      });
+          const doc = await page.evaluate(() => ({
+            scrollWidth: document.documentElement.scrollWidth,
+            clientWidth: document.documentElement.clientWidth,
+          }));
+          expect(doc.scrollWidth, 'the page scrolls sideways at 200% text').toBeLessThanOrEqual(
+            doc.clientWidth + 1
+          );
+        });
+      }
     }
   }
 
@@ -270,7 +370,6 @@ test.describe('at 200% text size on a 320px viewport', () => {
    */
   test('the segmented options wrap rather than summing their widths', async ({ page }) => {
     await page.goto('/');
-    await scaleRoot(page, ROOT_200);
 
     const kv = page.getByRole('group', { name: /kv precision/i });
     await expect(kv).toBeVisible();
@@ -298,7 +397,6 @@ test.describe('at 200% text size on a 320px viewport', () => {
    */
   test('the numeral pair keeps its own nowrap', async ({ page }) => {
     await page.goto('/');
-    await scaleRoot(page, ROOT_200);
 
     const pair = page
       .getByRole('region', { name: /every model on every machine/i })
