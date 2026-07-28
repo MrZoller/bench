@@ -45,9 +45,11 @@ deployment, and the follow-up list in [issues #12–#20](https://github.com/MrZo
 **Correctness debt is tracked as issues, not here.** Four are open once this lands. #9 and #10,
 which graded a configuration as working when it is not, are fixed — together with #11, which
 printed a figure measured at a different scenario from the one its sentence described. Filed as
-three bugs, one class; written up under **Verdicts** below. What remains is labelling (#13), UI
-state (#15), MLX's unmeasured 8-bit KV (#33), and three touch targets too small for a coarse
-pointer (#29). Both engine bugs are fixed: the layer-split spill fraction (#14) and prefill having
+three bugs, one class; written up under **Verdicts** below. MLX's unmeasured 8-bit KV (#33) is
+closed the way #18 was — marked rather than guessed, since the width it wants cannot be measured
+from here; what that leaves open is the measurement itself. What remains is labelling (#13), UI
+state (#15), and three touch targets too small for a coarse pointer (#29). Both engine bugs are
+fixed: the layer-split spill fraction (#14) and prefill having
 no notion of a cached prefix (#23); see **Engine** below. The browser-level test gap (#19) is
 closed, and with it the legend overflow (#34) that only a browser could falsify; see **Tests**
 below.
@@ -419,6 +421,24 @@ section is for the questions those issues cannot settle.
   **What would still resolve it** is measured bits-per-weight for MLX's affine 4- and 8-bit schemes,
   at which point the substitution is deleted rather than explained. That needs real checkpoints on
   Apple hardware; the marker is what makes the interim honest rather than what makes it right.
+
+  **The cache was a second, independent substitution, and it hid behind the first** (#33, closed by
+  extending the marker). `kvElementBytes` falls back to the nominal width when a runtime declares no
+  `kvBytesPerElement` — exact for a float format, not for an affine one. MLX's `--kv-bits 8` is a
+  real flag, so the entry in `kvPrecisions` is not a fiction; what is missing is its _width_, since
+  affine quantization carries a scale and a bias per group. The cache is therefore charged exactly
+  one byte per element, which understates it — in the direction that reports a long-context
+  configuration fitting when it does not, which is the direction this repo cares most about.
+
+  Two things about the shape of the fix. **The axes are independent in both directions**, which is
+  why `substituted` names `nativeKvPrecisions` alongside `nativeFormats` instead of folding them
+  together: MLX at Q4_K_M with an FP16 cache substitutes only weights, and MLX at BF16 with an
+  8-bit cache substitutes only the cache — and that second combination **carried no marker at
+  all**, which is worse than the half-described state the issue was filed about. And **no width was
+  invented.** llama.cpp's 34/32 is derived from a published block layout; the MLX equivalent needs
+  the group size and the scale/bias dtypes confirmed against a real checkpoint on Apple hardware.
+  A plausible number entered without one is precisely the invisible approximation this field exists
+  to abolish, so it is marked and the measurement is tracked as its own issue.
 
 - ~~Codex connector coverage is unconfirmed.~~ **Confirmed working**, and now well characterised.
   Reviews arrive roughly 40 minutes after a push, which is long enough to look like absence — don't

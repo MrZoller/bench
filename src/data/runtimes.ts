@@ -1,4 +1,4 @@
-import type { DeviceSpec, RuntimeSpec } from '@/engine/types';
+import type { DeviceSpec, KvPrecision, RuntimeSpec } from '@/engine/types';
 import { GIB } from '@/engine/types';
 
 /**
@@ -101,6 +101,25 @@ export const RUNTIMES: readonly RuntimeSpec[] = [
       // and no biases, so 16 bpw is exact and it stays. Raised by Codex on PR #32.
       nativeFormats: ['bf16'],
       note: 'MLX quantizes with its own affine scheme and the catalog has no measured entry for it, so another catalogued format of the same nominal width stands in.',
+      /**
+       * FP16 only. `mlx-lm` does have an 8-bit cache — `--kv-bits 8` quantizes it with the same
+       * affine scheme the weights use — so the entry in `kvPrecisions` is real; what is missing is
+       * its *width*. With no `kvBytesPerElement`, it is charged exactly one byte per element.
+       *
+       * That is almost certainly an underestimate, and the direction matters: affine quantization
+       * carries a scale and a bias per group, so the cache costs more than its nominal byte, and
+       * under-charging it reports a long-context configuration fitting when it does not. This repo
+       * cares about that direction more than the other.
+       *
+       * **Not corrected with a guess.** llama.cpp's 34/32 is derived from a published block layout;
+       * the equivalent for MLX needs the group size and the scale/bias dtypes confirmed against a
+       * real checkpoint on Apple hardware, which nobody here has. A plausible width entered without
+       * one is exactly the invented data `substituted` exists to prevent — so it is marked, and the
+       * measurement is tracked separately.
+       */
+      nativeKvPrecisions: ['fp16'],
+      kvNote:
+        'MLX quantizes the cache with the same affine scheme, which carries a scale and a bias per group, and the catalog has no measured width for it — so it is charged its nominal byte, which understates the cache rather than overstating it.',
     },
     kvPrecisions: ['fp16', 'q8'],
     source: 'https://github.com/ml-explore/mlx',
@@ -143,4 +162,26 @@ export function substitutionFor(runtime: RuntimeSpec, quantId: string): string |
   if (!runtime.weightFormats.includes(quantId)) return undefined;
   if (substituted.nativeFormats.includes(quantId)) return undefined;
   return substituted.note;
+}
+
+/**
+ * The same question on the cache axis: is this precision charged a width nobody measured?
+ *
+ * A sibling function rather than a second branch inside `substitutionFor`, because the two answer
+ * about different inputs and a caller can be in one state, the other, or both — MLX at Q4_K_M with
+ * an FP16 cache substitutes only weights, and MLX at BF16 with an 8-bit cache substitutes only the
+ * cache. That second combination is the one that carried no marker at all before #33, and folding
+ * the axes together is how it would come back.
+ */
+export function kvSubstitutionFor(
+  runtime: RuntimeSpec,
+  precision: KvPrecision
+): string | undefined {
+  const substituted = runtime.substituted;
+  if (!substituted) return undefined;
+  // A precision the runtime cannot store is refused by the picker, not explained here — same
+  // reasoning as the weight axis above.
+  if (!runtime.kvPrecisions.includes(precision)) return undefined;
+  if (substituted.nativeKvPrecisions.includes(precision)) return undefined;
+  return substituted.kvNote;
 }

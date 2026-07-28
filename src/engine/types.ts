@@ -385,6 +385,29 @@ export interface RuntimeSpec {
     nativeFormats: readonly string[];
     /** What the substitution is, in one clause, for the marker shown beside those figures. */
     note: string;
+    /**
+     * Cache precisions stored at exactly their nominal width. Everything else in `kvPrecisions`
+     * is charged a width nobody measured.
+     *
+     * **The KV axis is a second, independent substitution, and treating it as part of the first
+     * is what let it hide.** The weight marker fired on MLX at Q4_K_M and stayed silent about the
+     * cache — so an Apple-silicon configuration at 8-bit KV showed a warning describing half of
+     * what was substituted, and the same configuration at BF16 weights showed no warning at all
+     * while still charging its cache a byte nobody measured (#33).
+     *
+     * Required rather than optional, for the reason the object itself is one field: a runtime that
+     * declares a substitution has to state both axes, so "we never thought about the cache" cannot
+     * be spelled the same way as "the cache is exact". Same polarity as `nativeFormats` — a
+     * precision added later is marked until someone says otherwise.
+     *
+     * Distinct from `kvBytesPerElement`, and the two are the honest and the dishonest ways to
+     * handle the same gap. llama.cpp declares a width because its block layout is published and
+     * the figure is derived; MLX cannot, so it is marked instead. Filling in a plausible number
+     * here would be the invisible approximation this whole field exists to abolish.
+     */
+    nativeKvPrecisions: readonly KvPrecision[];
+    /** What the cache substitution is, in one clause. Separate from `note`: different claim. */
+    kvNote: string;
   };
   /** KV cache dtypes the runtime can actually store. */
   kvPrecisions: readonly KvPrecision[];
