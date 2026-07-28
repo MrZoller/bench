@@ -102,27 +102,53 @@ export const RUNTIMES: readonly RuntimeSpec[] = [
       nativeFormats: ['bf16'],
       note: 'MLX quantizes with its own affine scheme and the catalog has no measured entry for it, so another catalogued format of the same nominal width stands in.',
       /**
-       * FP16 only. `mlx-lm` does have an 8-bit cache — `--kv-bits 8` quantizes it with the same
-       * affine scheme the weights use — so the entry in `kvPrecisions` is real; what is missing is
-       * its *width*. With no `kvBytesPerElement`, it is charged exactly one byte per element.
+       * Both of MLX's cache precisions have an established width, so neither is marked.
        *
-       * That is almost certainly an underestimate, and the direction matters: affine quantization
-       * carries a scale and a bias per group, so the cache costs more than its nominal byte, and
-       * under-charging it reports a long-context configuration fitting when it does not. This repo
-       * cares about that direction more than the other.
+       * FP16 is a float — no groups, no metadata, two bytes exactly. The 8-bit cache is derived
+       * below from `mlx-lm`'s own source, the same way llama.cpp's `q8_0` is derived from its
+       * published block layout, which is what this list is for. The weight axis is a different
+       * story and stays marked: MLX's *quantization* formats still have no catalogued entry (#18).
        *
-       * **Not corrected with a guess.** llama.cpp's 34/32 is derived from a published block layout;
-       * the equivalent for MLX needs the group size and the scale/bias dtypes confirmed against a
-       * real checkpoint on Apple hardware, which nobody here has. A plausible width entered without
-       * one is exactly the invented data `substituted` exists to prevent — so it is marked, and the
-       * measurement is tracked separately.
+       * `kvNote` therefore describes nothing today. That is the polarity working, not dead weight:
+       * a precision added to `kvPrecisions` later is marked until someone establishes its width,
+       * and this is the sentence it will be marked with.
        */
-      nativeKvPrecisions: ['fp16'],
+      measuredKvPrecisions: ['fp16', 'q8'],
       kvNote:
-        'MLX quantizes the cache with the same affine scheme, which carries a scale and a bias per group, and the catalog has no measured width for it — so it is charged its nominal byte, which understates the cache rather than overstating it.',
+        'MLX quantizes the cache with the same affine scheme its weights use, which carries a scale and a bias per group, and the catalog has no established width for this precision — so it is charged its nominal figure, which understates the cache rather than overstating it.',
     },
     kvPrecisions: ['fp16', 'q8'],
-    source: 'https://github.com/ml-explore/mlx',
+    /**
+     * **8.5 bits per element, derived from `mlx-lm` rather than guessed.** `QuantizedKVCache`
+     * defaults to `group_size=64, bits=8`, and `mx.quantize` returns three arrays: the packed
+     * data, a scale, and a *bias* — the last being what makes this different from llama.cpp's
+     * scheme. Both scale and bias are stored at `keys.dtype`, so 16 bits each per group of 64:
+     *
+     *     8 + 16/64 + 16/64 = 8.5 bits = 17/16 bytes
+     *
+     * The CLI's `--kv-group-size` defaults to 64 to match. Sources are cited on `source` below.
+     *
+     * It lands on exactly llama.cpp's 34/32 by coincidence rather than by kinship — one fp16 scale
+     * per 32 elements and an fp16 scale *plus* bias per 64 both come to half a bit. Worth stating
+     * so the agreement is not later "simplified" into a shared constant, which would tie two
+     * unrelated formats together and break silently when either changes its group size.
+     *
+     * **The threshold is all-or-nothing, not a blend.** `--quantized-kv-start` defaults to 5000 on
+     * the CLI (0 in the Python API), and it is easy to read as "the first 5,000 tokens stay fp16
+     * and the tail is quantized" — an earlier draft of this comment said exactly that and it is
+     * wrong. `to_quantized` calls `mx.quantize(self.keys, …)` on the *whole* array, so once the
+     * offset crosses the threshold the entire cache converts at once.
+     *
+     * Which makes this figure **exact above 5,000 tokens**, rather than approximate. Below it the
+     * cache is entirely fp16 and really costs 2 bytes per element, so a short-context Apple
+     * configuration is under-charged by ~1.9x here. That is not modelled, because the error is
+     * proportionally largest exactly where the cache is smallest — a 4K cache is a rounding error
+     * against the weights — and because anyone passing `--kv-bits` for memory reasons is the person
+     * most likely to set the start to 0. Every context this tool is interesting at is past 5,000.
+     */
+    kvBytesPerElement: { q8: 17 / 16 },
+    source:
+      'https://github.com/ml-explore/mlx-lm/blob/main/mlx_lm/models/cache.py (QuantizedKVCache: group_size=64, bits=8; scales and biases at keys.dtype), https://github.com/ml-explore/mlx',
   },
 ] as const;
 
@@ -182,6 +208,6 @@ export function kvSubstitutionFor(
   // A precision the runtime cannot store is refused by the picker, not explained here — same
   // reasoning as the weight axis above.
   if (!runtime.kvPrecisions.includes(precision)) return undefined;
-  if (substituted.nativeKvPrecisions.includes(precision)) return undefined;
+  if (substituted.measuredKvPrecisions.includes(precision)) return undefined;
   return substituted.kvNote;
 }

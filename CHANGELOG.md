@@ -37,12 +37,16 @@ This section becomes 0.1.0 on the first deploy.
 
 ### Notes on accuracy
 
-- Every figure derived from a **stand-in format or an unmeasured cache width is marked on screen**.
-  MLX has no catalogued native quantization, so another format of the same nominal width stands in
-  ([#18](https://github.com/MrZoller/bench/issues/18)), and its 8-bit cache is charged one byte per
-  element — a width nobody has measured ([#38](https://github.com/MrZoller/bench/issues/38)). Both
-  are documented approximations rather than invisible ones; the alternative was restricting Apple
-  silicon to BF16, which makes a headline case unusable.
+- **Every cache width is derived from the runtime's own source**, never from its name. llama.cpp's
+  `q8_0` carries a 2-byte scale per 32-element block (34/32 bytes per element); MLX's carries an
+  fp16 scale _and_ bias per group of 64, so 8.5 bits (17/16). Nominal widths would understate both,
+  in the direction that reports a long-context configuration fitting when it does not.
+- Every figure derived from a **stand-in weight format is marked on screen**. MLX has no catalogued
+  native quantization, so another format of the same nominal width stands in
+  ([#18](https://github.com/MrZoller/bench/issues/18)) — a documented approximation rather than an
+  invisible one. The alternative was restricting Apple silicon to BF16, which makes a headline case
+  unusable. The same marker covers any cache precision added without an established width; none
+  currently needs it.
 - **Pre-release hardware is labelled.** The one rumoured device row — the M5 Ultra Mac Studio — is
   press-rumour grade and says so, and the Matrix leaves it out entirely.
 - Throughput is a roofline calibrated to two anchors and asserted within ±30%. It is a band, not a

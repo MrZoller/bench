@@ -54,9 +54,10 @@ prefill having no notion of a cached prefix (#23); see **Engine** below. The bro
 sweeping the class rather than the named instance. The labelling (#13) and clipboard (#15) bugs
 turned out to have been fixed in passing by #25 and #26 and were closed on the evidence.
 
-MLX's unmeasured 8-bit KV (#33) is closed the way #18 was — **marked rather than guessed**, since
-the width it wants cannot be derived from here. What that leaves open is the measurement itself
-(#38), and a contract question that only bites when the measurement lands (#45).
+MLX's 8-bit KV cache (#33) is **derived rather than marked**: `mlx-lm`'s source states the group
+size and the scale-plus-bias dtypes, so the width is 8.5 bits and the catalog says so (#38). That
+forced the contract question the marker always carried (#45) — the field asks whether a width is
+_established_ now, not whether it is nominal.
 
 ## Deployment
 
@@ -82,10 +83,16 @@ nonsense. Three things about it are easy to get wrong and are already wrong once
   engine cannot price arriving in a green-looking PR.
 
 **`deploy.yml`** publishes `dist/` to GitHub Pages on every push to `main`. It is written, valid,
-and **has never run**, because Pages is not enabled for the repository — the same GitHub Pro
-constraint that blocks the branch ruleset. Rather than fail red on every push and say nothing about
-the commit that triggered it, a preflight job checks whether Pages exists and skips the deploy with
-an explanatory notice.
+and **has never run**, because Pages cannot be enabled on this repository. That is confirmed rather
+than assumed — `POST /repos/MrZoller/bench/pages` returns:
+
+```
+422 Your current plan does not support GitHub Pages for this repository.
+```
+
+The same paid-plan constraint that blocks the branch ruleset. Making the repo public lifts both at
+once. Rather than fail red on every push and say nothing about the commit that triggered it, a
+preflight job checks whether Pages exists and skips the deploy with an explanatory notice.
 
 Two settings are deliberately variables rather than committed values, because both are still
 undecided and both fail _quietly_ when wrong:
@@ -582,15 +589,51 @@ section is for the questions those issues cannot settle.
   one byte per element, which understates it — in the direction that reports a long-context
   configuration fitting when it does not, which is the direction this repo cares most about.
 
-  Two things about the shape of the fix. **The axes are independent in both directions**, which is
-  why `substituted` names `nativeKvPrecisions` alongside `nativeFormats` instead of folding them
-  together: MLX at Q4_K_M with an FP16 cache substitutes only weights, and MLX at BF16 with an
-  8-bit cache substitutes only the cache — and that second combination **carried no marker at
-  all**, which is worse than the half-described state the issue was filed about. And **no width was
-  invented.** llama.cpp's 34/32 is derived from a published block layout; the MLX equivalent needs
-  the group size and the scale/bias dtypes confirmed against a real checkpoint on Apple hardware.
-  A plausible number entered without one is precisely the invisible approximation this field exists
-  to abolish, so it is marked and the measurement is tracked as its own issue.
+  **The axes are independent in both directions**, which is why `substituted` names its cache list
+  alongside `nativeFormats` instead of folding them together: MLX at Q4_K_M with an FP16 cache
+  substitutes only weights, and MLX at BF16 with an 8-bit cache substitutes only the cache — and
+  that second combination **carried no marker at all**, which is worse than the half-described
+  state the issue was filed about.
+
+  **Then the width turned out to be derivable, and the marker was the wrong answer** (#38). The
+  first pass concluded it needed "a real checkpoint on Apple hardware, which nobody here has" —
+  wrong for the same reason the `--default-font-size` claim below was wrong: a negative result
+  about a tool, written down without checking the second place. `mlx-lm`'s source states it.
+  `QuantizedKVCache(group_size=64, bits=8)`, and `mx.quantize` returns packed data, a scale, **and
+  a bias** — the last two at `keys.dtype`:
+
+  ```
+  8 + 16/64 + 16/64 = 8.5 bits = 17/16 bytes per element
+  ```
+
+  The same kind of derivation as llama.cpp's 34/32: published source, not hardware. It lands on
+  exactly llama.cpp's figure by coincidence — one fp16 scale per 32 elements versus a scale _and_ a
+  bias per 64 both come to half a bit — and that coincidence has no test, because `17/16 === 34/32`
+  at runtime. Do not merge them into a shared constant.
+
+  **The threshold is all-or-nothing, and the first draft of this paragraph got it backwards.**
+  `--quantized-kv-start` defaults to 5000 on the CLI, which reads like "the first 5,000 tokens stay
+  fp16 and the tail is quantized" — it is not. `to_quantized` quantizes the _whole_ array at once,
+  so crossing the threshold converts everything. The figure is therefore **exact above 5,000
+  tokens** rather than approximate; below it the cache is entirely fp16 and costs 2 bytes per
+  element, so a short-context Apple configuration is under-charged ~1.9x. Not modelled, because the
+  error is proportionally largest exactly where the cache is smallest, and every context this tool
+  is interesting at is past 5,000. Caught in review — the wrong version was a plausible reading of
+  a flag name, asserted without checking the function it names.
+
+  **And resolving it forced the contract question this always carried** (#45). `nativeKvPrecisions`
+  asked whether a precision was stored at its _nominal_ width, which was the same question as "is
+  it known" only by accident — every non-nominal width in the catalog also happened to be
+  unmeasured. MLX's 8.5 bits is not nominal, so under the old predicate it could never be listed,
+  and the app would have gone on warning that a derived figure rested on a guess. It is
+  `measuredKvPrecisions` now, and the invariant that came with the rename is the part worth
+  keeping: **a precision listed as established whose real width is not nominal must also carry that
+  width**, or the marker goes quiet while the arithmetic stays wrong — worse than either alone.
+
+  The consequence is that no shipped precision is marked any more, so the mechanism has no live
+  trigger. It is not dead — it fires for the next precision added without a width. The polarity
+  test drives that with a synthetic runtime, and the two surfaces that render it are held by a
+  mocked `kvSubstitutionFor`, because an unreachable branch is one nobody notices breaking.
 
 - ~~Codex connector coverage is unconfirmed.~~ **Confirmed working**, and now well characterised.
   Reviews arrive roughly 40 minutes after a push, which is long enough to look like absence — don't
