@@ -73,22 +73,83 @@ export function compare(
   const before = substance(oldCatalog);
   const after = substance(newCatalog);
 
-  const changed = JSON.stringify(before) !== JSON.stringify(after);
+  const oldById = byId(before.models);
+  const newById = byId(after.models);
+
+  const added = [...newById.keys()].filter((id) => !oldById.has(id));
+  const removed = [...oldById.keys()].filter((id) => !newById.has(id));
+  const edited = [...newById.keys()]
+    .filter((id) => oldById.has(id))
+    .map((id) => ({ id, fields: changedFields(oldById.get(id)!, newById.get(id)!) }))
+    .filter((m) => m.fields.length > 0);
+
+  /**
+   * Failures are compared as a set, not by length.
+   *
+   * Length alone let a same-size change of contents through silently — one seed starting to fail
+   * as another stops is exactly the week someone needs to be told, and it read as a quiet week.
+   * The two lists below also make the line say *which*, which a count transition cannot.
+   */
+  const failuresAppeared = after.failures.filter((f) => !before.failures.includes(f));
+  const failuresResolved = before.failures.filter((f) => !after.failures.includes(f));
+  const failuresChanged =
+    failuresAppeared.length > 0 ||
+    failuresResolved.length > 0 ||
+    // Multiplicity, which the two set differences above cannot see. Contrived, but this whole
+    // function exists because the cheap comparison missed a case.
+    before.failures.length !== after.failures.length;
+
+  /** A repeated id would be collapsed by `byId` and become invisible to every check above. */
+  const duplicated = newById.size !== after.models.length;
+
+  /**
+   * The rows are the same rows, in a different order.
+   *
+   * Kept as a change rather than folded away, because the file really did move and a future sort
+   * by popularity or name should land visibly. What it must not do is set `changed` *silently* —
+   * that is the defect — so it gets a line of its own saying no figure moved. Only asked once the
+   * membership is settled: when models are added or removed the order differs as a matter of
+   * course, and saying so as well would be noise.
+   */
+  const reordered =
+    added.length === 0 &&
+    removed.length === 0 &&
+    // Compared as arrays rather than a joined string: any delimiter can in principle appear
+    // inside an id, and one that does would make a real reordering compare equal.
+    JSON.stringify(before.models.map((m) => String(m.id))) !==
+      JSON.stringify(after.models.map((m) => String(m.id)));
+
+  /**
+   * Decided from the same evidence the summary is built from, so the two cannot disagree.
+   *
+   * This was whole-document `JSON.stringify` equality, which is sensitive to array order and key
+   * order while every line of the summary below is blind to both. Any reordering that left the
+   * figures alone — reordering the seed list in `build-catalog.ts` is enough, since rows are
+   * written in seed order — therefore set `changed` with nothing at all to say, and the job
+   * committed and opened a pull request whose statement of what moved was a blank line.
+   *
+   * A reordering is still a change — see `reordered` above, which now says so in the summary
+   * rather than leaving it to be inferred from a blank one. What does become a no-op is a row
+   * whose *keys* moved with every value intact, which is a serialization artifact and not an
+   * ordering anyone chose.
+   */
+  const changed =
+    added.length > 0 ||
+    removed.length > 0 ||
+    edited.length > 0 ||
+    failuresChanged ||
+    duplicated ||
+    reordered;
 
   const lines: string[] = [];
+  /** A blank separator only once there is something to separate from, so no summary opens on one. */
+  const gap = () => {
+    if (lines.length) lines.push('');
+  };
+
   if (!changed) {
     lines.push('No change: every model resolves to the figures already committed.');
   } else {
-    const oldById = byId(before.models);
-    const newById = byId(after.models);
-
-    const added = [...newById.keys()].filter((id) => !oldById.has(id));
-    const removed = [...oldById.keys()].filter((id) => !newById.has(id));
-    const edited = [...newById.keys()]
-      .filter((id) => oldById.has(id))
-      .map((id) => ({ id, fields: changedFields(oldById.get(id)!, newById.get(id)!) }))
-      .filter((m) => m.fields.length > 0);
-
     if (added.length) lines.push(`**Added** (${added.length}): ${added.join(', ')}`);
     /**
      * Called out hard, because it is the one outcome that silently shrinks the product. The
@@ -102,7 +163,7 @@ export function compare(
       lines.push('> A removed model disappears from the product. Confirm this was intended.');
     }
     if (edited.length) {
-      lines.push('');
+      gap();
       lines.push('**Changed**');
       lines.push('');
       lines.push('| Model | Fields |');
@@ -110,12 +171,30 @@ export function compare(
       for (const { id, fields } of edited) lines.push(`| \`${id}\` | ${fields.join(', ')} |`);
     }
 
-    if (before.failures.length !== after.failures.length) {
-      lines.push('');
+    if (reordered) {
+      gap();
+      lines.push(
+        '**Reordered**: the same models, written in a different order. No figure changed.'
+      );
+    }
+
+    if (duplicated) {
+      gap();
+      lines.push(
+        `**Duplicate ids**: ${after.models.length} rows resolve to ${newById.size} models. ` +
+          'The generator wrote the same id twice.'
+      );
+    }
+
+    if (failuresChanged) {
+      gap();
       lines.push(
         `**Seed failures**: ${before.failures.length} → ${after.failures.length}. ` +
           'A non-empty list means the catalog was written without those models.'
       );
+      if (failuresAppeared.length) lines.push(`- Now failing: ${failuresAppeared.join(', ')}`);
+      if (failuresResolved.length)
+        lines.push(`- No longer failing: ${failuresResolved.join(', ')}`);
     }
   }
 

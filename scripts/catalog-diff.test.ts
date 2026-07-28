@@ -186,3 +186,135 @@ describe('the command line the refresh workflow drives', () => {
     });
   });
 });
+
+/**
+ * `changed` and the summary are two answers to one question, and they were derived from different
+ * evidence: `changed` from whole-document `JSON.stringify` equality, the summary from set
+ * differences on model id plus a per-field compare. Both halves of the summary are blind to array
+ * order and key order; the equality test is not. So any reordering that left every figure intact
+ * set `changed` with nothing at all to say — and the workflow interpolates that summary into both
+ * the commit message and the pull request body.
+ *
+ * A pull request that says nothing is the same failure as one that is wrong every week, and worse
+ * in one way: it asks for a review it gives no subject for.
+ */
+describe('what changed and what it says cannot disagree', () => {
+  /**
+   * The same row, written with its keys in a different order — every value identical.
+   *
+   * Built from `model` rather than hand-written, so it cannot drift into being a different row
+   * than the one it is compared against. Key order is a serialization artifact; this is the shape
+   * that made whole-document equality disagree with a summary that is blind to it.
+   */
+  const keysReordered = (id: string) => {
+    const row = model(id);
+    return {
+      attention: row.attention,
+      layers: row.layers,
+      totalParams: row.totalParams,
+      name: row.name,
+      id: row.id,
+    };
+  };
+
+  /** Every shape of difference the comparison can be handed, substantive or not. */
+  const CASES: [string, Parameters<typeof compare>][] = [
+    ['identical', [catalog([model('a/One')]), catalog([model('a/One')])]],
+    [
+      'timestamp only',
+      [
+        catalog([model('a/One')]),
+        { ...catalog([model('a/One')]), generatedAt: '2099-01-01T00:00:00.000Z' },
+      ],
+    ],
+    [
+      'models reordered',
+      [catalog([model('a/One'), model('b/Two')]), catalog([model('b/Two'), model('a/One')])],
+    ],
+    ['keys reordered within a row', [catalog([model('a/One')]), catalog([keysReordered('a/One')])]],
+    ['model added', [catalog([model('a/One')]), catalog([model('a/One'), model('b/Two')])]],
+    ['model removed', [catalog([model('a/One'), model('b/Two')]), catalog([model('a/One')])]],
+    ['field edited', [catalog([model('a/One')]), catalog([model('a/One', { layers: 40 })])]],
+    ['failures grew', [catalog([model('a/One')]), catalog([model('a/One')], ['b/Two: 401'])]],
+    [
+      'failures swapped at the same length',
+      [catalog([model('a/One')], ['b/Two: 401']), catalog([model('a/One')], ['c/Three: 404'])],
+    ],
+    ['empty on both sides', [{}, {}]],
+  ];
+
+  /**
+   * The property, stated once over every case rather than asserted case by case: whenever the
+   * script says a refresh is worth a pull request, it has to be able to say what moved. This is
+   * the invariant the workflow depends on and the one that was violated.
+   */
+  it.each(CASES)('%s: a claimed change always states what changed', (_label, [before, after]) => {
+    const { changed, summary } = compare(before, after);
+
+    expect(summary.trim()).not.toBe('');
+    if (changed) {
+      expect(summary).not.toMatch(/^no change/i);
+    } else {
+      expect(summary).toMatch(/no change/i);
+    }
+  });
+
+  it('treats a pure reordering as a change, and says that is all it was', () => {
+    const result = compare(
+      catalog([model('a/One'), model('b/Two')]),
+      catalog([model('b/Two'), model('a/One')])
+    );
+
+    expect(result.changed).toBe(true);
+    expect(result.summary).toMatch(/reordered/i);
+    // The point of the line: a reader must not have to guess whether a figure moved.
+    expect(result.summary).toMatch(/no figure changed/i);
+    expect(result.summary).not.toMatch(/\| `a\/One` \|/);
+  });
+
+  /**
+   * Key order within a row is a serialization artifact rather than an ordering anyone chose, and
+   * `changedFields` is already blind to it. Reporting it would be a pull request about whitespace.
+   */
+  it('treats a row whose keys moved as no change at all', () => {
+    const result = compare(catalog([model('a/One')]), catalog([keysReordered('a/One')]));
+
+    expect(result.changed).toBe(false);
+    expect(result.summary).toMatch(/no change/i);
+    // The two really are key-order variants of one row, not two different rows that happen to
+    // compare equal — otherwise this passes for a reason that has nothing to do with the guard.
+    expect(JSON.stringify(model('a/One'))).not.toBe(JSON.stringify(keysReordered('a/One')));
+  });
+
+  /**
+   * Failures were reported only when the *length* moved, so one seed starting to fail as another
+   * stopped read as a quiet week — the third route to an empty summary, and the one that matters
+   * most, since the whole point of the list is to say what the catalog was written without.
+   */
+  it('reports failures swapping at the same length, and names both sides', () => {
+    const result = compare(
+      catalog([model('a/One')], ['b/Two: 401']),
+      catalog([model('a/One')], ['c/Three: 404'])
+    );
+
+    expect(result.changed).toBe(true);
+    expect(result.summary).toMatch(/Now failing: c\/Three: 404/);
+    expect(result.summary).toMatch(/No longer failing: b\/Two: 401/);
+  });
+
+  it('never opens the summary on a blank line', () => {
+    // The summary is interpolated into the commit message and the PR body, where a leading blank
+    // line reads as a missing section.
+    for (const [, [before, after]] of CASES) {
+      expect(compare(before, after).summary).not.toMatch(/^\n/);
+    }
+  });
+
+  /** `byId` collapses a repeated id, so a duplicated row is invisible to every other check. */
+  it('catches the generator writing one id twice', () => {
+    const result = compare(catalog([model('a/One')]), catalog([model('a/One'), model('a/One')]));
+
+    expect(result.changed).toBe(true);
+    expect(result.summary).toMatch(/duplicate ids/i);
+  });
+});
