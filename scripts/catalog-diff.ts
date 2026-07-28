@@ -311,49 +311,50 @@ export function compare(
       gap();
       lines.push('**Repeated ids**');
       lines.push('');
-      // A fourth column, because the counts alone can be identical while the rows are not: an id
-      // carrying two rows on both sides where the *shadowed* one changed reads "2 → 2" against a
-      // claimed change and names nothing that moved. `edited` cannot cover that case — `byId` is
-      // last-wins, so the row it compares is precisely the row that did not move.
+      /**
+       * A fourth column, because the counts alone can be identical while the rows are not: an id
+       * carrying two rows on both sides where one of them changed reads "2 → 2" and names nothing.
+       *
+       * It counts rows in and rows out, and deliberately says nothing about *which* of them the
+       * app loads. Three rounds of review went into inferring that, and each phrasing was wrong in
+       * a case the last one had not considered — most recently, resolving `[base, v1]` to `[base]`
+       * makes `base` change roles from shadowed to loaded, so a role-aware reading called it two
+       * rows moving when one row was removed. Roles are a property of position, and this table is
+       * about content; conflating them is what kept producing confident wrong sentences. Which row
+       * the app loads is `edited`'s question, and it is answered in the fields table.
+       */
       lines.push('| Model | Rows before | Rows after | What moved |');
       lines.push('| --- | --- | --- | --- |');
       for (const id of repeated) {
-        const was = rowsFor(oldRows, id).length;
-        const now = rowsFor(newRows, id).length;
+        const before = rowsFor(oldRows, id);
+        const after = rowsFor(newRows, id);
         const plural = (n: number) => (n === 1 ? 'row' : 'rows');
 
-        // Which row moved is a separate question from how many there are, and answering only the
-        // second one gets the first wrong half the time: `[base, v1] -> [base, v2]` is also 2 → 2,
-        // and there the row that changed is the one the app loads. Asked by taking the loaded row
-        // out of each side and comparing what is left.
-        const loadedBefore = oldById.has(id) ? canonical(oldById.get(id)) : undefined;
-        const loadedAfter = newById.has(id) ? canonical(newById.get(id)) : undefined;
-        const loadedMoved = loadedBefore !== loadedAfter;
-        const shadowOf = (rows: string[], loaded: string | undefined) => {
-          const rest = [...rows];
-          const at = loaded === undefined ? -1 : rest.indexOf(loaded);
-          if (at >= 0) rest.splice(at, 1);
-          return canonical(rest);
-        };
-        const shadowMoved =
-          shadowOf(rowsFor(oldRows, id), loadedBefore) !==
-          shadowOf(rowsFor(newRows, id), loadedAfter);
+        // Multiset difference over canonical rows: an unchanged row cancels whichever position it
+        // sits in, so only rows that genuinely arrived or left are counted.
+        const remaining = [...before];
+        const arrived: string[] = [];
+        for (const row of after) {
+          const at = remaining.indexOf(row);
+          if (at >= 0) remaining.splice(at, 1);
+          else arrived.push(row);
+        }
+        const left = remaining;
 
-        const moved = loadedMoved
-          ? shadowMoved
-            ? 'the row the app loads, and one beneath it'
-            : 'the row the app loads — its fields are in the table above'
-          : shadowMoved
-            ? "a row's figures, beneath the one the app loads"
-            : 'how many rows carry this id';
-        const count =
-          was === now
-            ? ''
-            : now > was
-              ? `, ${now - was} more ${plural(now - was)}`
-              : `, ${was - now} fewer ${plural(was - now)}`;
+        const parts: string[] = [];
+        if (arrived.length && left.length) {
+          parts.push(
+            `${Math.min(arrived.length, left.length)} ${plural(Math.min(arrived.length, left.length))} replaced`
+          );
+        }
+        const netIn = arrived.length - Math.min(arrived.length, left.length);
+        const netOut = left.length - Math.min(arrived.length, left.length);
+        if (netIn) parts.push(`${netIn} ${plural(netIn)} added`);
+        if (netOut) parts.push(`${netOut} ${plural(netOut)} removed`);
 
-        lines.push(`| \`${id}\` | ${was} | ${now} | ${moved}${count} |`);
+        lines.push(
+          `| \`${id}\` | ${before.length} | ${after.length} | ${parts.join(', ') || 'nothing'} |`
+        );
       }
       lines.push('');
       // Per row rather than "twice", which is wrong in both directions: a refresh that *resolves*
@@ -361,8 +362,11 @@ export function compare(
       lines.push(
         '> `MODELS` keeps every row, so the model picker and the comparison grid each list an id ' +
           'once per row it carries, while `getModel` resolves it to whichever row comes last. ' +
-          'Wherever that count is above one the two surfaces disagree about the same model, and ' +
-          'the fields table above describes only the row that wins.'
+          'Wherever that count is above one the two surfaces disagree about the same model.' +
+          // Only when there is one. A shadowed row changing populates `repeated` and leaves
+          // `edited` empty, so the fields table is not printed and pointing at it sends a reviewer
+          // looking for something that is not there.
+          (edited.length ? ' The fields table above describes only the row that wins.' : '')
       );
     }
 
