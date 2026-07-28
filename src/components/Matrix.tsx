@@ -469,14 +469,20 @@ export function Matrix({ config }: { config: Config }) {
         )}
         {/* The cache axis, and a separate line rather than a clause on the one above.
             The two conditions are independent — this grid can be scored entirely at native
-            formats and still charge every cell's cache an unmeasured width — so a combined
-            sentence would be true of a state the grid is not in. It is also the *whole* grid
-            rather than "some rows": the cache precision comes from the scenario, not from the
-            per-row format substitution, so when it applies it applies everywhere. */}
+            formats and still charge an unmeasured width to every cache on it — so a combined
+            sentence would be true of a state the grid is not in.
+
+            "Every *scored* cell", and the qualifier is load-bearing rather than throat-clearing.
+            The quantifier is stronger than the weight legend's "some rows", because the cache
+            precision comes from the scenario rather than from the per-row format substitution —
+            but it is not "every cell", which is a claim about the whole grid and false on most
+            of it. Under MLX the grid still carries every shipping device while only the Apple
+            columns are evaluated at all, so a sentence saying "every cell" describes NVIDIA and
+            AMD columns that were never priced. Raised by Codex on PR #37. */}
         {kvSubstituted && (
           <span className="text-[var(--color-warning)]">
-            every cell’s cache charged at {kv}’s nominal width, which {runtime.label} has not been
-            measured at
+            every scored cell’s cache charged at {kv}’s nominal width, which {runtime.label} has not
+            been measured at
           </span>
         )}
         {/* A default allocation and a hardware limit are not the same answer, and this grid is

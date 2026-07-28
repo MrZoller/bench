@@ -1756,10 +1756,15 @@ describe('a cache charged an unmeasured width says so', () => {
    * The Matrix says it too, and says it about the whole grid rather than "some rows".
    *
    * The cache precision comes from the scenario, not from the per-row format substitution, so when
-   * it applies it applies to every cell — a different quantifier from the weight legend beside it,
-   * and stating it as "some" would understate it.
+   * it applies it applies to every cell that was *scored* — a stronger quantifier than the weight
+   * legend's "some rows" beside it, and a weaker one than "every cell".
+   *
+   * That middle term is the whole finding. Under MLX the grid still carries every shipping device
+   * while only the Apple columns are evaluated at all, so "every cell" describes NVIDIA and AMD
+   * columns that were never priced — on a legend whose job is saying which figures rest on an
+   * unmeasured width. Raised by Codex on PR #37.
    */
-  it('marks the Matrix, for every cell rather than some rows', async () => {
+  it('marks the Matrix for every scored cell, which is neither "some" nor "every"', async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -1774,5 +1779,36 @@ describe('a cache charged an unmeasured width says so', () => {
     await mlxAt(user, 'bf16');
     act(() => useConfig.getState().set('kvPrecision', 'q8'));
     expect(legend()).toBeInTheDocument();
+    expect(legend()).toHaveTextContent(/every scored cell/i);
+    expect(legend()).not.toHaveTextContent(/every cell’s/i);
+  });
+
+  /**
+   * The precondition that makes the qualifier necessary rather than pedantic.
+   *
+   * Asserted rather than assumed: if MLX ever drove every device in the catalog, "every scored
+   * cell" and "every cell" would be the same claim and the test above would stop distinguishing
+   * them — passing, while guarding nothing.
+   */
+  it('has unscored cells under MLX, which is why the qualifier is there', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await mlxAt(user, 'bf16');
+    act(() => useConfig.getState().set('kvPrecision', 'q8'));
+
+    const matrix = screen.getByRole('region', { name: /every model on every machine/i });
+    const cells = within(matrix).getAllByRole('button', { name: /:/ });
+    const unscored = cells.filter((c) =>
+      /does not (run|support)|cannot drive|no estimate/i.test(c.getAttribute('aria-label') ?? '')
+    );
+
+    expect(cells.length, 'the grid rendered nothing').toBeGreaterThan(0);
+    expect(unscored.length, 'every cell was scored, so the qualifier is vacuous').toBeGreaterThan(
+      0
+    );
+    // And the filter discriminates rather than matching everything handed to it — without this, a
+    // regex that matched every label would satisfy the assertion above while proving nothing.
+    expect(unscored.length, 'the filter matched every cell').toBeLessThan(cells.length);
   });
 });
