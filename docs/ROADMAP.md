@@ -45,7 +45,7 @@ zoller.ai subdomain is one repository variable away. See **Deployment**, below.
 | 5. Verdict + explain layers        | **done** (#4)     | Seven workload archetypes. See **Verdicts**, below                                                  |
 | 6. Envelope + Matrix surfaces      | **done** (#7, #8) | Context × concurrency feasibility field; model × device heatmap                                     |
 | 7. URL state, responsive, a11y     | **done** (#6)     | Querystring round-trips a scenario. Browser pass in `e2e/` (#19); reflow and hit targets (#35, #29) |
-| 8. Weekly catalog refresh + deploy | **built**         | Refresh opens a PR on a _substantive_ diff. Deploy waits on Pages being enabled — see below         |
+| 8. Weekly catalog refresh + deploy | **done**          | Refresh opens a PR on a _substantive_ diff. Deployed to Pages, 28 July 2026 — see below             |
 
 **Correctness debt is tracked as issues, not here.** #9 and #10, which graded a configuration as
 working when it is not, are fixed — together with #11, which printed a figure measured at a
