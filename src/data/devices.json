@@ -213,12 +213,13 @@
       "capacityGiB": 288,
       "allocatableGiB": 285,
       "bandwidthGBs": 8000,
-      "tflops": { "fp16": 2300, "fp8": 4600, "fp4": 9200 },
+      "tflops": { "fp16": 2500, "fp8": 5000, "fp4": 10000 },
+      "note": "Compute was MI350X's, not this part's: the row read 2300/4600/9200 — the air-cooled sibling's dense figures — because the source pointed at the MI350 family page rather than the MI355X one. Same silicon and the same 288 GB at 8 TB/s; MI355X is the 1400W liquid-cooled bin at 2400 MHz against MI350X's 1000W at 2200, which is the ~9% this restores. Found in the pre-publish verification pass.",
       "interconnect": "Infinity Fabric",
       "hostLinkGBs": 63.0,
       "tdpWatts": 1400,
       "releasedAt": "2025-06-12",
-      "source": "https://www.amd.com/en/products/accelerators/instinct/mi350.html"
+      "source": "https://www.amd.com/en/products/accelerators/instinct/mi350/mi355x.html"
     },
 
     {
