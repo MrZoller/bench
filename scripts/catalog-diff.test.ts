@@ -431,10 +431,10 @@ describe('a claim about a refresh is a claim about the difference', () => {
  */
 describe('the invariants hold across every small catalog', () => {
   const POOL = [
-    { id: 'a/One', layers: 1 },
+    { id: 'a/One', layers: 1, attention: { kind: 'gqa', kvHeads: 8 } },
     // Same id, different figures: the shape that makes `byId`'s last-wins collapse observable.
-    { id: 'a/One', layers: 2 },
-    { id: 'b/Two', layers: 1 },
+    { id: 'a/One', layers: 2, attention: { kind: 'gqa', kvHeads: 8 } },
+    { id: 'b/Two', layers: 1, attention: { kind: 'gqa', kvHeads: 8 } },
   ];
 
   const CATALOGS: Record<string, unknown>[][] = [];
@@ -447,8 +447,16 @@ describe('the invariants hold across every small catalog', () => {
   }
 
   /** Substance: row order matters, key order does not — the same reading `compare` uses. */
+  const deepSort = (value: unknown): unknown =>
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? Object.fromEntries(
+          Object.entries(value as Record<string, unknown>)
+            .sort(([a], [b]) => (a < b ? -1 : 1))
+            .map(([k, v]) => [k, deepSort(v)])
+        )
+      : value;
   const canonical = (models: Record<string, unknown>[]) =>
-    JSON.stringify(models.map((m) => JSON.stringify(m, Object.keys(m).sort())));
+    JSON.stringify(models.map((m) => JSON.stringify(deepSort(m))));
 
   it('decides identically to a byte comparison that ignores only key order', () => {
     const falseNegatives: string[] = [];
@@ -491,6 +499,23 @@ describe('the invariants hold across every small catalog', () => {
     }
   });
 
+  it('never claims a reordering when the ids themselves moved', () => {
+    for (const before of CATALOGS) {
+      for (const after of CATALOGS) {
+        const { summary } = compare(
+          { models: before, failures: [] },
+          { models: after, failures: [] }
+        );
+        const ids = (models: Record<string, unknown>[]) =>
+          JSON.stringify(models.map((m) => String(m.id)).sort());
+
+        // A reordering is the same rows in a different arrangement. If the id multiset moved,
+        // something was added, removed or duplicated, and that is the line that should say so.
+        if (/\*\*Reordered\*\*/.test(summary)) expect(ids(before)).toBe(ids(after));
+      }
+    }
+  });
+
   it('never prints a summary that contradicts itself', () => {
     for (const before of CATALOGS) {
       for (const after of CATALOGS) {
@@ -526,5 +551,66 @@ describe('the invariants hold across every small catalog', () => {
         if (differs) expect(summary).toMatch(/seed failures/i);
       }
     }
+  });
+});
+
+/**
+ * The second round of Codex findings on PR #59, all consequences of comparing an id's *presence*
+ * where the question was about its *rows*.
+ */
+describe('a repeated id is reported wherever it appears', () => {
+  const one = (id: string, extra: Record<string, unknown> = {}) => model(id, extra);
+
+  it('reports a newly added seed the generator wrote twice', () => {
+    // The id is absent from the old side entirely, so a check over shared ids alone never sees it:
+    // the summary said "Added (1)" and nothing about the row appearing twice.
+    const result = compare(
+      catalog([one('b/Two')]),
+      catalog([one('b/Two'), one('a/One'), one('a/One')])
+    );
+
+    expect(result.changed).toBe(true);
+    expect(result.summary).toMatch(/\*\*Added\*\* \(1\): a\/One/);
+    expect(result.summary).toMatch(/repeated ids/i);
+    expect(result.summary).toMatch(/\| `a\/One` \| 0 \| 2 \|/);
+  });
+
+  it('does not call a row gaining a duplicate a reordering', () => {
+    // `added` and `removed` track presence only, so `[a] → [a, a]` passes both while the id
+    // sequences differ in length. Nothing was reordered; a row was duplicated.
+    const result = compare(catalog([one('a/One')]), catalog([one('a/One'), one('a/One')]));
+
+    expect(result.changed).toBe(true);
+    expect(result.summary).toMatch(/repeated ids/i);
+    expect(result.summary).not.toMatch(/\*\*Reordered\*\*/);
+  });
+
+  it('does not name a field whose nested keys merely moved', () => {
+    // `canonical` treats these rows as identical, so `changedFields` must too — otherwise the
+    // summary reports an edit to `attention` that never happened. `attention` is one of the two
+    // nested objects the generator writes, which is why it is the field used here.
+    const straight = model('a/One');
+    const shuffled = {
+      ...model('a/One'),
+      attention: { core: { headDim: 128, kvHeads: 8, kind: 'gqa' } },
+    };
+
+    const result = compare(catalog([straight]), catalog([shuffled]));
+
+    // The two really are key-order variants, not two different rows that compare equal anyway.
+    expect(JSON.stringify(straight)).not.toBe(JSON.stringify(shuffled));
+    expect(result.changed).toBe(false);
+    expect(result.summary).not.toMatch(/attention/);
+  });
+
+  it('still names a field whose nested values really moved', () => {
+    // The other direction, so key-order blindness cannot be satisfied by ignoring the field.
+    const result = compare(
+      catalog([model('a/One')]),
+      catalog([model('a/One', { attention: { core: { kind: 'gqa', kvHeads: 4, headDim: 128 } } })])
+    );
+
+    expect(result.changed).toBe(true);
+    expect(result.summary).toMatch(/attention/);
   });
 });

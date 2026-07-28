@@ -87,10 +87,15 @@ function rowsById(models: Record<string, unknown>[]): Map<string, string[]> {
  * `attention` and `popularity`, and naming the field is enough to send a reader to the diff.
  * A per-leaf path would be more precise and less readable, and the PR carries the real diff
  * anyway.
+ *
+ * Through `canonical` so this agrees with every other comparison in the file about what a change
+ * is. Raw `JSON.stringify` is key-order sensitive, and `attention` and `popularity` are the two
+ * nested objects here — either re-emitted with its keys shuffled and every value intact would be
+ * named as a changed field, which is a pull request reporting an edit that did not happen.
  */
 function changedFields(a: Record<string, unknown>, b: Record<string, unknown>): string[] {
   const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-  return [...keys].filter((k) => JSON.stringify(a[k]) !== JSON.stringify(b[k])).sort();
+  return [...keys].filter((k) => canonical(a[k]) !== canonical(b[k])).sort();
 }
 
 /**
@@ -119,9 +124,11 @@ export function compare(
   const added = [...newRows.keys()].filter((id) => !oldRows.has(id));
   const removed = [...oldRows.keys()].filter((id) => !newRows.has(id));
 
-  /** Ids present on both sides whose rows are not the same rows. */
-  const differing = [...newRows.keys()].filter(
-    (id) => oldRows.has(id) && canonical(oldRows.get(id)) !== canonical(newRows.get(id))
+  /** Every id either side carries, and whether its rows are the same rows. */
+  const allIds = [...new Set([...oldRows.keys(), ...newRows.keys()])];
+  const rowsFor = (rows: Map<string, string[]>, id: string) => rows.get(id) ?? [];
+  const differing = allIds.filter(
+    (id) => canonical(rowsFor(oldRows, id)) !== canonical(rowsFor(newRows, id))
   );
 
   /**
@@ -148,9 +155,13 @@ export function compare(
    * open a pull request every Monday for as long as it survives — the weekly-noise failure this
    * file exists to prevent. Reported when one appears, when one is resolved, and when a row
    * changes underneath one.
+   *
+   * Over every id rather than only the ones both sides share, because a *newly added* seed written
+   * twice is absent from the old side entirely: it would be reported as one added model with no
+   * mention that the generator emitted it twice.
    */
   const repeated = differing.filter(
-    (id) => oldRows.get(id)!.length > 1 || newRows.get(id)!.length > 1
+    (id) => rowsFor(oldRows, id).length > 1 || rowsFor(newRows, id).length > 1
   );
 
   /**
@@ -214,9 +225,14 @@ export function compare(
   const rowsBefore = before.models.map(canonical);
   const rowsAfter = after.models.map(canonical);
 
+  // Guarded on the id *multiset*, not on `added`/`removed` being empty. Those track only whether
+  // an id is present at all, so `[a] → [a, a]` passes both while the id sequence differs in
+  // length — and the catalog gaining a duplicate row is not a reordering of anything. The multiset
+  // test subsumes the membership one and closes that case.
+  const sameIds = sequence([...idsBefore].sort()) === sequence([...idsAfter].sort());
+
   const reordered =
-    added.length === 0 &&
-    removed.length === 0 &&
+    sameIds &&
     (sequence(idsBefore) !== sequence(idsAfter) ||
       // The remaining case, once the ids line up: rows sharing an id permuting among themselves.
       // Only meaningful when the rows are otherwise the same rows — if the multiset moved, that
@@ -298,7 +314,9 @@ export function compare(
       lines.push('| Model | Rows before | Rows after |');
       lines.push('| --- | --- | --- |');
       for (const id of repeated) {
-        lines.push(`| \`${id}\` | ${oldRows.get(id)!.length} | ${newRows.get(id)!.length} |`);
+        lines.push(
+          `| \`${id}\` | ${rowsFor(oldRows, id).length} | ${rowsFor(newRows, id).length} |`
+        );
       }
       lines.push('');
       lines.push(
