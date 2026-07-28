@@ -19,6 +19,7 @@ import type { Placement } from './placement';
 import {
   DEFAULT_HOST_BANDWIDTH,
   effectiveDeviceCount,
+  effectivePromptTokens,
   kvShards,
   offloadBandwidth,
 } from './placement';
@@ -328,8 +329,7 @@ export function estimatePrefill(
   placement?: Placement,
   hostBandwidth = DEFAULT_HOST_BANDWIDTH
 ): PrefillEstimate {
-  const contextTokens = Math.max(1, usage.contextTokens);
-  const promptTokens = Math.max(1, usage.promptTokens ?? Math.floor(contextTokens * 0.9));
+  const promptTokens = effectivePromptTokens(usage);
   /**
    * Concurrent prompts multiply prefill in a way they do not multiply decode.
    *

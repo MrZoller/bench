@@ -336,3 +336,87 @@ describe('a cell is timed for the traffic its own row carries', () => {
     expect(many.state).not.toBe('comfortable');
   });
 });
+
+/**
+ * The prompt clamp and the prefix clamp are the same rule applied to the two halves of the
+ * working set, and for as long as both parameters existed only one of them was clamped. Decode
+ * ignores the prefix, so the tell is entirely in time-to-first-token: every new token is charged
+ * for attending over the resident session, whether or not the column could hold it.
+ */
+describe('a cell is timed for a working set its own column could hold', () => {
+  // No column here is wider than the prompt, so once the prompt is clamped to the column there is
+  // nothing left for a prefix to occupy in any of them. A wider column would have room, and would
+  // rightly be charged — which is the next test.
+  const FILLED = [2048, 8192, 32768, 65536] as const;
+
+  const at = (over: Partial<EnvelopeRequest['usage']>) =>
+    envelope({
+      contexts: FILLED,
+      usage: {
+        contextTokens: 65536,
+        concurrency: 1,
+        promptTokens: 65536,
+        kvPrecision: 'fp16',
+        ...over,
+      },
+    }).cells[0];
+
+  it('ignores a cached prefix the column has no room for', () => {
+    const without = at({ cachedPrefixTokens: 0 });
+    const with64K = at({ cachedPrefixTokens: 65536 });
+
+    // Not merely "close": the prefix has nowhere to go in any of these columns, so the two grids
+    // are the same grid. Unclamped, the 2K column was timed against a session 32 times its size.
+    for (let i = 0; i < without.length; i++) {
+      expect(with64K[i].ttftSeconds).toBe(without[i].ttftSeconds);
+      expect(with64K[i].state).toBe(without[i].state);
+    }
+  });
+
+  it('still charges for a prefix that does fit beside the prompt', () => {
+    // The clamp has to narrow the prefix, not discard it — a cell where the session genuinely is
+    // resident really does pay to attend over it, and that is the whole point of the parameter.
+    const prompt = 2048;
+    const without = envelope({
+      usage: { contextTokens: 65536, concurrency: 1, promptTokens: prompt, kvPrecision: 'fp16' },
+    }).cells[0];
+    const withPrefix = envelope({
+      usage: {
+        contextTokens: 65536,
+        concurrency: 1,
+        promptTokens: prompt,
+        cachedPrefixTokens: 32768,
+        kvPrecision: 'fp16',
+      },
+    }).cells[0];
+
+    const wide = withPrefix.findIndex((c) => c.contextTokens >= prompt + 32768);
+    expect(wide).toBeGreaterThanOrEqual(0);
+    expect(withPrefix[wide].ttftSeconds).toBeGreaterThan(without[wide].ttftSeconds);
+  });
+
+  it('leaves a narrow column untouched by a prefix only a wide one can hold', () => {
+    // The same request read across the row: the wide column pays, the narrow one cannot and does
+    // not. A clamp on the prompt alone gets the first half of this right and the second wrong.
+    // The prompt fills the narrow column exactly, so the room left there is nil and the room left
+    // in the wide one is nearly all of it.
+    const narrow = 2048;
+    const grid = envelope({
+      contexts: [narrow, 131072],
+      usage: {
+        contextTokens: 131072,
+        concurrency: 1,
+        promptTokens: narrow,
+        cachedPrefixTokens: 65536,
+        kvPrecision: 'fp16',
+      },
+    }).cells[0];
+    const baseline = envelope({
+      contexts: [narrow, 131072],
+      usage: { contextTokens: 131072, concurrency: 1, promptTokens: narrow, kvPrecision: 'fp16' },
+    }).cells[0];
+
+    expect(grid[0].ttftSeconds).toBe(baseline[0].ttftSeconds);
+    expect(grid[1].ttftSeconds).toBeGreaterThan(baseline[1].ttftSeconds);
+  });
+});
