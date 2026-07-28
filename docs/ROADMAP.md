@@ -33,16 +33,16 @@ deploy workflow is written and correct, and it cannot run until GitHub Pages is 
 repository — which needs a paid plan while the repo is private, and a decision about the
 subdomain. See **Deployment**, below.
 
-| Phase                              | State             | Notes                                                                                              |
-| ---------------------------------- | ----------------- | -------------------------------------------------------------------------------------------------- |
-| 1. Scaffold                        | **done**          | React 19 + TS strict + Vite + Tailwind v4 + Zustand. CI: lint → format:check → test → build        |
-| 2. Engine                          | **done**          | `src/engine/`, pure, no React. Pinned to published measurements at both ends of the hardware range |
-| 3. Catalogs                        | **done** (#1)     | 17 models derived from HF, 25 devices curated. `npm run catalog` regenerates it.                   |
-| 4. Design tokens + the Bench       | **done** (#5)     | Hero surface. Load the `dataviz` skill before any chart/meter/palette code                         |
-| 5. Verdict + explain layers        | **done** (#4)     | Seven workload archetypes. See **Verdicts**, below                                                 |
-| 6. Envelope + Matrix surfaces      | **done** (#7, #8) | Context × concurrency feasibility field; model × device heatmap                                    |
-| 7. URL state, responsive, a11y     | **mostly** (#6)   | Querystring round-trips a scenario. Browser-level pass in `e2e/` (#19); URL defect in #15          |
-| 8. Weekly catalog refresh + deploy | **built**         | Refresh opens a PR on a _substantive_ diff. Deploy waits on Pages being enabled — see below        |
+| Phase                              | State             | Notes                                                                                               |
+| ---------------------------------- | ----------------- | --------------------------------------------------------------------------------------------------- |
+| 1. Scaffold                        | **done**          | React 19 + TS strict + Vite + Tailwind v4 + Zustand. CI: lint → format:check → test → build         |
+| 2. Engine                          | **done**          | `src/engine/`, pure, no React. Pinned to published measurements at both ends of the hardware range  |
+| 3. Catalogs                        | **done** (#1)     | 17 models derived from HF, 25 devices curated. `npm run catalog` regenerates it.                    |
+| 4. Design tokens + the Bench       | **done** (#5)     | Hero surface. Load the `dataviz` skill before any chart/meter/palette code                          |
+| 5. Verdict + explain layers        | **done** (#4)     | Seven workload archetypes. See **Verdicts**, below                                                  |
+| 6. Envelope + Matrix surfaces      | **done** (#7, #8) | Context × concurrency feasibility field; model × device heatmap                                     |
+| 7. URL state, responsive, a11y     | **done** (#6)     | Querystring round-trips a scenario. Browser pass in `e2e/` (#19); reflow and hit targets (#35, #29) |
+| 8. Weekly catalog refresh + deploy | **built**         | Refresh opens a PR on a _substantive_ diff. Deploy waits on Pages being enabled — see below         |
 
 **Correctness debt is tracked as issues, not here.** #9 and #10, which graded a configuration as
 working when it is not, are fixed — together with #11, which printed a figure measured at a
@@ -54,8 +54,9 @@ prefill having no notion of a cached prefix (#23); see **Engine** below. The bro
 sweeping the class rather than the named instance. The labelling (#13) and clipboard (#15) bugs
 turned out to have been fixed in passing by #25 and #26 and were closed on the evidence.
 
-What remains open is MLX's unmeasured 8-bit KV (#33), which wants a measurement this repo cannot
-take.
+MLX's unmeasured 8-bit KV (#33) is closed the way #18 was — **marked rather than guessed**, since
+the width it wants cannot be derived from here. What that leaves open is the measurement itself
+(#38), and a contract question that only bites when the measurement lands (#45).
 
 ## Deployment
 
@@ -572,6 +573,24 @@ section is for the questions those issues cannot settle.
   **What would still resolve it** is measured bits-per-weight for MLX's affine 4- and 8-bit schemes,
   at which point the substitution is deleted rather than explained. That needs real checkpoints on
   Apple hardware; the marker is what makes the interim honest rather than what makes it right.
+
+  **The cache was a second, independent substitution, and it hid behind the first** (#33, closed by
+  extending the marker). `kvElementBytes` falls back to the nominal width when a runtime declares no
+  `kvBytesPerElement` — exact for a float format, not for an affine one. MLX's `--kv-bits 8` is a
+  real flag, so the entry in `kvPrecisions` is not a fiction; what is missing is its _width_, since
+  affine quantization carries a scale and a bias per group. The cache is therefore charged exactly
+  one byte per element, which understates it — in the direction that reports a long-context
+  configuration fitting when it does not, which is the direction this repo cares most about.
+
+  Two things about the shape of the fix. **The axes are independent in both directions**, which is
+  why `substituted` names `nativeKvPrecisions` alongside `nativeFormats` instead of folding them
+  together: MLX at Q4_K_M with an FP16 cache substitutes only weights, and MLX at BF16 with an
+  8-bit cache substitutes only the cache — and that second combination **carried no marker at
+  all**, which is worse than the half-described state the issue was filed about. And **no width was
+  invented.** llama.cpp's 34/32 is derived from a published block layout; the MLX equivalent needs
+  the group size and the scale/bias dtypes confirmed against a real checkpoint on Apple hardware.
+  A plausible number entered without one is precisely the invisible approximation this field exists
+  to abolish, so it is marked and the measurement is tracked as its own issue.
 
 - ~~Codex connector coverage is unconfirmed.~~ **Confirmed working**, and now well characterised.
   Reviews arrive roughly 40 minutes after a push, which is long enough to look like absence — don't

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RUNTIMES, getRuntime, runtimesFor } from './runtimes';
+import { RUNTIMES, getRuntime, kvSubstitutionFor, runtimesFor } from './runtimes';
 import { LLAMA_CPP, MLX, VLLM } from '@/engine/fixtures';
 import { getDevice } from './catalog';
 
@@ -63,5 +63,85 @@ describe('runtime support', () => {
 
   it('throws on an unknown id rather than returning a default', () => {
     expect(() => getRuntime('tensorrt')).toThrow(/Unknown runtime/);
+  });
+});
+
+/**
+ * A cache charged a width nobody measured says so — the KV half of #18's rule, filed as #33.
+ *
+ * `kvElementBytes` falls back to the nominal figure when a runtime declares no
+ * `kvBytesPerElement`, which is exact for a float format and not for an affine one. llama.cpp
+ * declares 34/32 for its `q8_0` cache because the block layout is published; MLX's affine scheme
+ * carries a scale and a bias per group and nobody here has measured what that costs, so its 8-bit
+ * cache is charged exactly one byte. The marker is what makes that interim honest.
+ */
+describe('a cache charged an unmeasured width is marked', () => {
+  it('marks MLX at 8-bit, which quantizes its cache affinely too', () => {
+    expect(kvSubstitutionFor(getRuntime('mlx'), 'q8')).toMatch(/affine scheme/i);
+  });
+
+  /**
+   * FP16 has no groups, no scales and no biases, so two bytes is exact. A marker here would be
+   * crying wolf on the majority case, which is the failure the weight-axis note already records:
+   * a warning on the common path trains people to ignore it where it matters.
+   */
+  it('stays silent on FP16, whose width is exact', () => {
+    expect(kvSubstitutionFor(getRuntime('mlx'), 'fp16')).toBeUndefined();
+  });
+
+  /**
+   * The two runtimes that are *not* approximating, in both directions.
+   *
+   * llama.cpp's `q8_0` cache is the interesting one: it also costs more than its nominal byte, and
+   * it is not marked — because the catalog states the real figure instead. A marker there would
+   * describe an approximation that is not being made.
+   */
+  it.each([
+    ['llama.cpp', 'q8'],
+    ['llama.cpp', 'q4'],
+    ['vllm', 'q8'],
+    ['vllm', 'fp16'],
+  ] as const)('stays silent for %s at %s, which is measured or exact', (id, precision) => {
+    expect(kvSubstitutionFor(getRuntime(id), precision)).toBeUndefined();
+  });
+
+  /**
+   * The polarity, asserted rather than assumed.
+   *
+   * `nativeKvPrecisions` names what is *real*, so a precision added to a runtime later is marked
+   * until someone declares otherwise. Naming the stand-ins instead is what let a format be added
+   * to `weightFormats` and stay silently unmarked, which is the whole reason that field is
+   * written the way it is.
+   */
+  it('marks a precision nobody has classified yet', () => {
+    const mlx = getRuntime('mlx');
+    const invented = { ...mlx, kvPrecisions: [...mlx.kvPrecisions, 'q4'] as const };
+    expect(kvSubstitutionFor(invented, 'q4')).toBeDefined();
+  });
+
+  /**
+   * A precision the runtime cannot store at all is a different refusal, made by the picker. Marking
+   * it here would explain a figure that is never produced — the same boundary `substitutionFor`
+   * draws for a format outside `weightFormats`.
+   */
+  it('says nothing about a precision the runtime cannot store', () => {
+    expect(kvSubstitutionFor(getRuntime('mlx'), 'q4')).toBeUndefined();
+  });
+
+  /**
+   * Both axes are declared, for every runtime that declares either. Required in the type, asserted
+   * here too: the type stops a field being omitted, and this stops it being satisfied with an empty
+   * list that marks everything, or a complete one that marks nothing.
+   */
+  it('states both axes wherever a substitution is declared', () => {
+    for (const runtime of RUNTIMES.filter((r) => r.substituted)) {
+      const { nativeFormats, nativeKvPrecisions, note, kvNote } = runtime.substituted!;
+      expect(nativeFormats.length, `${runtime.id} marks every weight format`).toBeGreaterThan(0);
+      expect(nativeKvPrecisions.length, `${runtime.id} marks every precision`).toBeGreaterThan(0);
+      expect(nativeKvPrecisions.length, `${runtime.id} marks no precision`).toBeLessThan(
+        runtime.kvPrecisions.length
+      );
+      expect(note).not.toEqual(kvNote);
+    }
   });
 });
