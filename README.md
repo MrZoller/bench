@@ -45,8 +45,13 @@ prefill.ttftSeconds; // how long before the first token
 
 ## Development
 
-- Test: `npm test`
-- Lint/format: `npm run lint` / `npm run format`
+```
+npm test                        # unit and component tests, in jsdom
+npm run test:e2e                # Playwright; builds and serves on 127.0.0.1:4173 itself
+npm run lint                    # eslint
+npm run format                  # prettier
+npm run catalog -- --dry-run    # re-derive the model catalog from Hugging Face, writing nothing
+```
 
 Current status and what's next: [docs/ROADMAP.md](docs/ROADMAP.md).
 
@@ -54,3 +59,13 @@ The engine under `src/engine/` is pure — no React imports — so it can be pin
 reference values. Those tests are the point: `src/engine/*.test.ts` asserts against llama.cpp's
 own published file sizes, DeepSeek's stated KV footprint, and measured throughput on a DGX Spark
 and an EPYC 9654. Treat a failure there as the numbers being wrong, not the test.
+
+`e2e/` covers only what jsdom structurally cannot — layout, scrolling, coarse-pointer media
+queries, canvas actually painting, and text scaled to 200%. That boundary is deliberate rather
+than tidy: the gap shipped a real bug once, and the specs there carry the reasoning.
+
+The model catalog is generated, never typed. `npm run catalog` rewrites
+`src/data/models.generated.json` from each repo's own `config.json` and safetensors index, and a
+[scheduled job](.github/workflows/catalog-refresh.yml) runs it weekly and opens a pull request when
+a figure actually moves. Corrections belong in that script's seed list, with a written reason —
+not in the JSON.
