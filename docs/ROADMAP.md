@@ -644,9 +644,29 @@ section is for the questions those issues cannot settle.
 - **`main` is unprotected.** Rulesets need GitHub Pro on a private repo, so the "PRs only, all
   threads resolved" rule is convention rather than enforcement. Re-run the ruleset POST if the
   repo goes public.
-- **Device specs need a verification pass before publishing.** Bandwidth is the number that
-  governs everything and the one vendors bury. The `rumored` row (M5 Ultra) is press-rumour grade
-  and must stay visibly labelled in the UI.
+- ~~Device specs need a verification pass before publishing.~~ **Done, 28 July 2026.** All 25 rows
+  checked against vendor documentation. Bandwidth — the number that governs everything — is
+  confirmed on every one: the four CPU rows are exact by arithmetic (12 channels × DDR5-4800 × 8
+  bytes is 460.8 GB/s to the digit, and the other three likewise), and the rest match their
+  datasheets. **One real error, in MI355X:** its whole compute row was the air-cooled MI350X's
+  (2300/4600/9200 dense), because the source pointed at the MI350 _family_ page. MI355X is the
+  1400W liquid-cooled bin at 2400 MHz — 2500/5000/10000 — and the row now cites the part's own
+  page. Same silicon and same memory, so nothing else moved.
+
+  Two conventions worth writing down, since both look like bugs and are not:
+
+  - **Marketed HBM capacities run ~0.4% above true binary capacity.** H200's "141 GB" is 143,771
+    MiB — 140.4 GiB — against a stored `capacityGiB: 141`; H100's "80 GB" is 79.65 GiB against 80.
+    It does not reach the engine, because what the engine budgets against is `allocatableGiB`,
+    which is below the true figure in every case (139 and 79). The headline stays as vendors quote
+    it; the number that decides a fit is conservative.
+  - **Bandwidth is theoretical peak, never measured.** Strix Halo's 256 GB/s is AMD's rating and
+    real workloads see ~215. That gap belongs to `bandwidthEfficiency` and
+    `CLASS_BANDWIDTH_UTILIZATION`, which exist to model it — folding it into the catalog would
+    double-count it and quietly break the calibration anchors.
+
+  The `rumored` row (M5 Ultra) is still press-rumour grade and must stay visibly labelled in the UI.
+
 - **Final subdomain** on zoller.ai, and **Pages is not enabled**, which blocks publishing
   regardless of the domain. Both are account-level decisions rather than code: enabling Pages on a
   private repo needs a paid plan, and making the repo public would do it for free while also
