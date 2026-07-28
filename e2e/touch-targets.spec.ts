@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { marks } from '@/design/tokens';
 
 /**
@@ -9,7 +9,112 @@ import { marks } from '@/design/tokens';
  * Matrix's 28px squares sit two pixels apart, and with hundreds of neighbours a touch user hitting
  * the wrong scenario is the likely outcome rather than the unlucky one. The coarse-pointer rules
  * that fix it are three utility classes, and nothing else can tell whether they still apply.
+ *
+ * **It sweeps rather than names.** It used to measure the three Matrix controls it knew about,
+ * which is how three 16px buttons on other surfaces went unnoticed until someone looked (#29).
+ * The sweep below measures every pointer target on the page and fails on any that is too small, so
+ * a control added later is covered by default instead of by remembering to add it here.
  */
+
+/**
+ * WCAG 2.5.8 (AA). The floor every pointer target has to clear.
+ *
+ * Distinct from `marks.hitTarget`, and the difference is deliberate rather than an inconsistency
+ * to tidy away: 24px is the standard's minimum, 44px is the stricter bar this repo declares for
+ * targets that are *crowded* or that are the only route to an accessibility affordance. Holding
+ * everything to 44 would fail controls the app never claimed it for.
+ */
+const WCAG_MINIMUM_TARGET = 24;
+
+/**
+ * Things that are focusable but are not pointer targets, with the reason each is exempt.
+ *
+ * Kept as data rather than as a filter buried in the query, because an exception nobody can see is
+ * how a real failure gets classified as expected. Each entry is asserted to still match something
+ * below — a stale exemption is itself a bug, and this is the file where it would rot unnoticed.
+ */
+const NOT_POINTER_TARGETS = [
+  {
+    selector: 'li[tabindex="0"]',
+    why:
+      'The budget legend cross-highlights its series on hover, and `tabIndex` is there to give ' +
+      'that hover affordance a keyboard equivalent. Nothing is activated by pointing at one — ' +
+      'there is no click handler — so 2.5.8 does not reach them.',
+  },
+] as const;
+
+/**
+ * Every candidate target, with the sr-only inputs resolved to the label that actually receives
+ * the tap.
+ *
+ * The radios inside the segmented controls measure 1x1 because they are `sr-only` — they have to
+ * stay focusable for arrow-key navigation, so they are hidden by clipping rather than removed
+ * from the layout. Measuring the input is measuring the wrong box: the user taps the label. A
+ * sweep that did not resolve this would report three impossible-to-hit 1px targets and be
+ * disabled within a week for crying wolf.
+ */
+async function sweep(page: Page) {
+  return page.evaluate(
+    ({ exempt }) => {
+      const candidates = Array.from(
+        document.querySelectorAll<HTMLElement>(
+          'button, a[href], select, input, [role="button"], [tabindex]:not([tabindex="-1"])'
+        )
+      );
+
+      const targets: { label: string; width: number; height: number; inGrid: boolean }[] = [];
+      const seen = new Set<HTMLElement>();
+
+      for (const el of candidates) {
+        if (exempt.some((s) => el.matches(s))) continue;
+
+        const style = getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden') continue;
+
+        // A visually-hidden control is tapped through its label.
+        const box = el.getBoundingClientRect();
+        const target = box.width < 2 || box.height < 2 ? (el.closest('label') ?? el) : el;
+        if (seen.has(target)) continue;
+        seen.add(target);
+
+        // A zero-size box is *reported*, not skipped. Skipping it is the tempting reading — it
+        // looks like something that is not really on screen — but `display: none` and
+        // `visibility: hidden` are already handled above, so what is left is a laid-out control
+        // collapsed to nothing, which is the worst version of the defect this file exists for.
+        const rect = target.getBoundingClientRect();
+
+        targets.push({
+          label:
+            `<${target.tagName.toLowerCase()}> ` +
+            `"${(target.textContent ?? '').trim().slice(0, 40) || target.getAttribute('aria-label')?.slice(0, 40) || '(no text)'}"`,
+          width: rect.width,
+          height: rect.height,
+          inGrid: !!target.closest('table'),
+        });
+      }
+      return targets;
+    },
+    { exempt: NOT_POINTER_TARGETS.map((e) => e.selector) }
+  );
+}
+
+/**
+ * Both disclosures are behind their own toggle, so half the page's controls do not exist until
+ * something opens them — including the Envelope's table, which is the surface the issue cared
+ * most about. A sweep run on the initial page measures what it can see and reports a clean bill
+ * for the rest.
+ */
+async function revealEverything(page: Page) {
+  for (const name of [
+    /show figures as a table/i,
+    /show the region as a table/i,
+    /show what each workload means/i,
+  ]) {
+    const toggle = page.getByRole('button', { name });
+    await expect(toggle, `nothing matched ${String(name)}`).toHaveCount(1);
+    await toggle.click();
+  }
+}
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
@@ -43,26 +148,81 @@ test('Matrix cells meet the hit target this repo declares', async ({ page }) => 
 });
 
 /**
- * The Matrix's own controls are *not* on the 44px rule, and that is deliberate rather than an
- * omission this spec should assert away: the grid earns it because its squares sit two pixels apart
- * with hundreds of neighbours, where a mis-hit loads the wrong scenario silently. A row of three
- * labelled toggles is not that situation.
+ * The three "show this as a table" toggles, which #29 found at 16px.
  *
- * What they do have to clear is the 24px WCAG 2.5.8 floor, with no crowding exception available —
- * so that is what is asserted. Written down because the first version of this file measured them
- * against 44 and failed, which is a claim the app never made.
+ * Held to 44 rather than to the 24px floor because two of them are the only route to the textual
+ * equivalent of a canvas — the Envelope's table is how a screen-reader or low-vision user reads
+ * the field at all. That is the same bar the grid holds, so it reads `marks.hitTarget` rather
+ * than a literal 44 — the token is what the app declares, and a spec asserting its own copy of the
+ * number is a spec that will one day disagree with the CSS it is checking.
  */
-const WCAG_MINIMUM_TARGET = 24;
-
-test('the Matrix controls clear the accessibility floor, if not the grid’s bar', async ({
+test('the table disclosures meet the hit target, being the accessibility affordance', async ({
   page,
 }) => {
-  for (const name of [/does it fit/i, /how fast/i, /how responsive/i]) {
-    const control = page.getByRole('button', { name }).first();
-    await expect(control).toBeVisible();
-    const box = await control.boundingBox();
+  for (const name of [
+    /show figures as a table/i,
+    /show the region as a table/i,
+    /show what each workload means/i,
+  ]) {
+    const toggle = page.getByRole('button', { name });
+    await expect(toggle, `nothing matched ${String(name)}`).toHaveCount(1);
+    const box = await toggle.boundingBox();
     expect(box, `${String(name)} is not laid out`).not.toBeNull();
-    expect(box!.height, `${String(name)} height`).toBeGreaterThanOrEqual(WCAG_MINIMUM_TARGET);
-    expect(box!.width, `${String(name)} width`).toBeGreaterThanOrEqual(WCAG_MINIMUM_TARGET);
+    expect(box!.height, `${String(name)} height`).toBeGreaterThanOrEqual(marks.hitTarget);
+    expect(box!.width, `${String(name)} width`).toBeGreaterThanOrEqual(marks.hitTarget);
+  }
+});
+
+/**
+ * The sweep. Every pointer target on the page, in both disclosure states.
+ *
+ * The Matrix's own measure toggles are the reason this asserts 24 and not 44: a row of three
+ * labelled controls with room around them is not the crowded situation the grid's squares are in,
+ * and holding them to 44 would fail a claim the app never made. Written down because the first
+ * version of this file measured them against 44 and failed on exactly that.
+ */
+test('every pointer target clears the WCAG 2.5.8 floor', async ({ page }) => {
+  await revealEverything(page);
+
+  const targets = await sweep(page);
+
+  /**
+   * Guards the sweep itself: an empty or partial result set makes every assertion below vacuous,
+   * which is the failure mode this suite has produced three of.
+   *
+   * Derived from the page rather than written as a literal. A hardcoded floor near today's 408
+   * cells would fail the week the catalog refresh drops a model — a false alarm that teaches
+   * people to raise the number rather than read it — and one set far below it would stop catching
+   * anything. Counting the grid's own buttons holds regardless of how big the catalog gets.
+   */
+  const gridCells = await page
+    .getByRole('region', { name: /every model on every machine/i })
+    .locator('table td button')
+    .count();
+
+  expect(gridCells, 'the grid rendered no cells').toBeGreaterThan(0);
+  expect(targets.filter((t) => t.inGrid).length, 'the sweep missed grid cells').toBe(gridCells);
+  expect(
+    targets.filter((t) => !t.inGrid).length,
+    'the sweep found no controls outside the grid'
+  ).toBeGreaterThan(10);
+
+  const tooSmall = targets
+    .filter((t) => t.height < WCAG_MINIMUM_TARGET || t.width < WCAG_MINIMUM_TARGET)
+    .map((t) => `${t.label} is ${Math.round(t.width)}x${Math.round(t.height)}`);
+
+  expect(tooSmall, `below the ${WCAG_MINIMUM_TARGET}px floor`).toEqual([]);
+});
+
+/**
+ * And that every exemption above still describes something real.
+ *
+ * An exception list is the one part of a sweep that fails open: delete the element it was written
+ * for and the entry stops excluding anything, so it sits there looking like a considered decision
+ * while quietly covering whatever matches next.
+ */
+test('each documented exemption still matches an element', async ({ page }) => {
+  for (const { selector, why } of NOT_POINTER_TARGETS) {
+    await expect(page.locator(selector), `stale exemption — ${why}`).not.toHaveCount(0);
   }
 });

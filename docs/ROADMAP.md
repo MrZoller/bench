@@ -42,15 +42,18 @@ deployment, and the follow-up list in [issues #12–#20](https://github.com/MrZo
 | 7. URL state, responsive, a11y     | **mostly** (#6)   | Querystring round-trips a scenario. Browser-level pass in `e2e/` (#19); URL defect in #15          |
 | 8. Weekly catalog refresh + deploy | **next**          | Scheduled `build-catalog` → PR on diff; static deploy to a zoller.ai subdomain                     |
 
-**Correctness debt is tracked as issues, not here.** Four are open once this lands. #9 and #10,
-which graded a configuration as working when it is not, are fixed — together with #11, which
-printed a figure measured at a different scenario from the one its sentence described. Filed as
-three bugs, one class; written up under **Verdicts** below. What remains is labelling (#13), UI
-state (#15), MLX's unmeasured 8-bit KV (#33), and three touch targets too small for a coarse
-pointer (#29). Both engine bugs are fixed: the layer-split spill fraction (#14) and prefill having
-no notion of a cached prefix (#23); see **Engine** below. The browser-level test gap (#19) is
-closed, and with it the legend overflow (#34) that only a browser could falsify; see **Tests**
-below.
+**Correctness debt is tracked as issues, not here.** #9 and #10, which graded a configuration as
+working when it is not, are fixed — together with #11, which printed a figure measured at a
+different scenario from the one its sentence described. Filed as three bugs, one class; written up
+under **Verdicts** below. Both engine bugs are fixed: the layer-split spill fraction (#14) and
+prefill having no notion of a cached prefix (#23); see **Engine** below. The browser-level test gap
+(#19) is closed, and with it the legend overflow (#34) that only a browser could falsify; see
+**Tests** below. Reflow at 200% text (#35) and the coarse-pointer targets (#29) are fixed, both by
+sweeping the class rather than the named instance. The labelling (#13) and clipboard (#15) bugs
+turned out to have been fixed in passing by #25 and #26 and were closed on the evidence.
+
+What remains open is MLX's unmeasured 8-bit KV (#33), which wants a measurement this repo cannot
+take.
 
 ## Decisions already made
 
@@ -284,11 +287,66 @@ reading the test that guards them.
   343/320 — the sideways scroll the wrap was added to remove, returning in the one setting a reader
   most needs it gone. `min-w-[min(12rem,100%)]` yields instead, and is identical at the default
   root. Worth checking on any `min-w-`/`w-` in rem that a narrow layout depends on.
-- **Reflow at 200% text is not clean yet, and the legend was not the only offender.** Probing the
-  above at a 32px root found `Matrix.tsx`'s "N of M combinations run" line — an explicit
-  `whitespace-nowrap` — taking the document to 409/320 on its own. It predates the legend work and
-  is filed rather than fixed here; the point for next time is that the probe which proves your fix
-  is also the cheapest audit of its neighbours.
+- **Reflow at 200% text is a different test from reflow at 320px, and the page passed one while
+  failing the other by 89px.** WCAG 1.4.10 asks about a narrow viewport at the default text size,
+  which this app already satisfied; 1.4.4 asks about text scaled to 200%, which browsers do by
+  growing the root font size and leaving the viewport alone. So every rem-derived width and every
+  `whitespace-nowrap` line grows and nothing gives them more room. Fixed in #35, and the shape of
+  the fix is the point: the filed instance was one of four identical `whitespace-nowrap` panel
+  headers, now one `PanelCount` that protects the numeral pair — "12 of 425" broken across a line
+  reads as two unrelated numbers — and lets the noun after it wrap like the prose it is.
+
+  **The second offender was not a nowrap at all, and would not have been found by fixing the first
+  one.** A non-wrapping flex row's min-content is the _sum_ of its children, and the segmented KV
+  control sets the width of its grid column — so four options at a 32px root widened three `w-full`
+  sliders in a panel the control is not part of, and it was the _sliders_ that left the viewport.
+  `flex-wrap` makes the floor the widest single option instead. Two separate mechanisms, one
+  symptom; the probe that proved the first fix is what found the second, which is the general
+  lesson worth keeping.
+
+  **The third offender was padding, and only CI could see it.** Both fixes above passed locally
+  with 18px to spare and failed on the Linux runner by 4px, on markup neither run had changed. The
+  cause is that the app's font stack — `ui-sans-serif, system-ui, -apple-system, 'Segoe UI', …` —
+  resolves to SF on a Mac and to fontconfig's default sans on a runner, which is wider. **The
+  overflow was real, not an artefact**: the page genuinely scrolled sideways for anyone whose
+  system sans is wider than SF, which is most Linux users and any Windows machine not reaching
+  Segoe UI. Measuring on one machine's typography is measuring the machine.
+
+  The lever was padding, because at a 32px root the shell consumed **146 of 320px — 46% of the
+  viewport** before any content was laid out. `p-4`/`p-5` are rem-derived, so they grow with the
+  text while the viewport does not. Every one is now `p-[min(1rem,4vw)]` / `p-[min(1.25rem,5vw)]`,
+  which is identical at the default root and yields only when the root font has outgrown the
+  screen — the same shape as the `min-w-[min(12rem,100%)]` fix in #34, and the general form of that
+  lesson: **a rem length in a layout a narrow viewport depends on wants a viewport term beside it.**
+
+  `e2e/reflow.spec.ts` now runs every scenario twice, once at the host's own fonts and once at
+  `'Courier New', monospace` — deliberately wider than any UI sans, and present or metric-aliased
+  on all three platforms. That is what makes the verdict portable rather than a description of the
+  machine that ran it, and reverting the padding fix now fails on a Mac. Two details that cost a
+  round each: Verdana is **not** wide enough to reproduce the CI failure locally, so a spec written
+  at Verdana would have shipped the same green-here-red-there result again; and the font has to be
+  set through `--font-sans`, because `body` sets `font-family: var(--font-sans)` and an inline
+  `style.fontFamily` on `<html>` loses to it silently. The spec asserts the stress font really is
+  wider than the host's before trusting any of it.
+
+  It holds at 200% only. Past a 40px root the page is **not** clean — long single words like
+  "Unsupported" and the slider labels start escaping — and that is recorded rather than fixed,
+  because 1.4.4 stops at 200% and "the bar is met" is a different claim from "the layout is
+  unbreakable".
+
+- **The numeral pair's nowrap cannot be falsified by geometry, and the spec says so.** "67 of 408"
+  is short enough that it never breaks on its own at any root size from 32px to 64px — measured,
+  not assumed — so `getClientRects().length === 1` is true with the class and true without it. The
+  spec asserts the computed style instead. Worth stating because writing the geometry version is
+  the obvious move and it would pass against markup with the protection deleted.
+
+- **A touch-target spec that names its controls will always be out of date.** The old one measured
+  the three Matrix toggles it knew about, and three 16px buttons on other surfaces went unnoticed
+  until someone looked (#29). It sweeps now: every pointer target on the page, with the `sr-only`
+  radios resolved to the label that actually receives the tap, and both disclosures opened first —
+  half the page's controls do not exist until something opens them, including the Envelope's table.
+  Exemptions are data with a written reason, and each is asserted to still match an element, since
+  an exception list is the one part of a sweep that fails open.
 
 **Verdicts**
 
