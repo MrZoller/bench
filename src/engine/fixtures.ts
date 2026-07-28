@@ -399,6 +399,11 @@ export const MLX: RuntimeSpec = {
   substituted: {
     nativeFormats: ['bf16'],
     note: 'MLX quantizes with its own affine scheme and the catalog has no measured entry for it, so another catalogued format of the same nominal width stands in.',
+    // FP16 only: `--kv-bits 8` is a real MLX flag, but its affine scheme carries a scale and a bias
+    // per group, and the width that costs was never measured. See `runtimes.ts`.
+    nativeKvPrecisions: ['fp16'],
+    kvNote:
+      'MLX quantizes the cache with the same affine scheme, which carries a scale and a bias per group, and the catalog has no measured width for it — so it is charged its nominal byte, which understates the cache rather than overstating it.',
   },
   kvPrecisions: ['fp16', 'q8'],
   source: 'https://github.com/ml-explore/mlx',

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { DEVICES, MODELS, RUNTIMES, evaluateConfig, useConfig, type Config } from '@/store/config';
 import { useUrlSync } from '@/store/useUrlSync';
 import { configToShareSearch } from '@/store/url';
-import { getRuntime, runtimeDrives, substitutionFor } from '@/data/runtimes';
+import { getRuntime, kvSubstitutionFor, runtimeDrives, substitutionFor } from '@/data/runtimes';
 import { QUANTS, getQuant } from '@/data/quants';
 import { CATALOG_GENERATED_AT, getDevice, getModel } from '@/data/catalog';
 import { BudgetBar } from './BudgetBar';
@@ -127,6 +127,18 @@ export function Bench() {
    */
   const substitution = wasEvaluated(evaluation.placement)
     ? substitutionFor(runtime, config.quantId)
+    : undefined;
+
+  /**
+   * The same question about the cache, kept as its own value because it is its own claim.
+   *
+   * The two are independent in both directions, which is exactly why folding them together hid
+   * this one for a release: MLX at Q4_K_M with an FP16 cache substitutes only the weights, and MLX
+   * at BF16 with an 8-bit cache substitutes only the cache — and that second combination showed no
+   * marker at all, on a page whose every memory figure included a byte nobody measured (#33).
+   */
+  const kvSubstitution = wasEvaluated(evaluation.placement)
+    ? kvSubstitutionFor(runtime, config.kvPrecision)
     : undefined;
 
   /** Whether the configuration runs at all. */
@@ -313,19 +325,37 @@ export function Bench() {
           which is a different person arriving at a different moment — usually from a shared link
           that chose the format for them. Warning tone rather than critical: the arithmetic is sound
           for the width it was given, and what is uncertain is whether the width is right. */}
-      {substitution && (
-        <p
+      {(substitution || kvSubstitution) && (
+        <div
           role="note"
-          className="panel border-[var(--color-warning)] p-[min(1rem,4vw)] text-sm leading-relaxed text-[var(--color-text-muted)]"
+          className="panel flex flex-col gap-2 border-[var(--color-warning)] p-[min(1rem,4vw)] text-sm leading-relaxed text-[var(--color-text-muted)]"
         >
-          <span aria-hidden="true" className="text-[var(--color-warning)]">
-            ◐{' '}
-          </span>
-          The memory and speed figures below are derived from a format {runtime.label} cannot load.{' '}
-          {substitution} They use {getQuant(config.quantId).label}’s {getQuant(config.quantId).bpw}{' '}
-          bpw, and the arithmetic is sound for that width; whether it is the width {runtime.label}{' '}
-          would really use is the approximation.
-        </p>
+          {substitution && (
+            <p>
+              <span aria-hidden="true" className="text-[var(--color-warning)]">
+                ◐{' '}
+              </span>
+              The memory and speed figures below are derived from a format {runtime.label} cannot
+              load. {substitution} They use {getQuant(config.quantId).label}’s{' '}
+              {getQuant(config.quantId).bpw} bpw, and the arithmetic is sound for that width;
+              whether it is the width {runtime.label} would really use is the approximation.
+            </p>
+          )}
+          {/* One panel, two paragraphs, rather than two panels: they are the same kind of caveat
+              about the same set of figures, and stacking two identical warning boxes reads as two
+              problems. Each keeps its own ◐ so neither is skimmed as a continuation of the other,
+              and either can appear without the other. */}
+          {kvSubstitution && (
+            <p>
+              <span aria-hidden="true" className="text-[var(--color-warning)]">
+                ◐{' '}
+              </span>
+              The cache is charged {kvLabel(runtime, config.kvPrecision)} at its nominal width.{' '}
+              {kvSubstitution} The cache is what pushes a long-context configuration over, so this
+              one errs towards reporting a fit.
+            </p>
+          )}
+        </div>
       )}
 
       <BudgetBar evaluation={evaluation} canOffload={device.class === 'discrete-gpu'} />

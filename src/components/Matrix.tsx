@@ -8,7 +8,7 @@ import {
 } from '@/engine/matrix';
 import { DEVICES, MODELS, getDevice, getModel } from '@/data/catalog';
 import { getQuant } from '@/data/quants';
-import { getRuntime, substitutionFor } from '@/data/runtimes';
+import { getRuntime, kvSubstitutionFor, substitutionFor } from '@/data/runtimes';
 import { FALLBACK_QUANT_ID, quantApplies } from '@/lib/quantChoice';
 import { sequential } from '@/design/tokens';
 import { kvLabel } from '@/lib/stops';
@@ -200,6 +200,18 @@ export function Matrix({ config }: { config: Config }) {
     () => cells.flat().some((cell) => cell.evaluated && substitutionFor(runtime, cell.quantId)),
     [cells, runtime]
   );
+
+  /**
+   * Whether the cache precision itself is a stand-in — a claim about the scenario, not about any
+   * row, so it needs no `some` over the cells.
+   *
+   * Gated on a cell having been evaluated for the same reason `substitutedCells` is: a grid where
+   * nothing ran produced no figure to caveat, and a warning explaining arithmetic that was never
+   * performed is noise that teaches people to skip the warning that matters.
+   */
+  const kvSubstituted =
+    kvSubstitutionFor(runtime, config.kvPrecision) !== undefined &&
+    cells.flat().some((cell) => cell.evaluated);
 
   /**
    * Tall enough for the longest label this grid actually renders.
@@ -453,6 +465,24 @@ export function Matrix({ config }: { config: Config }) {
         {substitutedCells && (
           <span className="text-[var(--color-warning)]">
             some rows scored at a stand-in format {runtime.label} cannot load
+          </span>
+        )}
+        {/* The cache axis, and a separate line rather than a clause on the one above.
+            The two conditions are independent — this grid can be scored entirely at native
+            formats and still charge an unmeasured width to every cache on it — so a combined
+            sentence would be true of a state the grid is not in.
+
+            "Every *scored* cell", and the qualifier is load-bearing rather than throat-clearing.
+            The quantifier is stronger than the weight legend's "some rows", because the cache
+            precision comes from the scenario rather than from the per-row format substitution —
+            but it is not "every cell", which is a claim about the whole grid and false on most
+            of it. Under MLX the grid still carries every shipping device while only the Apple
+            columns are evaluated at all, so a sentence saying "every cell" describes NVIDIA and
+            AMD columns that were never priced. Raised by Codex on PR #37. */}
+        {kvSubstituted && (
+          <span className="text-[var(--color-warning)]">
+            every scored cell’s cache charged at {kv}’s nominal width, which {runtime.label} has not
+            been measured at
           </span>
         )}
         {/* A default allocation and a hardware limit are not the same answer, and this grid is
