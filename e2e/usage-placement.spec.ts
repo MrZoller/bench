@@ -5,22 +5,24 @@ import { SETTING_LABELS } from '@/lib/stops';
  * Whether the controls and the figures they drive are ever on screen together.
  *
  * The five Usage controls set the scenario every figure on this page is computed at, and they used to
- * render after all of it. Measured at 1440x900 on the default scenario, before #66:
+ * render after all of it. The issue's table, measured at 1440x900 on the default scenario before #66,
+ * with `main`'s figures as re-measured in headless Chromium when this landed — the masthead and two
+ * catalog rows have moved every row, and the shape is what matters:
  *
  * ```
- * section                              top      height
- * Memory budget                         342        220   <- driven by the sliders below
- * Verdicts                              582        155
- * What you could do with it             757        304
- * How much room is left                1081        409
- * Every model on every machine         1510       1072
- * Usage                                2602        232   <- the sliders
- * gap, memory bar -> context slider    2260px  (2.5 viewport heights)
+ * section                              top      height     top on main today
+ * Memory budget                         342        220     545  <- driven by the sliders below
+ * Verdicts                              582        155     785
+ * What you could do with it             757        304     ...
+ * How much room is left                1081        409     ...
+ * Every model on every machine         1510       1072    1920
+ * Usage                                2602        232    2959  <- the sliders
+ * gap, memory bar -> context slider    2260px            2402px  (2.5 viewport heights)
  * ```
  *
- * On an iPhone 14 the document was 4,887px and the two were never on screen together at any scroll
- * position. That is a direct-manipulation tool — "drag usage, watch the budget fill" — in which you
- * cannot watch the budget fill while you drag.
+ * On an iPhone 14 the gap was 3,505px in a 5,302px document — the two were never on screen together at
+ * any scroll position. That is a direct-manipulation tool — "drag usage, watch the budget fill" — in
+ * which you cannot watch the budget fill while you drag.
  *
  * **jsdom cannot answer this at all.** It has no layout engine, so every `getBoundingClientRect` in it
  * reads 0 and any version of the assertion below is a tautology there. The reading-order half — that
@@ -79,7 +81,8 @@ test('the context slider and the bar it fills are within one viewport of each ot
   expect(bar.top, 'the memory bar is still above the slider that sizes its cache').toBeGreaterThan(
     slider.top
   );
-  // And close enough to it to be watched. 2,260px before — two and a half of these viewports.
+  // And close enough to it to be watched. 2,402px on `main` when this landed, 388px after — two and a
+  // half of these viewports down to under half of one.
   expect(
     bar.top - slider.top,
     'the slider and the bar it fills are more than a viewport apart'
@@ -109,13 +112,15 @@ test('every figure on the page is laid out after the controls that set it', asyn
 });
 
 /**
- * The phone case, which was the worse one: 2,602px into a 4,887px document, past four screens of grid.
+ * The phone case, which was the worse one: the Usage panel started 4,316px into a 5,302px document on
+ * `main`, past four screens of grid, and now starts at 774px in a document the same height.
  *
  * Asserted as "inside the first two screens" rather than as a gap in viewport heights. Both panels
  * stack to one column here, so nine controls sit between the top of the page and the bar, and that is
  * the real cost of this placement — worth stating honestly rather than dressing up. What the fix has
  * to buy on a phone is that the controls are somewhere a reader arrives at, instead of somewhere they
- * have to scroll past the entire catalog to find.
+ * have to scroll past the entire catalog to find. The slider and the bar do come within one screen
+ * here — 683px of the 844 — but the bar is still the second screen, not the landing one.
  */
 test('the controls are in the first two screens on a phone, not the last', async ({ page }) => {
   await page.setViewportSize(PHONE);

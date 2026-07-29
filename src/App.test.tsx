@@ -3164,9 +3164,9 @@ const TABBABLE = [
  * The five Usage sliders set the scenario every figure here is computed at — the memory bar, the three
  * verdict tiles, the workload strip, the Envelope, and a Matrix heading that prints the very numbers
  * they hold ("32K context, 8K prompt, 1 user, FP16 KV"). They used to render after all five: 2,260px
- * below the memory bar at 1440x900, two and a half viewport heights, and past four screens of grid on
- * an iPhone 14, where the slider and the bar it fills were never on screen together at any scroll
- * position. #52 took the keyboard cost from 422 Tab presses to 15 and closed by naming this as the
+ * below the memory bar at 1440x900 when the issue measured it, 2,402px on `main` by the time this
+ * landed — two and a half viewport heights either way — and past four screens of grid on an iPhone 14,
+ * where the slider and the bar it fills were never on screen together at any scroll position. #52 took the keyboard cost from 422 Tab presses to 15 and closed by naming this as the
  * open question — "whether the Usage controls should sit above the two large grids in DOM order. They
  * are the primary input of the tool and are currently last." #66 is that question answered.
  *
@@ -3228,8 +3228,14 @@ describe('the controls come before the figures they drive', () => {
     const stops = [...main.querySelectorAll<HTMLElement>(TABBABLE)];
     const controls = stops.filter((el) => setup.contains(el) || usage.contains(el));
 
-    // Both panels are actually in the sweep — twelve stops today: four selects, the hardware note's
-    // disclosure, four sliders and three KV options. A zero here would satisfy the prefix trivially.
+    // Both panels are actually in the sweep — twelve elements today: four selects, the hardware
+    // note's disclosure, four sliders and three KV options. A zero here would satisfy the prefix
+    // trivially.
+    //
+    // Twelve *elements*, ten stops: a radio group offers Tab only its checked member, so the three
+    // KV options are one press in a browser and three in this enumeration. That does not weaken the
+    // prefix — a stop the browser skips cannot reorder the ones it does not — but it is why this
+    // figure and `e2e/matrix-grid.spec.ts`'s differ by two on identical markup.
     expect(controls.length).toBeGreaterThan(8);
     expect(stops.slice(0, controls.length), 'a figure is reachable before a control').toEqual(
       controls
@@ -3256,6 +3262,37 @@ describe('the controls come before the figures they drive', () => {
       true
     );
   });
+
+  /**
+   * The same rule one level down, where it was already being followed and had nothing holding it.
+   *
+   * Both picture panels carry a measure switch that recolours the whole picture, and both put it
+   * *above* the picture — which is the #66 property inside a panel rather than across the page. A
+   * review of this change audited the class and found these two clean and two disclosures (the
+   * workload glossary, the budget table) sitting under their output, which is the "show more under a
+   * list" convention and stays: they reveal detail already in the same viewport rather than setting a
+   * scenario something else is computed from. The two that recolour a whole figure are the ones worth
+   * pinning, because moving one is a plausible tidy-up and nothing would have failed.
+   */
+  it('puts each measure switch above the picture it recolours', () => {
+    const { container } = render(<App />);
+
+    const gridSwitch = screen.getByRole('group', { name: /colour the grid by/i });
+    const table = container.querySelector('table[role="grid"]')!;
+    expect(precedes(gridSwitch, table), 'the Matrix recolours a grid drawn above its switch').toBe(
+      true
+    );
+
+    const fieldSwitch = screen.getByRole('group', { name: /colour the field by/i });
+    const canvas = screen
+      .getByRole('region', { name: /how much room is left/i })
+      .querySelector('canvas')!;
+    expect(canvas, 'the Envelope drew no canvas, so this proves nothing').not.toBeNull();
+    expect(
+      precedes(fieldSwitch, canvas),
+      'the Envelope recolours a field drawn above its switch'
+    ).toBe(true);
+  });
 });
 
 /**
@@ -3263,8 +3300,10 @@ describe('the controls come before the figures they drive', () => {
  * carrying a full-sentence `aria-label`, and it sat above the Usage controls in DOM order. Every one
  * of those cells in the tab sequence put 422 Tab presses between the top of the page and the context
  * slider that drives every figure on the page, and a screen-reader user heard 408 sentences on the
- * way. #66 has since moved those controls above the grid; the grid is still 714 stops from anything
- * after it, and a reader who Tabs into it still needs one press to get out.
+ * way. #66 has since moved those controls above the grid, which does not retire the pattern: the grid
+ * is the page's last tab stop, so the 714 presses it used to cost are now the price of leaving the
+ * document rather than of reaching the next panel. One press either way, and only with the roving
+ * index.
  *
  * The counting lives here rather than in `e2e/` because the tab *sequence* is a DOM property —
  * `tabindex="-1"` is reachable by script and never by Tab — and jsdom can answer it in a second.
@@ -3297,16 +3336,21 @@ describe('the comparison grid is one tab stop, not four hundred', () => {
    * have passed against a grid that had never been fixed. The total is the property #52 actually
    * bought, and it is indifferent to where any panel sits.
    */
-  it('keeps the whole page inside thirty tab stops', () => {
+  it('keeps the whole page inside forty tab stops', () => {
     const { container } = render(<App />);
     const stops = [...container.querySelectorAll<HTMLElement>(TABBABLE)];
 
     // The grid has to be in this page, or the count is of a page without the problem on it.
     expect(cellsOf(container).length).toBeGreaterThan(300);
-    // 26 as it stands, one of which is the grid. 740 if every cell were in the sequence again. The
-    // bound is deliberately loose — what matters is the order of magnitude, and pinning the exact
-    // figure would fail on any unrelated control being added.
-    expect(stops.length).toBeLessThan(30);
+    /* 26 as it stands, one of which is the grid. 739 if every cell were in the sequence again —
+       26 − 1 + 714 — which is what replacing the roving `tabIndex` with `tabIndex={0}` reports.
+
+       Forty, the same ceiling `e2e/matrix-grid.spec.ts` uses, because the two count one sequence and
+       a bound that fires in one channel and not the other is a bug report about the wrong file. Loose
+       on purpose: at 30 this sat four stops from red on a measured 26, and this sweep has been adding
+       two to five stops a PR — so the next disclosure would have failed a test named after the grid
+       while nothing about the grid had changed. What matters is the order of magnitude. */
+    expect(stops.length).toBeLessThan(40);
   });
 
   it('moves between cells with the arrow keys', async () => {

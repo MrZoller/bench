@@ -272,11 +272,12 @@ export function Matrix({ config }: { config: Config }) {
    * it sat *above* the Usage controls in DOM order, which meant 422 presses of Tab between the top
    * of the page and the context slider that drives every figure on it. A screen-reader user heard
    * every one of those sentences on the way. #66 has since moved those controls above this grid, and
-   * that does not make this pattern optional: 714 stops still stand between the grid and anything
-   * after it, and a reader who Tabs *into* the grid still needs a way out of it. That is the one
-   * accessibility affordance this repo had no
-   * spec behind, which is exactly why it survived: touch targets, reflow at 200%, coarse-pointer
-   * queries and palette contrast all have tokens and tests, and nothing was looking at focus order.
+   * that does not make this pattern optional: this is the last panel with a tab stop in it, so
+   * without the roving index a reader who Tabs *into* the grid needs 714 presses to get out of the
+   * document — nothing downstream is being protected, the reader is. That is the one accessibility
+   * affordance this repo had no spec behind, which is exactly why it survived: touch targets, reflow
+   * at 200%, coarse-pointer queries and palette contrast all have tokens and tests, and nothing was
+   * looking at focus order.
    *
    * The ARIA grid pattern is what this is for: one element in the tab sequence, arrows to move
    * between cells, Home/End for the ends of a row and Ctrl+Home/End for the ends of the grid. One

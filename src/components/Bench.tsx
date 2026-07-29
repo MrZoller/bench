@@ -354,16 +354,26 @@ export function Bench() {
           five controls drove every figure that used to precede them — the memory bar, the three
           verdict tiles, the workload strip, the Envelope, and a Matrix whose heading states the very
           scenario they set ("32K context, 8K prompt, 1 user, FP16 KV"). At 1440x900 the context
-          slider sat 2,260px below the bar it fills, two and a half viewport heights; on an iPhone 14
-          the two were never on screen together at any scroll position. A page whose premise is the
+          slider sat 2,260px below the bar it fills when the issue measured it and 2,402px by the time
+          this landed, two and a half viewport heights either way; on an iPhone 14 the gap was 3,505px
+          and the two were never on screen together at any scroll position. A page whose premise is the
           docstring above — "drag usage, watch the budget fill" — cannot put the drag and the fill in
           different viewports, so every panel was an answer to a question the reader could not see
-          themselves asking.
+          themselves asking. Both gaps are now inside one viewport: 388px at 1440x900, 683px at 390x844.
 
           DOM order is reading order, so the same distance was the screen-reader cost: six panels of
           output before the first input. #52 fixed the keyboard half — 422 Tab presses down to 15 —
           and deliberately scoped the placement out, as a layout decision rather than a reachability
           bug. This is that decision, made the other way.
+
+          **What it costs, measured rather than waved at.** The landing view no longer holds a figure.
+          At 1440x900 the two control panels run 281–901 and the memory bar's top is 978, so at scroll
+          0 there are 620px of input and nothing computed; before this the bar sat at 602 and the
+          verdict tiles at 785, both on screen. The trade is deliberate — a reader who arrives, drags,
+          and scrolls 100px sees the bar respond, where before they had to scroll past the whole
+          catalog to find the slider at all — but it is a trade, not a free win, and the thing that
+          would remove it is the sticky summary strip #66 named and scoped out. Merging the two panels
+          would not: that recovers the gap between them, not 620px of controls.
 
           Kept as two panels rather than merged into one `sm:grid-cols-2` grid now that they are
           adjacent. They are two landmarks with two names, and "what are you running" and "how are

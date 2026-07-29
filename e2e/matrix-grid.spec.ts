@@ -22,7 +22,7 @@ import { expect, test } from '@playwright/test';
  * 714 cells in the sequence blows any bound, one does not.
  *
  * Written as a bound rather than an exact count on purpose. The figure that matters is the order
- * of magnitude — nobody presses Tab 422 times — and pinning 25 exactly would fail the next time an
+ * of magnitude — nobody presses Tab 422 times — and pinning 23 exactly would fail the next time an
  * unrelated control is added, which is how a spec stops being read.
  */
 
@@ -53,7 +53,9 @@ async function tabStopsInsideMain(
     });
     if (inside) stops++;
     // Focus has been in `<main>` and is not any more, so the walk is over. Whether the browser hands
-    // focus to its own chrome or wraps to the masthead, either lands outside `<main>`.
+    // focus to its own chrome or wraps to the masthead, either lands outside `<main>`. Observed in
+    // headless Chromium: the press after the grid's single cell puts focus on `<body>`, so the walk
+    // terminates here rather than at the `limit`.
     else if (stops > 0) return stops;
   }
   return Number.POSITIVE_INFINITY;
@@ -67,9 +69,15 @@ test('the whole page is a short keyboard walk, grid included', async ({ page }) 
 
   const stops = await tabStopsInsideMain(page, 80);
 
-  // 25 as it stands: eleven controls (four selects, four sliders, three KV options), four
-  // disclosures, three legend keys, six measure buttons, and exactly one cell. 422 before the roving
-  // tabindex landed, which the 80-press ceiling never reaches — so that regression reports Infinity.
+  // 23 as measured in this browser: nine controls (four selects, four sliders, and the KV group as
+  // one stop), four disclosures, three legend keys, six measure buttons, and exactly one cell. 422
+  // before the roving tabindex landed, which the 80-press ceiling never reaches — so that regression
+  // reports Infinity.
+  //
+  // The nine is where this figure and `App.test.tsx`'s diverge, and the divergence is the point of
+  // running both. A radio group offers Tab only its checked member, so the three KV options are one
+  // stop here and three in a `querySelectorAll` of tabbable elements: 23 in the browser against 25
+  // in jsdom, on the same markup. Compare a new measurement against the number from the same channel.
   expect(stops).toBeLessThan(40);
   expect(stops, 'the walk never entered or never left <main>').toBeGreaterThan(0);
 });
