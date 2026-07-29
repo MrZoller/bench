@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 import { useConfig, DEFAULT_CONFIG } from '@/store/config';
 import { configToShareSearch } from '@/store/url';
-import { getModel } from '@/data/catalog';
+import { DEVICES, getModel } from '@/data/catalog';
 import { tokens } from '@/lib/format';
 import { DETAIL_ANCHOR_ID } from '@/components/Matrix';
 import { judgeWorkloads } from '@/engine/verdict';
@@ -931,6 +931,123 @@ describe('the Matrix stays informative', () => {
     const byFit = fills();
     await user.click(within(matrix()).getByRole('button', { name: 'How fast' }));
     expect(fills()).not.toEqual(byFit);
+  });
+});
+
+/**
+ * The device headers are rotated 45 degrees, which costs height *and* width — one length, spent
+ * twice. #64 is what happened when the component derived it once: 246px of header band reserved at
+ * every viewport, from a 40-character label, while the same label's sideways extent went unreserved
+ * and leaned 142px out of a scroll container the grid otherwise fitted exactly. The app paid a phone
+ * screen of vertical space for four names it then cut off.
+ *
+ * Split across the two suites the way the quantity itself splits. The *derivation* is a string —
+ * label text, an inline height, an inline track list — and jsdom reads all three in milliseconds.
+ * What those lengths buy in a laid-out browser is `e2e/matrix-header.spec.ts`, because jsdom reports
+ * every width on this surface as 0, which is exactly why the sideways half went unnoticed.
+ */
+describe('the Matrix header reserves the rotation once', () => {
+  const matrix = () => screen.getByRole('region', { name: /Every model on every machine/i });
+
+  /**
+   * The rendered labels, each paired with the device it names.
+   *
+   * Read off the `title`, which carries the full catalog name, rather than by zipping the header
+   * against `DEVICES` in column order — the pairing is the thing under test, and an assertion that
+   * assumes it cannot catch it going wrong.
+   */
+  const headerLabels = () =>
+    [...matrix().querySelectorAll('thead th span[title]')].map((span) => ({
+      name: span.getAttribute('title') ?? '',
+      label: span.textContent ?? '',
+    }));
+
+  /** The part of a name that is not the vendor line and not the trailing parenthetical. */
+  const stem = (name: string) =>
+    name.replace(/^(GeForce|Instinct|Radeon)\s+/, '').replace(/\s*\([^)]*\)\s*$/, '');
+
+  it('drops the qualifier from every column that can be identified without it', () => {
+    render(<App />);
+    const labels = headerLabels();
+    // The header is the whole shipping catalog; a locator that found four of them would make
+    // everything below it pass for the wrong reason.
+    expect(labels.length).toBe(DEVICES.filter((d) => d.status === 'shipping').length);
+
+    for (const { label } of labels) {
+      expect(label, `"${label}" still spends characters on brackets`).not.toMatch(/[()]/);
+    }
+
+    /**
+     * Minimal, stated as a rule rather than against a list of names: a label may only be longer
+     * than its own stem where another column answers to that same stem.
+     *
+     * This is the half of the fix that is easy to get wrong in the other direction. Stripping the
+     * parenthetical unconditionally is the obvious reading of the issue and it reintroduces the
+     * defect the rotation exists to prevent — the three Mac Studio M3 Ultra rows differ *only* in
+     * capacity, so they would collapse into one string three columns wide, and a header that
+     * cannot distinguish its own columns is worse than none.
+     */
+    const stems = labels.map((l) => stem(l.name));
+    for (const { name, label } of labels) {
+      if (label === stem(name)) continue;
+      expect(
+        stems.filter((s) => s === stem(name)).length,
+        `"${label}" is longer than "${stem(name)}", which no other column answers to`
+      ).toBeGreaterThan(1);
+      expect(label.startsWith(stem(name))).toBe(true);
+    }
+
+    // And the rule bites on the shipped catalog rather than being vacuously true of it.
+    expect(labels.filter(({ name, label }) => label !== stem(name)).length).toBeGreaterThan(1);
+    expect(new Set(labels.map((l) => l.label)).size).toBe(labels.length);
+  });
+
+  it('spends one derived length on the band and the lane, not two', () => {
+    render(<App />);
+
+    const band = matrix().querySelector<HTMLElement>('thead th[style]');
+    const lane = matrix().querySelector<HTMLElement>('.overflow-x-auto > div[style]');
+    expect(band, 'the header row reserves no height at all').not.toBeNull();
+    expect(
+      lane,
+      'the scroll container reserves no lane for the labels to lean into'
+    ).not.toBeNull();
+
+    const bandRem = parseFloat(band!.style.height);
+    // `minmax(0, …)`, so the lane is what is left over rather than a claim on the grid's width.
+    const laneRem = parseFloat(
+      /minmax\(\s*0\s*,\s*([\d.]+)rem\s*\)/.exec(lane!.style.gridTemplateColumns)?.[1] ?? 'NaN'
+    );
+
+    expect(laneRem).toBeGreaterThan(0);
+    // sin(45) and cos(45) are the same number: the band is the lean plus the row's own padding, so
+    // the two axes cannot drift apart without this failing.
+    expect(bandRem - laneRem).toBeCloseTo(1.25, 6);
+  });
+
+  it('reserves a band for the labels it renders, not for the ones it used to', () => {
+    render(<App />);
+
+    const bandRem = parseFloat(
+      matrix().querySelector<HTMLElement>('thead th[style]')!.style.height
+    );
+    const longest = Math.max(...headerLabels().map((l) => l.label.length));
+
+    // Still long enough for the longest label at the same 0.5rem-per-character estimate the
+    // rotation has always been sized by — the band may only shrink because the labels did, never
+    // because someone capped it. Clipping the names is the failure the rotation exists to prevent.
+    expect(bandRem).toBeGreaterThanOrEqual(longest * 0.5 * Math.SQRT1_2);
+
+    /**
+     * And the 246px in the issue has actually moved.
+     *
+     * 15.39rem was the band when the reservation carried `(12-ch DDR5-4800)` and its neighbours:
+     * 40 characters, 246px at the default root, 16% of the Matrix panel on a phone, and unchanged
+     * between a 320px screen and a 1440px one. 11rem is 176px — comfortably above the 10.09rem the
+     * shipped catalog now asks for, and far enough below 15.39 that restoring the parentheticals
+     * fails here rather than in review.
+     */
+    expect(bandRem).toBeLessThan(11);
   });
 });
 

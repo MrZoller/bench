@@ -109,6 +109,148 @@ test('does not reserve more header height than the labels need', async ({ page }
 });
 
 /**
+ * The other axis, which is the half nothing was measuring (#64).
+ *
+ * A 45-degree rotation costs `sin(45) × label` of height and `cos(45) × label` of width, and only
+ * the height was ever reserved — so the labels leaned up-and-*right* out of the scroll container.
+ * At 1440 and 1024 the grid fitted its panel exactly and the container still reported 142px of
+ * overflow, purely from header text: a grid that needs no horizontal scrolling got a scrollbar, and
+ * the default view hid the last four device names — including the longest one, the one the 246px of
+ * reserved height was calculated from.
+ *
+ * Two widths, because they catch different mistakes. 1280 is where the panel is at its widest and
+ * the overflow was pure decoration. 1060 is the interesting one: the grid's own min-content is 857px
+ * (868 under a wider font) inside a 970px panel, so the trailing lane and the columns are competing
+ * for the same 100px — a lane declared as fixed padding rather than a `minmax(0, …)` track passes at
+ * 1280 and fails here by 29px, which is the filed defect with the blame moved. Both mutations were
+ * run, not reasoned about.
+ *
+ * **Not 1024, and the reason is worth writing down.** The filed bug measures 1024 and the fix does
+ * cover it on this repo's own machine, with 14px to spare. Under `'Courier New'` — the stress font
+ * `reflow.spec.ts` uses precisely because it is wider than any UI sans and present on all three
+ * platforms — the same width comes out 5px over: the grid's min-content grows with the font, the
+ * labels grow with it, and the panel does not. Measured, not feared. 142px of overflow becoming 5
+ * is the fix working; an assertion that green here and red on a Linux runner would be this suite's
+ * fourth spec measuring the machine instead of the layout.
+ *
+ * jsdom reports every one of these widths as 0, which is why this survived.
+ */
+for (const width of [1280, 1060]) {
+  test(`the grid does not scroll sideways for a header leaning past it at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto('/');
+
+    const scroller = page
+      .getByRole('region', { name: /every model on every machine/i })
+      .locator('div.overflow-x-auto');
+    await expect(scroller).toBeVisible();
+
+    const measured = await scroller.evaluate((el) => {
+      const table = el.querySelector('table')!;
+      const labels = [...el.querySelectorAll('thead th span[title]')];
+      const box = el.getBoundingClientRect();
+      return {
+        client: el.clientWidth,
+        scroll: el.scrollWidth,
+        table: table.getBoundingClientRect().width,
+        // The container's own right edge, at the resting scroll position — what a reader can see
+        // without panning.
+        visibleRight: box.left + el.clientWidth,
+        rightmostLabel: Math.max(...labels.map((l) => l.getBoundingClientRect().right)),
+        labelCount: labels.length,
+      };
+    });
+
+    expect(measured.labelCount).toBeGreaterThan(1);
+
+    /**
+     * The premise, asserted rather than assumed: the grid itself fits the panel here. Without it
+     * this test would pass on any layout wide enough to scroll for honest reasons, which is the
+     * "measures the wrong thing and cannot fail" shape the roadmap keeps recording.
+     */
+    expect(measured.table, 'the grid no longer fits its panel at this width').toBeLessThanOrEqual(
+      measured.client + 1
+    );
+
+    // So nothing may scroll. One pixel of tolerance for a fractional layout; the defect was 142.
+    expect(measured.scroll, 'the grid scrolls sideways for its header alone').toBeLessThanOrEqual(
+      measured.client + 1
+    );
+
+    // And the last thing the header paints is inside what the reader can see, rather than 116px
+    // past it.
+    expect(
+      measured.rightmostLabel,
+      'a device label is painted outside the scroll container'
+    ).toBeLessThanOrEqual(measured.visibleRight + 1);
+  });
+}
+
+/**
+ * The same claim, generalised: **no scroll container on this page scrolls for its own decoration.**
+ *
+ * The Matrix header is where this defect was found, which is why the sweep lives here, but the page
+ * carries two of these containers before anything is disclosed — the grid and the Envelope's plot,
+ * with the Envelope's table making a third once opened — and the mechanism that produced 142px of
+ * phantom overflow is available to all of them. Anything painted out of flow (a rotation, an absolute
+ * label, a ring, a shadow) enlarges the scrollable area without enlarging any child, and the
+ * container then offers to scroll to something the layout never asked for.
+ *
+ * So: a container may scroll only as far as its **in-flow** content reaches. Out-of-flow boxes are
+ * excluded deliberately, and that exclusion is the whole test — `scrollWidth` on the children counts
+ * the rotated labels, because they are descendants of the table, so the first version of this sweep
+ * passed against the filed defect with 142px of overflow in front of it. Decoration has to fit inside
+ * the box; only layout may ask for a scrollbar.
+ *
+ * Checked at a desktop width and a phone width, not at the ~1024 knife-edge where the Matrix has 5px
+ * of honest overflow under a wide font; see the note above.
+ */
+for (const [width, height] of [
+  [1280, 720],
+  [390, 844],
+]) {
+  test(`no panel scrolls sideways for its own decoration at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height });
+    await page.goto('/');
+    await expect(page.locator('table td button').first()).toBeVisible();
+
+    const containers = await page.evaluate(() =>
+      [...document.querySelectorAll<HTMLElement>('*')]
+        .filter((el) => ['auto', 'scroll'].includes(getComputedStyle(el).overflowX))
+        .map((el) => {
+          const left = el.getBoundingClientRect().left;
+          const inFlow = [...el.querySelectorAll<HTMLElement>('*')].filter(
+            (child) => !['absolute', 'fixed'].includes(getComputedStyle(child).position)
+          );
+          return {
+            where: el.className.toString().slice(0, 60),
+            client: el.clientWidth,
+            scroll: el.scrollWidth,
+            // Measured from the container's own left edge, at the resting scroll position.
+            content: Math.max(
+              0,
+              ...inFlow.map((child) => child.getBoundingClientRect().right - left)
+            ),
+          };
+        })
+    );
+
+    // Two on a fresh page; finding one would make every assertion below it a description of nothing.
+    expect(containers.length).toBeGreaterThanOrEqual(2);
+
+    for (const c of containers) {
+      if (c.scroll <= c.client + 1) continue;
+      expect(
+        c.content,
+        `"${c.where}" scrolls to ${c.scroll} in a ${c.client} box, and nothing inside it is that wide`
+      ).toBeGreaterThan(c.client);
+    }
+  });
+}
+
+/**
  * The reason the rotation exists at all: horizontally these clipped to "GeForc…" four times over,
  * and two Mac Studio variants differing only in a trailing capacity suffix became indistinguishable.
  * A header that cannot tell its own columns apart is worse than none.

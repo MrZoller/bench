@@ -403,6 +403,49 @@ reading the test that guards them.
   row is short). The general form is the thing to keep: a length measured from text belongs in the
   same units as the text. (#42, #44.)
 
+- **A rotation costs two lengths, and `headerHeight` only ever charged for one** ([#64](https://github.com/MrZoller/bench/issues/64)).
+  `sin(45)` and `cos(45)` are the same number, so the Matrix's device labels leaned as far sideways
+  as they stood tall — 246px of reserved band at every viewport, and 142px of the same quantity
+  leaking out of a scroll container the grid otherwise fitted _exactly_ at both 1440 and 1024. The
+  grid got a scrollbar it did not need, the default view hid the last four device names, and the one
+  it cut off first was the 40-character label the 246px had been calculated from. Both numbers now
+  come from one expression, which is the actual repair; the rest is what the repair had to get right.
+
+  **The obvious label fix reintroduces the bug the rotation exists to prevent.** The filed
+  suggestion is to strip the parenthetical — `(12-ch DDR5-4800)`, `(512 GB)` — since it is already
+  in the tooltip and every cell's `aria-label`. Unconditionally, that collapses the three Mac Studio
+  M3 Ultra rows into one string three columns wide, which is precisely the "a header that cannot
+  distinguish its own columns is worse than none" failure the 45-degree labels were introduced to
+  fix. The qualifier is dropped only where the rest of the name is already unique across the
+  _rendered set_, so a catalog addition that collides with an existing stem lengthens both labels
+  instead of quietly making one ambiguous. 40 characters becomes 25, and the band 161px.
+
+  **The trailing lane has to be able to yield, and padding cannot.** Reserving `cos(45) × longest`
+  as `padding-right` on the scroll container — also the filed suggestion — fixes 1440 and 1280 and
+  moves the defect at 1024: the grid's own min-content is 857px inside a 934px panel, so a
+  non-negotiable 141px lane forces 65px of scrolling onto a grid that fits. Measured on both
+  implementations. Two grid tracks express the priority instead —
+  `minmax(min-content, 1fr) minmax(0, lean)` — so the lane takes free space, shrinks to the 77px
+  going spare at 1024, and stands down to nothing on a phone, where the columns keep their 44px
+  coarse-pointer targets and the labels are reachable by the panning already happening.
+
+  **The 1024px case in the issue is fixed but deliberately not asserted.** Under `'Courier New'` —
+  `reflow.spec.ts`'s stress font, wider than any UI sans — the grid's min-content and the labels
+  both grow while the panel does not, and 1024 comes out 5px over. 142px becoming 5 is the fix
+  working; a spec that is green on a Mac and red on a Linux runner would be this suite's fourth
+  measuring the machine instead of the layout. The geometry assertions sit at 1280 and at **1060**,
+  the width where the lane and the columns compete hardest — a padding lane passes at 1280 and fails
+  at 1060 by 29px, so the spec separates the two implementations rather than merely the two axes.
+
+  **And the sweep is the interesting half.** The defect class is not "a rotated label" — it is _any_
+  scroll container whose scrollable area is enlarged by something out of flow: a rotation, an
+  absolute label, a ring, a shadow. All three of the app's `overflow-x-auto` containers can do it,
+  so `matrix-header.spec.ts` now checks every one of them: a container may only scroll as far as its
+  **in-flow** content reaches. The first version of that sweep measured each child's `scrollWidth`
+  and passed against the filed defect with 142px of overflow in front of it — the rotated labels are
+  descendants of the table, so the table's own `scrollWidth` already counted them. Out-of-flow boxes
+  have to be excluded by hand, and that exclusion is the whole test.
+
 - **Simulating text zoom by setting the root font size is not text zoom, and a test built on it
   reports layouts nobody can reach.** Widening the reflow sweep to the `sm` and `lg` boundaries —
   640 and 1024 — produced six red tests and three plausible-looking layout bugs, all artifacts.
