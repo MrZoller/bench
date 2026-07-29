@@ -1187,7 +1187,8 @@ describe('the Matrix stays informative', () => {
 /**
  * "Will not run" and "this runtime cannot drive it" were the same empty cell (#72).
  *
- * Select vLLM and 10 of the 24 columns empty out completely, every cell drawn `transparent` behind
+ * Select vLLM and every Mac, every Strix Halo and every CPU host empties out completely — 10 of the
+ * 24 shipping columns as the catalog stands at this commit — every cell drawn `transparent` behind
  * the same dashed border as a pair that was measured and did not fit, under the same one-line
  * legend. A uniformly empty column is the pattern that reads as a confident finding, so the picture
  * said "this hardware cannot hold the model" — quantitatively backwards, since a 256 GB Mac Studio
@@ -1255,9 +1256,13 @@ describe('the Matrix tells a runtime refusal from a memory one', () => {
      * The component decides from `runtimeDrives` while every cell's refusal comes from
      * `planPlacement`'s own copy of that check, so this is the assertion that keeps the two from
      * drifting: a struck column's cells must *all* carry the runtime-level reason, and no cell
-     * anywhere else may carry it. Marking a column that merely came up empty is the same
-     * misattribution pointed the other way — at the scenario #72 was filed at, the DGX Spark column
-     * is also entirely empty and vLLM drives a Spark perfectly well.
+     * anywhere else may carry it.
+     *
+     * Marking a column that merely came up empty would be the same misattribution pointed the other
+     * way. At #72's own URL the two sets happen to coincide — the DGX Spark still runs 11 of its 17
+     * rows there, so the only empty columns are the undrivable ones — which is exactly why deriving
+     * from emptiness looks safe. Take that grid to 32 concurrent users and the RTX 3090, 4090 and
+     * 5080 columns empty out too, on counted bytes, under a runtime that drives all three.
      */
     for (const column of struck) {
       for (const cell of column.cells) {
@@ -1308,6 +1313,109 @@ describe('the Matrix tells a runtime refusal from a memory one', () => {
     for (const cell of measured) {
       expect(cell).toHaveAccessibleName(/does not fit|past the default allocation/i);
     }
+  });
+
+  /**
+   * Every hole on the grid, and nothing else, sits under a struck heading.
+   *
+   * The exhaustive version of the assertion above, and the one that keeps the two predicates from
+   * coming apart in the direction nothing else watches. The heading is struck from `runtimeDrives`;
+   * the cell's ink is dropped on `evaluated`, which `planPlacement` clears on **five** categorical
+   * grounds, of which "this runtime does not drive this device" is one. The other four are filtered
+   * out upstream today — the store coerces `kvPrecision` into `runtime.kvPrecisions`, `quantFor`
+   * only ever returns a format the runtime lists, and this grid hardcodes one device per cell — so
+   * the two sets coincide, and an assertion that only checked the `!drives` wording would keep
+   * passing on the day one of the other four became reachable. That day the grid grows a column of
+   * identical unexplained holes, which is #72 restated with a different ground.
+   *
+   * A hole is read off what the grid paints rather than out of the engine: `transparent` and no
+   * dashed border is exactly "not judged on its numbers", since `fill` returns the panel surface for
+   * anything that does not run and the border is what separates counted bytes from a categorical
+   * refusal. Asserted as an equality in both directions, so it fails for a stray hole *and* for a
+   * struck column whose cells kept their ink.
+   */
+  it('leaves no hole on the grid that a struck heading does not explain', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'vllm');
+
+    const hole = (cell: HTMLButtonElement) =>
+      (cell.getAttribute('style') ?? '').includes('transparent') &&
+      !cell.className.includes('border-dashed');
+
+    const holes = columns()
+      .filter((c) => !c.struck)
+      .flatMap((c) => c.cells.filter(hole).map((cell) => `${c.device}: ${cell.ariaLabel}`));
+    expect(holes, 'cells refused before the arithmetic with no struck heading saying why').toEqual(
+      []
+    );
+
+    const closed = columns().filter((c) => c.struck);
+    expect(closed.length).toBeGreaterThan(1);
+    for (const column of closed) {
+      expect(column.cells.every(hole)).toBe(true);
+      // And the proxy really is reading refusals rather than figures, so "every cell is a hole"
+      // cannot be satisfied by a grid that stopped measuring.
+      for (const cell of column.cells) {
+        expect(cell).not.toHaveAccessibleName(
+          /of the ceiling free|tok\/s|to first token|spilling/i
+        );
+      }
+    }
+  });
+
+  /**
+   * A square with no ink is not a control.
+   *
+   * The other half of narrowing the border: these cells now have nothing drawn in them at all, and
+   * they were still enabled buttons in the arrow-key sequence whose click set five config keys and
+   * smooth-scrolled three sections up to a Bench that can only blank. `tokens.ts` puts the rule as
+   * "a control's boundary is what identifies it as interactive, so it needs the 3:1 non-text minimum
+   * *before* it is focused", and records `--color-border` at 1.18:1 — so no hairline was going to
+   * make these look interactive either. They are inert instead.
+   *
+   * Still focusable and still named, which is why `aria-disabled` rather than `disabled`: a disabled
+   * button takes no focus, so the arrows would stop dead at the first struck column and the per-cell
+   * sentence — the only channel that says which machine and which runtime — would go with it.
+   */
+  it('makes a closed column inert without taking it out of the grid', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'vllm');
+
+    const closed = columns().filter((c) => c.struck);
+    const open = columns().filter((c) => !c.struck);
+    expect(closed.length).toBeGreaterThan(1);
+    expect(open.length).toBeGreaterThan(1);
+
+    for (const column of closed) {
+      for (const cell of column.cells) {
+        expect(cell).toHaveAttribute('aria-disabled', 'true');
+        expect(cell.className).toContain('cursor-not-allowed');
+        // Not `disabled`: it has to keep taking focus for the roving tab stop to cross the column.
+        expect(cell.disabled).toBe(false);
+      }
+    }
+    for (const column of open) {
+      for (const cell of column.cells) {
+        expect(cell).not.toHaveAttribute('aria-disabled');
+        expect(cell.className).not.toContain('cursor-not-allowed');
+      }
+    }
+
+    // And clicking one loads nothing. `aria-disabled` is advisory — the browser still fires the
+    // click — so the handler has to refuse it, which is what this actually checks.
+    const before = useConfig.getState();
+    await user.click(closed[0].cells[0]);
+    const after = useConfig.getState();
+    expect(`${after.modelId}/${after.deviceId}/${after.quantId}`).toBe(
+      `${before.modelId}/${before.deviceId}/${before.quantId}`
+    );
+
+    // While a column the runtime does drive still adopts its cell, so the refusal above is the
+    // narrow one and not a click handler that stopped working.
+    await user.click(open[0].cells[0]);
+    expect(useConfig.getState().deviceId).not.toBe(before.deviceId);
   });
 
   it('keys the strike in the legend, and only while the grid holds one', async () => {

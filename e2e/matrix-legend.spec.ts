@@ -40,7 +40,8 @@ const LAPTOP = { width: 1024, height: 768 };
  *
  *   - "will not run" — unconditional
  *   - "a struck column heading — MLX (Apple) does not support this hardware, at any size" — MLX runs
- *     on Apple silicon and nothing else, so 19 of the 24 columns are struck (#72)
+ *     on Apple silicon and nothing else, so all but five columns are struck (19 of 24 as the catalog
+ *     stands at this commit) (#72)
  *   - "some rows scored at a stand-in format MLX (Apple) cannot load" — MLX's only native format is
  *     BF16, so every Apple row is scored at a stand-in
  *   - "past the default allocation, which this machine lets you raise" — DeepSeek V3 at Q5_K_M is

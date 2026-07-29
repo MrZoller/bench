@@ -14,8 +14,8 @@ import { expect, test } from '@playwright/test';
  *
  * What it does **not** do is read pixels. "Distinguishable from a dashed cell" would mean decoding a
  * screenshot, so it asserts the mechanism: the decoration line on the heading, the border style on
- * the cells, and both groups non-empty so neither claim is vacuous. Same compromise
- * `budget-overshoot.spec.ts` makes for its halo.
+ * the cells, the cursor those border-less cells resolve to, and both groups non-empty so no claim is
+ * vacuous. Same compromise `budget-overshoot.spec.ts` makes for its halo.
  */
 
 /**
@@ -32,6 +32,14 @@ interface Column {
   spoken: string | null;
   /** The computed border of every cell in this column, top edge — they are drawn as one. */
   borders: { style: string; width: number }[];
+  /**
+   * What the pointer is told before it clicks, per cell.
+   *
+   * The only channel a mouse user has on a square with no boundary, and a computed value: the
+   * utility is a class name in jsdom, so `App.test.tsx` can say it is present and nothing there can
+   * say the browser resolved it to a cursor.
+   */
+  cursors: string[];
 }
 
 const readColumns = (page: import('@playwright/test').Page) =>
@@ -51,6 +59,7 @@ const readColumns = (page: import('@playwright/test').Page) =>
             width: parseFloat(style.borderTopWidth) || 0,
           };
         }),
+        cursors: rows.map((row) => getComputedStyle(row.querySelectorAll('td button')[i]).cursor),
       };
     });
   });
@@ -118,6 +127,34 @@ test('the cells under a struck heading carry no border, and measured ones still 
     .filter(drawn);
   expect(measured.length, 'nothing on the grid keys "will not run" any more').toBeGreaterThan(0);
   for (const border of measured) expect(border.style).toBe('dashed');
+});
+
+/**
+ * The cells under a struck heading say "inert" to the pointer as well as to the accessibility tree.
+ *
+ * They have no boundary left to look at — `tokens.ts` records `--color-border` at 1.18:1 on the
+ * raised fill, so there was never one worth looking at — and the answer to that is state rather than
+ * ink. `App.test.tsx` asserts the `aria-disabled` attribute and the utility class; what it cannot
+ * assert is that the class resolved to a cursor, which is the one thing a mouse user actually meets.
+ */
+test('a closed column tells the pointer it is closed', async ({ page }) => {
+  const columns = await readColumns(page);
+  const struck = columns.filter((c) => c.decoration.includes('line-through'));
+  const plain = columns.filter((c) => !c.decoration.includes('line-through'));
+  expect(struck.length).toBeGreaterThan(1);
+  expect(plain.length).toBeGreaterThan(1);
+
+  for (const column of struck) {
+    const wrong = column.cursors.filter((c) => c !== 'not-allowed');
+    expect(
+      wrong.length,
+      `cells under the struck "${column.device}" invite a click: ${[...new Set(wrong)].join(', ')}`
+    ).toBe(0);
+  }
+  // And a column the runtime drives still invites one, so the rule above is the narrow one.
+  for (const column of plain) {
+    expect(column.cursors.every((c) => c !== 'not-allowed')).toBe(true);
+  }
 });
 
 test('the legend key is struck the same way the heading is', async ({ page }) => {

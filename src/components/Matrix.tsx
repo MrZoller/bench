@@ -98,7 +98,8 @@ export function Matrix({ config }: { config: Config }) {
   /**
    * The columns this runtime cannot drive at all — one fact about the scenario, not 17 findings.
    *
-   * Select vLLM and 10 of the 24 columns empty out completely, and every cell in them used to be
+   * Select vLLM and every Mac, every Strix Halo and every CPU host empties out completely — 10 of
+   * the 24 shipping columns as the catalog stands at this commit — and every cell in them used to be
    * drawn exactly like a cell that *was* measured and did not fit: `transparent` behind a dashed
    * border, keyed "will not run". A uniformly empty column is the pattern that reads as a confident
    * result, so the picture said "this hardware cannot hold the model" where the truth is "this
@@ -109,16 +110,32 @@ export function Matrix({ config }: { config: Config }) {
    * `Will not run`, and BudgetBar refuses to draw a stack at all. This was the one that collapsed
    * them, on the surface people read as a shortlist (#72).
    *
-   * **From `runtimeDrives`, not from "every cell in this column is empty".** The two are not the
-   * same question and the difference is the whole mark: at the scenario the issue was filed at, the
-   * DGX Spark column is also entirely empty, and vLLM drives a Spark perfectly well — it is a
-   * capacity result, and striking that header would be exactly the misattribution being fixed, only
-   * pointed the other way. `runtimeDrives` is the same predicate `planPlacement` refuses on, so the
-   * struck heading and the cells' own `blockedBy` cannot come apart; `App.test.tsx` pins that
-   * agreement rather than trusting it, since `placement.ts` still holds its own copy of the check.
+   * **From `runtimeDrives`, not from "every cell in this column is empty".** At #72's own URL the
+   * two happen to agree — the columns with no runnable cell there are exactly these 10, since the
+   * DGX Spark still runs 11 of its 17 rows — and that coincidence is precisely what makes deriving
+   * the mark from emptiness look safe. It is one slider from wrong. Take that same vLLM grid to 32
+   * concurrent users and the RTX 3090, 4090 and 5080 columns empty out as well, all 17 cells apiece
+   * refused on counted bytes, and vLLM drives all three perfectly well. Striking those headings
+   * would be exactly the misattribution being fixed, only pointed the other way. Model-independent
+   * by construction, which is why it is a set of device ids rather than a scan of the grid: "at any
+   * size" is the claim, and it is true of the column before any row is scored.
    *
-   * Model-independent by construction, which is why it is a set of device ids rather than a scan of
-   * the grid: "at any size" is the claim, and it is true of the column before any row is scored.
+   * **What agrees with what, and what does not.** `planPlacement` turns a cell away on five
+   * categorical grounds, and only two of them are facts about a *column*: this one, and "this device
+   * has no interconnect, so a model cannot be split across N of them". The other three — a cache
+   * precision the runtime cannot store, a weight format it cannot load, a format needing silicon the
+   * device lacks — vary with the scenario or with the row, so a column heading is the wrong place to
+   * state them. The second column-wide ground is unreachable from here because this grid scores
+   * every cell at one device (said in the header above), which leaves this the only reason a column
+   * can close today. So the cells' ink and the heading's mark are deliberately *not* the same
+   * predicate: the ink asks `evaluated` — was this judged on its numbers — which is the broader
+   * question, and the heading asks the narrower one it has wording for.
+   *
+   * `App.test.tsx` pins the gap shut rather than trusting it, and pins it as an exhaustive claim
+   * rather than an example: no cell anywhere may be refused before the arithmetic unless its column
+   * is struck. The day a device count is threaded through here, or a runtime is handed a format the
+   * catalog can offer it, that assertion fails — instead of quietly producing 17 unexplained holes,
+   * which is the failure this whole block exists to prevent.
    */
   const undrivable = useMemo(
     () => new Set(devices.filter((d) => !runtimeDrives(runtime, d)).map((d) => d.id)),
@@ -467,10 +484,12 @@ export function Matrix({ config }: { config: Config }) {
             combinations run.
             {/* The same fact the struck headings and the legend carry, in the channel that has
                 neither. This caption is the grid's only summary for a reader who cannot see it, and
-                "235 of 408 combinations run" with no further explanation is the collapsed reading
-                #72 is about — said in the one place where the strike-through, the empty columns and
-                the legend key are all invisible. Stated only when the grid is in that state, the
-                same rule the legend below follows. */}
+                at #72's own URL it read "232 of 408 combinations run" with no further explanation —
+                the collapsed reading the issue is about, said in the one place where the
+                strike-through, the empty columns and the legend key are all invisible. (232, not the
+                235 the same grid shows at Q4_K_M: the store coerces that selection to BF16 under
+                vLLM, since vLLM does not read GGUF K-quants.) Stated only when the grid is in that
+                state, the same rule the legend below follows. */}
             {undrivable.size > 0 &&
               ` ${undrivable.size} of the ${devices.length} device columns are hardware ${runtime.label} does not support at any size, struck through in the header: their cells are empty because of the runtime, not for want of memory.`}{' '}
             This grid is a single tab stop: use the arrow keys to move between cells, Home and End
@@ -601,8 +620,15 @@ export function Matrix({ config }: { config: Config }) {
                        */
                       onClick={() => {
                         // So the tab stop follows the reader: leaving the grid and coming back
-                        // returns to the cell they last used, not to the top-left corner.
+                        // returns to the cell they last used, not to the top-left corner. Done
+                        // before the guard below, because a closed cell is still where the keyboard
+                        // should resume from — it is inert, not absent.
                         setActive([r, c]);
+                        // A closed column has no scenario to load. Argued at `aria-disabled` below;
+                        // the short version is that adopting this pair sets the Bench to a
+                        // configuration it can only blank, several sections above where the click
+                        // happened, from a square with nothing drawn in it.
+                        if (undrivable.has(cell.deviceId)) return;
                         set('modelId', cell.modelId);
                         set('deviceId', cell.deviceId);
                         set('quantId', cell.quantId);
@@ -637,6 +663,34 @@ export function Matrix({ config }: { config: Config }) {
                       title={tooltip(cell, measure, quant.id, config.deviceCount)}
                       aria-label={tooltip(cell, measure, quant.id, config.deviceCount)}
                       aria-current={isCurrent(cell) ? 'true' : undefined}
+                      /**
+                       * A square with nothing drawn in it is not a control.
+                       *
+                       * Narrowing the dashed border to `evaluated` (argued in the class list below)
+                       * leaves a closed column's cells with no ink whatsoever — `fill` already
+                       * returns `transparent` for anything that does not run — so on today's
+                       * catalog vLLM produced 170 enabled 28px buttons a reader cannot see, each
+                       * one in the arrow-key sequence and each one silently adopting a scenario
+                       * several sections above that the Bench can only blank.
+                       *
+                       * Restoring a hairline would not have answered it. `tokens.ts` states the
+                       * rule: "a control's boundary is what identifies it as interactive, so it
+                       * needs the 3:1 non-text minimum *before* it is focused" — and it records
+                       * `--color-border` at 1.18:1 on the raised fill, which is why that token is
+                       * the panel edge and `--color-control-border` exists separately at 3.41:1.
+                       * At that contrast there is no ink here that both reads as "closed" and stays
+                       * clear of "measured and over the ceiling", so the honest channel is state
+                       * rather than ink — and it is the channel the rest of the app already uses on
+                       * an unsupported pairing: BudgetBar draws no stack, the Bench blanks its
+                       * tiles.
+                       *
+                       * `aria-disabled` rather than `disabled`, because a disabled button takes no
+                       * focus: the arrow keys would stop dead at a struck column and a screen
+                       * reader would lose the per-cell sentence, which is the one channel that says
+                       * *which* machine and *which* runtime. Focusable, hoverable, announced
+                       * unavailable, and inert.
+                       */
+                      aria-disabled={undrivable.has(cell.deviceId) ? 'true' : undefined}
                       // 28px squares two pixels apart are under the 44px `marks.hitTarget` this
                       // repo declares, and with hundreds of neighbours a touch user loading the
                       // wrong scenario is the likely outcome rather than the unlucky one. Coarse
@@ -698,7 +752,13 @@ export function Matrix({ config }: { config: Config }) {
                       // categorical ground was not, so it gets no ink at all, and the struck column
                       // heading above says why once instead of 17 times. That also makes the
                       // "will not run" key below true of exactly the cells that wear it.
+                      //
+                      // The cursor is the pointer's half of the `aria-disabled` above — the one
+                      // channel a mouse user gets before they click, on a square that has no
+                      // boundary to look at.
                       className={`h-7 w-full rounded-sm focus:ring-2 focus:ring-[var(--color-accent)] focus:outline-none [@media(pointer:coarse)]:h-11 ${
+                        undrivable.has(cell.deviceId) ? 'cursor-not-allowed' : ''
+                      } ${
                         !cell.runs && cell.evaluated
                           ? 'border border-dashed border-[var(--color-border)]'
                           : ''
