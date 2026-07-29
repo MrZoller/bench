@@ -236,6 +236,94 @@ describe('the Bench does not overclaim', () => {
 });
 
 /**
+ * The budget bar past the point its own shape stops arguing (#73).
+ *
+ * The panel's claim is that it says how far over you are *structurally*, with an overflow region
+ * beyond the ceiling rule, "because it turned red does not tell you by how much". That holds while
+ * the overshoot is small and inverts past about 3x: `scale` follows the stack, so the budget becomes
+ * the sliver, the segments fill the bar, and 448 GiB against a 31 GiB ceiling draws as "nearly
+ * full". The multiple is the figure the picture stopped conveying, and it was stated nowhere.
+ *
+ * Split deliberately. Whether the rule stays *legible* where it lands is geometry — jsdom reports
+ * every width here as 0 — and lives in `e2e/budget-overshoot.spec.ts`. The clause and the legend key
+ * are DOM, so they belong here, where they run in a second.
+ */
+describe('the budget bar states an overshoot its shape cannot show', () => {
+  /** The overflow line, addressed by the part of it that does not move. */
+  const overflow = () => screen.getByText(/Over the ceiling by/);
+  const budget = () => screen.getByRole('region', { name: /memory budget/i });
+
+  /**
+   * The issue's own URL, reached through the controls: DeepSeek V3 at Q4_K_M on one 5090 at 128K
+   * and 8 users. 448 GiB used against a 31 GiB ceiling — 14.5x, with the rule 6.9% from the left.
+   */
+  const fourteenTimesOver = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
+    act(() => {
+      useConfig.getState().set('contextTokens', 131072);
+      useConfig.getState().set('concurrency', 8);
+    });
+  };
+
+  it('says how many times over the ceiling the stack is', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await fourteenTimesOver(user);
+
+    // Both figures, because they are different quantities and the absolute one was never the
+    // problem: 417 GiB is the overflow, 14x is the stack. The second is the one the bar lost.
+    expect(overflow()).toHaveTextContent(/Over the ceiling by 417 GiB/);
+    expect(overflow()).toHaveTextContent(/The stack is 14x the ceiling/);
+  });
+
+  /**
+   * And does not, where the shape still carries it. At 1.1x the ceiling rule sits 91% along, the
+   * gap is plainly visible, and "over by 2.2 GiB" and "1.1x the ceiling" are one fact said twice —
+   * a clause on every overflow is a clause people stop reading, including at 14x.
+   */
+  it('does not restate a small overshoot as a multiple', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Gemma 3 12B over three 4090s at 128K and 8 users: 25.2 GiB against a 23 GiB ceiling.
+    await user.selectOptions(screen.getByLabelText('Model'), 'unsloth/gemma-3-12b-it');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-4090');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'llama.cpp');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
+    act(() => {
+      useConfig.getState().set('contextTokens', 131072);
+      useConfig.getState().set('concurrency', 8);
+      useConfig.getState().set('deviceCount', 3);
+    });
+
+    expect(overflow()).toHaveTextContent(/Over the ceiling by/);
+    expect(overflow()).not.toHaveTextContent(/The stack is/);
+    expect(overflow()).not.toHaveTextContent(/x the ceiling/);
+  });
+
+  /**
+   * The legend is the dependable identity channel — which is exactly why the mark that is hardest
+   * to see is the one that must be in it. Every fill had a key and the rule did not, so a reader
+   * met a dashed red line inside a blue fill with nothing on the page naming it.
+   */
+  it('keys the ceiling rule in the legend, and only while the rule is drawn', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // The opening scenario fits, so no rule is drawn and there is nothing to key.
+    expect(within(budget()).queryByText('Ceiling')).not.toBeInTheDocument();
+
+    await fourteenTimesOver(user);
+    const key = within(budget()).getByText('Ceiling').closest('li');
+    expect(key).not.toBeNull();
+    // The ceiling's own figure, for the same reason every other row carries its bytes.
+    expect(key).toHaveTextContent('31 GiB');
+  });
+});
+
+/**
  * The masthead survives having no canvas.
  *
  * Its backdrop is painted on a 2D context, and jsdom has none — `getContext` returns null here, and

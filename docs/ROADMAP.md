@@ -487,6 +487,50 @@ reading the test that guards them.
   Exemptions are data with a written reason, and each is asserted to still match an element, since
   an exception list is the one part of a sweep that fails open.
 
+- **A bar that scales to its own overflow stops measuring anything, and the answer is words rather
+  than a broken axis** ([#73](https://github.com/MrZoller/bench/issues/73)). `scale = max(used,
+ceiling)` keeps an over-budget stack on screen, which is right and stays. What it means is that the
+  ceiling's _position_ is a function of the overshoot: DeepSeek V3 at Q4_K_M on one 5090 at 128K and
+  8 users draws 448 GiB against a 31 GiB ceiling, so the rule lands 6.9% from the left edge and the
+  panel reads "nearly full" instead of "fourteen times over". The bar's own docblock promised the
+  opposite — an overflow region beyond the line, "because it turned red does not tell you by how
+  much" — and past about 3x the budget is the sliver and the overflow is the entire picture.
+
+  Three things about the fix are worth keeping. **The multiple is stated past 3x and deliberately not
+  below it** (`OVERSHOOT_STATED`): at 1.1x "over by 2.2 GiB" and "1.1x the ceiling" are one fact said
+  twice, and a clause on every overflow is a clause people stop reading — including at 14x, where it
+  is the only thing carrying the scale. **The overshoot is `used / ceiling` computed in the panel**,
+  not `placement.utilization`, because it is exactly the reciprocal of where the rule is drawn
+  (`ceiling / scale`) — the sentence and the line are two readings of one expression and cannot come
+  apart. **A broken axis was rejected** rather than overlooked: it is a real cost for a case a clause
+  already covers, and the header states the true figures throughout.
+
+  The other half was legibility, and it is **broader than the issue's 14x framing**: the rule is
+  drawn on top of a fill at _every_ overshoot, not merely a large one. Once the bar overflows, `scale`
+  is `used`, so the segments occupy the whole width and no empty track is left anywhere for the
+  reference line to sit on — at 1.1x it falls at 91%, inside the amber cache that took the
+  configuration over. The overshoot only decides _which_ fill.
+
+  The class check is the useful part of the rest. The rule was the only overlay mark in the app drawn
+  straight onto one — the Envelope's "you are here" ring strokes a 1px background counter-line under
+  itself and the Matrix's selected cell carries `ring-offset` in the surface colour, so both were
+  already right, and the house idiom was already "separate an overlapping mark with surface, never
+  with more ink". The rule now sits in a track-coloured halo one `marks.gap` wide on each side, the
+  same mechanism the segments already use between themselves. It was also the one mark in the bar with
+  no legend key at all — every fill had one — so it has one now, on overflow only, since the legend is
+  the dependable identity channel exactly when the mark is hard to see.
+
+  **Verification splits, and the e2e half records what it cannot claim.** The clause and the key are
+  DOM and are asserted in Vitest against a reinjected defect in each direction, including the
+  negative: dropping the threshold to 1 fails the 1.1x test. Position and halo are geometry, which
+  jsdom reports as 0, so `e2e/budget-overshoot.spec.ts` measures them in a browser — at two scenarios
+  (14x on a 5090, 2x on an M3 Ultra), because one position cannot tell a measurement from a constant,
+  and with the expected offset derived from the header's own figures rather than written as 6.9%. What
+  it does **not** do is read pixels: "distinguishable against the fill beneath it" would mean decoding
+  a screenshot, so it asserts the mechanism — halo width, halo colour taken off the bar, the rule
+  still at the true position — which fails if the bare 2px line comes back. Same shape of compromise
+  as `hybrid-targets.spec.ts` makes for the pointer queries.
+
 **Verdicts**
 
 - **Grade a tier on the measurement its own sentence quotes, and on the scenario it recommends.**

@@ -1,6 +1,6 @@
 import { useId, useState } from 'react';
 import type { Evaluation } from '@/engine';
-import { gibLabel, percent } from '@/lib/format';
+import { gibLabel, multiple, percent } from '@/lib/format';
 import { marks } from '@/design/tokens';
 import { DisclosureToggle } from './DisclosureToggle';
 
@@ -12,9 +12,28 @@ import { DisclosureToggle } from './DisclosureToggle';
  * stack passes the ceiling the bar says so structurally — an overflow region beyond the line —
  * rather than by turning red, because "it turned red" does not tell you *by how much*.
  *
+ * **That structural claim inverts at a large overshoot, and the sentence has to take over** (#73).
+ * `scale` follows the stack, so past roughly 3x the ceiling the *budget* becomes the sliver and the
+ * overflow becomes the whole picture: at 14x, DeepSeek V3 on a 5090 draws a full bar of segments
+ * with the ceiling 7% from the left edge, which reads as "nearly full" rather than "fourteen times
+ * over". The fix is not a different scale — keeping the stack on screen is still right — it is that
+ * the multiple is stated in words past the point the shape can carry it. See `OVERSHOOT_STATED`.
+ *
  * Colour is never the only channel here: every segment carries a direct label and a 2px surface
  * gap, and the same figures are available as a table for anyone who cannot use the bar at all.
  */
+
+/**
+ * Where the drawn shape stops conveying the overshoot and the sentence has to state it.
+ *
+ * 3x, because that is where the two halves of the picture change places: at 3x the budget occupies
+ * the left third of the bar and the gap is still legible as a proportion, and past it the ceiling
+ * rule closes on the left edge while the segments fill everything. Below the threshold the multiple
+ * is the absolute overage said a second way — "over by 3.1 GiB" *and* "1.1x the ceiling" — and a
+ * clause that appears on every overflow is a clause people learn to skip, including on the
+ * configurations where it is the only thing telling them the scale.
+ */
+const OVERSHOOT_STATED = 3;
 
 interface Segment {
   key: string;
@@ -93,6 +112,22 @@ export function BudgetBar({
   // legible as a proportion rather than clipped at the edge.
   const scale = Math.max(used, ceiling) || 1;
   const overflows = used > ceiling;
+
+  /**
+   * How many times over the ceiling the stack is — the figure the shape stops carrying.
+   *
+   * Computed from this panel's own two numbers rather than read from `placement.utilization`, which
+   * is the same quotient one level up. That is deliberate: this is exactly the reciprocal of where
+   * the ceiling rule is drawn (`ceiling / scale`), so the sentence and the line are two readings of
+   * one expression and cannot come apart. A second source for a figure whose whole job is to
+   * describe the picture is how the two would eventually disagree — the failure this file already
+   * carries a long comment about, one paragraph down.
+   *
+   * Finite-checked rather than merely compared: a degenerate zero ceiling makes this `Infinity`,
+   * which passes the threshold and would print an em dash where a multiple belongs.
+   */
+  const overshoot = used / ceiling;
+  const statesOvershoot = Number.isFinite(overshoot) && overshoot >= OVERSHOOT_STATED;
 
   /**
    * What the overflow line should say, which is not always "spill the weights".
@@ -201,13 +236,34 @@ export function BudgetBar({
         </div>
 
         {/* The ceiling. Drawn over the stack so it reads as a limit the bar is measured against,
-            not as another segment. */}
+            not as another segment — and inside a track-coloured halo, because whenever this line
+            exists it is drawn *on top of a fill*. `scale` is `used` while the bar overflows, so the
+            segments occupy the whole width and no empty track is left for the rule to sit on; which
+            fill it lands on is the only thing the overshoot changes. Dashed critical red over
+            saturated blue at 14x is the worst pairing this palette contains, and 1.1x is no better
+            — there the rule falls at 91%, inside the amber cache that took the configuration over.
+            Either way the gaps between the dashes show the fill, and the line half disappears into
+            the thing it is supposed to be measuring.
+
+            A halo rather than a heavier or solid line: the same 2px of track colour the segments
+            already put between themselves via `marks.gap`, and the same mechanism the Envelope's
+            "you are here" ring and the Matrix's selected cell already use — a mark that overlaps
+            another is separated by surface, never by more ink. The dashes then read against the
+            track wherever the line falls. */}
         {overflows && (
           <div
-            className="absolute inset-y-0 border-l-2 border-dashed border-[var(--color-critical)]"
-            style={{ left: `${(ceiling / scale) * 100}%` }}
+            className="absolute inset-y-0 flex justify-center"
+            style={{
+              // The halo is centred on the rule, so the *line* stays at the true ceiling
+              // position: it starts one gap early and is one gap wider on each side.
+              left: `calc(${(ceiling / scale) * 100}% - ${marks.gap}px)`,
+              width: marks.lineWidth + marks.gap * 2,
+              background: 'var(--color-free)',
+            }}
             aria-hidden="true"
-          />
+          >
+            <div className="h-full w-0 shrink-0 border-l-2 border-dashed border-[var(--color-critical)]" />
+          </div>
         )}
       </div>
 
@@ -216,6 +272,12 @@ export function BudgetBar({
           <span aria-hidden="true">▲ </span>
           Over the ceiling by {gibLabel(used - ceiling)}
           {overflowDetail}.
+          {/* The clause the picture can no longer supply. `gibLabel(used - ceiling)` above answers
+              "by how much" in absolute terms, which is the answer at 1.1x; the multiple is the
+              answer at 14x, where 417 GiB past a 31 GiB ceiling is a magnitude nobody derives from
+              two figures in a header. Its own sentence rather than an apposition to the overage,
+              because it is a different quantity: 417 GiB is the overflow, 14x is the stack. */}
+          {statesOvershoot && ` The stack is ${multiple(overshoot)} the ceiling.`}
         </p>
       )}
 
@@ -254,6 +316,22 @@ export function BudgetBar({
             {gibLabel(Math.max(0, ceiling - used))}
           </span>
         </li>
+        {/* A key for the ceiling rule, which is the one mark in this bar that never had one.
+            Every fill is named here and the line was not, so at a large overshoot the reader met a
+            dashed red rule buried in a blue fill with nothing on the page saying what it was — the
+            legend is the dependable identity channel precisely because the mark may be hard to
+            see. Keyed only when it is drawn, which is on overflow alone, and it carries the ceiling
+            figure for the same reason every other row carries its bytes. */}
+        {overflows && (
+          <li className="flex items-center gap-2 text-sm">
+            <span
+              aria-hidden="true"
+              className="inline-block h-3 w-0 shrink-0 border-l-2 border-dashed border-[var(--color-critical)]"
+            />
+            <span className="text-[var(--color-text-muted)]">Ceiling</span>
+            <span className="tabular text-[var(--color-text)]">{gibLabel(ceiling)}</span>
+          </li>
+        )}
       </ul>
 
       {/* aria-live so the hint is announced on focus rather than only appearing visually. */}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { contextStopsFor } from './stops';
-import { gib, params, percent, rate, seconds, tokens, uniqueLabels } from './format';
+import { gib, multiple, params, percent, rate, seconds, tokens, uniqueLabels } from './format';
 
 /**
  * Formatting is where a correct number becomes a wrong statement. These guard the cases where
@@ -23,6 +23,26 @@ describe('percentages', () => {
   });
 });
 
+/**
+ * The budget bar's overshoot, which is a ratio said the way people say ratios. `percent` is the
+ * wrong form here: "1446% of the ceiling" and "14x the ceiling" are the same arithmetic and only
+ * one of them reads as fourteen times.
+ */
+describe('multiples', () => {
+  it('keeps a decimal only while it still means something', () => {
+    // The issue's own case: 448 GiB against a 31 GiB ceiling.
+    expect(multiple(448.1 / 31)).toBe('14x');
+    expect(multiple(4.492)).toBe('4.5x');
+    expect(multiple(10)).toBe('10x');
+  });
+
+  it('does not imply precision it rounded away', () => {
+    // A trailing `.0` claims a tenth that was measured. Same rule as `tokens`.
+    expect(multiple(3)).toBe('3x');
+    expect(multiple(1.987)).toBe('2x');
+  });
+});
+
 describe('non-finite input', () => {
   it.each([
     ['gib', gib],
@@ -31,6 +51,9 @@ describe('non-finite input', () => {
     ['rate', rate],
     ['seconds', seconds],
     ['percent', percent],
+    // A zero ceiling makes the budget bar's overshoot `Infinity`, which is the case that reaches
+    // this formatter with something that is not a number.
+    ['multiple', multiple],
   ])('%s renders an em dash rather than NaN', (_name, fn) => {
     expect(fn(Number.NaN)).toBe('—');
     expect(fn(Number.POSITIVE_INFINITY)).toBe('—');
