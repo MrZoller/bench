@@ -586,7 +586,8 @@ export function Envelope({ config }: { config: Config }) {
           "worse" and "better" — the Matrix's words for the same seven hexes — while this ramp's
           domain is the grid's own span and the Matrix's is floored at zero. On gpt-oss-20b against an
           EPYC 9755 all 56 cells run, the `fit` domain is 0.726 to 0.991 of the ceiling free, and the
-          darkest step lands on the 128K x 128-user corner with 1.05 TB unused: keyed "worse", the
+          darkest step lands on the 128K x 128-user corner with 1,052 of 1,450 allocatable GiB unused: keyed
+          "worse", the
           legend told the reader the emptiest machine in the catalogue was out of room. `MEASURES.ends`
           says "less room" instead, which is the strongest claim a rank-relative ramp is entitled to,
           and the trailing clause says what it is relative *to* — in the legend, rather than only in
@@ -816,7 +817,7 @@ function describe(
    * "Worst to best" is a claim about the configuration; this ramp's domain is the grid's own span, so
    * the only claim available is about the other cells. The asymmetry was the same one adding this
    * clause set out to close: on gpt-oss-20b against an EPYC 9755 the darkest step lands on a cell
-   * with 72.6% of a 1.45 TB ceiling free, and a screen-reader user was told it was the worst for room
+   * with 72.6% of a 1,450 GiB ceiling free, and a screen-reader user was told it was the worst for room
    * with none of the disclosure the 12px caption beside the picture carries. Both ends read from
    * `MEASURES.ends`, so the sentence and the visible key cannot drift.
    *

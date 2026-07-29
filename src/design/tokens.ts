@@ -148,7 +148,8 @@ export const magnitudeRamp = [...sequential].reverse();
  * **A rank-relative domain is a rank-relative claim, and the caller owes the reader that.** A cell on
  * the darkest step is the lowest reading *on its own grid* and not necessarily a poor one: on
  * gpt-oss-20b against an EPYC 9755 every Envelope cell runs, headroom spans 0.726 to 0.991 of the
- * ceiling, and the bottom step lands on a corner with 1.05 TB of 1.45 TB free. So the Envelope keys
+ * ceiling, and the bottom step lands on a corner with 1,052 of the machine's 1,450 allocatable GiB
+ * free. So the Envelope keys
  * its ramp "less room / more room" and states the comparison class, where the Matrix — floored at
  * zero across a desktop CPU to a B200 — can honestly say "worse / better". Anchoring is not the
  * escape: with `min: 0` that same grid puts **55 of 56** cells on one step against 50 for the span

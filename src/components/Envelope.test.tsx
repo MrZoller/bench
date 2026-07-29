@@ -109,7 +109,7 @@ describe('the feasibility field', () => {
      *
      * **A claim about this scenario, and deliberately not a universal bar.** How flat the field is
      * depends on the rig: on gpt-oss-20b against an EPYC 9755 the cache is negligible against a
-     * 1.45 TB ceiling until the far corner, so 50 of 56 cells genuinely do share a step — that is the
+     * 1,450 GiB ceiling until the far corner, so 50 of 56 cells genuinely do share a step — that is the
      * machine, not the scale, and flooring the domain at zero makes it 55 of 56. What has to hold at
      * every scenario is that the ramp is keyed as a ranking rather than as a verdict, which is the
      * sweep below at exactly that rig.
@@ -342,7 +342,7 @@ describe('the feasibility field', () => {
  *
  * Measured at this scenario — gpt-oss-20b, llama.cpp, MXFP4, 32K, 1 user, 8K prompt, one EPYC 9755:
  * all 56 cells run, the `fit` domain is headroom 0.726 to 0.991 of the ceiling, and the darkest step
- * lands on the 128K x 128-user corner at 27.4% utilization — about 1.05 TB of 1.45 TB unused.
+ * lands on the 128K x 128-user corner at 27.4% utilization — 1,052 of 1,450 allocatable GiB unused.
  *
  * The default scenario cannot show this: it has a red wall, so the darkest ramp step there really is
  * next to one. Which is why this is its own render rather than another assertion on the block above.

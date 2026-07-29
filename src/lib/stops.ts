@@ -79,7 +79,7 @@ export const SETTING_LABELS = {
  * A ramp whose domain is the grid's own span cannot label its dark end "worse": on gpt-oss-20b at
  * llama.cpp/MXFP4 against an EPYC 9755 every one of the Envelope's 56 cells runs, the `fit` domain is
  * headroom 0.726 to 0.991, and the darkest step — the one `tokens.ts` calls "the one that recedes
- * into the panel" — lands on the 128K x 128-user corner, which still has 72.6% of a 1.45 TB ceiling
+ * into the panel" — lands on the 128K x 128-user corner, which still has 72.6% of a 1,450 GiB ceiling
  * free. "Worse" there is a claim about the machine; "less room" is a claim about the ramp, which is
  * all a rank-relative scale is entitled to say. Comparatives rather than superlatives for the same
  * reason.
