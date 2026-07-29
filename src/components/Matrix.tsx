@@ -1014,7 +1014,7 @@ export function Matrix({ config }: { config: Config }) {
                       // The cursor is the pointer's half of the `aria-disabled` above — the one
                       // channel a mouse user gets before they click, on a square that has no
                       // boundary to look at.
-                      className={`h-7 w-full rounded-sm focus:ring-2 focus:ring-[var(--color-accent)] focus:outline-none [@media(pointer:coarse)]:h-11 ${
+                      className={`h-7 w-full scroll-mb-20 rounded-sm focus:ring-2 focus:ring-[var(--color-accent)] focus:outline-none sm:scroll-mb-10 lg:scroll-mb-5 [@media(pointer:coarse)]:h-11 ${
                         undrivable.has(cell.deviceId) ? 'cursor-not-allowed' : ''
                       } ${
                         !cell.runs && cell.evaluated
@@ -1244,19 +1244,33 @@ export function Matrix({ config }: { config: Config }) {
           the one who had nothing before this. `bottom-0` on an element in flow keeps it on screen
           without taking it out of the layout.
 
-          Last, because reserving a line's height only prevents reflow while the sentence *is* one
-          line. At 320px these are full model-and-device sentences and measure 60 to 80px — three and
-          four lines — against a 20px reservation, so focusing a cell shoved the legend down and
-          arrowing between sentences of different lengths jittered it. Reserving the worst case
-          instead would be a constant measured from today's names: #78 has already lengthened them
-          once ("MacBook Pro M1 Max (64 GB, 32-core GPU)"), and a length derived from text that grows
-          is the header band's own #44 defect. With nothing after it there is nothing to push, at any
-          width and any sentence length, and no constant to keep true.
+          Last in the panel, which is necessary and — as review pointed out — **not sufficient, and my
+          first rationale for it was wrong.** "Nothing follows it to push" is true inside this panel
+          and false on the page: `Bench.tsx` renders the Usage section immediately after `<Matrix>`,
+          so a paragraph whose height changes changes this section's height and shoves that panel
+          down. Being last removes the legend from the blast radius; it does not remove the page.
 
-          `min-h` stays for the empty state, so the pinned bar holds its line rather than collapsing
-          between hovers. No vertical padding with it: `min-h` is a border-box floor, so padding sits
-          inside it while the line is empty and adds to it once there is text — 4px of movement per
-          sentence, which is what this is all for. */}
+          So the height is **reserved per breakpoint**, from measurement rather than taste. The
+          sentence is a full model-and-device line, and its widest rendering is 80px at 320, 60 at
+          390, 40 at 640 and 768, 20 at 1024 and up — four lines, three, two, two, one. The
+          reservation follows that: `5rem` below `sm`, `2.5rem` at `sm`, `1.25rem` at `lg`. It costs
+          60px of reserved blank space on a phone and buys a layout that does not move as the reader
+          arrows across a row.
+
+          A constant measured from today's device names is exactly the trap #44 records — #78
+          lengthened them in this same sweep — so it is not left to hold by luck: `matrix-readout`
+          sweeps every cell at 320 and 640 and fails if any sentence renders taller than the space
+          reserved for it. A longer name added later breaks that test rather than the layout.
+
+          `pointer-events-none`, because a pinned opaque bar over a grid of buttons otherwise
+          swallows clicks meant for the cells behind it, and this paragraph is `aria-hidden`
+          decoration with nothing to click. The cells carry `scroll-mb` to match the reservation, so
+          the browser's own focus scrolling leaves the bar's height clear instead of parking the
+          focused cell behind it.
+
+          No vertical padding: `min-h` is a border-box floor, so padding sits inside it while the
+          line is empty and adds to it once there is text — 4px of movement per sentence, which is
+          the thing this is all for. */}
       {/* **Sticky to the bottom of the viewport while the grid is on screen** (found in review).
 
           The comment on the cell's `title` above concedes that this grid is 17 rows tall and a reader
@@ -1278,7 +1292,7 @@ export function Matrix({ config }: { config: Config }) {
           precisely the reflow the reservation exists to prevent. The sibling test caught it. */}
       <p
         aria-hidden="true"
-        className="tabular sticky bottom-0 -mx-[min(1.25rem,5vw)] mt-3 min-h-[1.25rem] bg-[var(--color-surface)] px-[min(1.25rem,5vw)] text-sm text-[var(--color-text)]"
+        className="tabular pointer-events-none sticky bottom-0 -mx-[min(1.25rem,5vw)] mt-3 min-h-[5rem] bg-[var(--color-surface)] px-[min(1.25rem,5vw)] text-sm text-[var(--color-text)] sm:min-h-[2.5rem] lg:min-h-[1.25rem]"
       >
         {readout}
       </p>

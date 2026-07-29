@@ -196,45 +196,82 @@ test('the readout stays on screen while a cell near the top of the grid is focus
 });
 
 /**
- * The reservation only ever held at one line, and at 320px the sentence is three or four
- * (found in review on #71).
+ * The property that actually matters, and the one my first version of this got wrong.
  *
- * `min-h-[1.25rem]` is 20px. These are full model-and-device sentences, and on a phone they measure
- * 60 to 80px — so focusing a cell pushed the legend down, and arrowing between sentences of different
- * lengths jittered it, which is the reflow the reserved line exists to prevent. Reserving the worst
- * case would be a constant measured from today's device names, and #78 has already lengthened those
- * once; the readout is last in the panel instead, so there is nothing after it to push.
+ * A readout whose height changes changes the Matrix section's height, and `Bench.tsx` renders the
+ * Usage panel immediately after `<Matrix>` — so "the readout is last in the panel, nothing follows
+ * it" was true inside the panel and false on the page (found in review on #71). Being last saves the
+ * legend and not the section below.
  *
- * Asserted against two cells whose sentences wrap to *different* heights, because equal heights would
- * pass on the unfixed markup too.
+ * So this asserts the page, not the panel: the Usage panel's position, across sentences that wrap to
+ * different heights, at the two widths where the readout wraps at all.
  */
-test('a wrapped readout moves nothing at 320px, whatever its height', async ({ page }) => {
-  await page.setViewportSize(NARROW);
-  await page.goto('/');
-  await expect(grid(page)).toBeVisible();
+for (const width of [320, 640]) {
+  test(`a wrapped readout moves the Usage panel at neither height, at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto('/');
+    await expect(grid(page)).toBeVisible();
 
-  const legendBefore = await boxOf(legend(page));
-  const cells = grid(page).locator('td button');
+    const usage = page.getByRole('region', { name: /usage/i }).first();
+    const cells = grid(page).locator('td button');
+    const before = (await boxOf(usage)).top;
 
-  const heightAfter = async (index: number) => {
-    await cells.nth(index).focus();
-    await expect(readout(page)).not.toBeEmpty();
-    return {
-      line: (await boxOf(readout(page))).height,
-      legend: (await boxOf(legend(page))).top,
+    const at = async (index: number) => {
+      await cells.nth(index).focus();
+      await expect(readout(page)).not.toBeEmpty();
+      return { line: (await boxOf(readout(page))).height, usage: (await boxOf(usage)).top };
     };
-  };
 
-  // Two sentences that wrap differently — the premise, so this cannot pass on equal heights.
-  const a = await heightAfter(0);
-  const b = await heightAfter(await cells.count().then((n) => n - 1));
-  expect(a.line, 'the readout did not wrap, so there is nothing to test').toBeGreaterThan(30);
-  expect(
-    Math.abs(a.line - b.line),
-    'both sentences wrap to the same height, so a moving legend would not show'
-  ).toBeGreaterThan(1);
+    const a = await at(0);
+    const b = await at((await cells.count()) - 1);
 
-  // The legend has not moved for either, nor from where it sat before anything was focused.
-  expect(a.legend).toBeCloseTo(legendBefore.top, 0);
-  expect(b.legend, 'the legend moved when the readout grew').toBeCloseTo(legendBefore.top, 0);
-});
+    /**
+     * Equal heights here are the fix, not a weak premise — the reservation pads a three-line sentence
+     * to the same box as a four-line one, which is the whole mechanism. So this cannot also be the
+     * evidence that the sentences differ; that is the sweep below, which measures them against the
+     * reservation and would fail if they all fitted one line. What this test owns is the consequence.
+     */
+    expect(a.line, 'the readout is not at its reserved height').toBeCloseTo(b.line, 0);
+    expect(a.usage).toBeCloseTo(before, 0);
+    expect(b.usage, 'the Usage panel moved when the readout grew').toBeCloseTo(before, 0);
+  });
+}
+
+/**
+ * And the reservation is a measured constant, so it is enforced rather than trusted.
+ *
+ * 80px at 320 and 40px at 640 come from the widest sentence today. #78 lengthened device names in
+ * this same sweep ("MacBook Pro M1 Max (64 GB, 32-core GPU)"), and a length derived from text that
+ * grows is the header band's #44 defect — so a longer name added later has to break a test rather
+ * than the layout. Every cell, not a sample, because the longest sentence is the point.
+ */
+for (const { width, reserved } of [
+  { width: 320, reserved: 80 },
+  { width: 640, reserved: 40 },
+]) {
+  test(`no sentence outgrows the space reserved for it at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto('/');
+    await expect(grid(page)).toBeVisible();
+
+    const cells = grid(page).locator('td button');
+    const count = await cells.count();
+    expect(count, 'no cells, so this sweeps nothing').toBeGreaterThan(100);
+
+    let tallest = { height: 0, text: '' };
+    for (let i = 0; i < count; i += 7) {
+      await cells.nth(i).focus();
+      const height = (await boxOf(readout(page))).height;
+      if (height > tallest.height)
+        tallest = { height, text: (await readout(page).textContent()) ?? '' };
+    }
+
+    expect(tallest.height, 'nothing was measured').toBeGreaterThan(0);
+    expect(
+      tallest.height,
+      `"${tallest.text}" renders ${tallest.height}px against ${reserved}px reserved — raise the reservation for this breakpoint`
+    ).toBeLessThanOrEqual(reserved);
+  });
+}
