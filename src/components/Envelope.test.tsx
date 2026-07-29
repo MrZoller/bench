@@ -412,3 +412,70 @@ describe('the ramp keys itself as a ranking, not a verdict', () => {
     expect(description()).toMatch(/ranked against the other cells on this grid/i);
   });
 });
+
+/**
+ * The two things the measure control promised and could not deliver (found in review on #65).
+ *
+ * Both are the same shape: a claim in the caption that the rest of the panel does not honour.
+ */
+describe('the measure control only claims what the panel can show', () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  /**
+   * **The ramp caption says "the table has the figures", and for the default measure it did not.**
+   *
+   * `describeCell` printed the verdict, the decode rate and the time to first token — so a reader
+   * switching to "How fast" or "How responsive" could indeed find the number behind the shade. `fit`
+   * is the measure the panel opens on, it paints headroom, and headroom appeared nowhere: not in the
+   * table, not in the canvas description. So the one measure nobody has to choose was the one whose
+   * "by how much" was unanswerable, on a field whose variation sits on top of a large constant and is
+   * therefore least readable from the ramp alone.
+   */
+  it('puts the headroom figure in the table, which is where the caption sends the reader', async () => {
+    const user = userEvent.setup();
+    recordPainting();
+    render(<Envelope config={DEFAULT_CONFIG} />);
+
+    // The claim under test, quoted from the caption rather than paraphrased.
+    expect(within(field()).getByText(/the table has the figures/i)).toBeInTheDocument();
+
+    await user.click(within(field()).getByRole('button', { name: /table/i }));
+    const table = within(field()).getByRole('table');
+
+    // Rate and first-token were already there; room is the one that was missing. Every graded cell
+    // carries it, so this is `getAllByText` — one match would mean it reached a single cell.
+    expect(within(table).getAllByText(/room left/i).length).toBeGreaterThan(1);
+    expect(within(table).getAllByText(/tok\/s/).length).toBeGreaterThan(0);
+  });
+
+  /**
+   * **Three buttons and a ramp caption on a field with no ramp in it.**
+   *
+   * `graded` is false for every cell when the runtime cannot drive the device — a state that stays
+   * reachable, because such a runtime remains selectable with a warning rather than being removed
+   * from the control. The legend and the canvas description already withhold the ramp key under that
+   * condition; this fieldset did not, so it offered three measures over an entirely categorical
+   * picture and a caption promising "the ramp runs between this grid's own extremes". Pressing a
+   * button moved `aria-pressed` and changed nothing else.
+   */
+  it('offers no measures on a grid where nothing is graded', () => {
+    recordPainting();
+    // vLLM cannot drive a Mac: every cell is `unsupported`, so no cell carries a magnitude.
+    render(
+      <Envelope
+        config={{ ...DEFAULT_CONFIG, deviceId: 'mac-studio-m3-ultra-256', runtimeId: 'vllm' }}
+      />
+    );
+
+    expect(within(field()).queryByRole('button', { name: 'Does it fit' })).toBeNull();
+    expect(within(field()).queryByRole('button', { name: 'How fast' })).toBeNull();
+    expect(within(field()).queryByText(/the ramp runs between/i)).toBeNull();
+
+    // And the panel still explains itself — withholding the ramp control is not withholding the
+    // reason, which is the distinction that makes this a fix rather than a deletion.
+    expect(within(field()).getByText(/runtime cannot drive it/i)).toBeInTheDocument();
+  });
+});

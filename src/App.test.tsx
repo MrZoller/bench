@@ -3447,9 +3447,17 @@ describe('the controls that drive every figure explain what they are', () => {
     const group = screen.getByRole('group', { name: /colour the grid by/i });
     expect(description(group)).toMatch(/headroom left/i);
 
-    // It tracks the selection, which is what makes it this group's description rather than a static
-    // caption: each measure means something different by a bright cell.
-    await user.click(screen.getByRole('button', { name: 'How fast' }));
+    /**
+     * It tracks the selection, which is what makes it this group's description rather than a static
+     * caption: each measure means something different by a bright cell.
+     *
+     * Scoped to the group since #65 gave the Envelope a measure control of its own, reading the same
+     * `MEASURES`. A page-wide `getByRole('button', { name: 'How fast' })` then finds two and throws —
+     * and the failure is a real one about the query rather than about either control, because "the
+     * grid" in this test's name is the Matrix and the Envelope's switch answers for a different
+     * picture. Both surfaces having the toggle is the point of sharing the vocabulary.
+     */
+    await user.click(within(group).getByRole('button', { name: 'How fast' }));
     expect(description(group)).toMatch(/tokens per second/i);
   });
 });

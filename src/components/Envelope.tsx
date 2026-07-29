@@ -25,7 +25,7 @@ import {
   TTFT_RESPONSIVE,
   parseDisplayedSeconds,
 } from '@/lib/verdicts';
-import { rate, seconds, tokens, uniqueLabels } from '@/lib/format';
+import { percent, rate, seconds, tokens, uniqueLabels } from '@/lib/format';
 import { PanelCount } from './PanelCount';
 import { DisclosureToggle } from './DisclosureToggle';
 import type { Config } from '@/store/scenario';
@@ -395,26 +395,38 @@ export function Envelope({ config }: { config: Config }) {
         The count in the header stays a comfort count, deliberately, and is the reason it can: the
         verdict is a word, so it lives in the channels that carry words. The fill is a magnitude.
       */}
-      <fieldset className="mt-4">
-        <legend className="sr-only">Colour the field by</legend>
-        <div className="flex flex-wrap gap-1 rounded-md border border-[var(--color-control-border)] bg-[var(--color-surface-raised)] p-1">
-          {MEASURES.map((m) => (
-            <button
-              key={m.value}
-              type="button"
-              aria-pressed={m.value === measure}
-              onClick={() => setMeasure(m.value)}
-              className={`rounded px-3 py-1 text-sm transition-colors ${
-                m.value === measure
-                  ? 'bg-[var(--color-accent-dim)] text-[var(--color-text)]'
-                  : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
-              }`}
-            >
-              {m.label}
-            </button>
-          ))}
-        </div>
-        {/* The ramp's domain, stated. Its ends are this grid's own extremes rather than absolute
+      {/*
+        Only while some cell is graded — the same condition the ramp key and the canvas description
+        already use, and it was missing here (found in review).
+
+        `graded` is false for a whole grid whenever the runtime cannot drive the device, or every
+        combination is over the ceiling. Those states are reachable: an undrivable runtime stays
+        selectable with a warning rather than being removed. The field is then entirely categorical,
+        with no ramp anywhere in it — and this fieldset went on offering three measures and a caption
+        promising "the ramp runs between this grid's own extremes". Pressing a button moved
+        `aria-pressed` and nothing else, which is a control that lies about having an effect.
+      */}
+      {grid.cells.flat().some(graded) && (
+        <fieldset className="mt-4">
+          <legend className="sr-only">Colour the field by</legend>
+          <div className="flex flex-wrap gap-1 rounded-md border border-[var(--color-control-border)] bg-[var(--color-surface-raised)] p-1">
+            {MEASURES.map((m) => (
+              <button
+                key={m.value}
+                type="button"
+                aria-pressed={m.value === measure}
+                onClick={() => setMeasure(m.value)}
+                className={`rounded px-3 py-1 text-sm transition-colors ${
+                  m.value === measure
+                    ? 'bg-[var(--color-accent-dim)] text-[var(--color-text)]'
+                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+                }`}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+          {/* The ramp's domain, stated. Its ends are this grid's own extremes rather than absolute
             figures — that is what makes a field whose variation sits on top of a large constant
             legible at all, and it is also a thing a reader would otherwise assume the other way
             round.
@@ -424,11 +436,12 @@ export function Envelope({ config }: { config: Config }) {
             canvas description. A relativity caveat that lives in one line of 12px type under a
             control, while the legend beside the picture says "worse" and "better", is a caveat the
             reader meets after they have already read the field. */}
-        <p className="mt-1.5 text-xs text-[var(--color-text-muted)]">
-          {measured.hint} The ramp runs between this grid&rsquo;s own extremes, so it says which way
-          the region falls off rather than by how much — the table has the figures.
-        </p>
-      </fieldset>
+          <p className="mt-1.5 text-xs text-[var(--color-text-muted)]">
+            {measured.hint} The ramp runs between this grid&rsquo;s own extremes, so it says which
+            way the region falls off rather than by how much — the table has the figures.
+          </p>
+        </fieldset>
+      )}
 
       <div className="mt-4">
         {/*
@@ -900,7 +913,21 @@ function describeCell(cell: EnvelopeCell): string {
         : cell.tightBecause === 'latency'
           ? ' (slow to start)'
           : '';
-  return `${STATE_STYLE[cell.state].label}${why} · ${rate(cell.tokensPerSec)} tok/s, ${seconds(
+  /**
+   * Room left, and it is the reason the caption above may point here at all (found in review).
+   *
+   * The caption says "the table has the figures", and for two of the three measures it did: decode
+   * reads `tokensPerSec` and responsiveness reads `ttftSeconds`. The default measure is `fit`, which
+   * paints headroom, and that had no numeric channel anywhere on the panel — not in the table, not in
+   * the canvas description. So the one measure a reader arrives on was the one the caption's promise
+   * was false for, and "by how much" was unanswerable exactly where the ramp is least readable,
+   * because a fit field's variation sits on top of a large constant.
+   *
+   * `1 - utilization` rather than utilization, so the figure and the ramp increase together: the ramp
+   * runs "less room" to "more room", and a column of rising percentages beside a fill that darkens
+   * would be two encodings of one quantity disagreeing about its direction.
+   */
+  return `${STATE_STYLE[cell.state].label}${why} · ${percent(Math.max(0, 1 - cell.utilization))} room left, ${rate(cell.tokensPerSec)} tok/s, ${seconds(
     cell.ttftSeconds
   )} to first token`;
 }

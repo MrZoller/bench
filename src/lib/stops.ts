@@ -94,38 +94,68 @@ export const SETTING_LABELS = {
  * over a grid spanning a desktop CPU to a B200, so a dark cell there really is near the bottom of
  * what any hardware on the page achieves and a verdict word is a claim it can make. See the `fill`
  * comment in `Matrix.tsx` and `magnitudeFill` in `tokens.ts` for the two domains and why they differ.
+ *
+ * **The entries keep their literal types, so exhaustiveness can be checked below.**
+ *
+ * `satisfies` rather than a type annotation, and that distinction is the whole point (found in
+ * review). Annotating the array `readonly { value: Measure; … }[]` widens each `value` to `Measure`,
+ * so `(typeof MEASURES)[number]['value']` *is* `Measure` however few arms are listed — the check the
+ * docblock on `measureVocabulary` claimed to be relying on could not fail. `satisfies` validates the
+ * same shape while leaving `'fit' | 'decode' | 'ttft'` intact for `UncoveredMeasure` to subtract.
  */
+const MEASURE_ENTRIES = [
+  {
+    value: 'fit',
+    label: 'Does it fit',
+    paints: 'headroom left after weights, cache and overhead',
+    ends: ['less room', 'more room'],
+  },
+  {
+    value: 'decode',
+    label: 'How fast',
+    paints: 'tokens per second for one user',
+    ends: ['slower', 'faster'],
+  },
+  {
+    value: 'ttft',
+    label: 'How responsive',
+    paints: 'time until the first token appears',
+    ends: ['slower to start', 'quicker to start'],
+  },
+] as const satisfies readonly {
+  value: Measure;
+  label: string;
+  paints: string;
+  ends: readonly [string, string];
+}[];
+
+/**
+ * Any `Measure` with no entry above — and the assertion that there is none.
+ *
+ * `AssertNever` fails to compile when its argument is inhabited, so adding an arm to `Measure` in the
+ * engine breaks *here*, naming the measure that has no control. Without it the omission was silent in
+ * both directions a reader would check: these grids would render one fewer button, and
+ * `measureVocabulary` would fall back to the fit vocabulary for the new arm — labelling a decode ramp
+ * "less room / more room" rather than failing.
+ *
+ * This is the claim `SETTING_LABELS` makes with `satisfies Record<keyof Config, string>` one screen
+ * up. It cannot be made that way here, because the order of these entries is the order of the control
+ * and a `Record` does not carry one.
+ */
+type AssertNever<T extends never> = T;
+type UncoveredMeasure = Exclude<Measure, (typeof MEASURE_ENTRIES)[number]['value']>;
+export type _EveryMeasureHasAnEntry = AssertNever<UncoveredMeasure>;
+
 export const MEASURES: readonly {
   value: Measure;
   label: string;
   paints: string;
   hint: string;
   ends: readonly [string, string];
-}[] = (
-  [
-    {
-      value: 'fit',
-      label: 'Does it fit',
-      paints: 'headroom left after weights, cache and overhead',
-      ends: ['less room', 'more room'],
-    },
-    {
-      value: 'decode',
-      label: 'How fast',
-      paints: 'tokens per second for one user',
-      ends: ['slower', 'faster'],
-    },
-    {
-      value: 'ttft',
-      label: 'How responsive',
-      paints: 'time until the first token appears',
-      ends: ['slower to start', 'quicker to start'],
-    },
-    // `as const` so each `value` stays its own literal and the annotation above checks it against
-    // `Measure` rather than against `string` — the same claim `SETTING_LABELS` makes with
-    // `satisfies`, and the reason a fourth measure cannot be added here without the engine agreeing.
-  ] as const
-).map((m) => ({ ...m, hint: `${m.paints[0].toUpperCase()}${m.paints.slice(1)}.` }));
+}[] = MEASURE_ENTRIES.map((m) => ({
+  ...m,
+  hint: `${m.paints[0].toUpperCase()}${m.paints.slice(1)}.`,
+}));
 
 /**
  * Everything a surface says about the measure in force, in one lookup.
@@ -133,9 +163,13 @@ export const MEASURES: readonly {
  * The Envelope names the same colouring in four places — the caption under the toggle, the ramp key's
  * two ends, its trailing clause and the canvas `aria-label` — and a per-place `MEASURES.find(...)?.x`
  * makes each of them independently optional for a value that cannot be missing. Total by
- * construction: `Measure` is a closed union and the annotation on `MEASURES` checks that every arm
- * has an entry, so the fallback is unreachable. Unreachable rather than asserted, because a
- * non-null assertion would go on surviving if that annotation were ever loosened.
+ * construction: `Measure` is a closed union and `_EveryMeasureHasAnEntry` above fails to compile if
+ * an arm has no entry, so the fallback is unreachable. Unreachable rather than asserted, because a
+ * non-null assertion would go on surviving if that check were ever loosened.
+ *
+ * This docblock previously credited "the annotation on `MEASURES`" with that guarantee, which it
+ * never had: annotating the array widened every `value` to `Measure`, so the coverage test was
+ * comparing `Measure` against itself and could not fail. The check is real now; the sentence was not.
  */
 export function measureVocabulary(measure: Measure): (typeof MEASURES)[number] {
   return MEASURES.find((m) => m.value === measure) ?? MEASURES[0];
