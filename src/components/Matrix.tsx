@@ -511,12 +511,25 @@ export function Matrix({ config }: { config: Config }) {
                       // wrong scenario is the likely outcome rather than the unlucky one. Coarse
                       // pointers get the full target; a mouse keeps the dense grid, which is what
                       // makes the comparison legible in one screen.
+                      //
+                      // The selected square is marked *inside* its own box, and the focus ring
+                      // stays outside it, because the two used to be the same mark. Selection was
+                      // `ring-2 ring-[accent] ring-offset-1` and focus is `focus:ring-2
+                      // ring-[accent]` — the same channel, the same width and the same colour, so
+                      // focusing the marked square changed nothing whatsoever: a 1:1 change
+                      // contrast, which is #67's 1.95:1 select border in its most extreme form. And
+                      // it is not a corner case. Clicking a cell makes it both the selection and
+                      // the roving tab stop, so the marked square is exactly where Tab lands when a
+                      // reader comes back to the grid.
+                      //
+                      // An inner frame now says "this is the scenario the Bench is showing" and an
+                      // outer ring says "this is where the keyboard is", and neither can stand in
+                      // for the other. It also stops the mark bleeding over the 2px `border-spacing`
+                      // onto the neighbouring squares, which the offset ring did.
                       className={`h-7 w-full rounded-sm focus:ring-2 focus:ring-[var(--color-accent)] focus:outline-none [@media(pointer:coarse)]:h-11 ${
                         cell.runs ? '' : 'border border-dashed border-[var(--color-border)]'
                       } ${cell.raiseCeilingWouldHelp ? 'border-[var(--color-warning)]' : ''} ${
-                        isCurrent(cell)
-                          ? 'ring-2 ring-[var(--color-accent)] ring-offset-1 ring-offset-[var(--color-surface)]'
-                          : ''
+                        isCurrent(cell) ? 'inset-ring-2 inset-ring-[var(--color-accent)]' : ''
                       }`}
                       style={{ background: fill(cell, measure, max) }}
                     />

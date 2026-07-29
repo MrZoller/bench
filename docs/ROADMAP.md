@@ -455,6 +455,42 @@ reading the test that guards them.
   about what the page leads with rather than a keyboard-reachability bug, and the fix above already
   takes the walk from 422 presses to 15.
 
+- **A focus indicator is a mark of its own, never a colour swap and never a channel a resting state
+  already uses** ([#67](https://github.com/MrZoller/bench/issues/67)). The four primary selects —
+  Model, Hardware, Quantization, Runtime — removed the outline and replaced it with a 1px border
+  colour change measuring **1.95:1 against the unfocused edge**, where SC 2.4.13 asks for 3:1 at a
+  2px minimum. `--color-control-border` had been raised to `#646d88` specifically so a control's
+  edge cleared 3:1 _before_ focus; the focused state never got the same treatment, so the most
+  important controls on the page were the only ones whose indicator you could not see.
+
+  Two more instances came out of the sweep, both of them listed in the issue as already correct:
+
+  - The budget legend drew `focus:ring-1` — 1px, half the minimum, and with the outline suppressed
+    it is the whole indicator rather than a decoration on top of one.
+  - The Matrix marked its selected square with `ring-2 ring-[accent] ring-offset-1` and lit
+    `focus:ring-2 ring-[accent]` on focus: **the same channel, width and colour**, so focusing the
+    marked square changed nothing whatsoever. A 1:1 change contrast, which is the select's 1.95:1
+    in its most extreme form, and reachable in one click — clicking a cell makes it both the
+    selection and the roving tab stop, so the marked square is exactly where Tab lands coming back
+    to the grid. Selection is drawn `inset-ring-2` now, inside the cell, and focus stays outside it.
+
+  **The mechanism differs by control and the bar does not**, which is the decision rather than an
+  oversight. The selects use `outline` where their neighbours use `ring`, because a ring is a
+  `box-shadow` and a native `menulist` select is painted by the platform in WebKit — the fix that
+  matched the rest of the app would have shipped nothing at all on Safari, and Chromium cannot tell
+  you that. What is uniform is 2px in the accent, drawn where nothing else is drawing.
+
+  **Split across both suites, for the reason #52's counting was.** Which indicator a control
+  _declares_ is a class-list property, so `App.test.tsx` sweeps all 400-odd focusable elements in a
+  second and pins the declared width, colour, and the channel collision. Whether it _paints_ 2px at
+  3:1 against what sits behind it needs a real stylesheet and a real ring, and jsdom has neither:
+  that is `e2e/focus-indicators.spec.ts`, which walks the tab sequence with Tab rather than
+  `focus()` — the UA ring is `:focus-visible`-gated and a scripted focus does not reliably satisfy
+  the heuristic, so a sweep driven by `focus()` reports every slider on the page as painting
+  nothing. The browser spec exempts `outline-style: auto` from the thickness check, because
+  Chromium reports 1px for a dual-tone ring it paints at 2px; the exemption is asserted to still
+  match something, or it would quietly become the rule.
+
 - **`pointer: coarse` does not mean "this user can touch the screen".** It describes the _primary_
   pointing device, so a touchscreen laptop, a Surface, or an iPad with a keyboard case reports
   `fine` — and the disclosure toggles dropped back to 16px for someone who can still put a thumb on
