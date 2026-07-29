@@ -179,6 +179,17 @@ const AXIS_TITLE = 'text-xs text-[var(--color-text-muted)]';
 export function Envelope({ config }: { config: Config }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const headingId = useId();
+  /**
+   * The measure fieldset's description, wired the way `Matrix.tsx` wires its own (found in review).
+   *
+   * Without it the caption below is a paragraph that happens to sit under a control: the group
+   * announced "Colour the field by, Does it fit, pressed" and nothing about what a bright cell means,
+   * and switching measures announced no change of scale. That is the same defect #80 fixed on the
+   * Matrix — the sentence was already written and simply never attached — reappearing on the surface
+   * that copied the control. Once per group rather than per button, so switching does not re-read it
+   * three times.
+   */
+  const measureHintId = useId();
   const [showTable, setShowTable] = useState(false);
   /**
    * What the fill means, defaulting to the question the panel's own heading asks.
@@ -407,7 +418,7 @@ export function Envelope({ config }: { config: Config }) {
         `aria-pressed` and nothing else, which is a control that lies about having an effect.
       */}
       {grid.cells.flat().some(graded) && (
-        <fieldset className="mt-4">
+        <fieldset className="mt-4" aria-describedby={measureHintId}>
           <legend className="sr-only">Colour the field by</legend>
           <div className="flex flex-wrap gap-1 rounded-md border border-[var(--color-control-border)] bg-[var(--color-surface-raised)] p-1">
             {MEASURES.map((m) => (
@@ -436,7 +447,7 @@ export function Envelope({ config }: { config: Config }) {
             canvas description. A relativity caveat that lives in one line of 12px type under a
             control, while the legend beside the picture says "worse" and "better", is a caveat the
             reader meets after they have already read the field. */}
-          <p className="mt-1.5 text-xs text-[var(--color-text-muted)]">
+          <p id={measureHintId} className="mt-1.5 text-xs text-[var(--color-text-muted)]">
             {measured.hint} The ramp runs between this grid&rsquo;s own extremes, so it says which
             way the region falls off rather than by how much — the table has the figures.
           </p>

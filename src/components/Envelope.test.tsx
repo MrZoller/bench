@@ -479,3 +479,38 @@ describe('the measure control only claims what the panel can show', () => {
     expect(within(field()).getByText(/runtime cannot drive it/i)).toBeInTheDocument();
   });
 });
+
+/**
+ * The measure group's description, which is #80's defect reappearing on the surface that copied the
+ * control (found in review on #65).
+ *
+ * The caption was already written and already on screen — it simply was not the group's *accessible*
+ * description, so entering the fieldset announced "Colour the field by, Does it fit, pressed" and
+ * nothing about what a bright cell means. `Matrix.tsx` wires exactly this, for exactly this reason,
+ * and the comment there names #80.
+ */
+describe('the measure group says what it colours by', () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it('attaches the caption to the fieldset, and follows the selection', async () => {
+    const user = userEvent.setup();
+    recordPainting();
+    render(<Envelope config={DEFAULT_CONFIG} />);
+
+    const group = within(field()).getByRole('group', { name: /colour the field by/i });
+    const describedBy = (el: HTMLElement) => {
+      const id = el.getAttribute('aria-describedby');
+      return id ? (document.getElementById(id)?.textContent ?? '') : '';
+    };
+
+    expect(describedBy(group)).toMatch(/headroom left/i);
+
+    // Tracking the selection is what makes it the group's description rather than a static caption:
+    // each measure means something different by a bright cell.
+    await user.click(within(group).getByRole('button', { name: 'How fast' }));
+    expect(describedBy(group)).toMatch(/tokens per second/i);
+  });
+});
