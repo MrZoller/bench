@@ -1317,6 +1317,403 @@ describe('the Matrix stays informative', () => {
 });
 
 /**
+ * Every figure on the grid used to be behind a native `title` (#71).
+ *
+ * A mouse, a second of dwell, one cell at a time, gone on the next move. That leaves the colour and
+ * nothing else for three readers: a sighted keyboard user, who sees the ring move and never hears the
+ * `aria-label`; a touch user, who has no hover at all and can only read a cell by committing to it,
+ * which rewrites five store keys and scrolls several sections away; and anyone comparing two cells,
+ * since a native tooltip shows one and dismisses it on the way to the second. `fill` log-scales onto
+ * seven steps deliberately, so the colour is a rank and never a magnitude — which leaves no other
+ * route to one.
+ *
+ * All of this is DOM: which string the line holds, when it fills, when it clears, and whether it is
+ * announced. jsdom answers every one of those in a second. What it cannot answer is whether the
+ * reservation actually holds a line of height, which is `e2e/matrix-readout.spec.ts` — the same split
+ * the focus-indicator suite draws between the indicator a control *declares* and the one it paints.
+ */
+describe('the comparison grid puts a cell’s value where it can be read', () => {
+  const matrix = () => screen.getByRole('region', { name: /every model on every machine/i });
+
+  /**
+   * The readout, addressed structurally.
+   *
+   * It has no role of its own on purpose — see the `aria-hidden` test below — so there is no accessible
+   * name to find it by. The section's only direct paragraph is unambiguous: the workload caveat sits
+   * inside the `header` and the measure hint inside the `fieldset`. Deliberately *not* keyed on
+   * `aria-hidden`, which is the subject of one of the tests below and would make that one circular —
+   * and the assertions here all compare its text against a cell's own `aria-label`, so a locator that
+   * found the wrong element could not pass for the wrong reason either way.
+   */
+  const line = () => matrix().querySelector<HTMLElement>(':scope > p')!;
+  const readout = () => line().textContent;
+  const cells = () => [...matrix().querySelectorAll<HTMLButtonElement>('td button')];
+  const legend = () => [...matrix().querySelectorAll<HTMLElement>(':scope > div')].at(-1)!;
+
+  it('reserves the line before anything is pointed at', () => {
+    render(<App />);
+
+    // Present and empty, rather than absent until it has something to say: a line that appears
+    // reflows whatever is under it every time a reader moves between two cells. Whether the
+    // reservation is worth a line of height is geometry, and geometry is e2e's half.
+    expect(line()).toBeInTheDocument();
+    expect(readout()).toBe('');
+    expect(line().className).toMatch(/min-h-/);
+  });
+
+  it('fills on focus, which is the half that answers the keyboard', () => {
+    render(<App />);
+    const cell = cells()[5];
+
+    act(() => cell.focus());
+
+    // The same sentence the cell announces, not a second wording of it: one `tooltip()` call feeding
+    // both channels is what keeps the line and the accessible name from drifting apart.
+    expect(readout()).toBe(cell.getAttribute('aria-label'));
+    expect(readout()).toMatch(/ on .+:/);
+
+    act(() => cell.blur());
+    expect(readout()).toBe('');
+  });
+
+  it('fills on hover, without the dwell the tooltip charged for', () => {
+    render(<App />);
+    const cell = cells()[7];
+
+    fireEvent.mouseEnter(cell);
+    expect(readout()).toBe(cell.getAttribute('aria-label'));
+
+    fireEvent.mouseLeave(cell);
+    expect(readout()).toBe('');
+  });
+
+  it('falls back to the focused cell when the pointer leaves, rather than blanking', () => {
+    render(<App />);
+    const [held, pointed] = [cells()[0], cells()[9]];
+
+    act(() => held.focus());
+    fireEvent.mouseEnter(pointed);
+    // The pointer wins while there is one — it is the more recent intent.
+    expect(readout()).toBe(pointed.getAttribute('aria-label'));
+
+    fireEvent.mouseLeave(pointed);
+    // And the focus ring is still drawn on the first cell, so its sentence is still the true one. A
+    // single `hovered` flag blanks here, which is a visible mark with nothing on the page explaining
+    // it — the disagreement `isCurrent` exists to prevent, pointed the other way.
+    expect(document.activeElement).toBe(held);
+    expect(readout()).toBe(held.getAttribute('aria-label'));
+  });
+
+  /**
+   * And the other order, which is the one that shipped broken.
+   *
+   * `hovered ?? focused` is the fallback above with no way back out of it: a pointer resting anywhere
+   * on the grid fires `mouseenter` and, because the mouse does not move, never fires `mouseleave`. A
+   * reader who then tabs in and arrows across a row moves the ring while the line goes on printing the
+   * cell the pointer happens to be sitting on — indefinitely, and with no `hover:` style on the cells,
+   * the ring is the only mark on screen. That is a *wrong* figure where #71's sighted keyboard reader
+   * previously got none, which is worse than the defect being fixed.
+   *
+   * No contrivance in this test but the missing `mousemove`, which is the whole point: the pointer is
+   * where it was and the keyboard has moved twice.
+   */
+  it('lets the keyboard take the line back from a pointer that has stopped moving', () => {
+    render(<App />);
+    const resting = cells()[0];
+
+    fireEvent.mouseEnter(resting);
+    expect(readout()).toBe(resting.getAttribute('aria-label'));
+
+    const stepped = cells()[300];
+    act(() => stepped.focus());
+    fireEvent.keyDown(stepped, { key: 'ArrowRight' });
+    const arrowed = document.activeElement as HTMLButtonElement;
+
+    // The ring moved, so the line has to have moved with it.
+    expect(arrowed).not.toBe(resting);
+    expect(readout()).toBe(arrowed.getAttribute('aria-label'));
+    expect(readout()).not.toBe(resting.getAttribute('aria-label'));
+
+    // And the pointer is not disabled by having been outranked once: the next `mouseenter` is a new
+    // move, and the rule is that the newer input wins.
+    const pointed = cells()[7];
+    fireEvent.mouseEnter(pointed);
+    expect(readout()).toBe(pointed.getAttribute('aria-label'));
+  });
+
+  /**
+   * And the way back that `mouseenter` alone cannot provide (found in review on #71).
+   *
+   * The test above proves the pointer can reclaim the line by entering a *different* cell. It cannot
+   * prove it can reclaim the cell it is already in, and it could not: `mouseenter` needs a boundary
+   * crossing, so once `onFocus` expired the hover claim, a reader whose mouse was resting on a cell
+   * had to leave it and come back. Last-input-wins held in one direction only, and the direction it
+   * failed in is the one a mixed keyboard-and-mouse reader hits first — the mouse is where they left
+   * it, and the hand that moves is the one already on it.
+   *
+   * `mousemove` without a preceding `mouseenter` is exactly that state, and it is why the contrivance
+   * is the *absence* of an enter rather than the presence of a move.
+   */
+  it('lets a pointer that never left reclaim the line by moving in place', () => {
+    render(<App />);
+    const resting = cells()[3];
+
+    fireEvent.mouseEnter(resting);
+    expect(readout()).toBe(resting.getAttribute('aria-label'));
+
+    // Keyboard takes it, which also expires the pointer's claim.
+    const stepped = cells()[200];
+    act(() => stepped.focus());
+    expect(readout()).toBe(stepped.getAttribute('aria-label'));
+
+    // The pointer has not moved between cells and so fires no `mouseenter` — only a move inside the
+    // one it is already in.
+    fireEvent.mouseMove(resting);
+    expect(
+      readout(),
+      'a pointer resting on a cell cannot get the line back without leaving it'
+    ).toBe(resting.getAttribute('aria-label'));
+
+    // The focus ring has not moved, so the fallback is still the stepped cell once the pointer goes.
+    expect(document.activeElement).toBe(stepped);
+    fireEvent.mouseLeave(resting);
+    expect(readout()).toBe(stepped.getAttribute('aria-label'));
+  });
+
+  /**
+   * The line is derived from where the reader is, not stored when they get there.
+   *
+   * Reachable without contriving anything: a pointer resting on a cell while the keyboard drives one
+   * of the Usage sliders — which is what this does, since that is exactly what a slider does to the
+   * store. Nothing moves the pointer, so no `mouseleave` fires, and every figure on the grid changes
+   * underneath it. A stored string would keep quoting the old scenario over the new grid.
+   */
+  it('tracks the scenario instead of freezing the sentence it arrived with', () => {
+    render(<App />);
+    // A cell that runs, so it has a figure to report at all.
+    const cell = cells().find((c) => /: \d/.test(c.getAttribute('aria-label') ?? ''))!;
+
+    fireEvent.mouseEnter(cell);
+    const before = readout();
+    expect(before).toBe(cell.getAttribute('aria-label'));
+
+    act(() => useConfig.getState().set('contextTokens', 131072));
+
+    expect(readout()).not.toBe(before);
+    expect(readout()).toBe(cell.getAttribute('aria-label'));
+  });
+
+  /**
+   * The one place this deliberately departs from `BudgetBar`'s hint, which is `aria-live="polite"`.
+   *
+   * There the sentence exists nowhere else — a legend item is named "Weights 14 GiB" and the
+   * explanation is not part of that name. Here the line is a verbatim copy of the focused cell's
+   * accessible name, so a live region would announce every cell twice: once as the name, once as the
+   * update, on every arrow key across a 42-column row. The channel #71 is missing is the visual one.
+   */
+  it('does not read the cell’s own sentence out a second time', () => {
+    render(<App />);
+    const cell = cells()[11];
+
+    act(() => cell.focus());
+
+    expect(line().getAttribute('aria-hidden')).toBe('true');
+    expect(line().getAttribute('aria-live')).toBeNull();
+    // And the spoken channel is untouched: the cell still carries the whole sentence.
+    expect(cell.getAttribute('aria-label')).toBe(readout());
+  });
+
+  /**
+   * The sweep. #71 names the cells, and the same defect was live on both headings.
+   *
+   * `headerColumns` shortens every device name — the vendor line goes, and the bracketed qualifier
+   * with it wherever the stem is already unique — and the full name lived only in a `title`. The row
+   * heading truncates at 9rem and put the model name *and* its parameter count in one. Three
+   * hover-only strings, one line to put them in.
+   */
+  it('names the machine a shortened column heading stands for', () => {
+    render(<App />);
+    const heading = [...matrix().querySelectorAll('thead th')].at(-1)!;
+    const label = heading.querySelector('span[title]')!;
+
+    fireEvent.mouseEnter(heading);
+
+    // The full catalog name, which is longer than what the column can print.
+    expect(readout()).toBe(label.getAttribute('title'));
+    expect(readout()!.length).toBeGreaterThan(label.textContent!.length);
+  });
+
+  it('carries the runtime refusal a struck heading only says in colour and ink', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'vllm');
+
+    const struck = [...matrix().querySelectorAll('thead th')].find((th) =>
+      th.querySelector('span[title]')?.className.includes('line-through')
+    )!;
+    fireEvent.mouseEnter(struck);
+
+    // Same string as the heading's own `aria-label`, from the same derivation — the strike is the
+    // sighted channel and it says nothing about why on its own.
+    expect(readout()).toBe(struck.getAttribute('aria-label'));
+    expect(readout()).toMatch(/does not support this hardware, at any size/i);
+  });
+
+  it('punctuates a refusal once, now that the sentence is printed rather than hovered', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    // vLLM drives no Mac, no Strix Halo and no CPU host, so this fills the grid with the refusals
+    // `planPlacement` writes — each of which already ends in a full stop.
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'vllm');
+
+    const blocked = cells().filter((c) =>
+      /does not run on/i.test(c.getAttribute('aria-label') ?? '')
+    );
+    expect(blocked.length).toBeGreaterThan(50);
+
+    fireEvent.mouseEnter(blocked[0]);
+    expect(readout()).toMatch(/does not run on .+[^.]\.$/);
+    for (const cell of blocked) expect(cell.getAttribute('aria-label')).not.toContain('..');
+  });
+
+  it('spells out a truncated model row, parameter count and all', () => {
+    render(<App />);
+    const heading = matrix().querySelectorAll('tbody th')[3];
+
+    fireEvent.mouseEnter(heading);
+
+    expect(readout()).toBe(heading.getAttribute('title'));
+    expect(readout()).toContain(heading.textContent);
+    // The parameter count, which had no channel at all besides that `title`.
+    expect(readout()).toMatch(/\d+(\.\d+)?B$/);
+  });
+
+  /**
+   * And the parameter count needs a spoken channel of its own, which the line cannot be.
+   *
+   * The readout is `aria-hidden` for the reason above — it copies a cell's accessible name, so a live
+   * region says every cell twice — and these headings take no focus, so hover was the *only* route to
+   * the count: a cell's sentence names the model but never its size. An `aria-label` on the row header
+   * is the same answer the column header already uses for its runtime refusal, from the same one
+   * derivation, and a grid announces a row header once per row rather than once per cell.
+   */
+  it('tells a screen reader the row’s parameter count, which no cell states', () => {
+    render(<App />);
+    const headings = [...matrix().querySelectorAll('tbody th')];
+
+    expect(headings.length).toBeGreaterThan(10);
+    for (const heading of headings) {
+      // One string in all three channels — the visible name, the tooltip and the accessible name.
+      expect(heading.getAttribute('aria-label')).toBe(heading.getAttribute('title'));
+      expect(heading.getAttribute('aria-label')).toMatch(/\d+(\.\d+)?B$/);
+      expect(heading.getAttribute('aria-label')).toContain(heading.textContent);
+    }
+  });
+
+  /**
+   * And the ramp is a scale now rather than an ordering.
+   *
+   * `worse [gradient] better` says which way to read the colour and nothing about what it spans, so a
+   * mid-blue under "How fast" could be 20 tok/s or 200. The endpoints are asserted against the
+   * *cells'* own sentences rather than recomputed here: whatever the engine says, the figure at each
+   * end of the legend has to be the figure some cell reports, and the extreme one.
+   */
+  const spoken = (cells: HTMLButtonElement[], pattern: RegExp) =>
+    cells.flatMap((cell) => {
+      const found = pattern.exec(cell.getAttribute('aria-label') ?? '');
+      return found ? [found[1]] : [];
+    });
+
+  /**
+   * The extreme is chosen by number and asserted as the *string the cell printed*.
+   *
+   * `Math.min(...rates.map(Number))` and `toContain` looks equivalent and is not: `rate()` keeps a
+   * decimal below 10 tok/s, so the day the slowest running cell lands on an exact tenth-free value the
+   * legend correctly renders "worse 3.0 tok/s" while the round trip through `Number` asks for "worse
+   * 3 tok/s" — a red test with nothing wrong in the code. It passes today only because the minimum is
+   * 0.5. Same reason the TTFT test below compares by `asSeconds` and asserts the figure verbatim.
+   */
+  const extremeBy = (figures: string[], value: (figure: string) => number, want: 'min' | 'max') =>
+    figures.reduce((a, b) =>
+      want === 'min' ? (value(b) < value(a) ? b : a) : value(b) > value(a) ? b : a
+    );
+
+  it('anchors the ramp with the throughput its own cells report', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(within(matrix()).getByRole('button', { name: 'How fast' }));
+
+    const rates = spoken(cells(), /: ([\d.]+) tok\/s per user\.$/);
+    expect(rates.length).toBeGreaterThan(100);
+
+    const text = legend().textContent!;
+    expect(text).toContain(`worse ${extremeBy(rates, Number, 'min')} tok/s`);
+    expect(text).toContain(`${extremeBy(rates, Number, 'max')} tok/s better`);
+  });
+
+  it('puts the longest wait at the worse end, which the stored value inverts', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(within(matrix()).getByRole('button', { name: 'How responsive' }));
+
+    /** "188 ms", "2.7 s", "84 min" — one axis, three units, as `seconds()` prints them. */
+    const UNIT: Record<string, number> = { ms: 0.001, s: 1, min: 60 };
+    const asSeconds = (figure: string) => {
+      const [value, unit] = figure.split(' ');
+      return Number(value) * UNIT[unit];
+    };
+
+    const waits = spoken(cells(), /: (.+) to first token\.$/);
+    expect(waits.length).toBeGreaterThan(100);
+    const longest = extremeBy(waits, asSeconds, 'max');
+    const shortest = extremeBy(waits, asSeconds, 'min');
+
+    // `measureValue` inverts TTFT so that larger is better, so the ramp's worst end is the *slowest*
+    // machine. An endpoint pair ordered by the number it prints puts the fastest one under "worse"
+    // and leaves every colour on the grid correct, which is what makes it invisible.
+    const text = legend().textContent!;
+    expect(text).toContain(`worse ${longest}`);
+    expect(text).toContain(`${shortest} better`);
+    expect(asSeconds(longest)).toBeGreaterThan(asSeconds(shortest));
+  });
+
+  it('anchors the fit ramp with the most headroom any cell has', () => {
+    render(<App />);
+
+    const free = spoken(cells(), /: (\d+)% of the ceiling free\.$/);
+    expect(free.length).toBeGreaterThan(100);
+
+    const text = legend().textContent!;
+    expect(text).toContain(`${extremeBy(free, Number, 'max')}% free better`);
+  });
+
+  /**
+   * And the low end of the *fit* ramp is the one endpoint that is not a cell's own figure.
+   *
+   * `measureValue('fit')` collapses every offloaded cell to zero headroom deliberately, so the dark
+   * end is a population: a pair that just fits and a pair spilling most of its weights paint the same
+   * square. "0% free" is the one statement true of all of them, which is why it is what the label
+   * says — and the consequence is that the figure appears on no tooltip, since a spilled cell's own
+   * sentence quotes the spill instead. Pinned rather than left to `/worse \d+% free/`, which any digit
+   * satisfies: printing the tied cell's own 66% spill would describe every other square wrongly, and
+   * `measureRange` hands back whichever tied cell came first in row-major order, so a label reading
+   * any other field off it would be reading an arbitrary cell.
+   */
+  it('says the fit ramp’s dark end has no headroom, not what the worst cell spills', () => {
+    render(<App />);
+
+    const spilling = cells().filter((c) =>
+      /spilling \d+% of its weights/.test(c.getAttribute('aria-label') ?? '')
+    );
+    expect(spilling.length, 'no cell spills, so the low end is a resident cell').toBeGreaterThan(0);
+
+    const text = legend().textContent!;
+    expect(text).toContain('worse 0% free');
+    expect(text).not.toMatch(/worse \d+% (spilled|of its weights)/);
+  });
+});
+
+/**
  * "Will not run" and "this runtime cannot drive it" were the same empty cell (#72).
  *
  * Select vLLM and every Mac, every Strix Halo and every CPU host empties out completely — 10 of the

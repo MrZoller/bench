@@ -389,6 +389,67 @@ test.describe('at 200% text size', () => {
   });
 
   /**
+   * The Matrix legend's two endpoint figures, which the sweep above cannot reach on two counts.
+   *
+   * **The stress font never touches them.** `useStressFont` sets `--font-sans`, and every figure in
+   * this app carries `.tabular`, which resolves `--font-mono` (`index.css`). So the four stress runs
+   * above measure the app's prose in Courier New and its numbers in whatever monospace the host has —
+   * a class-wide gap that predates these labels and now has two more members. Stressing the sweep's
+   * own runs through `--font-mono` as well is the fix for the class and is deliberately not done here:
+   * the file's own precondition is that the stress font is *wider* than what the host resolves, and
+   * one monospace substituted for another is not, so it would add red risk to unrelated panels without
+   * adding a stress. Set on both variables for these two labels instead, where the question is
+   * specifically whether a protected figure fits.
+   *
+   * **And no run reaches the widest labels.** `measure` is component state rather than a URL key, so
+   * every scenario above lays out `fit`'s "worse 0% free" while the longest pair the app can print is
+   * a decode one — 17 characters at "1011 tok/s better", measured over three runtimes, every
+   * catalogued format, 4K/32K/128K of context and 1/8/128 users. Clicked, because that is the only way
+   * in.
+   *
+   * What is asserted is containment of each label rather than the document's own width: the point is
+   * the two `whitespace-nowrap` figures, and a document-level assertion here would report on every
+   * other `.tabular` element the mono stress touches — a different (and pre-existing) question.
+   */
+  test('the legend endpoints hold their figures inside the panel', async ({ page }) => {
+    await page.setViewportSize(NARROW);
+    await page.goto('/');
+
+    const matrix = page.getByRole('region', { name: /every model on every machine/i });
+    await useStressFont(page, WIDE_FONT);
+    await page.evaluate((f) => {
+      document.documentElement.style.setProperty('--font-mono', f);
+    }, WIDE_FONT);
+
+    // The measure with the widest labels, and a precondition that it took: at `fit` these read
+    // "0% free" and the assertion below would be measuring the short case.
+    await matrix.getByRole('button', { name: 'How fast' }).click();
+    const ends = matrix.locator(':scope > div').last().locator(':scope > span').first();
+    await expect(ends).toContainText(/tok\/s/);
+
+    const boxes = await ends.locator(':scope > span').evaluateAll((els) =>
+      els.map((el) => {
+        const rect = el.getBoundingClientRect();
+        const panel = el.closest('section')!.getBoundingClientRect();
+        return { left: rect.left, right: rect.right, width: rect.width, panel };
+      })
+    );
+
+    // Label, gradient, label. The gradient is the zero-basis item #34 is about and is measured in
+    // `matrix-legend.spec.ts`; these two are the ones carrying text that cannot break.
+    expect(boxes).toHaveLength(3);
+    for (const box of [boxes[0], boxes[2]]) {
+      expect(box.width, 'an endpoint label is not laid out').toBeGreaterThan(0);
+      expect(box.left, 'an endpoint label escapes the panel at 200%').toBeGreaterThanOrEqual(
+        box.panel.left - 1
+      );
+      expect(box.right, 'an endpoint label escapes the panel at 200%').toBeLessThanOrEqual(
+        box.panel.right + 1
+      );
+    }
+  });
+
+  /**
    * And that wrapping did not fix the overflow by breaking the thing worth protecting.
    *
    * "12 of 425" split across a line reads as two unrelated numbers, so `PanelCount` keeps a
