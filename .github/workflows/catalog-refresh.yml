@@ -189,4 +189,4 @@ jobs:
         # discovery cannot be detected by re-deriving figures — an absence has no diff — so on this
         # path the seed-candidate table on the run's own page is the entire output of the mechanism.
         run: |
-          echo "::notice::Catalog is current — no pull request opened. Seed candidates are in this run's summary."
+          echo "::notice::Catalog is current — no pull request opened. See this run's summary for the seed-candidate check, which reports its own failure if the listing did not complete."

@@ -2030,9 +2030,26 @@ async function reportSeedCandidates(): Promise<void> {
       }
     }
   } catch (error) {
-    console.warn(
-      `\nCould not list candidate models: ${error instanceof Error ? error.message : error}`
-    );
+    const why = error instanceof Error ? error.message : String(error);
+    console.warn(`\nCould not list candidate models: ${why}`);
+    /**
+     * And say so where the report would have been (found in review on #77).
+     *
+     * The workflow's closing notice points a maintainer at this run's summary unconditionally, so a
+     * failed listing left no summary at all beside a sentence saying the candidates are in it —
+     * silence that reads exactly like "no candidates". That is worse than the transient-log problem
+     * the summary was added to fix, because it is indistinguishable from good news.
+     */
+    const target = process.env.GITHUB_STEP_SUMMARY;
+    if (target) {
+      await appendFile(
+        target,
+        `\n### Seed candidates — not checked\n\nThe Hugging Face listing failed, so the seed list ` +
+          `was **not** compared against what the hub is downloading on this run: ${why}\n\n` +
+          'This is not "no candidates". The next scheduled run re-asks; a second failure is worth ' +
+          'looking at, since nothing else here can detect that the seed list has aged.\n'
+      );
+    }
     return;
   }
 

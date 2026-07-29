@@ -4,6 +4,9 @@ import { useUrlSync } from '@/store/useUrlSync';
 import { getRuntime, kvSubstitutionFor, runtimeDrives, substitutionFor } from '@/data/runtimes';
 import { QUANTS, getQuant } from '@/data/quants';
 import { getDevice, getModel } from '@/data/catalog';
+// The decode basis itself, so the sentence that attributes speed to a figure prints the figure the
+// speed was computed from rather than a near neighbour of it.
+import { effectiveActiveParams } from '@/engine/weights';
 import { BudgetBar } from './BudgetBar';
 import { Telemetry } from './Telemetry';
 import { Workloads } from './Workloads';
@@ -495,21 +498,28 @@ export function Bench() {
             {model.name} holds{' '}
             <strong className="text-[var(--color-text)]">{params(model.totalParams)}</strong> of
             weights, so all of them occupy memory — but routes each token through only{' '}
-            {/* `activeDenseParams`, not `activeParams`, because this sentence makes a claim about
-                what a token *physically* reads and then says that is what sets the speed — and the
-                engine agrees: `docs/ROADMAP.md` records that `activeParams` "excludes the input
-                embedding unconditionally, and that is the *published* convention, not the physical
-                one", which "is the wrong basis for decode", so `speed.ts` reads
-                `activeDenseParams` instead.
+            {/* `effectiveActiveParams(model, 1)` — the engine's own decode basis, at one sequence.
 
-                Raised in review on #77, where the gap widened enough to be visible: the newly
-                seeded multimodal MoEs carry non-language towers inside `activeParams`, so Mistral
-                Small 4 was printed as 6.524B active against a 6.096B physical basis and Command A+
-                as 24.403B against 24.981B — a headline contradicting the decode figure two panels
-                away. The picker keeps `activeParams` (line 179), which is right: that column exists
-                to reconcile with the figure a vendor publishes. This sentence is about the machine,
-                not the announcement. */}
-            <strong className="text-[var(--color-text)]">{params(model.activeDenseParams)}</strong>
+                This sentence claims what a token physically reads and then attributes the speed to
+                it, so it has to print the quantity `speed.ts` divides by. `activeParams` is not that:
+                `docs/ROADMAP.md` records it as excluding the input embedding "unconditionally, and
+                that is the *published* convention, not the physical one", which "is the wrong basis
+                for decode". Visible on the multimodal MoEs this PR seeds, whose non-language towers
+                sit inside it — Mistral Small 4 printed 6.524B against a 6.096B basis.
+
+                **`activeDenseParams` alone was the wrong correction, and review caught it before it
+                shipped.** That field is only the always-active dense part: `effectiveActiveParams`
+                is `activeDenseParams + expertParams * expertFraction(model, batch)`, so dropping the
+                routed experts understated every MoE — Kimi K2 as 10.6B where a token traverses about
+                31.7B. One error replaced by a larger one in the opposite direction.
+
+                Batch one, because the sentence is about a token rather than about a deployment, and
+                `expertFraction` grows with the batch as more of the expert union gets touched. The
+                figure beside it in the picker stays `activeParams` (line 179), which is right — that
+                column exists to reconcile with what a vendor publishes. */}
+            <strong className="text-[var(--color-text)]">
+              {params(effectiveActiveParams(model, 1))}
+            </strong>
             {/*
               Every branch below reads a decode estimate, so all of them are gated on `runnable`
               — not just `fast`. When the runtime cannot drive the device or the model cannot be

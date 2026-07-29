@@ -4,12 +4,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 import { useConfig, DEFAULT_CONFIG, estimateConfig } from '@/store/config';
 import { configToShareSearch } from '@/store/url';
-import { DEVICES, getDevice, getModel } from '@/data/catalog';
-import { tokens } from '@/lib/format';
+import { DEVICES, MODELS, getDevice, getModel } from '@/data/catalog';
+import { params, tokens } from '@/lib/format';
 import { SETTING_LABELS, SETTING_NOTES, deviceCountNote } from '@/lib/stops';
 import { DETAIL_ANCHOR_ID } from '@/components/Matrix';
 import { judgeWorkloads } from '@/engine/verdict';
 import { RUNTIMES, getRuntime, kvSubstitutionFor, runtimeDrives } from '@/data/runtimes';
+import { effectiveActiveParams } from '@/engine/weights';
 import { canShard } from '@/engine/placement';
 import { colors, marks } from '@/design/tokens';
 
@@ -3417,5 +3418,55 @@ describe('the controls that drive every figure explain what they are', () => {
     // caption: each measure means something different by a bright cell.
     await user.click(screen.getByRole('button', { name: 'How fast' }));
     expect(description(group)).toMatch(/tokens per second/i);
+  });
+});
+
+/**
+ * The per-token figure in the Bench's aside, which claims to be what sets the speed (#77 review).
+ *
+ * Three quantities are in play and they differ by enough to matter on the models this catalog exists
+ * for. `activeParams` is the *published* convention — it excludes the input embedding unconditionally
+ * and, on a multimodal model, includes the non-language towers a token never touches.
+ * `activeDenseParams` is the always-active dense part and excludes the routed experts. Only
+ * `effectiveActiveParams(model, 1)` is what `speed.ts` divides by.
+ *
+ * Both wrong answers shipped briefly during #77 and each was caught by review rather than by a test:
+ * `activeParams` overstated the multimodal MoEs (Mistral Small 4 at 6.524B against a 6.096B basis),
+ * and the correction to `activeDenseParams` understated every MoE far more badly in the other
+ * direction (Kimi K2 at 10.6B where a token traverses about 31.7B). So this pins the sentence to the
+ * engine's own expression, and asserts the two near neighbours are *not* what it prints — a test that
+ * only checked the value against `effectiveActiveParams` would have passed on a dense model either
+ * way, since all three coincide there.
+ */
+describe('the aside prints the basis the speed is actually computed from', () => {
+  /**
+   * A *multimodal* MoE, chosen so all three figures differ. On a text-only MoE the published and
+   * physical bases coincide exactly — gpt-oss-20b is 3.61B on both — so a test written against one
+   * would pass whichever of the two the component printed, and the overstatement half of this would
+   * go uncovered. The gap only opens where non-language towers sit inside `activeParams`.
+   */
+  const moe = MODELS.find(
+    (m) => m.expertParams > 0 && Math.abs(effectiveActiveParams(m, 1) - m.activeParams) > 1e8
+  )!;
+
+  it('quotes the decode basis at one sequence, not the published or the dense figure', () => {
+    expect(moe, 'no multimodal MoE in the catalog, so this test has no subject').toBeDefined();
+
+    const basis = effectiveActiveParams(moe, 1);
+    // The premise: on an MoE the three figures genuinely differ, or none of this discriminates.
+    expect(basis).toBeGreaterThan(moe.activeDenseParams);
+    expect(Math.abs(basis - moe.activeParams)).toBeGreaterThan(1e8);
+
+    act(() => useConfig.getState().set('modelId', moe.id));
+    render(<App />);
+
+    const aside = screen.getByText(/routes each token through only/i).closest('p')!;
+    expect(aside.textContent).toContain(params(basis));
+    expect(aside.textContent, 'prints the dense part, dropping the routed experts').not.toContain(
+      params(moe.activeDenseParams)
+    );
+    expect(aside.textContent, 'prints the published figure, not the physical one').not.toContain(
+      params(moe.activeParams)
+    );
   });
 });
