@@ -176,11 +176,19 @@ export function measureValue(cell: MatrixCell, measure: MatrixMeasure): number |
 /**
  * The two ends of what a measure actually spans on this grid, and the top value for scaling.
  *
- * The cells rather than only their numbers, because the number a reader needs at the end of a ramp
- * is the one the cell itself reports — `tokensPerSec`, `ttftSeconds` — and `measureValue` is not
- * always that. It inverts TTFT so that larger is better, so the ramp's *low* end is the *longest*
- * wait, and recovering the seconds from `1 / value` is both a second derivation of a figure the cell
- * already holds and a floating-point round trip. Handing back the cell lets a label read the field.
+ * The cells rather than only their numbers, because for two of the three measures the number a
+ * reader needs at the end of a ramp is the one the cell itself reports — `tokensPerSec`,
+ * `ttftSeconds` — and `measureValue` is not that. It inverts TTFT so that larger is better, so the
+ * ramp's *low* end is the *longest* wait, and recovering the seconds from `1 / value` is both a
+ * second derivation of a figure the cell already holds and a floating-point round trip. Handing back
+ * the cell lets a label read the field.
+ *
+ * **`low` is a tie in the ordinary case, and a caller reading anything but the ramp value off it is
+ * reading an arbitrary cell.** `measureValue('fit')` returns exactly 0 for every offloaded cell by
+ * design, so on any grid where something spills — most of them — the low end is a whole population
+ * and `low` is whichever member comes first in row-major order. That is safe only because every one
+ * of them yields the same *value*, which is what the legend prints; see `rampEnd`, which argues why
+ * the fit label is the ramp's figure rather than the worst spiller's sentence.
  *
  * **There is deliberately no `min`.** Nothing scales against the bottom: `fill` anchors its log
  * curve at zero rather than at the lowest cell, so a minimum would be a number no mark is derived

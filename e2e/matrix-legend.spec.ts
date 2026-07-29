@@ -40,8 +40,8 @@ const LAPTOP = { width: 1024, height: 768 };
  *
  *   - "will not run" — unconditional
  *   - "a struck column heading — MLX (Apple) does not support this hardware, at any size" — MLX runs
- *     on Apple silicon and nothing else, so all but five columns are struck (19 of 24 as the catalog
- *     stands at this commit) (#72)
+ *     on Apple silicon and nothing else, so all but the Apple columns are struck (32 of the 42
+ *     shipping devices as the catalog stands at this commit) (#72)
  *   - "some rows scored at a stand-in format MLX (Apple) cannot load" — MLX's only native format is
  *     BF16, so every Apple row is scored at a stand-in
  *   - "past the default allocation, which this machine lets you raise" — DeepSeek V3 at Q5_K_M is
@@ -133,9 +133,8 @@ test('the overflow does not reach the document', async ({ page }) => {
  * than assumed: the containment tests above now cover the figures too, and this one asserts they are
  * really there, so those cannot pass by describing a legend that never grew.
  */
-test('the ramp is labelled with what it spans, inside the panel', async ({ page }) => {
-  const group = rampGroup(page);
-  const parts = group.locator(':scope > span');
+async function assertEndpointsInsidePanel(page: import('@playwright/test').Page) {
+  const parts = rampGroup(page).locator(':scope > span');
 
   // Label, gradient, label — in order, which also proves the group locator found the ramp.
   await expect(parts).toHaveCount(3);
@@ -152,8 +151,8 @@ test('the ramp is labelled with what it spans, inside the panel', async ({ page 
     }));
 
     expect(box.width, 'an endpoint label is not laid out').toBeGreaterThan(0);
-    // Both edges: the labels are `whitespace-nowrap`, so an overrun leaves the panel rather than
-    // wrapping, and the left edge is the one no reader can pan to.
+    // Both edges: the figure inside each label is `whitespace-nowrap`, so an overrun leaves the panel
+    // rather than breaking mid-number, and the left edge is the one no reader can pan to.
     expect(box.left, 'an endpoint label escapes the panel').toBeGreaterThanOrEqual(
       box.panelLeft - 1
     );
@@ -161,6 +160,26 @@ test('the ramp is labelled with what it spans, inside the panel', async ({ page 
       box.panelRight + 1
     );
   }
+}
+
+test('the ramp is labelled with what it spans, inside the panel', async ({ page }) => {
+  await assertEndpointsInsidePanel(page);
+});
+
+/**
+ * And again at the measure whose labels are the longest, which no other run reaches.
+ *
+ * `measure` is component state rather than a URL key, so every spec in this suite lays out the `fit`
+ * labels — "worse 0% free", "100% free better" — and the widest the app can print is a decode pair:
+ * 17 characters at "1011 tok/s better", measured across three runtimes, every catalogued format,
+ * 4K/32K/128K of context and 1/8/128 users. Asserting containment at `fit` and calling the row safe
+ * is measuring the short case. Reached by clicking, because that is the only way in.
+ */
+test('the widest labels the grid can print stay inside it too', async ({ page }) => {
+  await matrix(page).getByRole('button', { name: 'How fast' }).click();
+  await expect(rampGroup(page).locator(':scope > span').first()).toHaveText(/tok\/s/);
+
+  await assertEndpointsInsidePanel(page);
 });
 
 /**

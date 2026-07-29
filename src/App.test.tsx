@@ -1276,6 +1276,43 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
   });
 
   /**
+   * And the other order, which is the one that shipped broken.
+   *
+   * `hovered ?? focused` is the fallback above with no way back out of it: a pointer resting anywhere
+   * on the grid fires `mouseenter` and, because the mouse does not move, never fires `mouseleave`. A
+   * reader who then tabs in and arrows across a row moves the ring while the line goes on printing the
+   * cell the pointer happens to be sitting on — indefinitely, and with no `hover:` style on the cells,
+   * the ring is the only mark on screen. That is a *wrong* figure where #71's sighted keyboard reader
+   * previously got none, which is worse than the defect being fixed.
+   *
+   * No contrivance in this test but the missing `mousemove`, which is the whole point: the pointer is
+   * where it was and the keyboard has moved twice.
+   */
+  it('lets the keyboard take the line back from a pointer that has stopped moving', () => {
+    render(<App />);
+    const resting = cells()[0];
+
+    fireEvent.mouseEnter(resting);
+    expect(readout()).toBe(resting.getAttribute('aria-label'));
+
+    const stepped = cells()[300];
+    act(() => stepped.focus());
+    fireEvent.keyDown(stepped, { key: 'ArrowRight' });
+    const arrowed = document.activeElement as HTMLButtonElement;
+
+    // The ring moved, so the line has to have moved with it.
+    expect(arrowed).not.toBe(resting);
+    expect(readout()).toBe(arrowed.getAttribute('aria-label'));
+    expect(readout()).not.toBe(resting.getAttribute('aria-label'));
+
+    // And the pointer is not disabled by having been outranked once: the next `mouseenter` is a new
+    // move, and the rule is that the newer input wins.
+    const pointed = cells()[7];
+    fireEvent.mouseEnter(pointed);
+    expect(readout()).toBe(pointed.getAttribute('aria-label'));
+  });
+
+  /**
    * The line is derived from where the reader is, not stored when they get there.
    *
    * Reachable without contriving anything: a pointer resting on a cell while the keyboard drives one
@@ -1384,6 +1421,28 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
   });
 
   /**
+   * And the parameter count needs a spoken channel of its own, which the line cannot be.
+   *
+   * The readout is `aria-hidden` for the reason above — it copies a cell's accessible name, so a live
+   * region says every cell twice — and these headings take no focus, so hover was the *only* route to
+   * the count: a cell's sentence names the model but never its size. An `aria-label` on the row header
+   * is the same answer the column header already uses for its runtime refusal, from the same one
+   * derivation, and a grid announces a row header once per row rather than once per cell.
+   */
+  it('tells a screen reader the row’s parameter count, which no cell states', () => {
+    render(<App />);
+    const headings = [...matrix().querySelectorAll('tbody th')];
+
+    expect(headings.length).toBeGreaterThan(10);
+    for (const heading of headings) {
+      // One string in all three channels — the visible name, the tooltip and the accessible name.
+      expect(heading.getAttribute('aria-label')).toBe(heading.getAttribute('title'));
+      expect(heading.getAttribute('aria-label')).toMatch(/\d+(\.\d+)?B$/);
+      expect(heading.getAttribute('aria-label')).toContain(heading.textContent);
+    }
+  });
+
+  /**
    * And the ramp is a scale now rather than an ordering.
    *
    * `worse [gradient] better` says which way to read the colour and nothing about what it spans, so a
@@ -1397,17 +1456,31 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
       return found ? [found[1]] : [];
     });
 
+  /**
+   * The extreme is chosen by number and asserted as the *string the cell printed*.
+   *
+   * `Math.min(...rates.map(Number))` and `toContain` looks equivalent and is not: `rate()` keeps a
+   * decimal below 10 tok/s, so the day the slowest running cell lands on an exact tenth-free value the
+   * legend correctly renders "worse 3.0 tok/s" while the round trip through `Number` asks for "worse
+   * 3 tok/s" — a red test with nothing wrong in the code. It passes today only because the minimum is
+   * 0.5. Same reason the TTFT test below compares by `asSeconds` and asserts the figure verbatim.
+   */
+  const extremeBy = (figures: string[], value: (figure: string) => number, want: 'min' | 'max') =>
+    figures.reduce((a, b) =>
+      want === 'min' ? (value(b) < value(a) ? b : a) : value(b) > value(a) ? b : a
+    );
+
   it('anchors the ramp with the throughput its own cells report', async () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(within(matrix()).getByRole('button', { name: 'How fast' }));
 
-    const rates = spoken(cells(), /: ([\d.]+) tok\/s per user\.$/).map(Number);
+    const rates = spoken(cells(), /: ([\d.]+) tok\/s per user\.$/);
     expect(rates.length).toBeGreaterThan(100);
 
     const text = legend().textContent!;
-    expect(text).toContain(`worse ${Math.min(...rates)} tok/s`);
-    expect(text).toContain(`${Math.max(...rates)} tok/s better`);
+    expect(text).toContain(`worse ${extremeBy(rates, Number, 'min')} tok/s`);
+    expect(text).toContain(`${extremeBy(rates, Number, 'max')} tok/s better`);
   });
 
   it('puts the longest wait at the worse end, which the stored value inverts', async () => {
@@ -1424,8 +1497,8 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
 
     const waits = spoken(cells(), /: (.+) to first token\.$/);
     expect(waits.length).toBeGreaterThan(100);
-    const longest = waits.reduce((a, b) => (asSeconds(b) > asSeconds(a) ? b : a));
-    const shortest = waits.reduce((a, b) => (asSeconds(b) < asSeconds(a) ? b : a));
+    const longest = extremeBy(waits, asSeconds, 'max');
+    const shortest = extremeBy(waits, asSeconds, 'min');
 
     // `measureValue` inverts TTFT so that larger is better, so the ramp's worst end is the *slowest*
     // machine. An endpoint pair ordered by the number it prints puts the fastest one under "worse"
@@ -1439,14 +1512,36 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
   it('anchors the fit ramp with the most headroom any cell has', () => {
     render(<App />);
 
-    const free = spoken(cells(), /: (\d+)% of the ceiling free\.$/).map(Number);
+    const free = spoken(cells(), /: (\d+)% of the ceiling free\.$/);
     expect(free.length).toBeGreaterThan(100);
 
     const text = legend().textContent!;
-    expect(text).toContain(`${Math.max(...free)}% free better`);
-    // The other end is a cell that fits only by spilling, which scores zero headroom by design —
-    // `measureValue` ranks an offloaded fit below every resident one.
-    expect(text).toMatch(/worse \d+% free/);
+    expect(text).toContain(`${extremeBy(free, Number, 'max')}% free better`);
+  });
+
+  /**
+   * And the low end of the *fit* ramp is the one endpoint that is not a cell's own figure.
+   *
+   * `measureValue('fit')` collapses every offloaded cell to zero headroom deliberately, so the dark
+   * end is a population: a pair that just fits and a pair spilling most of its weights paint the same
+   * square. "0% free" is the one statement true of all of them, which is why it is what the label
+   * says — and the consequence is that the figure appears on no tooltip, since a spilled cell's own
+   * sentence quotes the spill instead. Pinned rather than left to `/worse \d+% free/`, which any digit
+   * satisfies: printing the tied cell's own 66% spill would describe every other square wrongly, and
+   * `measureRange` hands back whichever tied cell came first in row-major order, so a label reading
+   * any other field off it would be reading an arbitrary cell.
+   */
+  it('says the fit ramp’s dark end has no headroom, not what the worst cell spills', () => {
+    render(<App />);
+
+    const spilling = cells().filter((c) =>
+      /spilling \d+% of its weights/.test(c.getAttribute('aria-label') ?? '')
+    );
+    expect(spilling.length, 'no cell spills, so the low end is a resident cell').toBeGreaterThan(0);
+
+    const text = legend().textContent!;
+    expect(text).toContain('worse 0% free');
+    expect(text).not.toMatch(/worse \d+% (spilled|of its weights)/);
   });
 });
 
