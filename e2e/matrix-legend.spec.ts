@@ -14,10 +14,10 @@ import { expect, test } from '@playwright/test';
  * assertion below is a tautology — the same blind spot that shipped the `display: contents` scroll
  * bug this directory exists for.
  *
- * The trap the issue records: **two of the four keys are conditional**, and in the default scenario
- * neither renders. A spec written against a fresh page passes without the fix. So the scenario is
- * pinned in the querystring and the three coexisting keys are asserted as a precondition, before
- * any geometry is read.
+ * The trap the issue records: **most of these keys are conditional**, and in the default scenario
+ * the prose ones do not render at all. A spec written against a fresh page passes without the fix. So
+ * the scenario is pinned in the querystring and the coexisting keys are asserted as a precondition,
+ * before any geometry is read.
  */
 
 /**
@@ -36,9 +36,12 @@ const NARROW = { width: 320, height: 640 };
 const LAPTOP = { width: 1024, height: 768 };
 
 /**
- * MLX at Q5_K_M, which is the state that renders all three keys at once:
+ * MLX at Q5_K_M, which is the state that renders every prose key at once:
  *
  *   - "will not run" — unconditional
+ *   - "a struck column heading — MLX (Apple) does not support this hardware, at any size" — MLX runs
+ *     on Apple silicon and nothing else, so all but five columns are struck (19 of 24 as the catalog
+ *     stands at this commit) (#72)
  *   - "some rows scored at a stand-in format MLX (Apple) cannot load" — MLX's only native format is
  *     BF16, so every Apple row is scored at a stand-in
  *   - "past the default allocation, which this machine lets you raise" — DeepSeek V3 at Q5_K_M is
@@ -69,7 +72,7 @@ test.beforeEach(async ({ page }) => {
   await expect(matrix(page).locator('table td button').first()).toBeVisible();
 });
 
-test('renders all three keys at once, which is the state the overflow needs', async ({ page }) => {
+test('renders every prose key at once, which is the state the overflow needs', async ({ page }) => {
   const keys = legend(page);
 
   // Confirms the locator found the legend and not a neighbour.
@@ -77,6 +80,7 @@ test('renders all three keys at once, which is the state the overflow needs', as
   await expect(keys).toContainText('better');
 
   await expect(keys).toContainText(/will not run/i);
+  await expect(keys).toContainText(/does not support this hardware, at any size/i);
   await expect(keys).toContainText(/stand-in format/i);
   await expect(keys).toContainText(/past the default allocation/i);
 });

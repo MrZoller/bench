@@ -25,7 +25,9 @@ import {
   KV_PRECISIONS,
   PROMPT_STOPS,
   SETTING_LABELS,
+  SETTING_NOTES,
   contextStopsFor,
+  deviceCountNote,
   kvLabel,
   withStored,
 } from '@/lib/stops';
@@ -223,18 +225,55 @@ export function Bench() {
     []
   );
 
+  /**
+   * The runtimes, each with something to say about itself at every scenario.
+   *
+   * The note is the control's accessible description, so a "does not run here" warning has to live
+   * in it — a screen-reader user tabbing the picker hears nothing otherwise. That is also why the
+   * first clause below is unconditional. `Select` renders only the *selected* option's note, and
+   * the two conditions this used to hold — unsupported hardware, and a runtime that preallocates —
+   * are both false for llama.cpp on any machine it drives. So at the default scenario the Runtime
+   * picker emitted no `aria-describedby` at all, and a description that exists only for vLLM
+   * appears and vanishes as the choice moves: the same defect #80 tabulated for the Usage sliders,
+   * in the panel #80 cited as doing the opposite (found in review of that fix).
+   *
+   * `nativeLowPrecision` is the fact worth spending the sentence on. `runtimes.ts` calls it "the
+   * single biggest lever on time-to-first-token, and no VRAM calculator models it" — llama.cpp
+   * dequantizes every GGUF to fp16 before the matmul, so a Blackwell card's FP4 headline is
+   * unreachable from it, and prefill was overstated 8x when this was inferred from bit width.
+   * Every runtime has the field, so every option has a sentence, which is what stops the
+   * description flickering.
+   *
+   * Not the multi-device layout, which is the other always-present fact: `parallelism` is what
+   * `deviceCountNote` says under the Device count slider, and saying it twice on one screen is how
+   * two copies of one claim come to disagree. MLX would also be the wrong place to say it — it
+   * declares `layer` because the field is required, and no Apple machine in the catalog has an
+   * interconnect, so it never divides anything.
+   */
   const runtimeOptions = useMemo(
     () =>
       RUNTIMES.map((r) => ({
         value: r.id,
         label: r.label,
-        // The note is the control's accessible description, so a "does not run here" warning
-        // has to live in it — a screen-reader user tabbing the picker hears nothing otherwise.
         note: !runtimeDrives(r, device)
-          ? `Does not run on ${device.name}`
-          : r.preallocFraction
-            ? `Reserves ${Math.round(r.preallocFraction * 100)}% of the device up front`
-            : undefined,
+          ? `Does not run on ${device.name}.`
+          : [
+              /* "every weight" was wrong in a configuration two clicks away. BF16 is a real format
+                 here — MLX coerces to it — and there is nothing to dequantize when the checkpoint is
+                 already FP16-or-wider, so the claim was false for the one selection where it is
+                 easiest to check. `nativeLowPrecision` describes what the runtime does with a
+                 *quantized* checkpoint, which is what the sentence now says. Left as a capability
+                 rather than derived from `config.quant`: this is an option list, and each note
+                 describes the runtime a reader has not selected yet. */
+              r.nativeLowPrecision
+                ? 'Sends low-precision weights straight to the tensor cores.'
+                : 'Dequantizes a quantized checkpoint to FP16 before the matmul, so a card’s low-precision peak is out of reach.',
+              r.preallocFraction
+                ? `Reserves ${Math.round(r.preallocFraction * 100)}% of the device up front.`
+                : undefined,
+            ]
+              .filter(Boolean)
+              .join(' '),
       })),
     [device]
   );
@@ -360,7 +399,11 @@ export function Bench() {
       {/* Usage: the half of the question that is about you, not the hardware.
 
           The labels come from `SETTING_LABELS` rather than being written here, because the Envelope
-          draws two of these settings as its axes and titles them with the same words. */}
+          draws two of these settings as its axes and titles them with the same words. The notes come
+          from `SETTING_NOTES` for the same reason and one more: these five controls *are* the
+          KV-cache argument — context times users times bits per token is most of what the budget bar
+          draws — and until they carried a sentence each, the panel's whole text content was the
+          labels and the values, with the argument made only in `Envelope.tsx`'s docstring (#80). */}
       <section aria-label="Usage" className="panel grid gap-5 p-[min(1.25rem,5vw)] sm:grid-cols-2">
         <StopSlider
           label={SETTING_LABELS.contextTokens}
@@ -368,6 +411,7 @@ export function Bench() {
           value={nearestStop(contextStops, config.contextTokens)}
           onChange={(v) => set('contextTokens', v)}
           format={tokens}
+          note={SETTING_NOTES.contextTokens}
         />
         <StopSlider
           label={SETTING_LABELS.concurrency}
@@ -375,31 +419,52 @@ export function Bench() {
           value={nearestStop(concurrencyStops, config.concurrency)}
           onChange={(v) => set('concurrency', v)}
           format={(v) => String(v)}
+          note={SETTING_NOTES.concurrency}
         />
+        {/* The note is the only place the coupling with the context is stated: `promptStops` above
+            filters the prompt to what the context can hold, so dragging the context down drags the
+            prompt with it — a jump nothing on screen explained, from a slider a reader could
+            reasonably have read as *additional* to the context rather than part of it. */}
         <StopSlider
           label={SETTING_LABELS.promptTokens}
           stops={promptStops}
           value={nearestStop(promptStops, config.promptTokens)}
           onChange={(v) => set('promptTokens', v)}
           format={tokens}
+          note={SETTING_NOTES.promptTokens}
         />
         <Segmented
           label={SETTING_LABELS.kvPrecision}
           value={config.kvPrecision}
           onChange={(v) => set('kvPrecision', v)}
           options={kvOptions}
+          note={SETTING_NOTES.kvPrecision}
         />
         {shardable ? (
+          /* The note goes on the *control*, which is the branch that had no prose at all. The
+             explanation below is about the absence of the control and cannot double as its
+             description — a sentence that renders only where there is nothing to configure is how
+             this panel came to hold exactly one explanatory line and hide it from everyone who
+             could act on it.
+
+             It is the one note that reads the runtime, because what a second device buys is the one
+             thing here that the runtime decides: `deviceCountNote` derives it from `parallelism`,
+             the same field `achievedBandwidth` short-circuits on. */
           <StopSlider
             label={SETTING_LABELS.deviceCount}
             stops={deviceCountStops}
             value={nearestStop(deviceCountStops, config.deviceCount)}
             onChange={(v) => set('deviceCount', v)}
             format={(v) => `${v}x`}
+            note={deviceCountNote(runtime, runtimeDrives(runtime, device))}
           />
         ) : (
+          /* Any split needs a link, not only a tensor-parallel one — `canShard` is
+             `interconnect !== undefined` and asks nothing about the runtime. Naming one layout here
+             said the layer split was available on a Mac, which is the same conflation the note above
+             was carrying in the other direction. */
           <p className="self-end text-xs text-[var(--color-text-muted)]">
-            Single machine. Tensor-parallel sharding needs a transport between devices, which
+            Single machine. Sharding a model across devices needs a transport between them, which
             unified-memory and CPU hosts do not have.
           </p>
         )}

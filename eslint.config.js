@@ -5,7 +5,14 @@ import reactRefresh from 'eslint-plugin-react-refresh';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist', 'coverage', 'playwright-report', 'test-results'] },
+  /**
+   * `.claude/worktrees` holds a full checkout of this repo per background agent, and each carries its
+   * own `tsconfig.json`. Without this, typescript-eslint sees several candidate roots and fails with
+   * `No tsconfigRootDir was set, and multiple candidate TSConfigRootDirs are present` — as a
+   * *parsing* error on every file it is given, so `npm run lint` reported 936 errors across the real
+   * `src/` tree while an agent happened to be running, and none of them were about the code.
+   */
+  { ignores: ['dist', 'coverage', 'playwright-report', 'test-results', '.claude/worktrees'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],
