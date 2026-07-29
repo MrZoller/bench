@@ -6,6 +6,7 @@ import {
   wasEvaluated,
 } from './placement';
 import { estimateDecode, estimatePrefill } from './speed';
+import { measureOf, type Measure } from './measure';
 
 /**
  * Every model against every device, at one usage setting.
@@ -20,7 +21,15 @@ import { estimateDecode, estimatePrefill } from './speed';
  * some axis, and averaging them produces a number that recommends neither.
  */
 
-export type MatrixMeasure = 'fit' | 'decode' | 'ttft';
+/**
+ * The measure vocabulary, under the name this grid's callers already use.
+ *
+ * Shared with the Envelope since #65 — the same three questions over different axes — and the type
+ * lives in `measure.ts` beside the direction each one runs in. An alias rather than a second union,
+ * because two spellings of one type is how a surface comes to accept a measure the other cannot
+ * read.
+ */
+export type MatrixMeasure = Measure;
 
 export interface MatrixCell {
   modelId: string;
@@ -153,24 +162,22 @@ export function computeMatrix(request: MatrixRequest): MatrixCell[][] {
 }
 
 /**
- * The value a measure reads off a cell, normalised so 1 is best and 0 is worst.
+ * The value a measure reads off a cell, oriented so larger is better — or nothing at all.
  *
- * Normalised against the grid rather than against an absolute scale, because the useful
- * comparison is between the options in front of you: a heatmap where every cell is pale because
- * nothing reaches some theoretical maximum tells you nothing about which to buy.
+ * The reading itself is `measureOf`, shared with the Envelope so the direction of each measure is
+ * stated once. What stays here is the pair of questions only this grid can answer: whether the cell
+ * ran, and whether a spill puts it off the scale rather than merely low on it.
+ *
+ * Read against the grid rather than against an absolute scale, because the useful comparison is
+ * between the options in front of you: a heatmap where every cell is pale because nothing reaches
+ * some theoretical maximum tells you nothing about which to buy.
  */
 export function measureValue(cell: MatrixCell, measure: MatrixMeasure): number | undefined {
   if (!cell.runs) return undefined;
-  switch (measure) {
-    case 'fit':
-      // Headroom, so more is better and an offloaded fit scores below any resident one.
-      return cell.offloadFraction > 0 ? 0 : Math.max(0, 1 - cell.utilization);
-    case 'decode':
-      return cell.tokensPerSec;
-    case 'ttft':
-      // Inverted: less time is better.
-      return cell.ttftSeconds > 0 ? 1 / cell.ttftSeconds : 0;
-  }
+  // An offloaded fit scores below any resident one — a categorical answer rather than a degree,
+  // since the weights are crossing the bus whatever the headroom arithmetic says.
+  if (measure === 'fit' && cell.offloadFraction > 0) return 0;
+  return measureOf(cell, measure);
 }
 
 /** Largest value across the grid for a measure, for scaling the ramp. */

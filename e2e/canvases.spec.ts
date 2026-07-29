@@ -142,6 +142,48 @@ test('the Envelope repaints when the scenario changes', async ({ page }) => {
 });
 
 /**
+ * And that the measure toggle repaints it (#65).
+ *
+ * The grading itself is asserted in `src/components/Envelope.test.tsx`, which reads the draw loop's
+ * own `fillStyle` calls back through a stubbed 2D context. What that cannot see is the bitmap: the
+ * effect sizes the canvas from `getBoundingClientRect` before it draws anything, and jsdom reports
+ * that as 0×0 — so a repaint that clears the canvas and puts nothing legible back is
+ * indistinguishable there from a correct one. This is the same claim, and the same three failure
+ * names, that the model-change test above makes for the other trigger.
+ *
+ * Scoped to the Envelope's own region, since the Matrix carries the same three buttons.
+ */
+test('the Envelope repaints when the measure changes', async ({ page }) => {
+  await page.goto('/');
+  const field = page.getByRole('region', { name: /how much room/i });
+  const canvas = field.locator('canvas');
+  await expect(canvas).toBeVisible();
+
+  const before = await painted(canvas);
+  expect(before, 'the canvas could not be read back').not.toHaveProperty('error');
+  if ('error' in before) return; // unreachable past that assertion; narrows the union for TS
+  expect(before.opaque, 'the canvas was blank before the measure changed').toBeGreaterThan(0);
+
+  // Decode rather than latency: it varies along both axes at the default scenario, so the two
+  // pictures differ over the whole field rather than in one corner.
+  await field.getByRole('button', { name: 'How fast' }).click();
+
+  await expect
+    .poll(
+      async () => {
+        const after = await painted(canvas);
+        if ('error' in after) return 'unreadable';
+        if (after.digest === before.digest) return 'unchanged';
+        if (after.opaque === 0) return 'cleared';
+        if (after.colours <= 1) return 'flat';
+        return 'repainted';
+      },
+      { message: 'the field never repainted after the measure changed' }
+    )
+    .toBe('repainted');
+});
+
+/**
  * The bitmap is sized from `getBoundingClientRect` times the device pixel ratio, in an effect that
  * runs after layout. Getting that wrong gives a stretched or blank plot rather than an error.
  */

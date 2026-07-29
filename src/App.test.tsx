@@ -404,8 +404,13 @@ describe('every mark drawn over another is named in a legend', () => {
 
     const key = within(envelope()).getByText('You are here').closest('li');
     expect(key).not.toBeNull();
-    // In the legend itself, beside the state keys, rather than as a caption of its own somewhere.
-    expect(key?.parentElement).toBe(within(envelope()).getByText('Comfortable').closest('ul'));
+    /*
+     * In the legend itself, beside the other keys, rather than as a caption of its own somewhere.
+     * Anchored on the ramp's key rather than on a state's since #65: the field is coloured by a
+     * magnitude now, so the ramp is what the neighbouring *keys* key, and "Comfortable" is a line of
+     * prose in the same list rather than a swatch.
+     */
+    expect(key?.parentElement).toBe(within(envelope()).getByText('better').closest('ul'));
   });
 
   /**

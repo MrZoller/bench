@@ -5,11 +5,18 @@ import {
   type EnvelopeCell,
   type EnvelopeGrid,
 } from '@/engine/envelope';
+import { measureOf, type Measure } from '@/engine/measure';
 import { getDevice, getModel } from '@/data/catalog';
 import { getQuant } from '@/data/quants';
 import { getRuntime } from '@/data/runtimes';
-import { CONCURRENCY_STOPS, SETTING_LABELS, contextStopsFor, withStored } from '@/lib/stops';
-import { colors, marks, withAlpha } from '@/design/tokens';
+import {
+  CONCURRENCY_STOPS,
+  MEASURES,
+  SETTING_LABELS,
+  contextStopsFor,
+  withStored,
+} from '@/lib/stops';
+import { colors, magnitudeFill, magnitudeRamp, marks, withAlpha } from '@/design/tokens';
 import {
   CAPACITY_TIGHT,
   DECODE_USABLE,
@@ -31,25 +38,49 @@ import type { Config } from '@/store/scenario';
  *
  * Drawn on canvas rather than as DOM cells because the grid is dense and redrawn on every
  * slider frame; a table view carries the same figures for anyone who cannot use the picture.
+ *
+ * **The fill is a magnitude, and the verdict deliberately is not the fill** (#65). Painted from the
+ * three-state classification, the default scenario came out 45 of 56 cells in one amber with one
+ * cell green: a channel carrying almost nothing, in front of readings that span 20x of decode and
+ * 561x of first-token latency. And *none* of the amber was amber for capacity — the tight-on-capacity
+ * band is the last tenth of the ceiling, while both axes double per step, so the grid goes from 82%
+ * of the ceiling straight to 112% and the one threshold that could have drawn a boundary out of the
+ * two quantities these axes measure is skipped in every column. The field titled "how much room is
+ * left" was coloured entirely by speed and latency.
+ *
+ * So the fill takes a step of `magnitudeRamp` under a measure the reader chooses, exactly as the
+ * Matrix does: the same three questions over different axes, the same control, the same `MEASURES`.
+ * Capacity gets a whole channel instead of a threshold nothing lands in. The verdict is not lost —
+ * it is in this panel's count, in every row of the table, in the ring's sentence and in the canvas
+ * description, which are the channels that can carry a word.
  */
 
 /**
- * Ordinal, not sequential: these are four named states, not four points on a magnitude scale,
- * so they take categorical hues rather than steps of one ramp.
+ * What each state is called — and, for the three that are not magnitudes, what colour it is.
  *
- * These are the reserved *status* colours, not the budget series — `tokens.ts` validates that
- * trio, and this set was measured separately: worst normal-vision pair is serious/critical at
- * ΔE 20.7, worst CVD is good/warning at ~13.7 under protanopia. Colour is not the only channel
- * regardless; every state carries a label and a written hint.
+ * **A `fill` here means "this state is not a point on any scale".** `over` and `unsupported` are
+ * refusals, and `offloaded` is a different placement rather than a worse one: its weights cross the
+ * host bus every token, which is a structural fact a reader can act on and the most common
+ * explanation for a machine being mysteriously slow. Grading those on a ramp would be answering
+ * "how much room is left" for a configuration that has already run out of it. Everything else — the
+ * cells that fit resident, whether the verdict called them comfortable or tight — is a magnitude,
+ * and takes its colour from `fieldFill`.
+ *
+ * The three that keep a colour keep the reserved *status* hues, not the budget series: `tokens.ts`
+ * validates that trio, and this set was measured separately — worst normal-vision pair is
+ * serious/critical at ΔE 20.7, worst CVD is good/warning at ~13.7 under protanopia. Both hues still
+ * in use sit in a different family from the blue ramp, so a state cannot read as a step of it.
+ *
+ * All five keep a label and a hint, including the two with no colour left. The words are still what
+ * the header count, the table and the ring's sentence say, and the legend still defines them — as
+ * prose rather than as a key, which is the shape a thing with no mark has to take.
  */
-const STATE_STYLE: Record<CellState, { fill: string; label: string; hint: string }> = {
+const STATE_STYLE: Record<CellState, { fill?: string; label: string; hint: string }> = {
   comfortable: {
-    fill: colors.good,
     label: 'Comfortable',
     hint: 'Fits with room, types fast enough to read along, and starts answering promptly.',
   },
   tight: {
-    fill: colors.warning,
     label: 'Tight',
     hint: 'Runs, but near the ceiling, slow to type, or slow to start — the table says which.',
   },
@@ -76,6 +107,29 @@ const STATE_STYLE: Record<CellState, { fill: string; label: string; hint: string
     hint: 'This runtime does not support this hardware, at any size.',
   },
 };
+
+/** Whether this cell's colour is a magnitude at all, rather than one of the flat states. */
+function graded(cell: EnvelopeCell): boolean {
+  return STATE_STYLE[cell.state].fill === undefined;
+}
+
+/**
+ * The colour a cell is painted: a step of the ramp, or the flat colour of a state that is not a
+ * magnitude.
+ *
+ * The domain is the grid's own span rather than zero-to-best, and that is the half of this that
+ * matters here — see `magnitudeFill`. Headroom at the default scenario runs 18% to 49% of the
+ * ceiling because 60 GiB of weights is in every cell, and measured from zero that whole range lands
+ * on three steps of seven. The ramp has to be spent on what differs along these two axes, which is
+ * the cache.
+ */
+function fieldFill(
+  cell: EnvelopeCell,
+  measure: Measure,
+  domain: { min: number; max: number }
+): string {
+  return STATE_STYLE[cell.state].fill ?? magnitudeFill(measureOf(cell, measure), domain);
+}
 
 /**
  * Narrowest a column may be, in `rem`.
@@ -125,6 +179,15 @@ export function Envelope({ config }: { config: Config }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const headingId = useId();
   const [showTable, setShowTable] = useState(false);
+  /**
+   * What the fill means, defaulting to the question the panel's own heading asks.
+   *
+   * `fit` rather than the liveliest picture: the axes are the two quantities that multiply into the
+   * cache, so capacity is the reading the field was drawn for, and it is the Matrix's default too.
+   * The other two are one press away and both are genuinely better graded — decode spans 20x here
+   * and latency 561x — which is the argument for a toggle rather than for picking one.
+   */
+  const [measure, setMeasure] = useState<Measure>('fit');
 
   const model = getModel(config.modelId);
 
@@ -175,6 +238,25 @@ export function Envelope({ config }: { config: Config }) {
    */
   const contextLabels = useMemo(() => uniqueLabels(grid.contexts), [grid.contexts]);
 
+  /**
+   * The span the ramp is stretched over: the selected measure across the cells that take a step of
+   * it, and nothing else.
+   *
+   * The flat states are excluded from the domain as well as from the ramp, which is the pairing that
+   * matters. A grid where most cells are closed has a handful of resident ones left, and scaling
+   * those against readings taken from cells painted a flat colour would spend the ramp on a range
+   * the field never shows.
+   */
+  const domain = useMemo(() => {
+    const values = grid.cells
+      .flat()
+      .filter(graded)
+      .map((cell) => measureOf(cell, measure));
+    return values.length > 0
+      ? { min: Math.min(...values), max: Math.max(...values) }
+      : { min: 0, max: 0 };
+  }, [grid, measure]);
+
   const [resizeTick, setResizeTick] = useState(0);
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -210,7 +292,7 @@ export function Envelope({ config }: { config: Config }) {
         // Rows are drawn bottom-up: concurrency increases upward, as an axis should.
         const x = c * cellW;
         const y = height - (r + 1) * cellH;
-        ctx.fillStyle = STATE_STYLE[cell.state].fill;
+        ctx.fillStyle = fieldFill(cell, measure, domain);
         // The 2px spacer, so adjacent cells never bleed into one continuous wash.
         ctx.fillRect(x, y, Math.max(1, cellW - marks.gap), Math.max(1, cellH - marks.gap));
       });
@@ -231,11 +313,30 @@ export function Envelope({ config }: { config: Config }) {
       ctx.beginPath();
       ctx.arc(x, y, Math.min(cellW, cellH) / 5, 0, Math.PI * 2);
       ctx.stroke();
+      /**
+       * The counter-line under the ring, which is what keeps it legible now that the fills are a
+       * ramp rather than four flat hues.
+       *
+       * Two tones on one path: light ink at `marks.lineWidth`, then a 1px near-black inside it. The
+       * invariant is not that either clears 3:1 on every step — it is that *one of them always
+       * does*, the dark line on the ramp's light end and the light ring on its dark one. That is the
+       * rule #67 wrote down for the Matrix's selected square on this same ramp, and this mark
+       * inherited the obligation the moment the cells underneath it stopped being status colours.
+       * `Envelope.test.tsx` measures both tones against every fill the field actually paints.
+       */
       ctx.strokeStyle = withAlpha(colors.bg, 0.9);
       ctx.lineWidth = 1;
       ctx.stroke();
     }
-  }, [grid, config.contextTokens, config.concurrency, model.maxContext, resizeTick]);
+  }, [
+    grid,
+    measure,
+    domain,
+    config.contextTokens,
+    config.concurrency,
+    model.maxContext,
+    resizeTick,
+  ]);
 
   /**
    * Whether the closed cells are closed by a ceiling rather than by the hardware. A grid is one
@@ -273,6 +374,46 @@ export function Envelope({ config }: { config: Config }) {
           comfortable
         </PanelCount>
       </header>
+
+      {/*
+        One filter row above the field, as the dataviz guidance puts it — and the Matrix's own
+        control, reading the Matrix's own `MEASURES`, because these are the same three questions
+        asked over different axes. Toggling rearranges which corner of the region looks survivable,
+        which is the capacity/bandwidth/compute triangle made concrete on a second surface rather
+        than asserted in prose.
+
+        The count in the header stays a comfort count, deliberately, and is the reason it can: the
+        verdict is a word, so it lives in the channels that carry words. The fill is a magnitude.
+      */}
+      <fieldset className="mt-4">
+        <legend className="sr-only">Colour the field by</legend>
+        <div className="flex flex-wrap gap-1 rounded-md border border-[var(--color-control-border)] bg-[var(--color-surface-raised)] p-1">
+          {MEASURES.map((m) => (
+            <button
+              key={m.value}
+              type="button"
+              aria-pressed={m.value === measure}
+              onClick={() => setMeasure(m.value)}
+              className={`rounded px-3 py-1 text-sm transition-colors ${
+                m.value === measure
+                  ? 'bg-[var(--color-accent-dim)] text-[var(--color-text)]'
+                  : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+              }`}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+        {/* The ramp's domain, stated. Its ends are this grid's own best and worst cell rather than
+            absolute figures — that is what makes a field whose variation sits on top of a large
+            constant legible at all, and it is also a thing a reader would otherwise assume the
+            other way round. */}
+        <p className="mt-1.5 text-xs text-[var(--color-text-muted)]">
+          {MEASURES.find((m) => m.value === measure)?.hint} The ramp runs between the best and worst
+          cell on this grid, so it says which way the region falls off rather than by how much — the
+          table has the figures.
+        </p>
+      </fieldset>
 
       <div className="mt-4">
         {/*
@@ -336,7 +477,7 @@ export function Envelope({ config }: { config: Config }) {
                 <canvas
                   ref={canvasRef}
                   role="img"
-                  aria-label={describe(grid, counts, total, currentCell, contextLabels)}
+                  aria-label={describe(grid, counts, total, currentCell, contextLabels, measure)}
                   className="h-48 w-full rounded"
                 />
                 <ol
@@ -369,12 +510,14 @@ export function Envelope({ config }: { config: Config }) {
       </div>
 
       {/*
-        The hint carries what the colour cannot: "Tight" means three unrelated things.
+        The hint carries what the colour cannot: a ramp step is a magnitude, while "will not run" and
+        "spilling to RAM" are states, and "tight" means three unrelated things.
 
-        Only the states actually on screen. A legend is a key to this picture, not a catalogue of
-        everything the engine can return — and `unsupported` deliberately shares `over`'s red, so
-        listing both unconditionally would put two identical swatches under different sentences.
-        They never co-occur: an unsupported runtime closes the whole grid.
+        Only what the picture and the panel actually contain. A legend is a key to this surface, not
+        a catalogue of everything the engine can return — and `unsupported` deliberately shares
+        `over`'s red, so listing both unconditionally would put two identical swatches under
+        different sentences. They never co-occur: an unsupported runtime closes the whole grid. The
+        ramp key follows the same rule and is absent from a grid where no cell is graded.
       */}
       <ul className="mt-4 grid gap-x-5 gap-y-2 sm:grid-cols-2">
         {/*
@@ -410,6 +553,50 @@ export function Envelope({ config }: { config: Config }) {
             </span>
           </li>
         )}
+        {/*
+          The ramp, which is the field's primary encoding and has no discrete keys to list — the
+          same shape of key the Matrix's legend carries for the same ramp, and spanning both columns
+          because it is one scale rather than one of a set of states.
+
+          `flex-wrap` with the gradient's floor capped at `100%`, for the reason recorded on the
+          Matrix's legend (#34) and on `min-w-[min(12rem,100%)]` in the ROADMAP: a bare rem floor is
+          a floor the viewport cannot argue with, so under browser text scaling it takes the document
+          into a sideways scroll at 320px. Capped, the gradient claims its own line instead.
+
+          Only while some cell is actually graded. Under a runtime that cannot drive the device the
+          whole field is one flat red, and a ramp key there describes a scale nothing on screen is
+          painted from.
+        */}
+        {grid.cells.flat().some(graded) && (
+          <li className="flex flex-wrap items-center gap-2 text-sm sm:col-span-2">
+            <span className="text-[var(--color-text)]">worse</span>
+            <span
+              aria-hidden="true"
+              className="flex h-3 min-w-[min(4rem,100%)] flex-1 overflow-hidden rounded-sm"
+            >
+              {magnitudeRamp.map((step) => (
+                <span key={step} className="flex-1" style={{ background: step }} />
+              ))}
+            </span>
+            <span className="text-[var(--color-text)]">better</span>
+            {/* Naming the measure again here would print the caption above twice on one panel; the
+                control is what says which of the three the ramp is currently spending itself on. */}
+            <span className="text-xs text-[var(--color-text-muted)]">
+              Every cell that fits, graded by the selected measure.
+            </span>
+          </li>
+        )}
+        {/*
+          Every state the grid holds, in one of two shapes: a swatch and a sentence for the three
+          that own a colour, and a sentence alone for the two verdicts that no longer do.
+
+          The swatch-less shape is deliberate rather than a leftover. "A key to a mark that appears
+          nowhere is worse than prose" is the rule the Matrix's own stand-in warning follows, and it
+          applies exactly here — but the words themselves have to stay, because the count in this
+          panel's header, the first thing every row of the table says and the ring's own sentence are
+          all "comfortable" or "tight", and this list is the only place on the surface that says what
+          either one means.
+        */}
         {(Object.keys(STATE_STYLE) as CellState[])
           .filter((state) => counts[state])
           .map((state) => {
@@ -436,13 +623,17 @@ export function Envelope({ config }: { config: Config }) {
                     }
                 : STATE_STYLE[state];
 
+            const fill = STATE_STYLE[state].fill;
+
             return (
               <li key={state} className="flex items-baseline gap-2 text-sm">
-                <span
-                  aria-hidden="true"
-                  className="mt-1 inline-block h-3 w-3 shrink-0 rounded-sm"
-                  style={{ background: STATE_STYLE[state].fill }}
-                />
+                {fill && (
+                  <span
+                    aria-hidden="true"
+                    className="mt-1 inline-block h-3 w-3 shrink-0 rounded-sm"
+                    style={{ background: fill }}
+                  />
+                )}
                 <span>
                   <span className="text-[var(--color-text)]">{label}</span>{' '}
                   <span className="text-xs text-[var(--color-text-muted)]">{hint}</span>
@@ -516,7 +707,8 @@ function describe(
   counts: Record<string, number>,
   total: number,
   current: EnvelopeCell | undefined,
-  contextLabels: readonly string[]
+  contextLabels: readonly string[],
+  measure: Measure
 ): string {
   /**
    * The closed cells, split the way the legend splits them.
@@ -573,11 +765,23 @@ function describe(
     (counts.offloaded ?? 0) > 0 &&
       `${counts.offloaded} run only by spilling weights to host RAM, if the host has room for them`,
   ].filter((s): s is string => typeof s === 'string');
+  /**
+   * What the colour means, which a sighted reader gets from the ramp and the toggle's caption.
+   *
+   * Said only when some cell is actually graded, the same condition the visible ramp key is drawn
+   * under: on a grid the runtime cannot drive there is no ramp on screen and nothing for this clause
+   * to describe. Without it the three measure buttons are silent for a screen-reader user — they
+   * repaint a picture whose only textual equivalent never mentioned colour at all.
+   */
+  const coloured = grid.cells.flat().some(graded)
+    ? `Cells that fit are coloured by ${MEASURES.find((m) => m.value === measure)?.paints}, worst to best.`
+    : '';
   // Suppressed only when it would print a zero — `closed.length > 0` is exactly the condition
   // under which `whyClosed` has something non-empty to report, in all three of its forms.
   const rest = [
     runnable.length > 0 ? `${runnable.join(', and ')}.` : '',
     closed.length > 0 ? whyClosed : '',
+    coloured,
   ];
 
   const comfortable = counts.comfortable ?? 0;

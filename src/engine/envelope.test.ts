@@ -300,6 +300,79 @@ describe('the feasibility region', () => {
 });
 
 /**
+ * The finding behind #65, kept as a property because it is why the picture is no longer painted
+ * from `state`.
+ *
+ * At the shipped default scenario — gpt-oss 120B at MXFP4 on one DGX Spark, 8K prompt — 45 of the
+ * 56 cells come back `tight`, one comes back `comfortable`, and not a single one is
+ * `tightBecause: 'capacity'`. The classification is not wrong; it is *flat*, and three buckets over
+ * a grid whose cells differ by 20x in decode and 561x in first-token latency cannot draw a shape.
+ * Nor can the capacity threshold rescue it: the tight band is the last tenth of the ceiling while
+ * both axes double per step, so the grid steps from 82% straight to 112% in every column.
+ *
+ * What this asserts is the half that has to stay true for the fill to be worth changing — that the
+ * readings carry the shape the states do not. If a future change makes the *verdicts* vary too, this
+ * still passes; it is a claim about cost, not about how many buckets there are.
+ */
+describe('the readings under one verdict', () => {
+  // The axes the panel builds at the default scenario: `CONTEXT_STOPS` up to the model's own
+  // 131,072 ceiling, and every concurrency stop.
+  const DEFAULT_CONTEXTS = [2048, 4096, 8192, 16384, 32768, 65536, 131072] as const;
+  const DEFAULT_CONCURRENCIES = [1, 2, 4, 8, 16, 32, 64, 128] as const;
+
+  const defaultScenario = () =>
+    envelope({
+      model: GPT_OSS_120B,
+      quant: getQuant('mxfp4'),
+      runtime: LLAMA_CPP,
+      rig: { device: DGX_SPARK, count: 1 },
+      usage: { contextTokens: 32768, concurrency: 1, promptTokens: 8192, kvPrecision: 'fp16' },
+      contexts: DEFAULT_CONTEXTS,
+      concurrencies: DEFAULT_CONCURRENCIES,
+      // The responsive bar, which is what the panel passes — not this file's default of 10.
+      usableTtftSeconds: 2,
+    });
+
+  it('spreads orders of magnitude of cost across cells that share one verdict', () => {
+    const cells = defaultScenario().cells.flat();
+    expect(cells).toHaveLength(DEFAULT_CONTEXTS.length * DEFAULT_CONCURRENCIES.length);
+
+    // The largest group of same-verdict cells, which at this scenario is 45 of the 56.
+    const byState = new Map<CellState, typeof cells>();
+    for (const cell of cells) byState.set(cell.state, [...(byState.get(cell.state) ?? []), cell]);
+    const largest = [...byState.values()].sort((a, b) => b.length - a.length)[0];
+    expect(largest.length / cells.length, 'no verdict covers much of this grid').toBeGreaterThan(
+      0.5
+    );
+
+    const rates = largest.map((c) => c.tokensPerSec);
+    const waits = largest.map((c) => c.ttftSeconds);
+    expect(Math.max(...rates) / Math.min(...rates)).toBeGreaterThan(10);
+    expect(Math.max(...waits) / Math.min(...waits)).toBeGreaterThan(100);
+  });
+
+  it('leaves the capacity band unreached, because the axes double and the band does not', () => {
+    /*
+     * Not a defect in the threshold — 90% of the ceiling is the right place to call a *point*
+     * scenario nearly full, and Telemetry uses it that way. It is a fact about this grid: every step
+     * of either axis doubles the cache, so the utilization of adjacent cells jumps clean over a band
+     * ten points wide, and the one cause that is about the two quantities these axes measure never
+     * fires. That is what the fill had to stop depending on.
+     */
+    const cells = defaultScenario().cells.flat();
+    expect(cells.some((c) => c.state === 'tight')).toBe(true);
+    expect(cells.filter((c) => c.tightBecause === 'capacity')).toHaveLength(0);
+
+    // And the utilizations really do straddle it rather than merely staying low: the fullest cell
+    // that runs is under the band, and the emptiest that does not is over the ceiling entirely.
+    const running = cells.filter((c) => c.state !== 'over' && c.state !== 'unsupported');
+    const closed = cells.filter((c) => c.state === 'over');
+    expect(Math.max(...running.map((c) => c.utilization))).toBeLessThan(0.9);
+    expect(Math.min(...closed.map((c) => c.utilization))).toBeGreaterThan(1);
+  });
+});
+
+/**
  * Every cell used to be timed for a single prompt, because `estimatePrefill` read `promptTokens`
  * and never `concurrency`. A row at 64 users therefore inherited the one-user time-to-first-token,
  * so it could stay Comfortable on a latency nobody in that row would actually see — the promptness

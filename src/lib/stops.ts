@@ -1,3 +1,4 @@
+import type { Measure } from '@/engine/measure';
 import type { KvPrecision, RuntimeSpec } from '@/engine/types';
 // The scenario *shape*, not the store: `scenario.ts` deliberately depends on nothing but engine
 // types so that everything needing the shape can have it without a cycle. Type-only, so it erases.
@@ -60,6 +61,35 @@ export const SETTING_LABELS = {
   kvPrecision: 'KV precision',
   deviceCount: 'Device count',
 } as const satisfies Record<keyof Config, string>;
+
+/**
+ * What each measure is called, wherever a grid offers to colour itself by one.
+ *
+ * Both grids offer the same three — the Matrix over model × device, the Envelope over context ×
+ * concurrent users since #65 — and they are the same three questions, so they are named once.
+ * `KV_PRECISIONS` above is here for exactly the same reason: the options a control offers are
+ * vocabulary, and a second hand-written copy is how two surfaces come to call one thing two things.
+ *
+ * `hint` is derived from `paints` rather than written beside it, because the two are the same
+ * sentence in two registers: the toggle's caption states it as a heading would, and the picture's
+ * `aria-label` needs it as a clause ("Coloured by tokens per second for one user"). Written twice,
+ * a reworded caption leaves the screen-reader description describing the old colouring.
+ */
+export const MEASURES: readonly { value: Measure; label: string; paints: string; hint: string }[] =
+  (
+    [
+      {
+        value: 'fit',
+        label: 'Does it fit',
+        paints: 'headroom left after weights, cache and overhead',
+      },
+      { value: 'decode', label: 'How fast', paints: 'tokens per second for one user' },
+      { value: 'ttft', label: 'How responsive', paints: 'time until the first token appears' },
+      // `as const` so each `value` stays its own literal and the annotation above checks it against
+      // `Measure` rather than against `string` — the same claim `SETTING_LABELS` makes with
+      // `satisfies`, and the reason a fourth measure cannot be added here without the engine agreeing.
+    ] as const
+  ).map((m) => ({ ...m, hint: `${m.paints[0].toUpperCase()}${m.paints.slice(1)}.` }));
 
 /**
  * The cache precisions a control can offer, with the name to use when a runtime has none of
