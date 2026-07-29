@@ -236,6 +236,47 @@ describe('the Bench does not overclaim', () => {
 });
 
 /**
+ * The masthead survives having no canvas.
+ *
+ * Its backdrop is painted on a 2D context, and jsdom has none — `getContext` returns null here, and
+ * a real browser can refuse one under memory pressure. Everything the masthead actually *says* is
+ * DOM, so the draw failing must cost the decoration and nothing else. That the backdrop paints at
+ * all is e2e's question, in `e2e/canvases.spec.ts`; this is the other half, and the half a headless
+ * environment can answer.
+ */
+describe('the masthead', () => {
+  it('renders the wordmark and tagline with no 2D context available', () => {
+    render(<App />);
+
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('bench');
+    expect(screen.getByText(/What runs on your hardware/i)).toBeInTheDocument();
+  });
+
+  /**
+   * And that its <header> sits outside <main>, which is the whole reason it is a `banner` landmark.
+   * Nesting it back inside is a one-line change that removes the role silently: the assertion above
+   * would still pass, and a screen-reader user's route to the top of the page would be gone with
+   * nothing to say so.
+   *
+   * Asserted positionally rather than with `getByRole('banner')`, because jsdom's role mapping
+   * reports *every* <header> as a banner — including the four nested inside <section> panels, which
+   * are `generic` in any browser that implements the scoping. The query finds five elements here
+   * and proves nothing. `e2e/canvases.spec.ts` makes the role claim where it means something.
+   */
+  it('sits outside <main>, which is what makes it a banner landmark', () => {
+    const { container } = render(<App />);
+
+    const header = screen.getByRole('heading', { level: 1 }).closest('header');
+    expect(header).not.toBeNull();
+    expect(container.querySelector('main')).not.toBeNull();
+    expect(container.querySelector('main')!.contains(header!)).toBe(false);
+
+    // The share control belongs up here too — it describes the whole scenario, not any one panel.
+    expect(within(header!).getByRole('button', { name: /copy link/i })).toBeInTheDocument();
+  });
+});
+
+/**
  * The verdict strip is now memoised on the scenario, so what needs guarding is the failure a memo
  * introduces: grades that keep describing the configuration they were computed for. It had no
  * coverage at this level at all before — the arithmetic is pinned in the engine's suite, but

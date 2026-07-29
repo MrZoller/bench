@@ -70,6 +70,31 @@ body {
 }
 
 /*
+ * The masthead wordmark settles into place once, on load.
+ *
+ * Declared as an animation rather than a transition so the reduced-motion rule below neutralises it
+ * with no second code path. The canvas backdrop behind it cannot rely on that and asks `matchMedia`
+ * itself — a blanket CSS rule reaches declared animations, not a requestAnimationFrame loop.
+ *
+ * `both` matters: with the rule below collapsing the duration to 0.01ms, the fill is what leaves
+ * the wordmark at its final opacity instead of the 0 it starts from.
+ */
+@keyframes hero-settle {
+  from {
+    opacity: 0;
+    transform: translateY(0.25rem);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.hero-wordmark {
+  animation: hero-settle 600ms ease-out both;
+}
+
+/*
  * Respect a reduced-motion preference. The Bench animates bar transitions so a change reads as
  * a change rather than a jump cut; that is an enhancement, never load-bearing.
  */
