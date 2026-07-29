@@ -706,6 +706,20 @@ export function Matrix({ config }: { config: Config }) {
                   // sighted keyboard reader gets the full name from any cell in the column instead.
                   onMouseEnter={() => setHovered({ kind: 'column', deviceId: device.id })}
                   onMouseLeave={() => setHovered(null)}
+                  /* The same reclaim the cells carry, for the same reason and by the same guard —
+                     see the cell's `onMouseMove`. A heading is a hover-only surface with no focus of
+                     its own, so a pointer resting in one and outranked by a keyboard step had *no*
+                     route back except leaving the heading: worse here than on a cell, where at least
+                     the reader can arrow to the thing they are pointing at. Fixing the cell alone
+                     left two live instances of one defect, which is the shape this repo keeps
+                     recording. */
+                  onMouseMove={() =>
+                    setHovered((claim) =>
+                      claim?.kind === 'column' && claim.deviceId === device.id
+                        ? claim
+                        : { kind: 'column', deviceId: device.id }
+                    )
+                  }
                 >
                   {/*
                       Rotated rather than truncated. Horizontally these clipped to "GeForc…" four
@@ -774,6 +788,14 @@ export function Matrix({ config }: { config: Config }) {
                   aria-label={rowReadout(model)}
                   onMouseEnter={() => setHovered({ kind: 'row', modelId: model.id })}
                   onMouseLeave={() => setHovered(null)}
+                  /* See the column heading above: one class, three surfaces. */
+                  onMouseMove={() =>
+                    setHovered((claim) =>
+                      claim?.kind === 'row' && claim.modelId === model.id
+                        ? claim
+                        : { kind: 'row', modelId: model.id }
+                    )
+                  }
                 >
                   {model.name}
                 </th>
@@ -1034,31 +1056,6 @@ export function Matrix({ config }: { config: Config }) {
 
           `tabular`, because the figures change under the sliders and a readout whose digits shift
           width as it counts is the thing `index.css` reserves that class for. */}
-      {/* **Sticky to the bottom of the viewport while the grid is on screen** (found in review).
-
-          The comment on the cell's `title` above concedes that this grid is 17 rows tall and a reader
-          at the top of it can have the readout below the fold — and treats the native tooltip as the
-          channel that covers that case. It does not: `title` needs a pointer and a dwell, so a sighted
-          *keyboard* reader arrowing across the first rows had the figures rendered somewhere they
-          could not see, which is #71's defect surviving its own fix for the reader who had the least
-          before it.
-          `sticky` rather than `fixed`, and `bottom-0` on the element that is already in flow, so it
-          occupies its own space in the layout and reflows nothing: the paragraph sits where it always
-          did and merely stops scrolling out of view while the panel is. `min-h` already reserved the
-          line against text scaling, which is what keeps this from shifting the legend below it as the
-          sentence appears and disappears.
-          A surface of its own — `--color-surface` plus the panel's horizontal padding pulled back out
-          with negative margins — because a line of text pinned over a scrolling grid of coloured
-          squares is unreadable against half of them. No vertical padding with it: `min-h` is a
-          border-box floor, so padding is inside it while the line is empty and *adds* to it once
-          there is a line of text — 4px of legend movement every time a sentence appears, which is
-          precisely the reflow the reservation exists to prevent. The sibling test caught it. */}
-      <p
-        aria-hidden="true"
-        className="tabular sticky bottom-0 -mx-[min(1.25rem,5vw)] mt-3 min-h-[1.25rem] bg-[var(--color-surface)] px-[min(1.25rem,5vw)] text-sm text-[var(--color-text)]"
-      >
-        {readout}
-      </p>
 
       {/* A ramp legend, since a continuous scale has no discrete keys to list.
           `flex-wrap`, because several of the seven entries are whole sentences and the row does not
@@ -1238,6 +1235,53 @@ export function Matrix({ config }: { config: Config }) {
           </span>
         )}
       </div>
+      {/* **Last in the panel, and sticky, and those two together are the fix** (#71, both halves
+          found in review).
+
+          Sticky, because the paragraph used to sit after a 17-row table: a keyboard reader arrowing
+          across the first rows had the figures rendered below the fold, and the cell's native `title`
+          does not cover them — it needs a pointer and a dwell, so it serves the mouse reader and not
+          the one who had nothing before this. `bottom-0` on an element in flow keeps it on screen
+          without taking it out of the layout.
+
+          Last, because reserving a line's height only prevents reflow while the sentence *is* one
+          line. At 320px these are full model-and-device sentences and measure 60 to 80px — three and
+          four lines — against a 20px reservation, so focusing a cell shoved the legend down and
+          arrowing between sentences of different lengths jittered it. Reserving the worst case
+          instead would be a constant measured from today's names: #78 has already lengthened them
+          once ("MacBook Pro M1 Max (64 GB, 32-core GPU)"), and a length derived from text that grows
+          is the header band's own #44 defect. With nothing after it there is nothing to push, at any
+          width and any sentence length, and no constant to keep true.
+
+          `min-h` stays for the empty state, so the pinned bar holds its line rather than collapsing
+          between hovers. No vertical padding with it: `min-h` is a border-box floor, so padding sits
+          inside it while the line is empty and adds to it once there is text — 4px of movement per
+          sentence, which is what this is all for. */}
+      {/* **Sticky to the bottom of the viewport while the grid is on screen** (found in review).
+
+          The comment on the cell's `title` above concedes that this grid is 17 rows tall and a reader
+          at the top of it can have the readout below the fold — and treats the native tooltip as the
+          channel that covers that case. It does not: `title` needs a pointer and a dwell, so a sighted
+          *keyboard* reader arrowing across the first rows had the figures rendered somewhere they
+          could not see, which is #71's defect surviving its own fix for the reader who had the least
+          before it.
+          `sticky` rather than `fixed`, and `bottom-0` on the element that is already in flow, so it
+          occupies its own space in the layout and reflows nothing: the paragraph sits where it always
+          did and merely stops scrolling out of view while the panel is. `min-h` already reserved the
+          line against text scaling, which is what keeps this from shifting the legend below it as the
+          sentence appears and disappears.
+          A surface of its own — `--color-surface` plus the panel's horizontal padding pulled back out
+          with negative margins — because a line of text pinned over a scrolling grid of coloured
+          squares is unreadable against half of them. No vertical padding with it: `min-h` is a
+          border-box floor, so padding is inside it while the line is empty and *adds* to it once
+          there is a line of text — 4px of legend movement every time a sentence appears, which is
+          precisely the reflow the reservation exists to prevent. The sibling test caught it. */}
+      <p
+        aria-hidden="true"
+        className="tabular sticky bottom-0 -mx-[min(1.25rem,5vw)] mt-3 min-h-[1.25rem] bg-[var(--color-surface)] px-[min(1.25rem,5vw)] text-sm text-[var(--color-text)]"
+      >
+        {readout}
+      </p>
     </section>
   );
 }

@@ -194,3 +194,47 @@ test('the readout stays on screen while a cell near the top of the grid is focus
   ).toBeLessThanOrEqual(LAPTOP.height + 1);
   expect(await readout(page).textContent()).toBeTruthy();
 });
+
+/**
+ * The reservation only ever held at one line, and at 320px the sentence is three or four
+ * (found in review on #71).
+ *
+ * `min-h-[1.25rem]` is 20px. These are full model-and-device sentences, and on a phone they measure
+ * 60 to 80px — so focusing a cell pushed the legend down, and arrowing between sentences of different
+ * lengths jittered it, which is the reflow the reserved line exists to prevent. Reserving the worst
+ * case would be a constant measured from today's device names, and #78 has already lengthened those
+ * once; the readout is last in the panel instead, so there is nothing after it to push.
+ *
+ * Asserted against two cells whose sentences wrap to *different* heights, because equal heights would
+ * pass on the unfixed markup too.
+ */
+test('a wrapped readout moves nothing at 320px, whatever its height', async ({ page }) => {
+  await page.setViewportSize(NARROW);
+  await page.goto('/');
+  await expect(grid(page)).toBeVisible();
+
+  const legendBefore = await boxOf(legend(page));
+  const cells = grid(page).locator('td button');
+
+  const heightAfter = async (index: number) => {
+    await cells.nth(index).focus();
+    await expect(readout(page)).not.toBeEmpty();
+    return {
+      line: (await boxOf(readout(page))).height,
+      legend: (await boxOf(legend(page))).top,
+    };
+  };
+
+  // Two sentences that wrap differently — the premise, so this cannot pass on equal heights.
+  const a = await heightAfter(0);
+  const b = await heightAfter(await cells.count().then((n) => n - 1));
+  expect(a.line, 'the readout did not wrap, so there is nothing to test').toBeGreaterThan(30);
+  expect(
+    Math.abs(a.line - b.line),
+    'both sentences wrap to the same height, so a moving legend would not show'
+  ).toBeGreaterThan(1);
+
+  // The legend has not moved for either, nor from where it sat before anything was focused.
+  expect(a.legend).toBeCloseTo(legendBefore.top, 0);
+  expect(b.legend, 'the legend moved when the readout grew').toBeCloseTo(legendBefore.top, 0);
+});
