@@ -203,9 +203,184 @@ type AttentionCore =
   | { kind: 'mla'; kvLoraRank: number; qkRopeHeadDim: number };
 
 /**
+ * Config key *prefixes* that name a non-attention block's own dimensions.
+ *
+ * A prefix rather than a list of exact names, because an enumerated list is a list of the configs
+ * its author happened to open. Thirteen exact names read off four configs already missed three
+ * shipping models: Granite declares `mamba_chunk_size`, `mamba_conv_bias` and `mamba_proj_bias`
+ * beside the six that got listed, Nemotron-Nano spells the same block `mamba_state_dim` /
+ * `mamba_head_dim` / `mamba_num_heads` and shares *no* exact name with Granite's spelling, and
+ * Kimi-Linear puts its entire linear-attention block inside a single nested `linear_attn_config`
+ * object, so a flat name lookup saw nothing at all and the model derived as 27-layer MLA at 3.86x
+ * over. The suffixes are per-architecture and move; the prefix is the part that holds. A block
+ * configured under `linear_*` or `mamba_*` is a recurrence whose state is **constant in sequence
+ * length**, whatever comes after the underscore.
+ *
+ * Verified against all 17 seeds: none carries a key matching either prefix, so this rejects nothing
+ * already in the product.
+ */
+const LINEAR_STACK_PREFIXES = [/^linear_/, /^mamba_/];
+
+/**
+ * The same statement, in the spellings whose key names carry no prefix worth generalising.
+ *
+ * There are only two attention families in this script's vocabulary, GQA and MLA, and both charge
+ * every layer a growing cache; a stack that mixes attention with a recurrence reads as a clean hit
+ * and is billed for a cache most of its layers never allocate. Qwen3-Next is 12 attention layers of
+ * 48 (4.0x over: 96.0 KiB/token derived against 24.0 actual, 12.0 GiB against 3.0 at 128K context),
+ * Granite 4.0-h-small 4 of 40 (10x), Kimi-Linear 7 of 27 (3.86x), LFM2-1.2B 6 of 16 (2.67x).
+ *
+ * Listed by config key rather than by architecture, because `architectures` is a transformers class
+ * name that moves and these keys are what the block itself is configured from:
+ *
+ *   - `full_attention_interval` — Qwen3-Next: one attention layer every N, gated DeltaNet between.
+ *   - `full_attn_idxs` — LFM2: the attending layers by index, short convolutions on the rest.
+ *     Present in the 1.2B and 350M exports, which carry no `layer_types` at all, while the 2.6B and
+ *     8B-A1B exports of the *same architecture* spell it `layer_types: ["conv", ...]`. One export
+ *     refusing and another silently mis-pricing is why both axes are guarded rather than one.
+ *   - `conv_L_cache` — LFM2 again: the short-conv state length, which is a state and not a cache.
+ *   - `hybrid_override_pattern` — Nemotron-H's per-layer `M`/`*`/`-` string.
+ *   - `mb_per_layer` — Phi-4-mini-flash-reasoning (SambaY): Mamba blocks interleaved by index, in a
+ *     32-layer stack that otherwise derives as clean GQA with `sliding_window: 512` throughout. The
+ *     exact split is in the modelling code rather than the config, which is a reason to refuse.
+ *
+ * A key here that a future config uses to mean something else costs one loud refusal and a one-line
+ * fix, which is the direction this file has chosen to fail in everywhere else too.
+ */
+const LINEAR_STACK_KEYS = [
+  'full_attention_interval',
+  'full_attn_idxs',
+  'conv_L_cache',
+  'hybrid_override_pattern',
+  'mb_per_layer',
+];
+
+/**
+ * Every key in this config that says the stack is not attention all the way down, sorted.
+ *
+ * Sorted rather than in config order so the refusal reads the same whoever exported the JSON —
+ * `Object.keys` follows insertion order, and the message is something tests and humans both quote.
+ */
+function linearStackKeys(config: HfConfig): string[] {
+  return Object.keys(config)
+    .filter((key) => config[key] !== undefined && config[key] !== null)
+    .filter(
+      (key) => LINEAR_STACK_KEYS.includes(key) || LINEAR_STACK_PREFIXES.some((p) => p.test(key))
+    )
+    .sort();
+}
+
+/**
+ * How many layers actually attend, where the config states it outright.
+ *
+ * Half the value of refusing is that the next person does not have to re-derive the split, so where
+ * it is in `config.json` the refusal counts the layers rather than merely naming a key — the
+ * difference between "this looks unusual" and "36 of these 48 layers were about to be charged for a
+ * cache they do not have". Three spellings state it; the rest only imply a hybrid, and an implied
+ * one gets a refusal without a count rather than a count that was guessed.
+ */
+function statedAttendingLayers(
+  config: HfConfig,
+  layers: number
+): { count: number; from: string } | undefined {
+  const interval = num(config, 'full_attention_interval');
+  if (interval !== undefined && interval > 0) {
+    return { count: Math.floor(layers / interval), from: 'full_attention_interval' };
+  }
+
+  const idxs = config.full_attn_idxs;
+  if (Array.isArray(idxs)) return { count: idxs.length, from: 'full_attn_idxs' };
+
+  // Kimi-Linear: the same array, one level down inside the block's own config object.
+  const linearAttn = config.linear_attn_config;
+  if (linearAttn !== null && typeof linearAttn === 'object') {
+    const full = (linearAttn as HfConfig).full_attn_layers;
+    if (Array.isArray(full)) {
+      return { count: full.length, from: 'linear_attn_config.full_attn_layers' };
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Refuses a model whose layers do not all cache keys and values.
+ *
+ * The rule this file already applies to an MTP module, a short `layer_types` and a ratio-guard
+ * miss, applied to the third attention family: refuse what cannot be derived. Pricing one properly
+ * needs a third `AttentionCore` kind carrying the per-layer split *and* the constant state term,
+ * and only the first half is in `config.json` — the state's shape is specific to the block
+ * (DeltaNet's `num_v_heads * head_k_dim * head_v_dim` plus its conv window; Mamba-2's
+ * `n_heads * d_head * d_state` plus its own; Kimi-Delta's `num_heads * head_dim` plus a
+ * `short_conv_kernel_size` window) and its width is set by the runtime rather than by `torch_dtype`.
+ * Deriving the split and inventing the term would put a made-up number inside the fix for a made-up
+ * number.
+ *
+ * So the error carries the evidence instead: how many layers cache, how many do not, and which key
+ * said so. A catalog with a gap and a loud reason is worth more than one with a confident 4x error.
+ */
+function refuseLinearStack(id: string, config: HfConfig, layers: number): void {
+  const declared = linearStackKeys(config);
+
+  if (declared.length > 0) {
+    // Counted only when the config states it *and* the count is a genuine split. An interval of 1 is
+    // legal and means every layer attends, which would otherwise produce "48 of 48 layers attend
+    // and cache; the other 0 hold a recurrent state" — a sentence whose two clauses disagree, which
+    // is the failure this file's own rule about predicates and their prose exists to prevent.
+    const stated = statedAttendingLayers(config, layers);
+    const split =
+      stated !== undefined && stated.count > 0 && stated.count < layers
+        ? ` ${stated.from} states the split: ${stated.count} of ${layers} layers attend and cache; ` +
+          `the other ${layers - stated.count} hold a recurrent state that does not grow with context.`
+        : '';
+
+    throw new DerivationError(
+      `${id}: declares ${declared.join(', ')} — a block whose state is constant in sequence ` +
+        `length, so this script cannot assume all ${layers} layers cache keys and values.${split} ` +
+        'The GQA and MLA branches charge every layer a growing cache: 4.0x over for Qwen3-Next ' +
+        "at 12 of 48, 10x for Granite 4.0-h-small at 4 of 40, 3.86x for Kimi-Linear's 7 of 27. " +
+        'Refusing rather than deriving: this needs a third attention family carrying the per-layer ' +
+        "split and the block's constant state term, and the state term is not in config.json."
+    );
+  }
+
+  /**
+   * MiniMax's spelling of the same split, and the one entry in this guard that has to *admit*
+   * something. `attn_type_list` is a per-layer array in which `1` is full attention, and MiniMax-M2
+   * is all ones — M2 really does attend fully on every layer, and M1's hybrid lightning attention
+   * did not carry forward. So the test is per entry rather than on the key being present at all,
+   * or the fix for the hybrids would reject the model that turned out not to be one.
+   */
+  const attnTypes = config.attn_type_list;
+  if (Array.isArray(attnTypes)) {
+    if (attnTypes.length !== layers) {
+      throw new DerivationError(
+        `${id}: attn_type_list lists ${attnTypes.length} entries for ${layers} layers. ` +
+          'Refusing to decide which of the two is the stack.'
+      );
+    }
+    const other = attnTypes.filter((t) => t !== 1);
+    if (other.length > 0) {
+      const names = [...new Set(other.map((t) => JSON.stringify(t)))].join('/');
+      throw new DerivationError(
+        `${id}: attn_type_list marks ${other.length} of ${layers} layers as ${names} rather than ` +
+          '1 (full attention). Whatever those layers are, they are not the growing cache the GQA ' +
+          'branch would charge them for.'
+      );
+    }
+  }
+}
+
+/**
  * Multi-head latent attention caches one compressed latent per token per layer; grouped-query
  * caches keys and values per KV head. Detected by the presence of `kv_lora_rank`, which is
  * what DeepSeek's config uses and no GQA model defines.
+ *
+ * Two families, and a model outside both is refused rather than flattened into the nearer one —
+ * see {@link refuseLinearStack}. That refusal comes first deliberately: Qwen3-Next carries
+ * `num_attention_heads`, `num_key_value_heads` and `head_dim` exactly where the GQA branch expects
+ * them, so the branch below reads as a clean hit and there is no signal in it that 36 of its 48
+ * layers were just charged for a cache they never allocate.
  *
  * Also returns the **attention projection width**, which is what QK^T and AV actually scale by
  * and is emphatically *not* `hidden_size`. A model is free to project to a wider or narrower
@@ -213,10 +388,13 @@ type AttentionCore =
  * size, Qwen3's MoEs 2x, while Gemma 3 27B and Mistral Small are *narrower*. Using hidden size
  * mis-scaled long-prompt TTFT in both directions.
  */
-function deriveAttention(
+export function deriveAttention(
   id: string,
-  config: HfConfig
+  config: HfConfig,
+  layers: number
 ): { core: AttentionCore; projectionWidth: number } {
+  refuseLinearStack(id, config, layers);
+
   const heads = require(num(config, 'num_attention_heads'), id, 'num_attention_heads');
   const kvLoraRank = num(config, 'kv_lora_rank');
 
@@ -224,6 +402,27 @@ function deriveAttention(
     const qkRopeHeadDim = require(num(config, 'qk_rope_head_dim'), id, 'qk_rope_head_dim');
     const qkNopeHeadDim = require(num(config, 'qk_nope_head_dim'), id, 'qk_nope_head_dim');
     const vHeadDim = require(num(config, 'v_head_dim'), id, 'v_head_dim');
+
+    /**
+     * A sparse-attention indexer is a second cache and a different prefill shape, and this branch
+     * has a term for neither. DeepSeek V3.2-Exp keeps `index_n_heads * index_head_dim` per token on
+     * top of the latent, and its main attention reads at most `index_topk` selected positions
+     * rather than everything before it — so the row would be right about the latent, silently short
+     * by the indexer's own cache, and quadratic about a prefill the model does not compute.
+     *
+     * Deriving both is its own piece of work, on the same axis as the linear stacks above but a
+     * different quantity. Charging one of them and not the other is not.
+     */
+    const indexer = ['index_n_heads', 'index_head_dim', 'index_topk'].filter(
+      (key) => num(config, key) !== undefined
+    );
+    if (indexer.length > 0) {
+      throw new DerivationError(
+        `${id}: declares ${indexer.join(', ')} — an MLA sparse-attention indexer, which keeps a ` +
+          'cache of its own and bounds what the main attention reads. Neither is modelled, so ' +
+          'this row would understate KV and overstate time-to-first-token together.'
+      );
+    }
 
     return {
       core: { kind: 'mla', kvLoraRank, qkRopeHeadDim },
@@ -250,14 +449,40 @@ function deriveAttention(
 }
 
 /**
+ * `layer_types` entries this script can price, and what each one caches.
+ *
+ * A closed vocabulary rather than a substring test, and that swap is half the fix for the hybrid
+ * stacks. The filter here used to be `t.includes('sliding')`, which asks only whether a layer is
+ * *windowed* attention and reads every other answer as full attention — so Granite 4.0-h-small's
+ * array of 36 `mamba` to 4 `attention` matched nothing, `sliding.length === 0` returned `undefined`,
+ * and all 40 layers were charged a growing cache that 36 of them never allocate. 10x, silently, in
+ * the direction that tells someone to buy another GPU. An unrecognised layer type is the same defect
+ * as a missing one, one axis over.
+ *
+ * `full_attention` and `sliding_attention` are transformers' own names; `attention` is what the
+ * hybrid exports call the attention layers of a stack that has others.
+ *
+ * `chunked_attention` is deliberately absent, so a config that names it refuses — but note that is
+ * not how Llama 4 is caught. Scout and Maverick ship no `layer_types` at all; their guard is
+ * `attention_chunk_size` in {@link deriveLayerWindows}. A vocabulary only fires for configs that
+ * use the key it is a vocabulary for.
+ */
+const LAYER_TYPES: Record<string, 'full' | 'sliding'> = {
+  full_attention: 'full',
+  attention: 'full',
+  sliding_attention: 'sliding',
+};
+
+/**
  * Per-layer attention window, or undefined when every layer attends over the full context.
  *
- * Three conventions in the wild, in order of precedence:
+ * Four conventions in the wild, in order of precedence:
+ *   - `attention_chunk_size` — Llama 4's chunked attention, which is refused rather than priced
  *   - `layer_types` — an explicit per-layer array (gpt-oss, recent transformers exports)
  *   - `sliding_window_pattern` — Gemma 3's "every Nth layer is full attention"
  *   - a bare `sliding_window` — applies to every layer (Mistral-style), unless switched off
  */
-function deriveLayerWindows(
+export function deriveLayerWindows(
   id: string,
   config: HfConfig,
   layers: number
@@ -265,18 +490,71 @@ function deriveLayerWindows(
   const window = num(config, 'sliding_window');
   const layerTypes = config.layer_types;
 
-  if (Array.isArray(layerTypes)) {
-    const sliding = layerTypes.filter((t) => typeof t === 'string' && t.includes('sliding'));
+  /**
+   * Chunked (block-local) attention, which is a fourth window convention and the one this script
+   * has no term for at all.
+   *
+   * Llama 4 states it as `attention_chunk_size` and nothing else: Scout's `text_config` carries no
+   * `layer_types`, so every guard below misses and all 48 layers read as full attention — 192.0
+   * KiB/token, 24.0 GiB at 128K, against 7.125 GiB for its real 12-global / 36-chunked-at-8192
+   * stack.
+   * 3.4x, in the direction that tells someone to buy another GPU. Maverick is the same shape.
+   *
+   * Refused rather than derived, and the reason is narrower than for the linear stacks: the split
+   * *is* derivable — `no_rope_layers` is 48 entries of 1/0, one global layer every fourth — but how
+   * many tokens a chunked layer's cache holds is not. Chunked attention is not a sliding window
+   * re-spelled: the mask is block-diagonal rather than trailing, and residency is set by the
+   * runtime's chunked-cache implementation rather than by this key. Reusing `sliding_window`'s term
+   * for it would be a guess wearing a derivation's clothes.
+   *
+   * Note what is deliberately *not* the signal: `cache_implementation: "hybrid"` sits on
+   * unsloth/gemma-3-12b-it and -27b-it, two shipped seeds whose windows derive correctly from
+   * `sliding_window_pattern`. Guarding on it would have refused two rows that are already right.
+   */
+  const chunk = num(config, 'attention_chunk_size');
+  if (chunk !== undefined) {
+    throw new DerivationError(
+      `${id}: declares attention_chunk_size ${chunk} — chunked attention on some layers and full ` +
+        `attention on others, with no layer_types to say which. Reading all ${layers} layers as ` +
+        'full attention overstates KV by the whole ratio of the split: Llama 4 Scout derives ' +
+        '192.0 KiB/token, 24.0 GiB at 128K context, against 7.125 GiB for its real 12-global / ' +
+        '36-chunked-at-8192 stack. The split is in no_rope_layers, but how much a chunked layer ' +
+        'keeps is not in config.json, and it is not a sliding window of attention_chunk_size — ' +
+        'the mask is block-diagonal, not trailing. Give it a term of its own.'
+    );
+  }
 
-    // Both of these silently read as full attention downstream — an absent array entry and an
-    // absent array are indistinguishable to `layerWindows?.[i]` — which overstates KV and
-    // prefill attention for exactly the models the sliding-window handling exists to get right.
-    if (layerTypes.length < layers) {
+  if (Array.isArray(layerTypes)) {
+    // All three of these silently read as full attention downstream — an absent array entry, an
+    // unrecognised one and an absent array are indistinguishable to `layerWindows?.[i]` — which
+    // overstates KV and prefill attention for exactly the models this handling exists to get right.
+    //
+    // Length is `!==` rather than `<` because a longer array and `num_hidden_layers` disagree about
+    // the stack, and slicing picks one of them without saying so.
+    if (layerTypes.length !== layers) {
       throw new DerivationError(
         `${id}: layer_types lists ${layerTypes.length} entries for ${layers} layers. ` +
-          'The missing ones would silently read as full attention.'
+          'Refusing to decide which of the two is the stack; the extras or the gaps would read ' +
+          'as full attention.'
       );
     }
+
+    const kindOf = (t: unknown) =>
+      typeof t === 'string' && Object.hasOwn(LAYER_TYPES, t) ? LAYER_TYPES[t] : undefined;
+
+    const unpriced = layerTypes.filter((t) => kindOf(t) === undefined);
+    if (unpriced.length > 0) {
+      const names = [...new Set(unpriced.map((t) => JSON.stringify(t)))].join('/');
+      throw new DerivationError(
+        `${id}: layer_types names ${unpriced.length} of ${layers} layers as ${names}, which this ` +
+          'script has no cache term for. A layer that is not attention caches nothing that grows ' +
+          'with context, so reading it as full attention overstates KV by the whole ratio of the ' +
+          'split — 10x for a 36-of-40 Mamba stack, at 128K context tens of gigabytes. Give the ' +
+          'type its own term rather than letting it fall through here.'
+      );
+    }
+
+    const sliding = layerTypes.filter((t) => kindOf(t) === 'sliding');
     if (sliding.length > 0 && window === undefined) {
       throw new DerivationError(
         `${id}: layer_types names ${sliding.length} sliding layers but no sliding_window size. ` +
@@ -285,9 +563,7 @@ function deriveLayerWindows(
     }
     if (sliding.length === 0) return undefined;
 
-    return layerTypes
-      .slice(0, layers)
-      .map((t) => (typeof t === 'string' && t.includes('sliding') ? window! : null));
+    return layerTypes.map((t) => (kindOf(t) === 'sliding' ? window! : null));
   }
 
   if (window === undefined || config.use_sliding_window === false) return undefined;
@@ -703,6 +979,20 @@ async function buildModel(seed: Seed) {
   const hiddenSize = require(num(config, 'hidden_size'), seed.id, 'hidden_size');
   const vocabSize = require(num(config, 'vocab_size'), seed.id, 'vocab_size');
 
+  /**
+   * The attention stack is settled here, before anything that touches the network again, and the
+   * order is load-bearing rather than tidy. These two read `config.json` alone; `deriveStackShape`
+   * below fetches a safetensors index and one header per non-language shard.
+   *
+   * Qwen3-Next is why. It ships an MTP module under an `mtp.` prefix, so run in the other order the
+   * seed is refused for 1,553 unclassified tensors — a true statement about a different problem,
+   * which sends whoever reads it to `LANGUAGE_PREFIXES` rather than to the 36 of 48 layers that
+   * hold a recurrent state. An architecture this script cannot price should say so from the config
+   * that says so, and should not spend a dozen range requests first.
+   */
+  const layerWindows = deriveLayerWindows(seed.id, config, layers);
+  const attention = deriveAttention(seed.id, config, layers);
+
   const moe = deriveMoe(seed.id, config, layers);
   const expertParams = moe?.expertParams ?? 0;
 
@@ -777,8 +1067,6 @@ async function buildModel(seed: Seed) {
     denseParams - stack.nonLanguageParams - (stack.tiedEmbeddings ? 0 : embeddingParams)
   );
 
-  const layerWindows = deriveLayerWindows(seed.id, config, layers);
-  const attention = deriveAttention(seed.id, config);
   const quantMethod = (config.quantization_config as Record<string, unknown> | undefined)
     ?.quant_method;
 
@@ -923,7 +1211,18 @@ async function main() {
   console.log(`\nWrote ${OUT}`);
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+/**
+ * Guarded so the derivations above can be imported by a test without the script running itself —
+ * the same guard `catalog-diff.ts` carries, and for a sharper reason here: importing this module
+ * unguarded starts seventeen rounds of network fetches.
+ *
+ * They went untested for exactly that long. `deriveAttention` flattening a hybrid stack into GQA
+ * and `deriveLayerWindows` refusing only along the sliding axis were both reachable from a
+ * three-line unit test the whole time; what was missing was the ability to call either of them.
+ */
+if (process.argv[1] && /build-catalog\.ts$/.test(process.argv[1])) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
