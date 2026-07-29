@@ -7,6 +7,12 @@ import { useId } from 'react';
  *
  * Every control is labelled and every live value is shown next to its control in the accent
  * colour — the accent's one job is marking what responds to you.
+ *
+ * Every control can also carry a `note`: one line of `text-xs` prose under it, wired through
+ * `aria-describedby` so it is part of the control's accessible description rather than text that
+ * merely happens to sit nearby. All three take one now. `Select` had the mechanism and the other two
+ * had nothing, which is how the five controls driving every figure on the page came to explain none
+ * of themselves (#80) — a call site cannot say what a component has no way to render.
  */
 
 export function Select<T extends string>({
@@ -14,16 +20,24 @@ export function Select<T extends string>({
   value,
   onChange,
   options,
-  hint,
 }: {
   label: string;
   value: T;
   onChange: (value: T) => void;
   options: readonly { value: T; label: string; disabled?: boolean; note?: string }[];
-  hint?: string;
 }) {
   const id = useId();
-  const note = options.find((o) => o.value === value)?.note ?? hint;
+  /**
+   * The selected option's note, and only that.
+   *
+   * There was a `hint` prop behind this as a fallback, which no call site ever passed — a dead
+   * escape hatch, and one that would have misbehaved if used: it rendered only while the selected
+   * option had no note of its own, so a control-level explanation would appear and vanish as the
+   * choice moved. A fixed sentence per control is `note` on `StopSlider`/`Segmented` below, where
+   * there are no per-option notes to fight with. Deleted rather than kept, because an unused prop
+   * that duplicates a working one is how the two drift.
+   */
+  const note = options.find((o) => o.value === value)?.note;
 
   return (
     <div className="flex flex-col gap-1">
@@ -89,12 +103,15 @@ export function StopSlider<T extends number | string>({
   value,
   onChange,
   format,
+  note,
 }: {
   label: string;
   stops: readonly T[];
   value: T;
   onChange: (value: T) => void;
   format: (value: T) => string;
+  /** One sentence on what this setting is. See `SETTING_NOTES`. */
+  note?: string;
 }) {
   const id = useId();
   const index = Math.max(0, stops.indexOf(value));
@@ -122,8 +139,18 @@ export function StopSlider<T extends number | string>({
         value={index}
         onChange={(e) => onChange(stops[Number(e.target.value)])}
         aria-valuetext={format(value)}
+        // On the input rather than beside it, for the same reason `Select`'s note is: adjacent text
+        // is text a screen-reader user reaches after the control, if they reach it at all, and a
+        // slider is exactly where they will not — arrowing through the stops re-announces the value
+        // and nothing else. The description is read once when the slider is focused.
+        aria-describedby={note ? `${id}-note` : undefined}
         className="h-6 w-full cursor-pointer accent-[var(--color-accent)]"
       />
+      {note && (
+        <p id={`${id}-note`} className="text-xs text-[var(--color-text-muted)]">
+          {note}
+        </p>
+      )}
     </div>
   );
 }
@@ -141,16 +168,23 @@ export function Segmented<T extends string>({
   value,
   onChange,
   options,
+  note,
 }: {
   label: string;
   value: T;
   onChange: (value: T) => void;
   options: readonly { value: T; label: string }[];
+  /** One sentence on what this setting is. See `SETTING_NOTES`. */
+  note?: string;
 }) {
   const name = useId();
 
   return (
-    <fieldset className="flex flex-col gap-1">
+    /* The description belongs to the *group*, not to each radio. A screen reader announces a
+       group's name and description on entry, so the sentence is heard once before the options; put
+       on the radios it would be re-read on every arrow key — three times for three options — which
+       is how a description earns itself a reputation for being noise. `fieldset` is the group. */
+    <fieldset aria-describedby={note ? `${name}-note` : undefined} className="flex flex-col gap-1">
       <legend className="text-xs font-medium tracking-wide text-[var(--color-text-faint)] uppercase">
         {label}
       </legend>
@@ -189,6 +223,11 @@ export function Segmented<T extends string>({
           );
         })}
       </div>
+      {note && (
+        <p id={`${name}-note`} className="text-xs text-[var(--color-text-muted)]">
+          {note}
+        </p>
+      )}
     </fieldset>
   );
 }

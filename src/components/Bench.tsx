@@ -25,6 +25,7 @@ import {
   KV_PRECISIONS,
   PROMPT_STOPS,
   SETTING_LABELS,
+  SETTING_NOTES,
   contextStopsFor,
   kvLabel,
   withStored,
@@ -360,7 +361,11 @@ export function Bench() {
       {/* Usage: the half of the question that is about you, not the hardware.
 
           The labels come from `SETTING_LABELS` rather than being written here, because the Envelope
-          draws two of these settings as its axes and titles them with the same words. */}
+          draws two of these settings as its axes and titles them with the same words. The notes come
+          from `SETTING_NOTES` for the same reason and one more: these five controls *are* the
+          KV-cache argument — context times users times bits per token is most of what the budget bar
+          draws — and until they carried a sentence each, the panel's whole text content was the
+          labels and the values, with the argument made only in `Envelope.tsx`'s docstring (#80). */}
       <section aria-label="Usage" className="panel grid gap-5 p-[min(1.25rem,5vw)] sm:grid-cols-2">
         <StopSlider
           label={SETTING_LABELS.contextTokens}
@@ -368,6 +373,7 @@ export function Bench() {
           value={nearestStop(contextStops, config.contextTokens)}
           onChange={(v) => set('contextTokens', v)}
           format={tokens}
+          note={SETTING_NOTES.contextTokens}
         />
         <StopSlider
           label={SETTING_LABELS.concurrency}
@@ -375,27 +381,40 @@ export function Bench() {
           value={nearestStop(concurrencyStops, config.concurrency)}
           onChange={(v) => set('concurrency', v)}
           format={(v) => String(v)}
+          note={SETTING_NOTES.concurrency}
         />
+        {/* The note is the only place the coupling with the context is stated: `promptStops` above
+            filters the prompt to what the context can hold, so dragging the context down drags the
+            prompt with it — a jump nothing on screen explained, from a slider a reader could
+            reasonably have read as *additional* to the context rather than part of it. */}
         <StopSlider
           label={SETTING_LABELS.promptTokens}
           stops={promptStops}
           value={nearestStop(promptStops, config.promptTokens)}
           onChange={(v) => set('promptTokens', v)}
           format={tokens}
+          note={SETTING_NOTES.promptTokens}
         />
         <Segmented
           label={SETTING_LABELS.kvPrecision}
           value={config.kvPrecision}
           onChange={(v) => set('kvPrecision', v)}
           options={kvOptions}
+          note={SETTING_NOTES.kvPrecision}
         />
         {shardable ? (
+          /* The note goes on the *control*, which is the branch that had no prose at all. The
+             explanation below is about the absence of the control and cannot double as its
+             description — a sentence that renders only where there is nothing to configure is how
+             this panel came to hold exactly one explanatory line and hide it from everyone who
+             could act on it. */
           <StopSlider
             label={SETTING_LABELS.deviceCount}
             stops={deviceCountStops}
             value={nearestStop(deviceCountStops, config.deviceCount)}
             onChange={(v) => set('deviceCount', v)}
             format={(v) => `${v}x`}
+            note={SETTING_NOTES.deviceCount}
           />
         ) : (
           <p className="self-end text-xs text-[var(--color-text-muted)]">

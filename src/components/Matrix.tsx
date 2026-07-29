@@ -68,6 +68,8 @@ export const DETAIL_ANCHOR_ID = 'bench-detail';
 
 export function Matrix({ config }: { config: Config }) {
   const headingId = useId();
+  /** The measure switch's own description — see the `fieldset` below. */
+  const measureHintId = useId();
   const [measure, setMeasure] = useState<MatrixMeasure>('fit');
   const set = useConfig((s) => s.set);
 
@@ -400,8 +402,15 @@ export function Matrix({ config }: { config: Config }) {
         </p>
       </header>
 
-      {/* One filter row above the grid, as the dataviz guidance puts it. */}
-      <fieldset className="mt-4">
+      {/* One filter row above the grid, as the dataviz guidance puts it.
+
+          `aria-describedby` on the group, not merely a paragraph under it: the hint below says what
+          the selected measure *is*, and until it was wired up a screen-reader user entering this
+          group heard "Colour the grid by, Does it fit, pressed" and nothing about headroom — the
+          same gap the five Usage controls had, in the one place on the page that already had the
+          sentence written (#80). Once per group rather than once per button, so switching measures
+          does not re-read it three times. */}
+      <fieldset className="mt-4" aria-describedby={measureHintId}>
         <legend className="sr-only">Colour the grid by</legend>
         <div className="flex flex-wrap gap-1 rounded-md border border-[var(--color-control-border)] bg-[var(--color-surface-raised)] p-1">
           {MEASURES.map((m) => (
@@ -420,7 +429,7 @@ export function Matrix({ config }: { config: Config }) {
             </button>
           ))}
         </div>
-        <p className="mt-1.5 text-xs text-[var(--color-text-muted)]">
+        <p id={measureHintId} className="mt-1.5 text-xs text-[var(--color-text-muted)]">
           {MEASURES.find((m) => m.value === measure)?.hint} Switching between these rearranges which
           hardware looks good — that disagreement is the whole point.
         </p>
