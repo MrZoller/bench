@@ -2039,6 +2039,8 @@ async function reportSeedCandidates(): Promise<void> {
    * catalog that outgrew it: it says so and stops.
    */
   const MAX_PAGES = 10;
+  /** Pipelines whose walk hit the ceiling, so the report can say it is not exhaustive. */
+  const capped: string[] = [];
   const live: LiveModel[] = [];
   try {
     for (const pipeline of PIPELINES) {
@@ -2055,6 +2057,11 @@ async function reportSeedCandidates(): Promise<void> {
         const lowest = batch.at(-1)?.downloads ?? 0;
         url = batch.length < PAGE || lowest < MIN_DOWNLOADS ? undefined : next;
         if (page === MAX_PAGES - 1 && url) {
+          // Carried out of the loop rather than only warned about: the summary below is what a
+          // maintainer reads, and a capped walk that publishes an ordinary-looking table claims a
+          // completeness it does not have (found in review). Same defect as the failed-fetch path
+          // one block down, which I fixed and this did not inherit.
+          capped.push(pipeline);
           console.warn(
             `\n  ${pipeline}: still above ${MIN_DOWNLOADS} downloads after ${MAX_PAGES} pages — ` +
               'stopping. Either the download bar wants raising or the listing is no longer sorted.'
@@ -2098,8 +2105,18 @@ async function reportSeedCandidates(): Promise<void> {
     `Seed candidates — released in the last ${MONTHS} months, over ` +
     `${(MIN_DOWNLOADS / 1000).toFixed(0)}K downloads, neither seeded nor listed in NOT_SEEDED`;
 
+  /**
+   * The console keeps its 25-line cap; the summary below does not (found in review).
+   *
+   * A terminal wants a readable tail, and a local run is interactive — whoever ran it can widen the
+   * bar. The summary is the durable channel, and truncating *that* to the top 25 of a
+   * download-sorted list makes the same 25 recur every week while everything below them is
+   * permanently unactionable: not merely unread, but never published anywhere. So the cap says it is
+   * a cap, and the summary carries all of them.
+   */
+  const CONSOLE_LIMIT = 25;
   console.log(`\n${heading}:`);
-  for (const model of candidates.slice(0, 25)) {
+  for (const model of candidates.slice(0, CONSOLE_LIMIT)) {
     console.log(
       `  ${String(model.downloads ?? 0).padStart(10)}  ${(model.createdAt ?? '').slice(0, 10)}  ${model.id}`
     );
@@ -2107,6 +2124,11 @@ async function reportSeedCandidates(): Promise<void> {
   if (candidates.length === 0) {
     console.log('  (none — the seed list covers what the field is downloading)');
   } else {
+    if (candidates.length > CONSOLE_LIMIT) {
+      console.log(
+        `  … and ${candidates.length - CONSOLE_LIMIT} more, listed in full in the run summary.`
+      );
+    }
     console.log(
       `\n  ${candidates.length} candidate(s). Each one is either a seed or a line in NOT_SEEDED ` +
         'saying why not — the list ages silently otherwise.'
@@ -2129,17 +2151,32 @@ async function reportSeedCandidates(): Promise<void> {
   const summary = process.env.GITHUB_STEP_SUMMARY;
   if (!summary) return;
   const rows = candidates
-    .slice(0, 25)
     .map(
       (m) =>
         `| \`${m.id}\` | ${(m.downloads ?? 0).toLocaleString()} | ${(m.createdAt ?? '').slice(0, 10)} |`
     )
     .join('\n');
+  /**
+   * A capped walk is not an exhaustive answer, and has to say so *here* (found in review).
+   *
+   * The ceiling above stops a runaway, and its warning went only to the log — after which this wrote
+   * an ordinary-looking table, or "None", for a listing that was never finished. The workflow points
+   * maintainers at this summary, so that reads as a complete negative result. Same defect as the
+   * failed-fetch path below, which was fixed one commit earlier and this did not inherit: two exits
+   * from one function, one of them honest.
+   */
+  const incomplete =
+    capped.length > 0
+      ? `\n> **This check is incomplete.** The ${capped.join(', ')} listing${capped.length > 1 ? 's were' : ' was'} ` +
+        `still above ${(MIN_DOWNLOADS / 1000).toFixed(0)}K downloads after ${MAX_PAGES} pages, so the ` +
+        'walk stopped early and models below that point were never examined. Either the download bar ' +
+        'wants raising or the listing is no longer sorted by downloads.\n'
+      : '';
   await appendFile(
     summary,
     candidates.length === 0
-      ? `\n### ${heading}\n\nNone — the seed list covers what the field is downloading.\n`
-      : `\n### ${heading}\n\n${candidates.length} candidate(s). Each is either a new seed or a line in ` +
+      ? `\n### ${heading}\n${incomplete}\nNone found${capped.length > 0 ? ' in the part that was checked' : ' — the seed list covers what the field is downloading'}.\n`
+      : `\n### ${heading}\n${incomplete}\n${candidates.length} candidate(s). Each is either a new seed or a line in ` +
           '`NOT_SEEDED` saying why not; the list ages silently otherwise.\n\n' +
           `| model | downloads | released |\n| --- | --- | --- |\n${rows}\n`
   );
