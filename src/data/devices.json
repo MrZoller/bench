@@ -567,7 +567,7 @@
     },
     {
       "id": "macbook-pro-m1-max-64",
-      "name": "MacBook Pro M1 Max (64 GB)",
+      "name": "MacBook Pro M1 Max (64 GB, 32-core GPU)",
       "vendor": "Apple",
       "class": "unified-soc",
       "status": "shipping",
@@ -580,7 +580,7 @@
       "tdpWatts": 115,
       "releasedAt": "2021-10-26",
       "source": "https://support.apple.com/en-us/111901",
-      "note": "The M1 generation, which had no row at all: 64 GiB at 400 GB/s is still a capable local-inference machine, and \"is the new one worth it\" is a question that needs both machines in the same list. The allocation ceiling reserves 8 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need."
+      "note": "The M1 generation, which had no row at all: 64 GiB at 400 GB/s is still a capable local-inference machine, and \"is the new one worth it\" is a question that needs both machines in the same list. The allocation ceiling reserves 8 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need. **The GPU bin is in the name because 64 GiB does not imply it.** M1 Max shipped as a 24-core and a 32-core GPU, and Apple offered 64 GiB with both, so capacity alone does not identify the part — this row is the 32-core at 21 TFLOPS fp16. A 24-core machine is 3/4 of that, about 15.7, and reading this row for one overstates prefill and understates TTFT by a third. Capacity identifies most rows in this catalog; on this one it does not, which is why the bin is stated rather than implied."
     },
     {
       "id": "mac-mini-m4-pro-64",
@@ -710,7 +710,7 @@
       "tdpWatts": 500,
       "releasedAt": "2024-09-24",
       "source": "https://www.intel.com/content/www/us/en/products/sku/240777/intel-xeon-6980p-processor-504m-cache-2-00-ghz/specifications.html",
-      "note": "Twelve channels of MRDIMM-8800 is 844.8 GB/s exactly, which is more than any EPYC row here and the reason high-bandwidth CPU inference is not an AMD-only technique. Capacity assumes one 128 GB MRDIMM per channel. Compute is the AVX-512 vector rate at base clock, on the same basis as the EPYC rows: AMX's tile rate is roughly an order of magnitude higher, nothing catalogued here reaches it for a GGUF today, and folding it in would report a CPU's time to first token as better than a 4090's."
+      "note": "Twelve channels of MRDIMM-8800 is 844.8 GB/s exactly, which is more than any EPYC row here and the reason high-bandwidth CPU inference is not an AMD-only technique. Capacity assumes one 128 GB MRDIMM per channel. Compute deliberately excludes AMX: its tile rate is roughly an order of magnitude higher, nothing catalogued here reaches it for a GGUF today, and folding it in would report a CPU's time to first token as better than a 4090's. **The 8 TFLOPS is not a computed vector peak, and this note used to claim it was.** 128 cores at 2.0 GHz with two 512-bit FMA pipelines is 16.4 TFLOPS fp32, or 32.8 with AVX512-FP16 — both well above this figure. It is carried on the same conservative basis as the four other `cpu-ram` rows, which is what keeps this row comparable with them and with the EPYC 9654 calibration anchor; that basis is not reproducible from a stated formula on any of the five (catalogued/fp32-peak runs 0.41 to 1.12 across them), and correcting one row alone would make it the odd one out rather than the right one. Deriving all five on one declared basis is filed separately — see #90."
     },
     {
       "id": "threadripper-7995wx",
