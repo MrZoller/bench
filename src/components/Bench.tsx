@@ -27,6 +27,7 @@ import {
   SETTING_LABELS,
   SETTING_NOTES,
   contextStopsFor,
+  deviceCountNote,
   kvLabel,
   withStored,
 } from '@/lib/stops';
@@ -224,18 +225,48 @@ export function Bench() {
     []
   );
 
+  /**
+   * The runtimes, each with something to say about itself at every scenario.
+   *
+   * The note is the control's accessible description, so a "does not run here" warning has to live
+   * in it — a screen-reader user tabbing the picker hears nothing otherwise. That is also why the
+   * first clause below is unconditional. `Select` renders only the *selected* option's note, and
+   * the two conditions this used to hold — unsupported hardware, and a runtime that preallocates —
+   * are both false for llama.cpp on any machine it drives. So at the default scenario the Runtime
+   * picker emitted no `aria-describedby` at all, and a description that exists only for vLLM
+   * appears and vanishes as the choice moves: the same defect #80 tabulated for the Usage sliders,
+   * in the panel #80 cited as doing the opposite (found in review of that fix).
+   *
+   * `nativeLowPrecision` is the fact worth spending the sentence on. `runtimes.ts` calls it "the
+   * single biggest lever on time-to-first-token, and no VRAM calculator models it" — llama.cpp
+   * dequantizes every GGUF to fp16 before the matmul, so a Blackwell card's FP4 headline is
+   * unreachable from it, and prefill was overstated 8x when this was inferred from bit width.
+   * Every runtime has the field, so every option has a sentence, which is what stops the
+   * description flickering.
+   *
+   * Not the multi-device layout, which is the other always-present fact: `parallelism` is what
+   * `deviceCountNote` says under the Device count slider, and saying it twice on one screen is how
+   * two copies of one claim come to disagree. MLX would also be the wrong place to say it — it
+   * declares `layer` because the field is required, and no Apple machine in the catalog has an
+   * interconnect, so it never divides anything.
+   */
   const runtimeOptions = useMemo(
     () =>
       RUNTIMES.map((r) => ({
         value: r.id,
         label: r.label,
-        // The note is the control's accessible description, so a "does not run here" warning
-        // has to live in it — a screen-reader user tabbing the picker hears nothing otherwise.
         note: !runtimeDrives(r, device)
-          ? `Does not run on ${device.name}`
-          : r.preallocFraction
-            ? `Reserves ${Math.round(r.preallocFraction * 100)}% of the device up front`
-            : undefined,
+          ? `Does not run on ${device.name}.`
+          : [
+              r.nativeLowPrecision
+                ? 'Sends low-precision weights straight to the tensor cores.'
+                : 'Dequantizes every weight to FP16 before the matmul, so a card’s low-precision peak is out of reach.',
+              r.preallocFraction
+                ? `Reserves ${Math.round(r.preallocFraction * 100)}% of the device up front.`
+                : undefined,
+            ]
+              .filter(Boolean)
+              .join(' '),
       })),
     [device]
   );
@@ -407,18 +438,26 @@ export function Bench() {
              explanation below is about the absence of the control and cannot double as its
              description — a sentence that renders only where there is nothing to configure is how
              this panel came to hold exactly one explanatory line and hide it from everyone who
-             could act on it. */
+             could act on it.
+
+             It is the one note that reads the runtime, because what a second device buys is the one
+             thing here that the runtime decides: `deviceCountNote` derives it from `parallelism`,
+             the same field `achievedBandwidth` short-circuits on. */
           <StopSlider
             label={SETTING_LABELS.deviceCount}
             stops={deviceCountStops}
             value={nearestStop(deviceCountStops, config.deviceCount)}
             onChange={(v) => set('deviceCount', v)}
             format={(v) => `${v}x`}
-            note={SETTING_NOTES.deviceCount}
+            note={deviceCountNote(runtime)}
           />
         ) : (
+          /* Any split needs a link, not only a tensor-parallel one — `canShard` is
+             `interconnect !== undefined` and asks nothing about the runtime. Naming one layout here
+             said the layer split was available on a Mac, which is the same conflation the note above
+             was carrying in the other direction. */
           <p className="self-end text-xs text-[var(--color-text-muted)]">
-            Single machine. Tensor-parallel sharding needs a transport between devices, which
+            Single machine. Sharding a model across devices needs a transport between them, which
             unified-memory and CPU hosts do not have.
           </p>
         )}

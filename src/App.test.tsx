@@ -2,14 +2,15 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
-import { useConfig, DEFAULT_CONFIG } from '@/store/config';
+import { useConfig, DEFAULT_CONFIG, estimateConfig } from '@/store/config';
 import { configToShareSearch } from '@/store/url';
-import { DEVICES, getModel } from '@/data/catalog';
+import { DEVICES, getDevice, getModel } from '@/data/catalog';
 import { tokens } from '@/lib/format';
-import { SETTING_LABELS, SETTING_NOTES } from '@/lib/stops';
+import { SETTING_LABELS, SETTING_NOTES, deviceCountNote } from '@/lib/stops';
 import { DETAIL_ANCHOR_ID } from '@/components/Matrix';
 import { judgeWorkloads } from '@/engine/verdict';
-import { kvSubstitutionFor } from '@/data/runtimes';
+import { RUNTIMES, getRuntime, kvSubstitutionFor, runtimeDrives } from '@/data/runtimes';
+import { canShard } from '@/engine/placement';
 import { colors, marks } from '@/design/tokens';
 
 /**
@@ -123,7 +124,9 @@ describe('the Bench', () => {
 
     await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
     expect(screen.queryByLabelText('Device count')).not.toBeInTheDocument();
-    expect(screen.getByText(/needs a transport between devices/i)).toBeInTheDocument();
+    // Any split needs a link, not only a tensor-parallel one: `canShard` is
+    // `interconnect !== undefined` and asks nothing about the runtime.
+    expect(screen.getByText(/needs a transport between them/i)).toBeInTheDocument();
   });
 
   it('does not claim a model fits when the budget says otherwise', async () => {
@@ -2867,18 +2870,20 @@ describe('the controls that drive every figure explain what they are', () => {
     render(<App />);
     const controls = controlsOf(usage());
 
-    // Vacuity guards, and exact rather than loose: the panel holds what the issue counted — four
-    // sliders and one radio group, on the default machine, which shards. A selector that stopped
-    // matching, or a control that moved out of the panel, cannot then report a clean sweep over
-    // nothing. A sixth control is meant to fail here, because the next line is what it has to satisfy.
+    // Vacuity guards, and lower bounds rather than exact counts: what has to hold is that the sweep
+    // below ran over something — a selector that stopped matching, or every control moving out of the
+    // panel, cannot report a clean sweep over nothing. An *exact* four went red on a sixth control
+    // that was wired perfectly, before the property under test was evaluated at all, which is a
+    // failure about the count and not about the thing this test is named after. A control leaving the
+    // panel is caught by the per-setting test below, which looks each one up inside the region.
     expect(
-      controls.filter((c) => c.tagName === 'INPUT'),
-      'the four sliders'
-    ).toHaveLength(4);
+      controls.filter((c) => c.tagName === 'INPUT').length,
+      'the sliders the sweep ran over'
+    ).toBeGreaterThanOrEqual(4);
     expect(
-      controls.filter((c) => c.tagName === 'FIELDSET'),
+      controls.filter((c) => c.tagName === 'FIELDSET').length,
       'the KV group'
-    ).toHaveLength(1);
+    ).toBeGreaterThanOrEqual(1);
 
     const silent = controls.filter((c) => description(c) === '').map(named);
     expect(silent, 'Usage controls with no accessible description').toEqual([]);
@@ -2892,15 +2897,22 @@ describe('the controls that drive every figure explain what they are', () => {
   it('wires each control to its own sentence', () => {
     render(<App />);
 
-    // The five the issue names. If a setting loses its note the sweep above catches the control;
-    // this catches a note that is present and attached to the wrong thing.
-    expect(Object.keys(SETTING_NOTES)).toHaveLength(5);
+    // Four of the five the issue names. If a setting loses its note the sweep above catches the
+    // control; this catches a note that is present and attached to the wrong thing.
+    expect(Object.keys(SETTING_NOTES)).toHaveLength(4);
 
     for (const key of Object.keys(SETTING_NOTES) as (keyof typeof SETTING_NOTES)[]) {
       expect(description(controlFor(key)), `${SETTING_LABELS[key]}’s description`).toBe(
         SETTING_NOTES[key]
       );
     }
+
+    // The fifth is not in the table, because what an extra device buys depends on the runtime. Same
+    // assertion, resolved through the same runtime the store is on.
+    expect(
+      description(within(usage()).getByLabelText(SETTING_LABELS.deviceCount)),
+      'Device count’s description'
+    ).toBe(deviceCountNote(getRuntime(DEFAULT_CONFIG.runtimeId)));
   });
 
   it('describes the KV group once rather than once per radio', () => {
@@ -2931,16 +2943,118 @@ describe('the controls that drive every figure explain what they are', () => {
     const user = userEvent.setup();
     render(<App />);
 
+    const note = deviceCountNote(getRuntime(DEFAULT_CONFIG.runtimeId));
     await user.selectOptions(screen.getByLabelText('Hardware'), 'dgx-spark');
     const slider = screen.getByLabelText(SETTING_LABELS.deviceCount);
-    expect(description(slider)).toBe(SETTING_NOTES.deviceCount);
+    expect(description(slider)).toBe(note);
 
     // A Mac has no transport between chassis: no control, so nothing to describe. The panel says
     // why the control is absent instead, which is a different sentence for a different reason.
     await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
     expect(screen.queryByLabelText(SETTING_LABELS.deviceCount)).not.toBeInTheDocument();
-    expect(screen.getByText(/needs a transport between devices/i)).toBeInTheDocument();
-    expect(screen.queryByText(SETTING_NOTES.deviceCount)).not.toBeInTheDocument();
+    expect(screen.getByText(/needs a transport between them/i)).toBeInTheDocument();
+    expect(screen.queryByText(note)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The sentence under the slider and the arithmetic the slider drives are one claim (found in
+   * review).
+   *
+   * The issue's suggested copy — "shard the model across, tensor-parallel. Adds memory and
+   * bandwidth, minus what the interconnect costs" — is true of vLLM and of nothing else the app
+   * offers, and the default runtime is one of the others. `achievedBandwidth` and the FLOPS closure
+   * in `speed.ts` both return the per-device figure and short-circuit before `effectiveDeviceCount`
+   * whenever `parallelism === 'layer'`, which is exactly the derivation `docs/ROADMAP.md` records as
+   * wrong-first and silent when it breaks: a layer split buys capacity, not speed.
+   *
+   * So this asserts the copy against a measurement rather than against itself. The model has to
+   * *fit on one device* for the comparison to isolate bandwidth: with a spill in play a layer split
+   * really does get faster with more cards — 14.25 tok/s to 190.11 for this model at Q4_K_M on one
+   * 4090 versus four — because the extra card stops it spilling. That is the capacity arriving as
+   * speed, and it is why the sentence says "buys capacity" rather than "makes no difference".
+   */
+  it('does not promise the device-count slider a speed-up the runtime cannot deliver', () => {
+    const device = getDevice('dgx-spark');
+    expect(canShard(device), 'the slider does not render at all without a link').toBe(true);
+
+    const measured = RUNTIMES.filter((r) => runtimeDrives(r, device)).map((runtime) => {
+      const at = (deviceCount: number) =>
+        estimateConfig({
+          ...DEFAULT_CONFIG,
+          deviceId: device.id,
+          runtimeId: runtime.id,
+          deviceCount,
+        });
+      const one = at(1);
+      expect(
+        one.placement.fits,
+        `${runtime.id} spills on one ${device.name}, so a speed change would be capacity, not bandwidth`
+      ).toBe(true);
+      return {
+        id: runtime.id,
+        note: deviceCountNote(runtime),
+        // 1% rather than exact equality: what is being distinguished is "held still to the last
+        // decimal" from "half again as fast", and neither side needs a tighter threshold than that.
+        aggregates: at(4).decode.perUserTokensPerSec > one.decode.perUserTokensPerSec * 1.01,
+      };
+    });
+
+    // Both sides of the distinction are present, or the assertion below measures one branch twice.
+    expect(measured.filter((m) => m.aggregates).map((m) => m.id)).toEqual(['vllm']);
+    expect(measured.filter((m) => !m.aggregates).map((m) => m.id)).toEqual(['llama.cpp']);
+
+    const lying = measured.filter(
+      (m) => /bandwidth as well as memory/.test(m.note) !== m.aggregates
+    );
+    expect(
+      lying.map((m) => `${m.id}: ${m.note}`),
+      'runtimes whose device-count sentence disagrees with their own throughput'
+    ).toEqual([]);
+  });
+
+  /**
+   * And that the sentence follows the runtime on screen, which is the whole reason it is a function.
+   */
+  it('rewrites the device-count sentence when the runtime changes what a device buys', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const slider = () => screen.getByLabelText(SETTING_LABELS.deviceCount);
+    expect(description(slider())).toMatch(/buys capacity, not speed/);
+
+    await user.selectOptions(screen.getByLabelText(SETTING_LABELS.runtimeId), 'vllm');
+    expect(description(slider())).toMatch(/bandwidth as well as memory/);
+  });
+
+  /**
+   * The instance one panel up (found in review).
+   *
+   * `Select` renders only the selected option's note, and `runtimeOptions` produced one for exactly
+   * two states — hardware the runtime cannot drive, and a runtime that preallocates. Both are false
+   * for llama.cpp on any machine it drives, so at the default scenario the Runtime picker emitted no
+   * `aria-describedby` at all: byte-for-byte the `aria-describedby: null` #80 tabulated for the
+   * Usage sliders, in the panel #80 held up as the counterexample. Switching to vLLM produced a
+   * description and switching back removed it, which is the appear-and-vanish behaviour that got
+   * `Select`'s `hint` prop deleted rather than wired.
+   *
+   * Every option, not just the default one, because "the description exists at the scenario the test
+   * happens to render" is the shape of the bug.
+   */
+  it('describes the Runtime picker at every choice, not only when a caveat applies', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const select = screen.getByLabelText(SETTING_LABELS.runtimeId) as HTMLSelectElement;
+    const options = within(select).getAllByRole('option') as HTMLOptionElement[];
+    // Vacuity guard: the picker offers every runtime, so a loop over nothing is a green test.
+    expect(options.length, 'runtimes the picker offered').toBe(RUNTIMES.length);
+
+    const silent: string[] = [];
+    for (const option of options) {
+      await user.selectOptions(select, option.value);
+      if (description(select) === '') silent.push(option.value);
+    }
+    expect(silent, 'runtimes that leave the picker with no accessible description').toEqual([]);
   });
 
   /**

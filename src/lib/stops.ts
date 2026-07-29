@@ -84,14 +84,21 @@ export const SETTING_LABELS = {
  * one-sentence explanation are the same vocabulary and drift the same way — this is the level
  * `SETTING_LABELS` already exists at.
  *
- * **Partial, deliberately.** The four setup selects explain themselves *per option* — the Hardware
- * note is about the machine you picked, not about hardware — so a fixed control-level sentence
- * there would either duplicate or fight with the note that changes underneath it. That is also why
- * `Select`'s `hint` prop is gone rather than wired up here: it rendered only when the selected
- * option had no note of its own, so the explanation would appear and vanish for a reason the reader
- * cannot see. `satisfies` makes the keying a claim the compiler checks; that every control in the
- * Usage panel actually *has* a sentence is a claim `App.test.tsx` sweeps for, since a control added
- * later cannot fail a type.
+ * **Partial, deliberately, and in two different ways.** The four setup selects explain themselves
+ * *per option* — the Hardware note is about the machine you picked, not about hardware — so a fixed
+ * control-level sentence there would either duplicate or fight with the note that changes
+ * underneath it. That is also why `Select`'s `hint` prop is gone rather than wired up here: it
+ * rendered only when the selected option had no note of its own, so the explanation would appear
+ * and vanish for a reason the reader cannot see.
+ *
+ * `deviceCount` is absent for the opposite reason: what an extra device *buys* is not a property of
+ * the setting, it is a property of the setting and the runtime together, so it cannot be a constant
+ * keyed by setting. It is `deviceCountNote` below. Every note in this table is true at every
+ * scenario, which is the invariant that makes a table the right shape for them.
+ *
+ * `satisfies` makes the keying a claim the compiler checks; that every control in the Usage panel
+ * actually *has* a sentence is a claim `App.test.tsx` sweeps for, since a control added later
+ * cannot fail a type.
  */
 export const SETTING_NOTES = {
   contextTokens:
@@ -102,9 +109,37 @@ export const SETTING_NOTES = {
     'How much of that context is already filled when generation starts. Part of the context, not extra — it sets how long you wait for the first token.',
   kvPrecision:
     'How many bits each cached token costs. Narrower shrinks the cache and can cost quality, the same trade quantization makes for weights.',
-  deviceCount:
-    'How many of this machine to shard the model across, tensor-parallel. Adds memory and bandwidth, minus what the interconnect costs.',
 } as const satisfies Partial<Record<keyof Config, string>>;
+
+/**
+ * What a second device buys you, which depends entirely on how the runtime splits the model.
+ *
+ * The draft copy for this control said "shard the model across, tensor-parallel. Adds memory and
+ * bandwidth, minus what the interconnect costs." That is true of vLLM and of nothing else the app
+ * offers. llama.cpp — the default runtime — and MLX both declare `parallelism: 'layer'`, and
+ * `achievedBandwidth` and the FLOPS closure in `speed.ts` both return the *per-device* figure and
+ * short-circuit before `effectiveDeviceCount` for a layer split. So at the default scenario the
+ * reader drags Device count from 1x to 4x, every speed figure on the page holds still to the last
+ * decimal — 35.57 tok/s decode, 1438 tok/s prefill on a DGX Spark — and a sentence directly beneath
+ * the slider credits an interconnect penalty against a bandwidth gain that was never evaluated.
+ *
+ * `docs/ROADMAP.md` records that derivation as one that was wrong first and is silent when it
+ * breaks: "A layer split is not a speedup ... a single stream sees one card's bandwidth and one
+ * card's FLOPS however many cards there are — that rig buys capacity, not speed." Putting the claim
+ * back on screen is the same mistake one layer up, so the sentence reads `parallelism` for the same
+ * reason the arithmetic does.
+ *
+ * A layer split can still make the page faster, and the note deliberately does not deny it: on a
+ * 4090 at Q4_K_M this model decodes 14.25 tok/s spilling to host memory on one card and 190.11 on
+ * four, because the fourth card is what stops it spilling. That is the capacity, arriving as speed.
+ * "Buys capacity, not speed" is a claim about the mechanism, which is why it is the clause here.
+ */
+export function deviceCountNote(runtime: RuntimeSpec): string {
+  const opening = 'How many of this machine to shard the model across.';
+  return runtime.parallelism === 'layer'
+    ? `${opening} ${runtime.label} runs whole layers on each device in turn, so this buys capacity, not speed — one device’s bandwidth is the ceiling however many you add.`
+    : `${opening} ${runtime.label} shards every layer across every device, so this adds bandwidth as well as memory, minus what the interconnect costs.`;
+}
 
 /**
  * The cache precisions a control can offer, with the name to use when a runtime has none of
