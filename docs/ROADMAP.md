@@ -564,6 +564,74 @@ reading the test that guards them.
   about what the page leads with rather than a keyboard-reachability bug, and the fix above already
   takes the walk from 422 presses to 15.
 
+- **A focus indicator is a mark of its own, never a colour swap and never a channel a resting state
+  already uses** ([#67](https://github.com/MrZoller/bench/issues/67)). The four primary selects —
+  Model, Hardware, Quantization, Runtime — removed the outline and replaced it with a 1px border
+  colour change measuring **1.95:1 against the unfocused edge**, where SC 2.4.13 asks for 3:1 at a
+  2px minimum. `--color-control-border` had been raised to `#646d88` specifically so a control's
+  edge cleared 3:1 _before_ focus; the focused state never got the same treatment, so the most
+  important controls on the page were the only ones whose indicator you could not see.
+
+  Two more instances came out of the sweep, both of them listed in the issue as already correct:
+
+  - The budget legend drew `focus:ring-1` — 1px, half the minimum, and with the outline suppressed
+    it is the whole indicator rather than a decoration on top of one.
+  - The Matrix marked its selected square with `ring-2 ring-[accent] ring-offset-1` and lit
+    `focus:ring-2 ring-[accent]` on focus: **the same channel, width and colour**, so focusing the
+    marked square changed nothing whatsoever. A 1:1 change contrast, which is the select's 1.95:1
+    in its most extreme form, and reachable in one click — clicking a cell makes it both the
+    selection and the roving tab stop, so the marked square is exactly where Tab lands coming back
+    to the grid. Selection is drawn inside the cell now, and focus stays outside it.
+
+  **Moving a mark onto the heatmap changes what it has to contrast against, and the accent was never
+  validated there.** Separating the two channels put the selection mark inside the cell, which took
+  it off `--color-surface` — where `tokens.ts` measures the accent at 7.14:1 — and onto the ramp,
+  where a single-tone accent frame measures **2.00, 1.48, 1.06, 1.38, 2.04, 3.07 and 4.52:1** across
+  the seven steps of `sequential`. That is below the 3:1 non-text minimum on **304 of the grid's 408
+  squares**, including the default selection at 1.38:1 on `#3987e5`; on `#6da7ec` the two colours sit
+  0.022 apart in relative luminance, so the mark was a pure hue difference at 1.06:1 — #67's own
+  failure mode, re-shipped as the resting state. The first attempt at this fix did exactly that, and
+  the only reason it looked measured is that the browser spec scored the mark against the panel
+  behind the cell instead of the fill on top of it.
+
+  So the selected square wears **two tones**: 2px of accent bounded by `--color-surface` on both
+  sides — the 2px `border-spacing` outside, a 1px separator inside — which is the dataviz surface
+  ring, and the same trick `Envelope.tsx` already used for its "you are here" mark on the same ramp
+  ("A ring, not a filled dot: the cell's own colour has to stay readable underneath it"). The
+  invariant is _not_ that either tone clears 3:1 everywhere; it is that **one of them always does**:
+  the separator on the five light steps (14.26 down to 3.50:1), the accent on the two dark ones where
+  the separator disappears into the fill (3.07 and 4.52:1). Worst case 3.07:1, zero squares under the
+  bar. Anything drawn on a cell in future — a value label, a comparison marker — inherits this
+  obligation and none of the existing measurements, because `--color-accent` is validated against
+  `surface` and nothing in `tokens.ts` says a word about the ramp. The separator rides the
+  `--tw-shadow` slot rather than a second inset ring because Tailwind composes one box-shadow chain in
+  a fixed order — `inset-shadow, inset-ring, ring-offset, ring, shadow` — and only the last slot
+  paints _under_ the accent, which is what keeps the accent 2px wide rather than 1px. Spelling a
+  bracketed utility out in prose is worth avoiding for its own small reason: Tailwind scans comments
+  and Markdown as source, so an example in a sentence compiles to a rule of dead CSS.
+
+  **The mechanism differs by control and the bar does not**, which is the decision rather than an
+  oversight. The selects use `outline` where their neighbours use `ring`, because a ring is a
+  `box-shadow` and a native `menulist` select is painted by the platform in WebKit — the fix that
+  matched the rest of the app would have shipped nothing at all on Safari, and Chromium cannot tell
+  you that. What is uniform is 2px and 3:1 against whatever the mark is drawn on, measured per
+  surface rather than assumed from the token.
+
+  **Split across both suites, for the reason #52's counting was.** Which indicator a control
+  _declares_ is a class-list property, so `App.test.tsx` sweeps all 400-odd focusable elements in a
+  second and pins the declared width, colour, and the channel collision — and, because the fill is an
+  inline style and the tones are token names, it also does the ramp arithmetic above over every fill
+  the grid paints. Whether an indicator _paints_ 2px at 3:1 needs a real stylesheet and a real focus
+  ring, and jsdom has neither: that is `e2e/focus-indicators.spec.ts`, which walks the tab sequence
+  with Tab rather than `focus()` — the UA ring is `:focus-visible`-gated and a scripted focus does not
+  reliably satisfy the heuristic, so a sweep driven by `focus()` reports every slider on the page as
+  painting nothing. Two things in that reader are easy to get wrong and both have now been wrong
+  once: it exempts `outline-style: auto` from the thickness check, because Chromium reports 1px for a
+  dual-tone ring it paints at 2px (asserted to still match something, or the exemption quietly
+  becomes the rule), and it scores each layer against the colour that layer actually covers — an
+  `inset` shadow over the element's own fill, everything else over the first opaque ancestor. Scoring
+  every mark against the ancestor is what certified a 1.06:1 mark as 7.14:1.
+
 - **`pointer: coarse` does not mean "this user can touch the screen".** It describes the _primary_
   pointing device, so a touchscreen laptop, a Surface, or an iPad with a keyboard case reports
   `fine` — and the disclosure toggles dropped back to 16px for someone who can still put a thumb on

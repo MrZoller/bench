@@ -10,6 +10,7 @@ import { SETTING_LABELS } from '@/lib/stops';
 import { DETAIL_ANCHOR_ID } from '@/components/Matrix';
 import { judgeWorkloads } from '@/engine/verdict';
 import { kvSubstitutionFor } from '@/data/runtimes';
+import { colors } from '@/design/tokens';
 
 /**
  * Wrapped rather than replaced, so every other test in this file still exercises the real verdict
@@ -2282,5 +2283,333 @@ describe('the comparison grid is one tab stop, not four hundred', () => {
 
     expect(caption.textContent).toMatch(/single tab stop/i);
     expect(caption.textContent).toMatch(/arrow keys/i);
+  });
+});
+
+/**
+ * Which focus indicator each control declares.
+ *
+ * The four primary selects suppressed the outline and replaced it with a 1px border colour change
+ * measuring **1.95:1 against the unfocused edge** — WCAG 2.2 SC 2.4.13 asks for 3:1 at a 2px
+ * minimum thickness, and a colour-only change at that size is most of what a deuteranope loses
+ * (#67). Two further instances came out of the sweep for the same shape, both listed in the issue as
+ * already correct: the budget legend drew `focus:ring-1`, which is half the minimum thickness and is
+ * the whole indicator once the outline is suppressed; and the Matrix marked its selected square with
+ * the same channel, width and colour as its focus ring, so focusing the marked square changed
+ * nothing at all — a 1:1 change contrast, and the square Tab lands on after a click.
+ *
+ * **The split across the two suites is deliberate, and it is the one #52 made.** Whether an
+ * indicator paints 2px and clears 3:1 against what it sits on is a question about a real stylesheet
+ * and a real focus ring: jsdom has no Tailwind cascade, no layout and no painted outline, so
+ * `getComputedStyle` here says nothing about any of it. That half is `e2e/focus-indicators.spec.ts`.
+ * What jsdom can answer is which indicator each control *declares*, which is a DOM property — and it
+ * answers it for every focusable element on the page in a second, so a control added later is
+ * covered by default rather than by someone remembering this file exists.
+ */
+describe('every control declares an indicator that says it has focus', () => {
+  /** SC 2.4.13's minimum thickness, in px. */
+  const MINIMUM_THICKNESS = 2;
+
+  /** The channels an indicator can be drawn in. A border colour is deliberately not one — see below. */
+  type Channel = 'outline' | 'ring' | 'inset-ring';
+
+  /**
+   * Split a utility into its variants and its base, bracket-aware.
+   *
+   * A naive split on `:` loses `[@media(pointer:coarse)]:h-11` — the variant contains a colon of its
+   * own — and the Matrix cells carry exactly that, so the sweep would have quietly stopped reading
+   * the class list of all 408 of them.
+   */
+  const parse = (utility: string) => {
+    const parts: string[] = [];
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i < utility.length; i += 1) {
+      const char = utility[i];
+      if (char === '[' || char === '(') depth += 1;
+      else if (char === ']' || char === ')') depth -= 1;
+      else if (char === ':' && depth === 0) {
+        parts.push(utility.slice(start, i));
+        start = i + 1;
+      }
+    }
+    return { variants: parts, base: utility.slice(start) };
+  };
+
+  /**
+   * What one element declares.
+   *
+   * `restingChannels` is what is drawn while the element is *not* focused, which is what a focus
+   * indicator has to be distinguishable from. A `border-*` swap is not counted in either direction:
+   * treating it as an indicator is precisely the mistake #67 documents, and it stays on the select as
+   * a redundant second cue.
+   */
+  const declared = (el: Element) => {
+    const focusChannels = new Set<Channel>();
+    const restingChannels = new Set<Channel>();
+    const focusColours = new Set<string>();
+    let thickness: number | null = null;
+    let suppressesOutline = false;
+
+    for (const utility of (el.getAttribute('class') ?? '').split(/\s+/).filter(Boolean)) {
+      const { variants, base } = parse(utility);
+      const match = /^(inset-ring|ring|outline)(?:-(.*))?$/.exec(base);
+      if (!match) continue;
+
+      const channel = match[1] as Channel;
+      const rest = match[2] ?? '';
+      const onFocus = variants.some((v) => v.startsWith('focus'));
+
+      // `outline-none`/`outline-hidden` removes the indicator the browser supplies for free, which
+      // is the state that puts an element under any obligation here at all.
+      if (channel === 'outline' && (rest === 'none' || rest === 'hidden')) {
+        suppressesOutline = true;
+        continue;
+      }
+      // `ring-offset-*` and `outline-offset-*` place a mark; they never are one.
+      if (rest.startsWith('offset-')) continue;
+
+      // A bare `ring`/`outline` is 1px in Tailwind v4; anything else numeric is that many px.
+      const width = rest === '' ? 1 : Number(rest);
+      if (Number.isFinite(width)) {
+        if (onFocus) thickness = Math.max(thickness ?? 0, width);
+      } else if (onFocus) {
+        focusColours.add(rest);
+      }
+      (onFocus ? focusChannels : restingChannels).add(channel);
+    }
+
+    return { focusChannels, restingChannels, focusColours, thickness, suppressesOutline };
+  };
+
+  /**
+   * Everything with a focus state worth looking at: what Tab or a script can focus, plus anything
+   * hosting a `focus-within:` indicator on behalf of a control inside it. The segmented controls are
+   * the second kind — their radios are `sr-only`, so the mark belongs to the label around them, and a
+   * sweep of focusable elements alone would have looked straight past it.
+   */
+  const controls = (container: HTMLElement) => [
+    ...container.querySelectorAll<HTMLElement>(
+      'a[href], button, input, select, textarea, [tabindex], [class*="focus-within:"]'
+    ),
+  ];
+
+  /** `<button> "Qwen3 32B on ..."`, enough to find the offender from the failure message. */
+  const name = (el: Element) =>
+    `<${el.tagName.toLowerCase()}> "${
+      (el.textContent ?? '').trim().slice(0, 40) ||
+      el.getAttribute('aria-label')?.slice(0, 40) ||
+      el.getAttribute('id') ||
+      '(no text)'
+    }"`;
+
+  it('never declares an indicator thinner than the 2px minimum', () => {
+    const { container } = render(<App />);
+    const summaries = controls(container).map((el) => ({ el, ...declared(el) }));
+    const withIndicator = summaries.filter((s) => s.thickness !== null);
+
+    // Vacuity guards. The grid alone declares one on every cell, and the page has to have several
+    // outside it — a selector that stopped matching would otherwise report a clean sweep.
+    expect(withIndicator.length, 'nothing on the page declares a focus indicator').toBeGreaterThan(
+      300
+    );
+    expect(
+      withIndicator.filter((s) => !s.el.closest('table')).length,
+      'the sweep found no indicators outside the grid'
+    ).toBeGreaterThan(5);
+
+    const tooThin = withIndicator
+      .filter((s) => s.thickness! < MINIMUM_THICKNESS)
+      .map((s) => `${name(s.el)} declares ${s.thickness}px`);
+    expect(tooThin, `thinner than ${MINIMUM_THICKNESS}px`).toEqual([]);
+  });
+
+  it('never takes the browser’s indicator away without replacing it', () => {
+    const { container } = render(<App />);
+    const summaries = controls(container).map((el) => ({ el, ...declared(el) }));
+    const suppressing = summaries.filter((s) => s.suppressesOutline);
+
+    expect(
+      suppressing.length,
+      'nothing suppresses the outline, so this asserts nothing'
+    ).toBeGreaterThan(0);
+    expect(
+      suppressing.filter((s) => !s.el.closest('table')).length,
+      'only grid cells suppress it, so the rule is narrower than it reads'
+    ).toBeGreaterThan(0);
+
+    const unreplaced = suppressing
+      .filter((s) => (s.thickness ?? 0) < MINIMUM_THICKNESS)
+      .map((s) => `${name(s.el)} suppresses the outline and declares ${s.thickness ?? 'nothing'}`);
+    expect(unreplaced, 'outline removed with no compliant replacement').toEqual([]);
+  });
+
+  /**
+   * The Matrix instance, stated as the general rule it is. An indicator that shares its channel with
+   * a mark the element already wears cannot be a *change*, however thick it is — the selected square
+   * wore an accent ring at rest and lit an identical accent ring on focus.
+   */
+  it('never draws focus in a channel a resting state already uses', () => {
+    const { container } = render(<App />);
+    const summaries = controls(container).map((el) => ({ el, ...declared(el) }));
+
+    // At least one element has to wear a resting mark, or the rule is trivially satisfied. The
+    // marked square is that element, and it is the one this rule was written for.
+    expect(
+      summaries.filter((s) => s.restingChannels.size > 0).length,
+      'no element wears a resting mark, so this asserts nothing'
+    ).toBeGreaterThan(0);
+
+    const collisions = summaries
+      .filter((s) => [...s.focusChannels].some((c) => s.restingChannels.has(c)))
+      .map((s) => `${name(s.el)} draws focus and state both as ${[...s.focusChannels].join('/')}`);
+    expect(collisions, 'focus and a resting state share a channel').toEqual([]);
+  });
+
+  /**
+   * And the named instance, control by control.
+   *
+   * The channel is pinned as an outline rather than left free, because the reason for it is invisible
+   * from Chromium: a ring is a `box-shadow`, and a native `menulist` select is painted by the
+   * platform in WebKit, which does not reliably paint one. The browser spec would go on passing while
+   * Safari showed nothing, so this is the assertion that holds that decision.
+   */
+  it('gives each of the four primary selects a 2px accent outline', () => {
+    render(<App />);
+
+    for (const label of ['Model', 'Hardware', 'Quantization', 'Runtime']) {
+      const select = screen.getByLabelText(label);
+      const summary = declared(select);
+
+      expect(summary.suppressesOutline, `${label} suppresses its outline`).toBe(false);
+      expect([...summary.focusChannels], `${label}'s indicator channel`).toEqual(['outline']);
+      expect(summary.thickness, `${label}'s indicator thickness`).toBeGreaterThanOrEqual(
+        MINIMUM_THICKNESS
+      );
+      expect([...summary.focusColours].join(), `${label}'s indicator colour`).toContain(
+        '--color-accent'
+      );
+    }
+  });
+});
+
+/**
+ * A mark drawn *on* the heatmap, measured against the heatmap.
+ *
+ * The rule above — focus and a resting state never share a channel — moved the Matrix's
+ * selected-square mark from an offset ring outside the cell to a frame inside it, and that moved it
+ * off `--color-surface`, where `tokens.ts` validated the accent at 7.14:1, and onto the ramp, where
+ * it was never validated at all. A single-tone accent frame measures **1.06:1 to 4.52:1** across
+ * the seven steps of `sequential` — below the 3:1 non-text minimum on 304 of the grid's 408 squares,
+ * the default selection among them. So the mark is two tones, and this is the arithmetic that says
+ * so: for every fill the grid actually paints, at least one of the mark's tones has to clear 3:1
+ * against it.
+ *
+ * **jsdom can answer this one, which is why it is here rather than in the browser suite.** The fill
+ * is an inline style and the mark's tones are token names in the class list; the rest is the WCAG
+ * contrast formula. What jsdom cannot answer — whether the two tones land in the geometry the class
+ * list implies, 2px of accent with the separator inside it — is `e2e/focus-indicators.spec.ts`.
+ */
+describe('a mark drawn on the heatmap stays visible on every step of the ramp', () => {
+  /** SC 1.4.11's floor for a non-text mark. */
+  const MINIMUM_CONTRAST = 3;
+
+  const parseColour = (value: string): [number, number, number] => {
+    if (value.startsWith('#')) {
+      const hex = value.slice(1);
+      return [0, 2, 4].map((i) => Number.parseInt(hex.slice(i, i + 2), 16)) as [
+        number,
+        number,
+        number,
+      ];
+    }
+    const parts = value.match(/[\d.]+/g)?.map(Number) ?? [];
+    return [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0];
+  };
+
+  const luminance = (value: string) => {
+    const [r, g, b] = parseColour(value)
+      .map((c) => c / 255)
+      .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+
+  const contrast = (a: string, b: string) => {
+    const [high, low] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (high + 0.05) / (low + 0.05);
+  };
+
+  /** `--color-surface-raised` -> `surfaceRaised`, so a token name resolves against `colors`. */
+  const token = (cssName: string) =>
+    cssName.replace('--color-', '').replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+
+  /**
+   * The tones a resting mark is drawn in, read off the element that wears it.
+   *
+   * Only the utilities that paint inside the cell count: the inset ring and the inset shadow
+   * separator beneath it. The `focus:`-gated ring is drawn *outside* the box, over the panel
+   * surface, so it is measured in the browser suite against a different colour entirely.
+   */
+  const restingTones = (el: Element) =>
+    (el.getAttribute('class') ?? '')
+      .split(/\s+/)
+      .filter((u) => !u.includes('focus') && /^(inset-ring|inset-shadow|shadow)-\[/.test(u))
+      .flatMap((u) => [...u.matchAll(/--color-[a-z-]+/g)].map((m) => m[0]))
+      .map(token)
+      .filter((name): name is keyof typeof colors => name in colors)
+      .map((name) => colors[name]);
+
+  it('keeps one of the selected square’s tones 3:1 against every fill it can land on', () => {
+    render(<App />);
+    const matrix = screen.getByRole('region', { name: /every model on every machine/i });
+    const cells = within(matrix)
+      .getAllByRole('button')
+      .filter((button) => button.closest('td'));
+
+    const marked = cells.filter((cell) => cell.getAttribute('aria-current') === 'true');
+    expect(marked, 'no square is marked, so there is no mark to measure').toHaveLength(1);
+    const tones = restingTones(marked[0]);
+
+    // Vacuity guards. A mark with no tones, or a grid the selector stopped matching, would
+    // otherwise report a clean sweep over nothing.
+    expect(
+      tones.length,
+      'the selected square declares no mark inside the cell — if selection moved back outside it, ' +
+        'the channel-collision rule above is what has to hold instead of this one'
+    ).toBeGreaterThan(0);
+    expect(cells.length, 'the grid is not rendering').toBeGreaterThan(300);
+
+    /** Every fill the grid paints, with how many squares wear it. `transparent` shows the panel. */
+    const fills = new Map<string, number>();
+    for (const cell of cells) {
+      const background = (cell as HTMLElement).style.background;
+      const behind = background === 'transparent' || !background ? colors.surface : background;
+      fills.set(behind, (fills.get(behind) ?? 0) + 1);
+    }
+    expect(
+      fills.size,
+      'the grid paints one colour, so the ramp is not being exercised'
+    ).toBeGreaterThan(4);
+
+    const best = (fill: string) => Math.max(...tones.map((tone) => contrast(tone, fill)));
+    const unreadable = [...fills.entries()]
+      .filter(([fill]) => best(fill) < MINIMUM_CONTRAST)
+      .map(([fill, count]) => `${fill} (${count} squares) at ${best(fill).toFixed(2)}:1`);
+    expect(unreadable, `the mark below ${MINIMUM_CONTRAST}:1 on a fill the grid paints`).toEqual(
+      []
+    );
+
+    /**
+     * And that the second tone is load-bearing rather than belt-and-braces. If every step of the
+     * ramp were readable under one tone, this test would pass on the single-tone frame that shipped
+     * 304 unreadable squares — the ramp is what makes it fail, so the ramp has to still be there.
+     */
+    const defeatsOneTone = tones.filter(
+      (tone) => ![...fills.keys()].every((fill) => contrast(tone, fill) >= MINIMUM_CONTRAST)
+    );
+    expect(
+      defeatsOneTone.length,
+      'every tone clears the bar alone, so this measures nothing the ramp can break'
+    ).toBeGreaterThan(0);
   });
 });
