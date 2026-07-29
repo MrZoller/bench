@@ -1,4 +1,9 @@
 import type { KvPrecision, RuntimeSpec } from '@/engine/types';
+// The curator's `note` is not an engine field — the engine has no use for it — so the picker's
+// prose is typed against the catalog's row. Type-only, so it erases and this module still pulls in
+// no data at runtime.
+import type { CatalogDevice } from '@/data/catalog';
+import { gibLabel, sentences } from './format';
 // The scenario *shape*, not the store: `scenario.ts` deliberately depends on nothing but engine
 // types so that everything needing the shape can have it without a cycle. Type-only, so it erases.
 import type { Config } from '@/store/scenario';
@@ -136,8 +141,9 @@ export const SETTING_NOTES = {
  */
 /**
  * `drives` is a parameter rather than a `runtimeDrives(runtime, device)` call inside, because this
- * module depends on nothing but engine *types* — see the import block — and the caller already has
- * the answer for the warning it prints on the Runtime control.
+ * module takes nothing from the engine but its *types* — see the import block, where every engine
+ * and catalog import is type-only — and the caller already has the answer for the warning it prints
+ * on the Runtime control. `devicePickerNote` below takes its ceiling for the same reason.
  *
  * It exists because `canShard` asks only about the hardware. A DGX Spark has an interconnect, so the
  * slider renders under MLX, which cannot drive that machine at all — and this note then described a
@@ -154,6 +160,60 @@ export function deviceCountNote(runtime: RuntimeSpec, drives: boolean): string {
   return runtime.parallelism === 'layer'
     ? `${opening} ${runtime.label} runs whole layers on each device in turn, so this buys capacity, not speed — one device’s bandwidth is the ceiling however many you add.`
     : `${opening} ${runtime.label} shards every layer across every device, so this adds bandwidth as well as memory, minus what the interconnect costs.`;
+}
+
+/**
+ * What the Hardware picker says about the selected machine, split into the two different kinds of
+ * text that used to be one string.
+ *
+ * **`claim` is picker copy**: the short, derived facts a reader needs *while choosing* — that these
+ * specs are not final, and that the allocation ceiling is a default rather than a wall. Both are
+ * generated here, both are one clause, and both end in a full stop of their own so that nothing
+ * downstream has to guess where they finish.
+ *
+ * **`detail` is reference prose**: `devices.json`'s `note`, which is provenance for a reader who
+ * has already chosen — which GPU bin the figures describe, why a bandwidth rating is not the
+ * measured figure, that a 3090 pair is modelled at PCIe rates. It is 40 to 180 words of it, with
+ * backticked sysctl names and a derivation, and it was being concatenated onto the claim and handed
+ * to the control as its `aria-describedby` (#68). So a screen-reader user heard the whole
+ * derivation before they could choose anything, and a sighted reader got five lines of 12px prose
+ * under a `<select>` in a two-column grid — which pushed the row beneath it down and left a void
+ * under Model. `Select` puts this behind a disclosure and keeps it out of the description.
+ *
+ * This is the trimming `quantOptions` in `Bench.tsx` already describes and the device note never
+ * got: "a short claim, not the whole derivation — the panel below carries that, and printing the
+ * same forty words twice on one screen taught people to skip both."
+ *
+ * **The curated note is still on screen**, which is the constraint this cannot trade away: it was
+ * dropped entirely once before, taking with it the 3090's warning that the estimates assume PCIe
+ * and do not model its optional NVLink bridge — precisely the caveat an owner of a bridged pair
+ * needs. A disclosure is one click, not a deletion.
+ *
+ * `ceilingBytes` is a parameter rather than a `maxAllocatablePerDevice(device)` call inside, for the
+ * same reason `deviceCountNote` takes `drives`: this module reads engine *types* and no engine
+ * values, and the caller already holds the figure. Passing it also keeps the "you could raise this"
+ * arithmetic in the one place that owns it — the Bench and the Envelope each had their own copy of
+ * that once, which is how one of them came to be wrong.
+ */
+export function devicePickerNote(
+  device: CatalogDevice,
+  ceilingBytes: number
+): { claim?: string; detail?: string } {
+  return {
+    claim: sentences(
+      // Pre-release specs must stay visibly labelled, not silently mixed in with shipping ones.
+      device.status !== 'shipping' &&
+        `${device.status === 'rumored' ? 'Rumoured' : 'Announced'} — specs may change.`,
+      // The tunable ceiling matters for the same reason in reverse: it is a default, and treating
+      // it as a hardware limit turns a raiseable setting into a flat "will not run".
+      device.allocatableTunable === true &&
+        ceilingBytes > device.allocatableBytes &&
+        `${gibLabel(device.allocatableBytes)} allocatable by default, raiseable to ${gibLabel(
+          ceilingBytes
+        )}.`
+    ),
+    detail: device.note,
+  };
 }
 
 /**

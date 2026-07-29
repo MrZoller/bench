@@ -1,4 +1,5 @@
-import { useId } from 'react';
+import { useId, useState, type ReactNode } from 'react';
+import { DisclosureToggle } from './DisclosureToggle';
 
 /**
  * The input layer. Plain `select` and `range` rather than custom widgets, because both are
@@ -13,7 +14,50 @@ import { useId } from 'react';
  * merely happens to sit nearby. All three take one now. `Select` had the mechanism and the other two
  * had nothing, which is how the five controls driving every figure on the page came to explain none
  * of themselves (#80) — a call site cannot say what a component has no way to render.
+ *
+ * **A note is one line, and `Select` now has somewhere else to put the rest.** An option can also
+ * carry a `detail` — reference prose about the thing you picked, rather than a claim that helps you
+ * pick — which renders behind a disclosure and stays out of the accessible description. Without that
+ * second slot the Hardware picker had one string for both jobs, so 180 words of catalog provenance
+ * were read out on every focus and drawn as five lines of 12px text inside a two-column grid (#68).
  */
+
+/**
+ * The two inline marks the curated catalog notes are written with, rendered rather than printed.
+ *
+ * `devices.json` is prose for a reader — `docs/ROADMAP.md`'s register — and it uses `**emphasis**`
+ * and backticked identifiers throughout: "**This row is the 80-core GPU**", "`iogpu.wired_limit_mb`
+ * accepts a value up to physical memory". Nothing rendered them, so five rows already printed literal
+ * asterisks in the picker, and moving the prose to its own region would have moved the glitch with
+ * it. Same root cause as the punctuation this issue is about: reference prose was being emitted as
+ * UI copy without the transformation it needs.
+ *
+ * Deliberately two patterns and no parser. Nested or unbalanced markers fall through as literal
+ * text, which is the failure mode that stays legible; a curator who wants a bulleted list is asking
+ * for something this field is not for.
+ */
+function inlineProse(text: string): ReactNode[] {
+  return text.split(/(\*\*[^*]+\*\*|`[^`]+`)/).map((part, i) => {
+    if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
+      return (
+        <strong key={i} className="font-semibold text-[var(--color-text)]">
+          {part.slice(2, -2)}
+        </strong>
+      );
+    }
+    if (part.startsWith('`') && part.endsWith('`') && part.length > 2) {
+      // `tabular` is the app's only mono utility — named for the figures it was written for, but it
+      // is `--font-mono` and this is `iogpu.wired_limit_mb`, a thing you type. A second class that
+      // set the same family would be the drift this repo keeps removing.
+      return (
+        <code key={i} className="tabular">
+          {part.slice(1, -1)}
+        </code>
+      );
+    }
+    return part;
+  });
+}
 
 export function Select<T extends string>({
   label,
@@ -24,7 +68,17 @@ export function Select<T extends string>({
   label: string;
   value: T;
   onChange: (value: T) => void;
-  options: readonly { value: T; label: string; disabled?: boolean; note?: string }[];
+  options: readonly {
+    value: T;
+    label: string;
+    disabled?: boolean;
+    note?: string;
+    /**
+     * Reference prose about the selected option, shown behind a disclosure and *not* part of the
+     * control's accessible description. See `devicePickerNote`.
+     */
+    detail?: string;
+  }[];
 }) {
   const id = useId();
   /**
@@ -37,7 +91,19 @@ export function Select<T extends string>({
    * there are no per-option notes to fight with. Deleted rather than kept, because an unused prop
    * that duplicates a working one is how the two drift.
    */
-  const note = options.find((o) => o.value === value)?.note;
+  const selected = options.find((o) => o.value === value);
+  const note = selected?.note;
+  const detail = selected?.detail;
+
+  /**
+   * Open across a change of selection, rather than reset by it.
+   *
+   * Someone who opened the note on a Mac Studio is comparing it with the next machine down, and
+   * closing it under them on every change would make the disclosure useless for exactly the reader
+   * who opened it. The region simply disappears while the selection has no detail — which is honest
+   * about there being nothing to show, and restores itself on the next option that has one.
+   */
+  const [showDetail, setShowDetail] = useState(false);
 
   return (
     <div className="flex flex-col gap-1">
@@ -85,6 +151,28 @@ export function Select<T extends string>({
         <p id={`${id}-note`} className="text-xs text-[var(--color-text-muted)]">
           {note}
         </p>
+      )}
+      {/* Named for the control rather than "Show more", because the accessible name of a bare
+          "Show more" is the same on every picker that grows one, and a screen-reader user listing
+          the page's buttons would get a set of identical labels pointing at different regions. */}
+      {detail && (
+        <>
+          <DisclosureToggle
+            expanded={showDetail}
+            onToggle={() => setShowDetail((v) => !v)}
+            controls={`${id}-detail`}
+          >
+            {showDetail ? 'Hide' : 'Show'} the full {label.toLowerCase()} note
+          </DisclosureToggle>
+          {showDetail && (
+            <p
+              id={`${id}-detail`}
+              className="text-xs leading-relaxed text-[var(--color-text-muted)]"
+            >
+              {inlineProse(detail)}
+            </p>
+          )}
+        </>
       )}
     </div>
   );

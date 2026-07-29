@@ -17,6 +17,7 @@ import { evaluate } from '@/engine';
 import { LLAMA_CPP, GPT_OSS_120B, DEEPSEEK_V3, QWEN3_32B } from '@/engine/fixtures';
 import { GIB } from '@/engine/types';
 import { maxAllocatablePerDevice, raisingCeilingWouldHelp } from '@/engine/placement';
+import { devicePickerNote } from '@/lib/stops';
 
 describe('device catalog', () => {
   it('covers all three hardware classes', () => {
@@ -953,4 +954,101 @@ describe('a renamed device keeps the links that already name it', () => {
       expect(ids.has(from), `${from} is both an alias and a row`).toBe(false);
     }
   });
+});
+
+/**
+ * What the Hardware picker says about a row, which is a claim about the *catalog* and not only
+ * about the component that renders it (#68).
+ *
+ * The note was `[statusWarning, ceilingClause, row.note].filter(Boolean).join(' ')`, and neither
+ * generated clause ended in punctuation. So the nine rows that compose more than one fragment read
+ * "192 GiB allocatable by default, raiseable to 240 GiB The allocation ceiling reserves 16 GiB for
+ * macOS…", and on the M5 Ultra — the only three-fragment row — the sentence that ran on was the
+ * warning that its specs are rumour-grade, fused to a capacity figure.
+ *
+ * **The issue named seven rows and one of them was not affected.** `ryzen-ai-max-395` is tunable but
+ * already at its own ceiling, so it composes one fragment and never had a seam; the three it missed
+ * are `mac-studio-m2-ultra-192`, `mac-studio-m4-max-36` and `macbook-pro-m1-max-64`. Swept rather
+ * than named for exactly that reason.
+ *
+ * The second half is the length. The claim is what a reader chooses *by* and it is the control's
+ * `aria-describedby`; the curated note is 40 to 180 words of provenance for a reader who has already
+ * chosen. Concatenating them read the whole derivation out on every focus, so the assertion here is
+ * that the two are separate strings and that only one of them is short.
+ */
+describe('the Hardware picker states a claim, not the catalog', () => {
+  /**
+   * How many clauses the picker is entitled to derive for this row, read off the row itself rather
+   * than off the composed note — otherwise this checks the implementation against itself.
+   */
+  const clauses = (device: (typeof DEVICES)[number]) =>
+    (device.status !== 'shipping' ? 1 : 0) +
+    (device.allocatableTunable === true && maxAllocatablePerDevice(device) > device.allocatableBytes
+      ? 1
+      : 0);
+
+  const composed = DEVICES.map((device) => ({
+    device,
+    clauses: clauses(device),
+    ...devicePickerNote(device, maxAllocatablePerDevice(device)),
+  }));
+
+  it('has rows with a seam to check, or this sweep proves nothing', () => {
+    // The nine rows the old composition fused: a derived clause immediately followed by a curated
+    // note. Eight Apple machines with a raiseable ceiling, plus the rumoured M5 Ultra.
+    expect(composed.filter((c) => c.clauses > 0 && c.device.note)).toHaveLength(9);
+    // And the one row that still has an internal seam after the split, because it derives two
+    // clauses of its own. That is the case the issue calls out as the worst of them.
+    expect(composed.filter((c) => c.clauses > 1).map((c) => c.device.id)).toEqual([
+      'mac-studio-m5-ultra-512',
+    ]);
+    // Most of the catalog derives nothing, so a sweep that only ever saw those would say nothing.
+    expect(composed.filter((c) => c.clauses === 0).length).toBeGreaterThan(20);
+  });
+
+  it.each(composed.map((c) => [c.device.id, c] as const))(
+    '%s ends every clause it states',
+    (id, { claim, clauses: count }) => {
+      if (count === 0) {
+        expect(claim, `${id} derives no clause, so it should carry no picker note`).toBeUndefined();
+        return;
+      }
+
+      // Whatever the last clause is, the note finishes as a sentence.
+      expect(claim, `${id}: “${claim}” does not end a sentence`).toMatch(/[.!?…]$/);
+
+      // And where anything follows the status warning, the warning is closed first. This is the
+      // seam the issue names. Checked against the clause's own fixed wording rather than with the
+      // issue's suggested /[a-z0-9)] [A-Z]/ sweep over the whole string, which cannot be used
+      // here: "5070 Ti" and "512 GiB" match it inside prose that is punctuated perfectly well.
+      if (count > 1) {
+        expect(claim, `${id}: the rumour warning runs into the clause after it`).toMatch(
+          /^(Rumoured|Announced) — specs may change\. /
+        );
+      }
+    }
+  );
+
+  it.each(composed.map((c) => [c.device.id, c] as const))(
+    '%s keeps its catalog note out of the claim',
+    (id, { device, claim, detail }) => {
+      // The curated prose is still rendered — it is `Select`'s `detail`, behind a disclosure — and
+      // it is verbatim. It was dropped from the picker entirely once before, taking the 3090's
+      // NVLink caveat with it, which is the regression this half of the split must not repeat.
+      expect(detail, `${id} lost its curated note`).toBe(device.note);
+      if (device.note) {
+        expect(claim ?? '', `${id} still concatenates its catalog note`).not.toContain(
+          device.note.slice(0, 40)
+        );
+      }
+
+      // Fourteen words is the longest claim the catalog can produce today (a rumour warning plus a
+      // raiseable ceiling). The bound is there to fail loudly if reference prose gets folded back
+      // in: the shortest curated note on any row is 25 words, and the longest is 197.
+      const words = (claim ?? '').split(/\s+/).filter(Boolean);
+      expect(words.length, `${id}: ${words.length} words of picker note — “${claim}”`).toBeLessThan(
+        20
+      );
+    }
+  );
 });

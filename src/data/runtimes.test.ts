@@ -186,6 +186,24 @@ describe('a cache charged a width nobody established says so', () => {
       expect(measuredKvPrecisions.length, `${runtime.id} marks every precision`).toBeGreaterThan(0);
       expect(note).not.toEqual(kvNote);
 
+      /**
+       * And both end a sentence, because both are dropped into the middle of a paragraph.
+       *
+       * `Bench.tsx`'s substitution panel reads "…figures below are derived from a format llama.cpp
+       * cannot load. {note} They use Q4_K_M's 4.5 bpw…", so a clause here without a full stop fuses
+       * two claims into one unreadable sentence — the defect #68 fixed on the Hardware picker, whose
+       * fragments were composed the same way. These two are interpolated into JSX rather than joined,
+       * so `sentences()` cannot cover them and the discipline has to be asserted at the source.
+       */
+      for (const [field, prose] of [
+        ['note', note],
+        ['kvNote', kvNote],
+      ] as const) {
+        expect(prose, `${runtime.id}'s ${field} is dropped mid-paragraph and does not end`).toMatch(
+          /[.!?…]$/
+        );
+      }
+
       for (const precision of measuredKvPrecisions) {
         expect(
           runtime.kvPrecisions,
