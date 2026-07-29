@@ -2912,7 +2912,14 @@ describe('the controls that drive every figure explain what they are', () => {
     expect(
       description(within(usage()).getByLabelText(SETTING_LABELS.deviceCount)),
       'Device count’s description'
-    ).toBe(deviceCountNote(getRuntime(DEFAULT_CONFIG.runtimeId)));
+    ).toBe(
+      deviceCountNote(
+        getRuntime(DEFAULT_CONFIG.runtimeId),
+        // Derived rather than `true`, so this tracks a change of default rather than asserting
+        // against the wrong branch if the default pairing ever becomes an undrivable one.
+        runtimeDrives(getRuntime(DEFAULT_CONFIG.runtimeId), getDevice(DEFAULT_CONFIG.deviceId))
+      )
+    );
   });
 
   it('describes the KV group once rather than once per radio', () => {
@@ -2943,7 +2950,10 @@ describe('the controls that drive every figure explain what they are', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    const note = deviceCountNote(getRuntime(DEFAULT_CONFIG.runtimeId));
+    const note = deviceCountNote(
+      getRuntime(DEFAULT_CONFIG.runtimeId),
+      runtimeDrives(getRuntime(DEFAULT_CONFIG.runtimeId), getDevice('dgx-spark'))
+    );
     await user.selectOptions(screen.getByLabelText('Hardware'), 'dgx-spark');
     const slider = screen.getByLabelText(SETTING_LABELS.deviceCount);
     expect(description(slider)).toBe(note);
@@ -2992,7 +3002,9 @@ describe('the controls that drive every figure explain what they are', () => {
       ).toBe(true);
       return {
         id: runtime.id,
-        note: deviceCountNote(runtime),
+        // `true` is not an assumption: the map above filters to `runtimeDrives`, and the
+        // unsupported branch has its own test below.
+        note: deviceCountNote(runtime, true),
         // 1% rather than exact equality: what is being distinguished is "held still to the last
         // decimal" from "half again as fast", and neither side needs a tighter threshold than that.
         aggregates: at(4).decode.perUserTokensPerSec > one.decode.perUserTokensPerSec * 1.01,
@@ -3024,6 +3036,76 @@ describe('the controls that drive every figure explain what they are', () => {
 
     await user.selectOptions(screen.getByLabelText(SETTING_LABELS.runtimeId), 'vllm');
     expect(description(slider())).toMatch(/bandwidth as well as memory/);
+  });
+
+  /**
+   * Both notes described something no evaluation reaches, in configurations two clicks from the
+   * default. Codex found them on #80; each is a sentence that reads the wrong one of two inputs.
+   *
+   * **The device-count note read the hardware and not the runtime.** `canShard` is
+   * `interconnect !== undefined`, so on a DGX Spark the slider renders under MLX — which cannot
+   * drive that machine at all — and the note promised a layer split buying capacity directly below
+   * the Runtime control's "Does not run on" warning.
+   *
+   * **The runtime note claimed every weight is dequantized.** BF16 is a real format here, and MLX
+   * coerces to it, so there is nothing to dequantize in a configuration a reader reaches by picking
+   * the one runtime this catalog exists to cover for Apple hardware.
+   */
+  it('does not describe a split for a runtime that cannot drive the machine', () => {
+    const device = getDevice('dgx-spark');
+    const mlx = getRuntime('mlx');
+    expect(canShard(device), 'the slider renders, which is the whole problem').toBe(true);
+    expect(runtimeDrives(mlx, device), 'this test needs an undrivable pairing').toBe(false);
+
+    const note = deviceCountNote(mlx, runtimeDrives(mlx, device));
+    expect(note).not.toMatch(/buys capacity, not speed/);
+    expect(note).not.toMatch(/bandwidth as well as memory/);
+    expect(note, 'the control still stores a value, so it has to say why nothing moves').toMatch(
+      /does not run on this machine/
+    );
+  });
+
+  it('says on screen that a device count buys nothing under an undrivable runtime', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const slider = () => screen.getByLabelText(SETTING_LABELS.deviceCount);
+    expect(description(slider())).toMatch(/buys capacity, not speed/);
+
+    // The default device is the DGX Spark, which MLX does not drive.
+    await user.selectOptions(screen.getByLabelText(SETTING_LABELS.runtimeId), 'mlx');
+    expect(description(slider())).not.toMatch(/buys capacity|bandwidth as well as memory/);
+    expect(description(slider())).toMatch(/does not run on this machine/);
+  });
+
+  it('does not tell a BF16 reader that every weight is dequantized', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const runtimeNote = () => description(screen.getByLabelText(SETTING_LABELS.runtimeId)) ?? '';
+
+    /**
+     * Driven through the DOM rather than read off the `<option>`s: `Controls.tsx` renders **only the
+     * selected** option's note, so a sweep over `option.textContent` finds nothing and passes
+     * whatever the copy says. That was the first version of this test.
+     */
+    const dequantizing = RUNTIMES.filter((r) => !r.nativeLowPrecision);
+    expect(dequantizing.length, 'nothing dequantizes, so this test has no subject').toBeGreaterThan(
+      0
+    );
+
+    // llama.cpp on the default machine, and MLX on hardware it actually drives — otherwise MLX's
+    // note is the "Does not run on" warning and the sentence under test never renders.
+    expect(runtimeNote()).toMatch(/quantized checkpoint/);
+    expect(runtimeNote(), 'false for BF16, which is a format this app offers').not.toMatch(
+      /every weight/
+    );
+
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-96');
+    await user.selectOptions(screen.getByLabelText(SETTING_LABELS.runtimeId), 'mlx');
+    expect(runtimeNote(), 'MLX coerces to BF16, so this is the easiest place to check it').toMatch(
+      /quantized checkpoint/
+    );
+    expect(runtimeNote()).not.toMatch(/every weight/);
   });
 
   /**

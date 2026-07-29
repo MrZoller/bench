@@ -258,9 +258,16 @@ export function Bench() {
         note: !runtimeDrives(r, device)
           ? `Does not run on ${device.name}.`
           : [
+              /* "every weight" was wrong in a configuration two clicks away. BF16 is a real format
+                 here — MLX coerces to it — and there is nothing to dequantize when the checkpoint is
+                 already FP16-or-wider, so the claim was false for the one selection where it is
+                 easiest to check. `nativeLowPrecision` describes what the runtime does with a
+                 *quantized* checkpoint, which is what the sentence now says. Left as a capability
+                 rather than derived from `config.quant`: this is an option list, and each note
+                 describes the runtime a reader has not selected yet. */
               r.nativeLowPrecision
                 ? 'Sends low-precision weights straight to the tensor cores.'
-                : 'Dequantizes every weight to FP16 before the matmul, so a card’s low-precision peak is out of reach.',
+                : 'Dequantizes a quantized checkpoint to FP16 before the matmul, so a card’s low-precision peak is out of reach.',
               r.preallocFraction
                 ? `Reserves ${Math.round(r.preallocFraction * 100)}% of the device up front.`
                 : undefined,
@@ -449,7 +456,7 @@ export function Bench() {
             value={nearestStop(deviceCountStops, config.deviceCount)}
             onChange={(v) => set('deviceCount', v)}
             format={(v) => `${v}x`}
-            note={deviceCountNote(runtime)}
+            note={deviceCountNote(runtime, runtimeDrives(runtime, device))}
           />
         ) : (
           /* Any split needs a link, not only a tensor-parallel one — `canShard` is

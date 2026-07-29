@@ -134,8 +134,23 @@ export const SETTING_NOTES = {
  * four, because the fourth card is what stops it spilling. That is the capacity, arriving as speed.
  * "Buys capacity, not speed" is a claim about the mechanism, which is why it is the clause here.
  */
-export function deviceCountNote(runtime: RuntimeSpec): string {
+/**
+ * `drives` is a parameter rather than a `runtimeDrives(runtime, device)` call inside, because this
+ * module depends on nothing but engine *types* — see the import block — and the caller already has
+ * the answer for the warning it prints on the Runtime control.
+ *
+ * It exists because `canShard` asks only about the hardware. A DGX Spark has an interconnect, so the
+ * slider renders under MLX, which cannot drive that machine at all — and this note then described a
+ * layer split buying capacity, three controls below "Does not run on NVIDIA DGX Spark". Two
+ * sentences on one screen, one of them describing an evaluation that never happens. The unsupported
+ * branch is deliberately not silent: the control is still there and still stores a value, so it
+ * needs to say why nothing it does moves a figure.
+ */
+export function deviceCountNote(runtime: RuntimeSpec, drives: boolean): string {
   const opening = 'How many of this machine to shard the model across.';
+  if (!drives) {
+    return `${opening} ${runtime.label} does not run on this machine, so nothing here is evaluated — what a second device buys is decided by the runtime that ends up driving it.`;
+  }
   return runtime.parallelism === 'layer'
     ? `${opening} ${runtime.label} runs whole layers on each device in turn, so this buys capacity, not speed — one device’s bandwidth is the ceiling however many you add.`
     : `${opening} ${runtime.label} shards every layer across every device, so this adds bandwidth as well as memory, minus what the interconnect costs.`;
