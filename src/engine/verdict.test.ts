@@ -22,6 +22,10 @@ import {
   MAC_STUDIO_M3_ULTRA_256,
 } from './fixtures';
 import { getQuant } from '@/data/quants';
+// The monotonicity sweep is about the *model*, not about a rig, so it runs the shipped catalog
+// rather than fixtures — a claim checked only on the hardware it was derived from is not checked.
+import { DEVICES, MODELS } from '@/data/catalog';
+import { RUNTIMES, runtimeDrives } from '@/data/runtimes';
 
 /** Resident, with room to spare — these tests are about rate and latency, not capacity. */
 const RESIDENT: Placement = {
@@ -289,6 +293,123 @@ describe('an archetype the scenario never exercises is not graded', () => {
 
     expect(serving.fitness).not.toBe('unmeasured');
     expect(serving.fitness).toBe('good');
+  });
+
+  /**
+   * **The other half of "never exercised": a one-user measurement that already settles it** (found in
+   * review on #94).
+   *
+   * The first version of this state asked only whether the turn *fits*, on the argument that a rig
+   * which cannot hold one 2K turn cannot hold two. True, and incomplete — the same reasoning covers
+   * the rate and the wait. `at('serving')` reads `usage.concurrency`, so at one user the 2K turn is
+   * genuinely evaluated, and if that evaluation misses a tight bar then no number of users recovers
+   * it: per-user decode is non-increasing in concurrency and prefill work grows with it (asserted
+   * over the catalog in the test below). Marking it "Not measured" claimed the question had not been
+   * asked when the engine had already answered it, and dropped the row out of both sides of the
+   * workload count.
+   *
+   * Both bars, because they are separate branches and a fix for one would leave the other reporting
+   * "Not measured" for a failure it had measured. This is not a corner: 384 of the 1,292 drivable
+   * combinations in the catalog miss a tight bar at one user.
+   */
+  it.each([
+    {
+      bar: 'rate',
+      model: DEEPSEEK_V3,
+      quant: 'bf16',
+      device: RTX_5090,
+      // 671B of BF16 weights against a 31 GiB ceiling: almost everything streams over the host bus.
+      says: /0\.8 tok\/s for a single served turn, under the 5 tok\/s/,
+    },
+    {
+      bar: 'TTFT',
+      model: LLAMA_31_8B,
+      quant: 'bf16',
+      device: EPYC_9654,
+      // Fits and decodes fine; a 2K prompt on CPU is what takes too long.
+      says: /42s to a first token for one prompt, past the 30s bar/,
+    },
+  ])('grades a one-user measurement that already misses the tight $bar bar', (c) => {
+    const serving = judge(c.model, c.quant, { device: c.device, concurrency: 1 }).get('serving')!;
+
+    expect(serving.fitness, 'a measured, unrecoverable failure is not "not measured"').toBe('fail');
+    // Names the bar it missed and what was actually measured, in the singular — the plural copy for
+    // a shared deployment would read "each once 1 users share the device" and describe a scenario
+    // that did not happen.
+    expect(serving.reason).toMatch(c.says);
+    expect(serving.reason).not.toMatch(/Not measured/);
+    expect(serving.reason).not.toMatch(/\b1 users\b/);
+  });
+
+  /**
+   * The premise the case above rests on, asserted over the catalog rather than argued from the
+   * roofline: **more users never improve a served user's rate, and never shorten the wait.**
+   *
+   * Decode is memory-bound, so the weights are read once per step however many sequences are in
+   * flight and the per-user share can only fall; prefill is compute-bound and one long prompt already
+   * saturates the units, so serving `n` of them is `n` times the arithmetic. If either direction ever
+   * reversed, "the one-user measurement settles it" would stop being true and the grade above would
+   * be wrong rather than merely early.
+   *
+   * Every drivable combination, not a sample, because the claim is about the model and not about one
+   * rig — and because a monotonicity claim checked on the machine it was derived from is not checked.
+   */
+  it('never improves a served user’s rate or wait by adding users', () => {
+    const reversals: string[] = [];
+    let checked = 0;
+
+    for (const device of DEVICES) {
+      for (const runtime of RUNTIMES) {
+        if (!runtimeDrives(runtime, device)) continue;
+        for (const model of MODELS) {
+          for (const quantId of ['q4_k_m', 'bf16']) {
+            if (!runtime.weightFormats.includes(quantId)) continue;
+            const series = [1, 2, 4, 8].map((concurrency) => {
+              const e = evaluate({
+                model,
+                quant: getQuant(quantId),
+                runtime,
+                rig: { device, count: 1 },
+                usage: {
+                  contextTokens: 2560,
+                  concurrency,
+                  promptTokens: 2048,
+                  kvPrecision: 'fp16',
+                },
+              });
+              return {
+                concurrency,
+                rate: e.decode.perUserTokensPerSec,
+                ttft: e.prefill.ttftSeconds,
+                unsupported: e.placement.unsupported,
+              };
+            });
+            if (series.some((s) => s.unsupported)) continue;
+            checked++;
+
+            const where = `${device.id}/${runtime.id}/${model.id}/${quantId}`;
+            for (let i = 1; i < series.length; i++) {
+              const [prev, next] = [series[i - 1], series[i]];
+              // A thousandth of tolerance for float noise; the reversals this guards are not subtle.
+              if (next.rate > prev.rate * 1.001)
+                reversals.push(
+                  `${where}: per-user rate rose ${prev.rate.toFixed(2)} -> ${next.rate.toFixed(2)} from ${prev.concurrency} to ${next.concurrency} users`
+                );
+              if (next.ttft < prev.ttft * 0.999)
+                reversals.push(
+                  `${where}: TTFT fell ${prev.ttft.toFixed(2)}s -> ${next.ttft.toFixed(2)}s from ${prev.concurrency} to ${next.concurrency} users`
+                );
+            }
+          }
+        }
+      }
+    }
+
+    // The sweep has to have swept: an empty filter passes this vacuously, and the first draft of
+    // this probe compared `quant.format` — a field `QuantSpec` does not have — so `includes()` was
+    // false for every combination and it reported monotonicity over zero cases.
+    expect(checked, 'the sweep matched no combinations, so it proves nothing').toBeGreaterThan(500);
+    expect(reversals.slice(0, 8), `${reversals.length} reversals`).toEqual([]);
   });
 
   /**

@@ -484,13 +484,39 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
    * the strongest negative in the vocabulary standing in for "you have not configured this yet",
    * beside rows where it means "this machine cannot do it" (#75).
    *
-   * The `fits` conjunct is what keeps the ungraded state from swallowing a real answer, and it is the
-   * same boundary the sentence below leads with: a rig that cannot hold one 2K turn cannot hold two
-   * of them either, so that failure is measured at any concurrency and stays `fail`. One expression,
-   * read by the tier and by its reason, because this file's history is a list of the times a
-   * condition and the sentence explaining it were written down twice.
+   * The other three conjuncts are what keep the ungraded state from swallowing a real answer, and
+   * each is the same boundary a sentence below leads with. One expression, read by the tier and by
+   * its reason, because this file's history is a list of the times a condition and the sentence
+   * explaining it were written down twice.
+   *
+   * **`fits` is the capacity half**: a rig that cannot hold one 2K turn cannot hold two of them
+   * either, so that failure is measured at any concurrency and stays `fail`.
+   *
+   * **The rate and TTFT conjuncts are the other half, and the first version of this omitted them**
+   * (found in review on #94). At one user the serving scenario *is* measured — `at('serving')` reads
+   * `usage.concurrency`, so a 2K turn at a single user is a real evaluation — and if that measurement
+   * already misses the tight tier, more users cannot rescue it: per-user decode is non-increasing in
+   * concurrency because the weights are read once per step however many are waiting, and prefill work
+   * grows with it because one long prompt already saturates the units. Both directions are asserted
+   * over the catalog rather than argued: 1,292 drivable model/device/runtime/quant combinations, zero
+   * cases where per-user rate rose or TTFT fell as concurrency went 1 → 2 → 4 → 8.
+   *
+   * So the omission was not a corner: **384 of those 1,292 miss a tight bar at one user** — a 5090
+   * running Llama-3.1-70B at BF16 decodes 0.58 tok/s against a 5 tok/s bar, and 0.57 at two users —
+   * and every one of them read "Not measured" for a failure the engine had already proved. Hiding a
+   * definitive failure behind "you have not configured this yet" is the same class of defect as #75
+   * itself, pointing the other way.
+   *
+   * The cost is that serving is now evaluated at the default concurrency of 1, which the note on
+   * `servingTtft` above was written to avoid. That saving is not available any more: whether the
+   * question was asked cannot be answered without taking the measurement. `evaluateOnce` memoises,
+   * so it is one placement and two estimates added to a render that already runs six archetypes.
    */
-  const servingNotTried = fits('serving') && usage.concurrency < BARS.serving.tight.users;
+  const servingNotTried =
+    fits('serving') &&
+    usage.concurrency < BARS.serving.tight.users &&
+    rateOf('serving') >= BARS.serving.tight.rate &&
+    servingTtft() <= BARS.serving.tight.ttft;
 
   const ragPrefill = at('rag').prefill;
   const ragFits = fits('rag');
@@ -868,10 +894,10 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
         servingTtft() <= BARS.serving.tight.ttft,
       why: () =>
         !fits('serving')
-          ? // `user`/`users` rather than a bare plural, because this is the one shortfall sentence
-            // reachable at a single user: it is precisely the branch that runs *instead* of the
-            // ungraded one, since `servingNotTried` requires the fit. It read "a turn each for
-            // 1 users".
+          ? // `user`/`users` rather than a bare plural. This was "the one shortfall sentence
+            // reachable at a single user" until #94 — the two below are reachable there now, and
+            // they have a branch of their own for it, because the plural phrasing that suits four
+            // users misdescribes one. It read "a turn each for 1 users".
             shortfall(
               'serving',
               `a turn each for ${usage.concurrency} ${usage.concurrency === 1 ? 'user' : 'users'}`
@@ -883,34 +909,44 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
               // none — but it has to say so, because read on its own it is indistinguishable from
               // advice attached to a failure.
               `Not measured at ${usage.concurrency} ${usage.concurrency === 1 ? 'user' : 'users'} — set concurrency above ${BARS.serving.tight.users - 1} to see whether this holds several.`
-            : rateOf('serving') < BARS.serving.tight.rate
-              ? `${fmt(rateOf('serving'))} tok/s each once ${usage.concurrency} users share the device.`
-              : servingTtft() > BARS.serving.tight.ttft
-                ? `${secs(servingTtft())}s before anyone sees a token — ${usage.concurrency} prompts have to be read first, and prefill does not batch the way decode does.`
-                : // Four good-tier bars now, through the same builder as the other tiers rather
-                  // than the nested ternaries this used to hand-write. Those covered two causes in
-                  // three branches and could not have absorbed a fourth: spill had a branch of its
-                  // own above, which is why a spilling row never mentioned the user count, and the
-                  // pair that did name both had to re-state the rate in each. This is the file's
-                  // own lesson about hand-written copies of one sentence, applied to the tier that
-                  // still had them.
-                  (shortOfGood(
-                    // No internal "and", and no internal comma: `shortOfGood` joins its items with
-                    // commas and a final "and", so a bar carrying either of its own leaves the
-                    // reader unable to see where one item stops. Three of these can be live at
-                    // once.
-                    usage.concurrency < BARS.serving.good.users &&
-                      `it is measuring ${usage.concurrency} users against the ${BARS.serving.good.users} concurrent users a serving deployment is graded from`,
-                    rateOf('serving') < BARS.serving.good.rate &&
-                      `${fmt(rateOf('serving'))} tok/s each is under the ${BARS.serving.good.rate} tok/s a served user expects`,
-                    // Spill can hold serving back while every printed figure looks healthy: the
-                    // rate is fine, the fit is fine, and the reason said so.
-                    headroomOf('serving') <= 0 &&
-                      'the weights are spilling to host RAM so every additional user makes that worse rather than simply not fitting',
-                    servingTtft() > BARS.serving.good.ttft &&
-                      `${secs(servingTtft())}s to first token across ${usage.concurrency} queued prompts is longer than a served user waits`
-                  ) ??
-                  `${usage.concurrency} users at ${fmt(rateOf('serving'))} tok/s each, ${fmt(at('serving').decode.aggregateTokensPerSec)} aggregate, ${secs(servingTtft())}s to first token.`),
+            : usage.concurrency < BARS.serving.tight.users
+              ? // Below the tier's own user count and *not* ungraded, which since #94 means one
+                // thing: the single-user measurement already missed a tight bar, and no number of
+                // users recovers it. So the sentence says which bar, at what the machine actually
+                // did, and why adding users is the wrong direction — rather than borrowing the
+                // plural copy below, which would read "0.6 tok/s each once 1 users share the
+                // device" and describe a shared deployment that is not what was measured.
+                rateOf('serving') < BARS.serving.tight.rate
+                ? `${fmt(rateOf('serving'))} tok/s for a single served turn, under the ${BARS.serving.tight.rate} tok/s a shared deployment needs — every user added divides it further.`
+                : `${secs(servingTtft())}s to a first token for one prompt, past the ${BARS.serving.tight.ttft}s bar — and each prompt added is read on top of it.`
+              : rateOf('serving') < BARS.serving.tight.rate
+                ? `${fmt(rateOf('serving'))} tok/s each once ${usage.concurrency} users share the device.`
+                : servingTtft() > BARS.serving.tight.ttft
+                  ? `${secs(servingTtft())}s before anyone sees a token — ${usage.concurrency} prompts have to be read first, and prefill does not batch the way decode does.`
+                  : // Four good-tier bars now, through the same builder as the other tiers rather
+                    // than the nested ternaries this used to hand-write. Those covered two causes in
+                    // three branches and could not have absorbed a fourth: spill had a branch of its
+                    // own above, which is why a spilling row never mentioned the user count, and the
+                    // pair that did name both had to re-state the rate in each. This is the file's
+                    // own lesson about hand-written copies of one sentence, applied to the tier that
+                    // still had them.
+                    (shortOfGood(
+                      // No internal "and", and no internal comma: `shortOfGood` joins its items with
+                      // commas and a final "and", so a bar carrying either of its own leaves the
+                      // reader unable to see where one item stops. Three of these can be live at
+                      // once.
+                      usage.concurrency < BARS.serving.good.users &&
+                        `it is measuring ${usage.concurrency} users against the ${BARS.serving.good.users} concurrent users a serving deployment is graded from`,
+                      rateOf('serving') < BARS.serving.good.rate &&
+                        `${fmt(rateOf('serving'))} tok/s each is under the ${BARS.serving.good.rate} tok/s a served user expects`,
+                      // Spill can hold serving back while every printed figure looks healthy: the
+                      // rate is fine, the fit is fine, and the reason said so.
+                      headroomOf('serving') <= 0 &&
+                        'the weights are spilling to host RAM so every additional user makes that worse rather than simply not fitting',
+                      servingTtft() > BARS.serving.good.ttft &&
+                        `${secs(servingTtft())}s to first token across ${usage.concurrency} queued prompts is longer than a served user waits`
+                    ) ??
+                    `${usage.concurrency} users at ${fmt(rateOf('serving'))} tok/s each, ${fmt(at('serving').decode.aggregateTokensPerSec)} aggregate, ${secs(servingTtft())}s to first token.`),
     }),
   ];
 }
