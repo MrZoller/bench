@@ -151,16 +151,21 @@ describe('the catalog covers the hardware the audience owns', () => {
    * nothing to select: AMD appeared only as datacenter Instinct parts and Intel not at all.
    */
   it('offers a consumer card from all three GPU vendors', () => {
-    const consumer = priced.filter((d) => d.msrpUsd! <= 1000);
-    expect(new Set(consumer.map((d) => d.vendor))).toEqual(new Set(['NVIDIA', 'AMD', 'Intel']));
+    // Containment rather than set equality: the claim is that each of the three is *present* in
+    // this tier, and a fourth vendor arriving is not a reason for this to fail.
+    const consumer = new Set(priced.filter((d) => d.msrpUsd! <= 1000).map((d) => d.vendor));
+    for (const vendor of ['NVIDIA', 'AMD', 'Intel']) {
+      expect(consumer, `no ${vendor} card at or under $1000`).toContain(vendor);
+    }
   });
 
   it('catalogues Intel in both classes it competes in', () => {
-    const intel = DEVICES.filter((d) => d.vendor === 'Intel');
     // `DEVICE_CLASSES` and the runtimes' `supports` checks never had an Intel problem — the rows
     // simply were not written. Xeon 6 with MRDIMM is the other half of the CPU inference story,
     // and without it `cpu-ram` read as an AMD-only technique.
-    expect(new Set(intel.map((d) => d.class))).toEqual(new Set(['discrete-gpu', 'cpu-ram']));
+    const classes = new Set(DEVICES.filter((d) => d.vendor === 'Intel').map((d) => d.class));
+    expect(classes).toContain('discrete-gpu');
+    expect(classes).toContain('cpu-ram');
   });
 
   it('does not make CPU inference look like an AMD technique', () => {
