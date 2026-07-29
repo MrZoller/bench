@@ -54,8 +54,13 @@ export const RUNTIMES: readonly RuntimeSpec[] = [
     nativeLowPrecision: true,
     // Reserves a fixed fraction of the device up front regardless of what the model needs.
     preallocFraction: 0.9,
-    // Discrete accelerators from either vendor, plus NVIDIA's unified-memory Spark, which is a
-    // CUDA target with an official playbook. Not Apple or AMD unified memory.
+    // Discrete accelerators from any of the three GPU vendors — CUDA, ROCm and the XPU backend —
+    // plus NVIDIA's unified-memory Spark, which is a CUDA target with an official playbook. Not
+    // Apple or AMD unified memory. The sentence here read "either vendor" until #78 catalogued Intel
+    // Arc, which the class rule below has admitted all along: `{ class: 'discrete-gpu' }` names no
+    // vendor, so the rule was already right and only the description of it was stale. What the shape
+    // cannot carry is how mature each backend is, and that is deliberate — the same coarseness the
+    // MLX entry documents, in the other direction.
     supports: [{ class: 'discrete-gpu' }, { class: 'unified-soc', vendor: 'NVIDIA' }],
     // Tensor-parallel by default: every layer sharded across every rank.
     parallelism: 'tensor',

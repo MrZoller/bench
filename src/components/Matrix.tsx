@@ -8,7 +8,7 @@ import {
 } from '@/engine/matrix';
 import { DEVICES, MODELS, getDevice, getModel } from '@/data/catalog';
 import { getQuant } from '@/data/quants';
-import { getRuntime, kvSubstitutionFor, substitutionFor } from '@/data/runtimes';
+import { getRuntime, kvSubstitutionFor, runtimeDrives, substitutionFor } from '@/data/runtimes';
 import { FALLBACK_QUANT_ID, quantApplies } from '@/lib/quantChoice';
 import { magnitudeFill, magnitudeRamp } from '@/design/tokens';
 import { MEASURES, kvLabel } from '@/lib/stops';
@@ -53,6 +53,8 @@ export const DETAIL_ANCHOR_ID = 'bench-detail';
 
 export function Matrix({ config }: { config: Config }) {
   const headingId = useId();
+  /** The measure switch's own description — see the `fieldset` below. */
+  const measureHintId = useId();
   const [measure, setMeasure] = useState<MatrixMeasure>('fit');
   const set = useConfig((s) => s.set);
 
@@ -79,6 +81,53 @@ export function Matrix({ config }: { config: Config }) {
   // Shipping hardware only: a rumoured row would put speculative specs into a comparison people
   // read as a shortlist, and `status` exists precisely so that never happens silently.
   const devices = useMemo(() => DEVICES.filter((d) => d.status === 'shipping'), []);
+
+  /**
+   * The columns this runtime cannot drive at all — one fact about the scenario, not 17 findings.
+   *
+   * Select vLLM and every Mac, every Strix Halo and every CPU host empties out completely — 10 of
+   * the 24 shipping columns as the catalog stands at this commit — and every cell in them used to be
+   * drawn exactly like a cell that *was* measured and did not fit: `transparent` behind a dashed
+   * border, keyed "will not run". A uniformly empty column is the pattern that reads as a confident
+   * result, so the picture said "this hardware cannot hold the model" where the truth is "this
+   * software does not run here" — and the two need opposite advice. A 256 GB Mac Studio holds
+   * Qwen3 8B many times over; the fix a reader would derive from the old picture (buy more memory)
+   * is not the fix (change runtime). Every other surface already split them: the Envelope has a
+   * separate `unsupported` state with its own sentence, Telemetry says `Unsupported` rather than
+   * `Will not run`, and BudgetBar refuses to draw a stack at all. This was the one that collapsed
+   * them, on the surface people read as a shortlist (#72).
+   *
+   * **From `runtimeDrives`, not from "every cell in this column is empty".** At #72's own URL the
+   * two happen to agree — the columns with no runnable cell there are exactly these 10, since the
+   * DGX Spark still runs 11 of its 17 rows — and that coincidence is precisely what makes deriving
+   * the mark from emptiness look safe. It is one slider from wrong. Take that same vLLM grid to 32
+   * concurrent users and the RTX 3090, 4090 and 5080 columns empty out as well, all 17 cells apiece
+   * refused on counted bytes, and vLLM drives all three perfectly well. Striking those headings
+   * would be exactly the misattribution being fixed, only pointed the other way. Model-independent
+   * by construction, which is why it is a set of device ids rather than a scan of the grid: "at any
+   * size" is the claim, and it is true of the column before any row is scored.
+   *
+   * **What agrees with what, and what does not.** `planPlacement` turns a cell away on five
+   * categorical grounds, and only two of them are facts about a *column*: this one, and "this device
+   * has no interconnect, so a model cannot be split across N of them". The other three — a cache
+   * precision the runtime cannot store, a weight format it cannot load, a format needing silicon the
+   * device lacks — vary with the scenario or with the row, so a column heading is the wrong place to
+   * state them. The second column-wide ground is unreachable from here because this grid scores
+   * every cell at one device (said in the header above), which leaves this the only reason a column
+   * can close today. So the cells' ink and the heading's mark are deliberately *not* the same
+   * predicate: the ink asks `evaluated` — was this judged on its numbers — which is the broader
+   * question, and the heading asks the narrower one it has wording for.
+   *
+   * `App.test.tsx` pins the gap shut rather than trusting it, and pins it as an exhaustive claim
+   * rather than an example: no cell anywhere may be refused before the arithmetic unless its column
+   * is struck. The day a device count is threaded through here, or a runtime is handed a format the
+   * catalog can offer it, that assertion fails — instead of quietly producing 17 unexplained holes,
+   * which is the failure this whole block exists to prevent.
+   */
+  const undrivable = useMemo(
+    () => new Set(devices.filter((d) => !runtimeDrives(runtime, d)).map((d) => d.id)),
+    [devices, runtime]
+  );
 
   /**
    * The selected format where it applies, and a universal one where it does not.
@@ -385,8 +434,15 @@ export function Matrix({ config }: { config: Config }) {
         </p>
       </header>
 
-      {/* One filter row above the grid, as the dataviz guidance puts it. */}
-      <fieldset className="mt-4">
+      {/* One filter row above the grid, as the dataviz guidance puts it.
+
+          `aria-describedby` on the group, not merely a paragraph under it: the hint below says what
+          the selected measure *is*, and until it was wired up a screen-reader user entering this
+          group heard "Colour the grid by, Does it fit, pressed" and nothing about headroom — the
+          same gap the five Usage controls had, in the one place on the page that already had the
+          sentence written (#80). Once per group rather than once per button, so switching measures
+          does not re-read it three times. */}
+      <fieldset className="mt-4" aria-describedby={measureHintId}>
         <legend className="sr-only">Colour the grid by</legend>
         <div className="flex flex-wrap gap-1 rounded-md border border-[var(--color-control-border)] bg-[var(--color-surface-raised)] p-1">
           {MEASURES.map((m) => (
@@ -405,7 +461,7 @@ export function Matrix({ config }: { config: Config }) {
             </button>
           ))}
         </div>
-        <p className="mt-1.5 text-xs text-[var(--color-text-muted)]">
+        <p id={measureHintId} className="mt-1.5 text-xs text-[var(--color-text-muted)]">
           {MEASURES.find((m) => m.value === measure)?.hint} Switching between these rearranges which
           hardware looks good — that disagreement is the whole point.
         </p>
@@ -419,9 +475,19 @@ export function Matrix({ config }: { config: Config }) {
           <caption className="sr-only">
             Every catalogued model against every shipping device, coloured by{' '}
             {MEASURES.find((m) => m.value === measure)?.label}. {runnable} of {cells.flat().length}{' '}
-            combinations run. This grid is a single tab stop: use the arrow keys to move between
-            cells, Home and End for the ends of a row, and Control with Home or End for the ends of
-            the grid.
+            combinations run.
+            {/* The same fact the struck headings and the legend carry, in the channel that has
+                neither. This caption is the grid's only summary for a reader who cannot see it, and
+                at #72's own URL it read "232 of 408 combinations run" with no further explanation —
+                the collapsed reading the issue is about, said in the one place where the
+                strike-through, the empty columns and the legend key are all invisible. (232, not the
+                235 the same grid shows at Q4_K_M: the store coerces that selection to BF16 under
+                vLLM, since vLLM does not read GGUF K-quants.) Stated only when the grid is in that
+                state, the same rule the legend below follows. */}
+            {undrivable.size > 0 &&
+              ` ${undrivable.size} of the ${devices.length} device columns are hardware ${runtime.label} does not support at any size, struck through in the header: their cells are empty because of the runtime, not for want of memory.`}{' '}
+            This grid is a single tab stop: use the arrow keys to move between cells, Home and End
+            for the ends of a row, and Control with Home or End for the ends of the grid.
           </caption>
           <thead>
             <tr>
@@ -456,6 +522,26 @@ export function Matrix({ config }: { config: Config }) {
                   // of its neighbours and skewed the whole grid.
                   className="relative w-7 min-w-7 p-0 align-bottom font-normal text-[var(--color-text-faint)] [@media(pointer:coarse)]:w-11 [@media(pointer:coarse)]:min-w-11"
                   style={{ height: headerBand.height }}
+                  /**
+                   * The runtime refusal, for a reader who is hearing this column rather than seeing
+                   * it struck — an `aria-label` on the `th` itself, so it is announced once as the
+                   * column's own name instead of appearing as a second child element.
+                   *
+                   * It keeps the device name, because the label beside it is deliberately shortened
+                   * and the header's job is still to say which machine this is; a name that stated
+                   * only the runtime would trade one missing fact for another.
+                   *
+                   * Deliberately *not* a `title`. Part of what #72 is about is that the distinction
+                   * already existed in a native tooltip, one cell at a time, on a surface whose
+                   * whole point is scanning — so a second tooltip would be the same mistake with a
+                   * new subject. The strike-through is the channel a sighted reader gets, keyed in
+                   * the legend below; this is the channel a screen reader gets.
+                   */
+                  aria-label={
+                    undrivable.has(device.id)
+                      ? `${device.name} — ${runtime.label} does not support this hardware, at any size.`
+                      : undefined
+                  }
                 >
                   {/*
                       Rotated rather than truncated. Horizontally these clipped to "GeForc…" four
@@ -473,9 +559,19 @@ export function Matrix({ config }: { config: Config }) {
                       grid that fits its panel came to report 142px of overflow (#64). Leaning the
                       other way spends the same length over the model-name column, which is inside
                       the container and reserved for it above.
+
+                      Struck through where the runtime cannot drive the machine. Dimming was the
+                      other half of the suggestion in #72 and there is nothing left to dim with:
+                      these labels are already `--color-text-faint`, the faintest ink the palette
+                      has, so a second step down would be unreadable rather than recessive. A strike
+                      is a non-colour channel in any case, which is what this needs — the cells
+                      beneath it carry no ink at all now, and colour alone was never going to be the
+                      thing that says why.
                     */}
                   <span
-                    className="absolute right-1/2 bottom-1 origin-bottom-right rotate-45 whitespace-nowrap"
+                    className={`absolute right-1/2 bottom-1 origin-bottom-right rotate-45 whitespace-nowrap ${
+                      undrivable.has(device.id) ? 'line-through' : ''
+                    }`}
                     title={device.name}
                   >
                     {label}
@@ -518,8 +614,15 @@ export function Matrix({ config }: { config: Config }) {
                        */
                       onClick={() => {
                         // So the tab stop follows the reader: leaving the grid and coming back
-                        // returns to the cell they last used, not to the top-left corner.
+                        // returns to the cell they last used, not to the top-left corner. Done
+                        // before the guard below, because a closed cell is still where the keyboard
+                        // should resume from — it is inert, not absent.
                         setActive([r, c]);
+                        // A closed column has no scenario to load. Argued at `aria-disabled` below;
+                        // the short version is that adopting this pair sets the Bench to a
+                        // configuration it can only blank, several sections above where the click
+                        // happened, from a square with nothing drawn in it.
+                        if (undrivable.has(cell.deviceId)) return;
                         set('modelId', cell.modelId);
                         set('deviceId', cell.deviceId);
                         set('quantId', cell.quantId);
@@ -554,6 +657,34 @@ export function Matrix({ config }: { config: Config }) {
                       title={tooltip(cell, measure, quant.id, config.deviceCount)}
                       aria-label={tooltip(cell, measure, quant.id, config.deviceCount)}
                       aria-current={isCurrent(cell) ? 'true' : undefined}
+                      /**
+                       * A square with nothing drawn in it is not a control.
+                       *
+                       * Narrowing the dashed border to `evaluated` (argued in the class list below)
+                       * leaves a closed column's cells with no ink whatsoever — `fill` already
+                       * returns `transparent` for anything that does not run — so on today's
+                       * catalog vLLM produced 170 enabled 28px buttons a reader cannot see, each
+                       * one in the arrow-key sequence and each one silently adopting a scenario
+                       * several sections above that the Bench can only blank.
+                       *
+                       * Restoring a hairline would not have answered it. `tokens.ts` states the
+                       * rule: "a control's boundary is what identifies it as interactive, so it
+                       * needs the 3:1 non-text minimum *before* it is focused" — and it records
+                       * `--color-border` at 1.18:1 on the raised fill, which is why that token is
+                       * the panel edge and `--color-control-border` exists separately at 3.41:1.
+                       * At that contrast there is no ink here that both reads as "closed" and stays
+                       * clear of "measured and over the ceiling", so the honest channel is state
+                       * rather than ink — and it is the channel the rest of the app already uses on
+                       * an unsupported pairing: BudgetBar draws no stack, the Bench blanks its
+                       * tiles.
+                       *
+                       * `aria-disabled` rather than `disabled`, because a disabled button takes no
+                       * focus: the arrow keys would stop dead at a struck column and a screen
+                       * reader would lose the per-cell sentence, which is the one channel that says
+                       * *which* machine and *which* runtime. Focusable, hoverable, announced
+                       * unavailable, and inert.
+                       */
+                      aria-disabled={undrivable.has(cell.deviceId) ? 'true' : undefined}
                       // 28px squares two pixels apart are under the 44px `marks.hitTarget` this
                       // repo declares, and with hundreds of neighbours a touch user loading the
                       // wrong scenario is the likely outcome rather than the unlucky one. Coarse
@@ -605,8 +736,26 @@ export function Matrix({ config }: { config: Config }) {
                       // instead of 1px. (Utility names are spelled out only in the class list below:
                       // Tailwind scans comments too, and a bracketed example in prose compiles to a
                       // rule of dead CSS.)
+                      //
+                      // **The dashed border keys one refusal, not both** (#72). `cell.runs` was the
+                      // condition, so a pair the runtime cannot load at all wore the same swatch as
+                      // a pair whose bytes were counted and came up short — byte-identical markup
+                      // for two states that need opposite advice, repeated down a whole column until
+                      // it read as a finding about the machine. `evaluated` is the question the
+                      // border actually answers: was this judged on its numbers. A cell refused on a
+                      // categorical ground was not, so it gets no ink at all, and the struck column
+                      // heading above says why once instead of 17 times. That also makes the
+                      // "will not run" key below true of exactly the cells that wear it.
+                      //
+                      // The cursor is the pointer's half of the `aria-disabled` above — the one
+                      // channel a mouse user gets before they click, on a square that has no
+                      // boundary to look at.
                       className={`h-7 w-full rounded-sm focus:ring-2 focus:ring-[var(--color-accent)] focus:outline-none [@media(pointer:coarse)]:h-11 ${
-                        cell.runs ? '' : 'border border-dashed border-[var(--color-border)]'
+                        undrivable.has(cell.deviceId) ? 'cursor-not-allowed' : ''
+                      } ${
+                        !cell.runs && cell.evaluated
+                          ? 'border border-dashed border-[var(--color-border)]'
+                          : ''
                       } ${cell.raiseCeilingWouldHelp ? 'border-[var(--color-warning)]' : ''} ${
                         isCurrent(cell)
                           ? 'inset-ring-2 inset-ring-[var(--color-accent)] shadow-[inset_0_0_0_3px_var(--color-surface)]'
@@ -623,7 +772,8 @@ export function Matrix({ config }: { config: Config }) {
       </div>
 
       {/* A ramp legend, since a continuous scale has no discrete keys to list.
-          `flex-wrap`, because two of the four entries are prose and the row does not fit a phone.
+          `flex-wrap`, because several of the seven entries are whole sentences and the row does not
+          fit a phone.
           Unlike the grid above it this div has no scroll container of its own, so a row that
           overran did not scroll itself — it scrolled the page. At 320px the legend measured 299px
           inside a 246px box and took the document to 336/320. Issue #34; guarded by
@@ -660,6 +810,30 @@ export function Matrix({ config }: { config: Config }) {
           />
           will not run
         </span>
+        {/* The other refusal — the one the swatch above used to absorb (#72).
+            A state the grid is really in gets a line, and only when it is in it: the same rule the
+            four conditional keys below follow, and the reason this cannot simply be listed
+            unconditionally beside "will not run". Under llama.cpp there is no undrivable column and
+            no strike on any heading, so a key for one would explain a mark that appears nowhere.
+
+            The sample *is* the mark rather than a swatch beside it, which is the only honest key for
+            a text treatment — and it is not `aria-hidden` like the swatches are, because struck text
+            has no swatch to hide: hidden, the sentence would start mid-clause, and read out, it
+            names the thing a screen reader cannot see. The `th`'s own `aria-label` is the other end
+            of that channel.
+
+            Wording borrowed verbatim from `Envelope.tsx`'s `unsupported` hint, with the runtime
+            named because this grid spans hardware the Envelope's does not. That sentence has already
+            been through review as the counterpart to "will not run"; writing a fourth version of it
+            here is how the two surfaces would come to disagree about the same refusal. */}
+        {undrivable.size > 0 && (
+          <span>
+            <span className="text-[var(--color-text-faint)] line-through">
+              a struck column heading
+            </span>{' '}
+            — {runtime.label} does not support this hardware, at any size
+          </span>
+        )}
         {/* The selection ring, which had no key — the third mark in this app drawn on top of a fill
             with nothing on the page naming it (#73; the budget bar's ceiling rule and the Envelope's
             ring were the other two). `aria-current` names it for a screen reader and the accent hue
