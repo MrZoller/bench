@@ -116,12 +116,32 @@ async function statusWords(page: Page) {
  */
 const WIDE_FONT = "'Courier New', monospace";
 
-/** Whether the stress font actually widened anything, rather than falling back to the host's sans. */
+/**
+ * Whether the stress font actually widened anything, rather than falling back to the host's sans.
+ *
+ * **The probe string is chosen for discrimination, not for relevance, and picking a status word cost
+ * a red CI run.** This measured `'Not measured'` first — the status word the test is about, which
+ * reads like the right choice. A short string with wide lowercase letters (`m`, `u`, `r`) is where a
+ * proportional sans and a monospace agree most, so the ratio it reports is the smallest one
+ * available: 1.191 on macOS, and **1.019 on the Linux runner**, under a 1.05 floor. The precondition
+ * fired and refused to measure, which is exactly its job — but it failed the build for the font
+ * rather than for the layout.
+ *
+ * That failure is worth keeping as a number: Courier New is metric-aliased on both platforms, so the
+ * two ratios differ only by the *host* sans, and 1.191/1.019 puts the runner's default about **17%
+ * wider than SF**. That is the same gap `reflow.spec.ts` records as having shipped a green-here,
+ * red-there result once.
+ *
+ * So this uses the string `reflow.spec.ts` probes with, which is long and full of letters a
+ * proportional font narrows hard (`i`, `l`, `n`, `t`, `e`): 1.368 on macOS, so ~1.17 through the same
+ * factor — a real margin rather than a coin flip. It is also one of this app's own workload labels,
+ * which is why it reads as a strip string rather than an arbitrary one.
+ */
 async function stressFontRatio(page: Page) {
   const probe = () =>
     page.evaluate(() => {
       const span = document.createElement('span');
-      span.textContent = 'Not measured';
+      span.textContent = 'Inline code completion';
       span.style.cssText =
         'position:absolute;white-space:nowrap;visibility:hidden;font-size:32px;font-family:var(--font-sans)';
       document.body.append(span);
