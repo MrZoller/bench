@@ -407,8 +407,21 @@ describe('every mark drawn over another is named in a legend', () => {
 
     const key = within(envelope()).getByText('You are here').closest('li');
     expect(key).not.toBeNull();
-    // In the legend itself, beside the state keys, rather than as a caption of its own somewhere.
-    expect(key?.parentElement).toBe(within(envelope()).getByText('Comfortable').closest('ul'));
+    /*
+     * In the legend itself, beside the other keys, rather than as a caption of its own somewhere.
+     * Anchored on the ramp's key rather than on a state's since #65: the field is coloured by a
+     * magnitude now, so the ramp is what the neighbouring *keys* key, and "Comfortable" is a line of
+     * prose in the same list rather than a swatch.
+     *
+     * On the ramp key's own clause rather than on either end label, because the ends are per-measure
+     * ("less room", "slower", "quicker to start") and this test is about where a key sits, not about
+     * which measure is in force.
+     */
+    expect(key?.parentElement).toBe(
+      within(envelope())
+        .getByText(/graded against the others on this grid/)
+        .closest('ul')
+    );
   });
 
   /**
@@ -614,6 +627,112 @@ describe('the workload strip keeps up with the scenario', () => {
       expect(row.className, 'the row template leaks past sm').toMatch(
         /max-sm:grid-cols-\[auto_1fr\]/
       );
+    }
+  });
+
+  // The count's noun is its own text node, so it is what a text query can reach — the numerals sit
+  // in the nested `whitespace-nowrap` span `PanelCount` wraps them in. "workloads" plural also
+  // distinguishes it from the disclosure button's "what each workload means".
+  const headline = () =>
+    within(strip())
+      .getByText(/workloads/)
+      .textContent!.replace(/\s+/g, ' ')
+      .trim();
+
+  /**
+   * The headline counts what was graded, on both sides of the fraction (#75).
+   *
+   * This is the number the panel is read by, and at the setting every visitor arrives on it was
+   * wrong: multi-user serving is not measured at one concurrent user, and `usable` subtracted the
+   * ungraded row exactly as it subtracted a failing one. gpt-oss-120b on a Spark read "5 of 7
+   * workloads" while the seventh row said, in critical red, that the reader should move a slider.
+   *
+   * Asserted here rather than in the engine suite because the count is this component's arithmetic —
+   * `judgeWorkloads` returns seven verdicts either way. The pinned pair is the issue's own
+   * measurement of the default scenario; the row count beside it is what says the denominator moved
+   * for the stated reason rather than because the engine regraded something.
+   */
+  it('leaves an ungraded workload out of both sides of the headline', () => {
+    render(<App />);
+
+    const ungraded = rows().filter((text) => text.includes('Not measured'));
+    const serving = rows().find((text) => text.includes('Multi-user serving'))!;
+
+    // The default scenario — gpt-oss-120b on a Spark at one user — has exactly one ungraded row.
+    expect(ungraded).toHaveLength(1);
+    expect(serving).toContain('Not measured');
+    // Neutral, not the strongest negative in the vocabulary: `fail` renders "No".
+    expect(serving).not.toMatch(/\bNo\b/);
+
+    /**
+     * **The denominator has to name itself while it is short of the list** (found in review on #94).
+     *
+     * Dropping the ungraded row from both sides is right — it is not evidence in either direction —
+     * but the fraction it leaves is read as a headline, and "5 of 6 workloads" beside seven visible
+     * rows claims the panel covered all of them. That is the same false implication the omission
+     * exists to prevent, arriving through the total instead of through the numerator. It is most
+     * visible one step from here: a rig that clears every graded bar renders "6 of 6", which reads as
+     * a clean sweep of a list whose seventh row says it was never measured.
+     */
+    expect(headline()).toBe('5 of 6 measured workloads');
+    expect(headline()).not.toMatch(/of 7 workloads/);
+    // The qualifier is what stops the fraction claiming coverage it does not have.
+    expect(headline()).not.toBe('5 of 6 workloads');
+  });
+
+  it('does not paint an ungraded row in the colour that means "will not run"', () => {
+    render(<App />);
+
+    const serving = within(strip())
+      .getAllByRole('listitem')
+      .find((li) => li.textContent?.includes('Multi-user serving'))!;
+    const status = serving.children[0] as HTMLElement;
+
+    // `--color-critical` is this panel's "No" and Telemetry's "Will not run". Wearing it for "you
+    // have not configured this yet" made the strongest negative in the vocabulary mean two things —
+    // and the row it sat next to, RAG at 31s to read a 32K document, means the other one. An
+    // ungraded row is not on that scale at all, so it takes recessive ink instead.
+    expect(status.textContent).toContain('Not measured');
+    expect(status.style.color).toBe('var(--color-text-faint)');
+    expect(status.style.color).not.toBe('var(--color-critical)');
+  });
+
+  it('counts every row again as soon as they are all graded', () => {
+    render(<App />);
+
+    // Two users is enough to put serving back on the scale, and nothing else can go ungraded — so
+    // the denominator returns to seven. The precondition for the case above: this asserts the
+    // denominator tracks the grading rather than simply being one smaller.
+    act(() => useConfig.getState().set('concurrency', 2));
+
+    expect(rows().filter((text) => text.includes('Not measured'))).toHaveLength(0);
+    expect(headline()).toMatch(/of 7 workloads$/);
+    // And the qualifier goes away with the shortfall: once the denominator is the whole list there
+    // is nothing to disclose, and "of 7 measured workloads" would imply some other total exists.
+    expect(headline()).not.toMatch(/measured/);
+  });
+
+  /**
+   * And the collapse for a configuration that cannot run must not lose the ungraded row's sentence.
+   *
+   * The strip says one shared reason above the list and blanks the rows' own — which is right when
+   * all seven say the same thing, and would delete the only sentence explaining an ungraded row. The
+   * refusal path grades all seven `fail`, so the two states cannot meet; this is the assertion that
+   * keeps it that way.
+   */
+  it('still collapses seven identical reasons into one when nothing runs', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // MLX is Apple-only; on an NVIDIA card nothing loads at all.
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+
+    expect(rows().filter((text) => text.includes('Not measured'))).toHaveLength(0);
+    expect(within(strip()).getByText(/does not run/i)).toBeInTheDocument();
+    // Every row keeps its status and gives up its reason to the sentence above the list.
+    for (const row of within(strip()).getAllByRole('listitem')) {
+      expect(row.children[2].textContent).toBe('');
     }
   });
 });
@@ -3792,9 +3911,17 @@ describe('the controls that drive every figure explain what they are', () => {
     const group = screen.getByRole('group', { name: /colour the grid by/i });
     expect(description(group)).toMatch(/headroom left/i);
 
-    // It tracks the selection, which is what makes it this group's description rather than a static
-    // caption: each measure means something different by a bright cell.
-    await user.click(screen.getByRole('button', { name: 'How fast' }));
+    /**
+     * It tracks the selection, which is what makes it this group's description rather than a static
+     * caption: each measure means something different by a bright cell.
+     *
+     * Scoped to the group since #65 gave the Envelope a measure control of its own, reading the same
+     * `MEASURES`. A page-wide `getByRole('button', { name: 'How fast' })` then finds two and throws —
+     * and the failure is a real one about the query rather than about either control, because "the
+     * grid" in this test's name is the Matrix and the Envelope's switch answers for a different
+     * picture. Both surfaces having the toggle is the point of sharing the vocabulary.
+     */
+    await user.click(within(group).getByRole('button', { name: 'How fast' }));
     expect(description(group)).toMatch(/tokens per second/i);
   });
 });

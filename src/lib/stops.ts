@@ -1,3 +1,4 @@
+import type { Measure } from '@/engine/measure';
 import type { KvPrecision, RuntimeSpec } from '@/engine/types';
 // The scenario *shape*, not the store: `scenario.ts` deliberately depends on nothing but engine
 // types so that everything needing the shape can have it without a cycle. Type-only, so it erases.
@@ -60,6 +61,119 @@ export const SETTING_LABELS = {
   kvPrecision: 'KV precision',
   deviceCount: 'Device count',
 } as const satisfies Record<keyof Config, string>;
+
+/**
+ * What each measure is called, wherever a grid offers to colour itself by one.
+ *
+ * Both grids offer the same three — the Matrix over model × device, the Envelope over context ×
+ * concurrent users since #65 — and they are the same three questions, so they are named once.
+ * `KV_PRECISIONS` above is here for exactly the same reason: the options a control offers are
+ * vocabulary, and a second hand-written copy is how two surfaces come to call one thing two things.
+ *
+ * `hint` is derived from `paints` rather than written beside it, because the two are the same
+ * sentence in two registers: the toggle's caption states it as a heading would, and the picture's
+ * `aria-label` needs it as a clause ("Coloured by tokens per second for one user"). Written twice,
+ * a reworded caption leaves the screen-reader description describing the old colouring.
+ *
+ * **`ends` names what the two extremes of a ramp *are*, and deliberately not whether they are good.**
+ * A ramp whose domain is the grid's own span cannot label its dark end "worse": on gpt-oss-20b at
+ * llama.cpp/MXFP4 against an EPYC 9755 every one of the Envelope's 56 cells runs, the `fit` domain is
+ * headroom 0.726 to 0.991, and the darkest step — the one `tokens.ts` calls "the one that recedes
+ * into the panel" — lands on the 128K x 128-user corner, which still has 72.6% of a 1,450 GiB ceiling
+ * free. "Worse" there is a claim about the machine; "less room" is a claim about the ramp, which is
+ * all a rank-relative scale is entitled to say. Comparatives rather than superlatives for the same
+ * reason.
+ *
+ * Per measure rather than one generic pair, because one of the three is inverted. `measureOf`
+ * returns `1 / ttftSeconds` so that larger is better throughout, which makes a generic "least → most"
+ * label read backwards against the caption beside it ("time until the first token appears"): a reader
+ * would take the dark end for the *quick* one. The direction has to be spelled in the measure's own
+ * units.
+ *
+ * The Matrix's ramp still says worse/better, and that is not drift: its domain is floored at zero
+ * over a grid spanning a desktop CPU to a B200, so a dark cell there really is near the bottom of
+ * what any hardware on the page achieves and a verdict word is a claim it can make. See the `fill`
+ * comment in `Matrix.tsx` and `magnitudeFill` in `tokens.ts` for the two domains and why they differ.
+ *
+ * **The entries keep their literal types, so exhaustiveness can be checked below.**
+ *
+ * `satisfies` rather than a type annotation, and that distinction is the whole point (found in
+ * review). Annotating the array `readonly { value: Measure; … }[]` widens each `value` to `Measure`,
+ * so `(typeof MEASURES)[number]['value']` *is* `Measure` however few arms are listed — the check the
+ * docblock on `measureVocabulary` claimed to be relying on could not fail. `satisfies` validates the
+ * same shape while leaving `'fit' | 'decode' | 'ttft'` intact for `UncoveredMeasure` to subtract.
+ */
+const MEASURE_ENTRIES = [
+  {
+    value: 'fit',
+    label: 'Does it fit',
+    paints: 'headroom left after weights, cache and overhead',
+    ends: ['less room', 'more room'],
+  },
+  {
+    value: 'decode',
+    label: 'How fast',
+    paints: 'tokens per second for one user',
+    ends: ['slower', 'faster'],
+  },
+  {
+    value: 'ttft',
+    label: 'How responsive',
+    paints: 'time until the first token appears',
+    ends: ['slower to start', 'quicker to start'],
+  },
+] as const satisfies readonly {
+  value: Measure;
+  label: string;
+  paints: string;
+  ends: readonly [string, string];
+}[];
+
+/**
+ * Any `Measure` with no entry above — and the assertion that there is none.
+ *
+ * `AssertNever` fails to compile when its argument is inhabited, so adding an arm to `Measure` in the
+ * engine breaks *here*, naming the measure that has no control. Without it the omission was silent in
+ * both directions a reader would check: these grids would render one fewer button, and
+ * `measureVocabulary` would fall back to the fit vocabulary for the new arm — labelling a decode ramp
+ * "less room / more room" rather than failing.
+ *
+ * This is the claim `SETTING_LABELS` makes with `satisfies Record<keyof Config, string>` one screen
+ * up. It cannot be made that way here, because the order of these entries is the order of the control
+ * and a `Record` does not carry one.
+ */
+type AssertNever<T extends never> = T;
+type UncoveredMeasure = Exclude<Measure, (typeof MEASURE_ENTRIES)[number]['value']>;
+export type _EveryMeasureHasAnEntry = AssertNever<UncoveredMeasure>;
+
+export const MEASURES: readonly {
+  value: Measure;
+  label: string;
+  paints: string;
+  hint: string;
+  ends: readonly [string, string];
+}[] = MEASURE_ENTRIES.map((m) => ({
+  ...m,
+  hint: `${m.paints[0].toUpperCase()}${m.paints.slice(1)}.`,
+}));
+
+/**
+ * Everything a surface says about the measure in force, in one lookup.
+ *
+ * The Envelope names the same colouring in four places — the caption under the toggle, the ramp key's
+ * two ends, its trailing clause and the canvas `aria-label` — and a per-place `MEASURES.find(...)?.x`
+ * makes each of them independently optional for a value that cannot be missing. Total by
+ * construction: `Measure` is a closed union and `_EveryMeasureHasAnEntry` above fails to compile if
+ * an arm has no entry, so the fallback is unreachable. Unreachable rather than asserted, because a
+ * non-null assertion would go on surviving if that check were ever loosened.
+ *
+ * This docblock previously credited "the annotation on `MEASURES`" with that guarantee, which it
+ * never had: annotating the array widened every `value` to `Measure`, so the coverage test was
+ * comparing `Measure` against itself and could not fail. The check is real now; the sentence was not.
+ */
+export function measureVocabulary(measure: Measure): (typeof MEASURES)[number] {
+  return MEASURES.find((m) => m.value === measure) ?? MEASURES[0];
+}
 
 /**
  * What each setting *means*, in one sentence, for the controls that have to say it themselves.
