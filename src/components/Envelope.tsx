@@ -8,7 +8,7 @@ import {
 import { getDevice, getModel } from '@/data/catalog';
 import { getQuant } from '@/data/quants';
 import { getRuntime } from '@/data/runtimes';
-import { CONCURRENCY_STOPS, USAGE_LABELS, contextStopsFor, withStored } from '@/lib/stops';
+import { CONCURRENCY_STOPS, SETTING_LABELS, contextStopsFor, withStored } from '@/lib/stops';
 import { colors, marks, withAlpha } from '@/design/tokens';
 import {
   CAPACITY_TIGHT,
@@ -258,11 +258,15 @@ export function Envelope({ config }: { config: Config }) {
       <header className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <h2 id={headingId} className="text-sm font-semibold tracking-wide">
           How much room is left
-          {/* The pair, in the words the controls and the axis titles use. This said "context
-              against concurrent users" while the sliders said "Context per sequence" and the table
-              below said "Users" — three names for two settings, in one panel. */}
+          {/* Prose, and deliberately *not* read from `SETTING_LABELS` — the rule recorded there.
+              This continues the heading as a sentence and is the section's `aria-labelledby`
+              target, so substituting the control names welds two capitalised labels into the
+              middle of it: "How much room is left Context per sequence against Concurrent users",
+              announced verbatim every time the landmark is. The axis titles, the caption and the
+              column header are the surfaces that *name* the settings, and those read the
+              constant. */}
           <span className="ml-2 font-normal text-[var(--color-text-faint)]">
-            {USAGE_LABELS.contextTokens} against {USAGE_LABELS.concurrency}
+            context against concurrent users
           </span>
         </h2>
         <PanelCount count={counts.comfortable ?? 0} total={total}>
@@ -274,11 +278,15 @@ export function Envelope({ config }: { config: Config }) {
         {/*
           The y title, stacked above the gutter rather than rotated beside it.
 
-          Rotating it would be the conventional choice and is wrong here specifically: this is the
-          one surface on the page with no width to spare — `MIN_COLUMN_REM` sets a per-column floor
-          and the plot already scrolls sideways inside its own box at 320px — so a rotated title
-          buys a label with plot columns. Stacked, it costs one line of vertical space, which this
-          panel has.
+          Rotating it is the conventional choice, and the cost is worth stating accurately because
+          the wrong figure is what a later session would inherit: a `writing-mode: vertical-rl`
+          title costs one line box of horizontal space — a fraction of one `MIN_COLUMN_REM` column
+          — and none of the plot's content width, only its scroll viewport. (A `rotate-90`
+          *transform* is the expensive one: transforms do not affect layout, so it reserves the
+          label's full unrotated length.) So this is a legibility call rather than a width one:
+          12px type turned on its side, on the surface whose whole complaint was that its meaning
+          rode on the least legible ink, and an arrow that has to read as up. Stacked it costs one
+          line of vertical space, which this panel has and the width it does not.
 
           The arrow is the point of it, not decoration. Rows are drawn bottom-up (see the paint
           effect below), which is correct for an axis and the opposite of every other list on this
@@ -291,7 +299,7 @@ export function Envelope({ config }: { config: Config }) {
           joined the accessible tree would have a screen reader hear the axes named twice.
         */}
         <p aria-hidden="true" className={`${AXIS_TITLE} leading-tight`}>
-          {USAGE_LABELS.concurrency} ↑
+          {SETTING_LABELS.concurrency} ↑
         </p>
 
         <div className="mt-1 flex gap-2">
@@ -354,7 +362,7 @@ export function Envelope({ config }: { config: Config }) {
               the scroller keeps clipping only the thing that is meant to scroll.
             */}
             <p aria-hidden="true" className={`mt-1 text-center ${AXIS_TITLE}`}>
-              {USAGE_LABELS.contextTokens}
+              {SETTING_LABELS.contextTokens}
             </p>
           </div>
         </div>
@@ -423,12 +431,12 @@ export function Envelope({ config }: { config: Config }) {
                 the sliders name, under two more spellings, on the surface that is the picture's
                 textual equivalent. */}
             <caption className="sr-only">
-              Feasibility by {USAGE_LABELS.contextTokens} and {USAGE_LABELS.concurrency}
+              Feasibility by {SETTING_LABELS.contextTokens} and {SETTING_LABELS.concurrency}
             </caption>
             <thead>
               <tr className="text-[var(--color-text-faint)]">
                 <th scope="col" className="py-1 pr-3 font-normal">
-                  {USAGE_LABELS.concurrency}
+                  {SETTING_LABELS.concurrency}
                 </th>
                 {grid.contexts.map((c, i) => (
                   <th key={c} scope="col" className="py-1 pr-3 text-right font-normal">

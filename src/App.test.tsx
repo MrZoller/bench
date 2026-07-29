@@ -6,7 +6,7 @@ import { useConfig, DEFAULT_CONFIG } from '@/store/config';
 import { configToShareSearch } from '@/store/url';
 import { getModel } from '@/data/catalog';
 import { tokens } from '@/lib/format';
-import { USAGE_LABELS } from '@/lib/stops';
+import { SETTING_LABELS } from '@/lib/stops';
 import { DETAIL_ANCHOR_ID } from '@/components/Matrix';
 import { judgeWorkloads } from '@/engine/verdict';
 import { kvSubstitutionFor } from '@/data/runtimes';
@@ -1441,7 +1441,7 @@ describe('the Matrix names the cache the runtime actually has', () => {
  * canvas's `aria-label` opens by naming both. The picture — the default representation — was the
  * one that did not say, and its y axis runs bottom-up, which was stated only in a source comment.
  *
- * Every assertion here reads `USAGE_LABELS` rather than a string literal, and that is the point of
+ * Every assertion here reads `SETTING_LABELS` rather than a string literal, and that is the point of
  * the test rather than a stylistic choice: what is being guarded is that an axis title and the
  * control that drives it cannot come apart. A test holding its own copy of the wording keeps
  * passing while the two surfaces drift, which is exactly the failure `kvLabel` was written for.
@@ -1454,17 +1454,18 @@ describe('the Envelope names both of its axes', () => {
 
     // The controls first, so the constant is anchored to something a user can actually operate
     // rather than asserted against itself.
-    expect(screen.getByLabelText(USAGE_LABELS.contextTokens)).toHaveAttribute('type', 'range');
-    expect(screen.getByLabelText(USAGE_LABELS.concurrency)).toHaveAttribute('type', 'range');
+    expect(screen.getByLabelText(SETTING_LABELS.contextTokens)).toHaveAttribute('type', 'range');
+    expect(screen.getByLabelText(SETTING_LABELS.concurrency)).toHaveAttribute('type', 'range');
 
-    // Matched as the whole text of an element, which is what distinguishes the x title from the
-    // subhead a few pixels above it — that names the pair in one sentence.
-    expect(within(region()).getByText(USAGE_LABELS.contextTokens)).toBeInTheDocument();
+    // Matched as the whole text of an element, so the title is the element that says exactly this
+    // and nothing else. The subhead a few pixels above it names the pair as prose, deliberately —
+    // it is a sentence, so it keeps its own English rather than reading the constant.
+    expect(within(region()).getByText(SETTING_LABELS.contextTokens)).toBeInTheDocument();
 
     // The y title carries the direction as well as the name, so it is found by prefix and the cue
     // asserted separately. Rows are drawn bottom-up, and a reader who assumes top-to-bottom reads
     // the default field as "128 users at 2K is the comfortable one" when it is 1 user at 2K.
-    const upward = within(region()).getByText(new RegExp(`^${USAGE_LABELS.concurrency}\\b`));
+    const upward = within(region()).getByText(new RegExp(`^${SETTING_LABELS.concurrency}\\b`));
     expect(upward).toHaveTextContent('↑');
   });
 
@@ -1478,8 +1479,8 @@ describe('the Envelope names both of its axes', () => {
      * the same way, and this is the assertion that says so.
      */
     const titles = [
-      within(region()).getByText(USAGE_LABELS.contextTokens),
-      within(region()).getByText(new RegExp(`^${USAGE_LABELS.concurrency}\\b`)),
+      within(region()).getByText(SETTING_LABELS.contextTokens),
+      within(region()).getByText(new RegExp(`^${SETTING_LABELS.concurrency}\\b`)),
     ];
     for (const title of titles) {
       expect(title.closest('[aria-hidden="true"]')).not.toBeNull();
@@ -1501,10 +1502,10 @@ describe('the Envelope names both of its axes', () => {
     await user.click(within(region()).getByRole('button', { name: /region as a table/i }));
 
     const table = within(region()).getByRole('table', {
-      name: `Feasibility by ${USAGE_LABELS.contextTokens} and ${USAGE_LABELS.concurrency}`,
+      name: `Feasibility by ${SETTING_LABELS.contextTokens} and ${SETTING_LABELS.concurrency}`,
     });
     expect(
-      within(table).getByRole('columnheader', { name: USAGE_LABELS.concurrency })
+      within(table).getByRole('columnheader', { name: SETTING_LABELS.concurrency })
     ).toBeInTheDocument();
   });
 });

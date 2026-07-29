@@ -403,33 +403,57 @@ reading the test that guards them.
   row is short). The general form is the thing to keep: a length measured from text belongs in the
   same units as the text. (#42, #44.)
 
-- **The Envelope's axis titles are stacked rather than rotated, and that is a constraint rather
-  than a preference.** Both axes were bare number strips: the gutter ran 1…128, the strip under the
-  plot ran 2K…128K, and the only thing separating "128 users" from "128K tokens" was a `K` in the
-  smallest and faintest type on the page — while the hidden table, the caption and the canvas
-  `aria-label` all named both quantities. The picture was the one representation that did not say,
-  and its y axis runs bottom-up, which was stated only in a source comment, so a reader assuming
-  top-to-bottom read the default field as "128 users at 2K is the comfortable cell" when it is 1
-  user at 2K. **A rotated y title buys a label with plot columns**, which is the one thing this
-  surface cannot pay: `MIN_COLUMN_REM` floors every column and the plot already scrolls inside its
-  own box at 320px, where it measures 364px of content in a 230px viewport. Stacked above the
-  gutter it costs a line of vertical space instead, and the x title sits _outside_ the scroller so
-  it stays centred on what the reader can see rather than on the scrolled content. Both are
-  `aria-hidden`, like the tick strips, because the canvas `aria-label` is the textual equivalent and
-  a visible title in the accessible tree has a screen reader hear each axis named twice.
-  `e2e/envelope-axes.spec.ts` holds the geometry at 320px — the title above the canvas, the plot's
-  width accounted for by the tick gutter and the row gap alone — and it is red with the titles
-  deleted, checked. (#81.)
+- **The Envelope's axis titles are stacked rather than rotated, and the cost of rotating is smaller
+  than it first looks — a fraction of a column, not a column.** Both axes were bare number strips:
+  the gutter ran 1…128, the strip under the plot ran 2K…128K, and the only thing separating "128
+  users" from "128K tokens" was a `K` in the smallest and faintest type on the page — while the
+  hidden table, the caption and the canvas `aria-label` all named both quantities. The picture was
+  the one representation that did not say, and its y axis runs bottom-up, which was stated only in a
+  source comment, so a reader assuming top-to-bottom read the default field as "128 users at 2K is
+  the comfortable cell" when it is 1 user at 2K.
 
-- **One name per setting, and `USAGE_LABELS` is where it lives.** The same #81 fix found the Usage
-  sliders saying "Context per sequence" and "Concurrent users" while the Envelope's heading said
-  "context against concurrent users", its table caption said "context length" and its row-header
-  column said "Users" — two settings under four spellings, in one panel, with the field's own axes
-  naming neither. Same failure `kvLabel` exists to prevent, one level up, and the same shape the
-  "expect a subset of a class" rule predicts: the issue named the two missing titles, and three more
-  hand-written copies were live. Prose deliberately does not read from the constant — "Currently at
-  32K context and 1 user" is a sentence, not a label, and forcing a control's name into it produces
-  worse English than the drift it would prevent. (#81.)
+  Width on this surface is genuinely scarce — `MIN_COLUMN_REM` floors every column and the plot
+  already scrolls inside its own box at 320px, where it measures 364px of content in a 230px
+  viewport — but **the first version of this note priced a rotated title at that whole ~110px
+  label and that is wrong.** `writing-mode: vertical-rl` costs one line box of horizontal space, and
+  costs the plot's _content_ width nothing at all; only its scroll viewport narrows. (`rotate-90` is
+  the expensive one: transforms do not affect layout, so the element still reserves its unrotated
+  box. That is the implementation the ~110px figure described, and not the one anyone would reach
+  for.) Recorded because a later session reading the old wording as a hard constraint would decline a
+  rotated title on the Matrix — whose axes are still untitled — on a number that is wrong for the CSS
+  it would actually write. **The real reason to stack is legibility**: 12px type on its side is the
+  least readable ink on a surface whose entire complaint was that its meaning rode on the least
+  readable ink, and the ↑ has to read as up. Vertical space is the axis this panel has spare.
+
+  The x title sits _outside_ the scroller so it stays centred on what the reader can see rather than
+  on the scrolled content. Both titles are `aria-hidden`, like the tick strips, because the canvas
+  `aria-label` is the textual equivalent and a visible title in the accessible tree has a screen
+  reader hear each axis named twice. `e2e/envelope-axes.spec.ts` holds the geometry at 320px — the
+  title above the canvas, the plot's width accounted for by the tick gutter and the row gap alone —
+  and it is red with the titles deleted, checked. Its three box comparisons measure a **`Range` over
+  the glyphs, not the paragraph**: both titles are block children of full-width containers, so their
+  element rects are their containers' rects for any alignment and for text that overflows, and the
+  centring and in-panel assertions were all true with `text-center` deleted before that substitution.
+  Same lesson as the `getClientRects().length === 1` note below. (#81.)
+
+- **One name per setting, and `SETTING_LABELS` is where it lives.** The same #81 fix found the Usage
+  sliders saying "Context per sequence" and "Concurrent users" while the Envelope's table caption
+  said "context length" and its row-header column said "Users" — two settings under three spellings,
+  in one panel, with the field's own axes naming neither. Same failure `kvLabel` exists to prevent,
+  one level up, and the same shape the "expect a subset of a class" rule predicts: the issue named
+  the two missing titles, and more hand-written copies were live. The constant is keyed by `Config`
+  field and `satisfies Record<keyof Config, string>`, so the keying is a claim the compiler checks
+  rather than a comment — including the four setup labels, whose second reader is the Matrix's
+  `sr-only` "Model" row axis, agreeing with the control today by coincidence.
+
+  **The line is whether a surface names a setting or says something in a sentence**, and prose stays
+  prose. "Currently at 32K context and 1 user" is a sentence about a cell; so is the Envelope's
+  subhead, "How much room is left — context against concurrent users", which is also the section's
+  `aria-labelledby` target. Substituting the labels there was tried and reverted: it renders "How
+  much room is left Context per sequence against Concurrent users", announced verbatim every time
+  the landmark is, which is worse English than the drift it prevents and out of register with the
+  Matrix's sibling subhead. Axis titles, captions and column headers name settings; headings and
+  hints talk. (#81.)
 
 - **Simulating text zoom by setting the root font size is not text zoom, and a test built on it
   reports layouts nobody can reach.** Widening the reflow sweep to the `sm` and `lg` boundaries —
