@@ -77,10 +77,15 @@ test.beforeEach(async ({ page }) => {
       const style = getComputedStyle(host);
 
       /**
-       * What the indicator is drawn *against* is the nearest opaque ancestor rather than the
-       * control's own fill: an outline at a 2px offset sits outside the control entirely, and the
-       * grid's ring sits in the 2px gap between two cells. Using the element's own background would
-       * measure the contrast of a mark against a colour it never touches.
+       * What a mark *outside* the box is drawn against: the nearest opaque ancestor, not the
+       * control's own fill. An outline at a 2px offset sits outside the control entirely, and the
+       * grid's focus ring sits in the 2px gap between two cells, so the element's own background is
+       * a colour those marks never touch.
+       *
+       * An `inset` layer is the other case and is measured against `backgroundColor` below — the
+       * Matrix's selected square is marked inside its own box, over a ramp fill that runs from
+       * `#cde2fb` to `#0d366b`, and scoring that against the panel surface behind it reports 7.14:1
+       * for a mark that can paint at 1.06:1. This reader returns both; `painted` picks per layer.
        */
       let behind = getComputedStyle(document.body).backgroundColor;
       for (let parent = host.parentElement; parent; parent = parent.parentElement) {
@@ -170,6 +175,8 @@ interface Shadow {
   raw: string;
   color: string;
   spread: number;
+  /** An `inset` layer is painted over the element's own fill, not over what is behind it. */
+  inset: boolean;
 }
 
 function parseShadows(value: string): Shadow[] {
@@ -193,7 +200,12 @@ function parseShadows(value: string): Shadow[] {
   return layers.map((raw) => {
     const color = /rgba?\([^)]*\)/.exec(raw)?.[0] ?? 'rgb(0, 0, 0)';
     const lengths = raw.replace(/rgba?\([^)]*\)/, '').match(/-?[\d.]+px/g) ?? [];
-    return { raw, color, spread: lengths.length >= 4 ? Number.parseFloat(lengths[3]) : 0 };
+    return {
+      raw,
+      color,
+      spread: lengths.length >= 4 ? Number.parseFloat(lengths[3]) : 0,
+      inset: /\binset\b/.test(raw),
+    };
   });
 }
 
@@ -234,20 +246,38 @@ function contrast(mark: string, behind: string): number {
  * offset — Tailwind folds the offset into the spread. The declared width is pinned exactly, in
  * `App.test.tsx`; what this number has to establish is that a mark of roughly the right size appeared
  * where there was none.
+ *
+ * Each mark carries the colour it is drawn `against`, because that differs per layer rather than per
+ * element: an outline and an outset ring cover what is behind the box, an `inset` layer covers the
+ * element's own fill. Measuring every mark against the ancestor is how an inset indicator on a
+ * heatmap cell scores 7.14:1 against the panel while painting at 1.06:1 over the ramp.
  */
 type Painted =
   | { kind: 'ua' }
   | { kind: 'none' }
   | { kind: 'colour-only'; detail: string }
-  | { kind: 'declared'; thickness: number; color: string };
+  | { kind: 'declared'; thickness: number; color: string; against: string };
+
+/** Whether a computed colour is `transparent` or fully transparent `rgba(…, 0)`. */
+const invisible = (color: string) => !color || color === 'transparent' || /,\s*0\)$/.test(color);
+
+/**
+ * The colour a mark covers: its own fill for an `inset` layer, what is behind the box otherwise.
+ *
+ * A cell with no fill of its own shows the surface behind it, so an inset mark there is measured
+ * against the same colour an outside mark would be.
+ */
+const over = (style: IndicatorStyle, inset: boolean) =>
+  inset && !invisible(style.backgroundColor) ? style.backgroundColor : style.behind;
 
 function painted(resting: IndicatorStyle, focused: IndicatorStyle): Painted {
   if (focused.outlineStyle === 'auto') return { kind: 'ua' };
 
-  const marks: { thickness: number; color: string }[] = [];
+  const marks: { thickness: number; color: string; against: string }[] = [];
   const width = Number.parseFloat(focused.outlineWidth);
   if (focused.outlineStyle !== 'none' && focused.outlineStyle !== 'hidden' && width > 0) {
-    marks.push({ thickness: width, color: focused.outlineColor });
+    // An outline is always drawn outside the border box, whatever the offset.
+    marks.push({ thickness: width, color: focused.outlineColor, against: focused.behind });
   }
 
   // Only what appeared. A ring the element already wore cannot be what says it has focus — that is
@@ -255,7 +285,11 @@ function painted(resting: IndicatorStyle, focused: IndicatorStyle): Painted {
   const before = new Set(parseShadows(resting.boxShadow).map((s) => s.raw));
   for (const shadow of parseShadows(focused.boxShadow)) {
     if (before.has(shadow.raw) || shadow.spread <= 0) continue;
-    marks.push({ thickness: shadow.spread, color: shadow.color });
+    marks.push({
+      thickness: shadow.spread,
+      color: shadow.color,
+      against: over(focused, shadow.inset),
+    });
   }
 
   if (marks.length === 0) {
@@ -374,11 +408,11 @@ test('every tab stop paints an indicator that clears 2px and 3:1', async ({ page
     if (mark.thickness < MINIMUM_THICKNESS) {
       failures.push(`${named(stop.index)} paints ${mark.thickness}px ${evidence(stop.focused)}`);
     }
-    const ratio = contrast(mark.color, controls[stop.index].resting.behind);
+    const ratio = contrast(mark.color, mark.against);
     if (ratio < MINIMUM_CONTRAST) {
       failures.push(
         `${named(stop.index)} paints ${mark.color} at ${ratio.toFixed(2)}:1 against ` +
-          `${controls[stop.index].resting.behind}`
+          `${mark.against}`
       );
     }
   }
@@ -432,10 +466,29 @@ test('the marked square still says when the keyboard is on it', async ({ page })
 
   // The mark it already wore is the precondition — without it the assertion below would pass on a
   // square that is simply unmarked.
+  const selection = parseShadows(resting.boxShadow).filter((s) => s.spread > 0);
+  expect(selection.length, 'the square is not marked').toBeGreaterThan(0);
+
+  /**
+   * And the selection mark has to be readable in its own right, measured against the cell's own
+   * ramp fill rather than against the panel behind it.
+   *
+   * This is the assertion that was missing while the mark was a single accent frame inside the
+   * cell: `--color-accent` is validated at 7.14:1 on `--color-surface` and measures 1.06:1 to
+   * 4.52:1 on the seven steps of the ramp, so the marked square was unreadable on 304 of 408 cells
+   * with every other assertion in this file still green. Two tones is the fix, and the property
+   * that makes it one is exactly this — *one of them* clears 3:1 against whatever the cell is
+   * painted. `App.test.tsx` does the same arithmetic over every fill the grid paints; this checks
+   * that the tones the class list promises are the tones the browser actually painted.
+   */
+  const fill = over(resting, true);
+  const readable = selection.map((layer) => contrast(layer.color, fill));
   expect(
-    parseShadows(resting.boxShadow).some((s) => s.spread > 0),
-    'the square is not marked'
-  ).toBe(true);
+    Math.max(...readable),
+    `the selection mark on ${fill}: ${selection
+      .map((l, i) => `${l.color} at ${readable[i].toFixed(2)}:1`)
+      .join(', ')}`
+  ).toBeGreaterThanOrEqual(MINIMUM_CONTRAST);
 
   const mark = painted(resting, focused);
   expect(mark.kind, `focusing the marked square painted ${mark.kind}`).toBe('declared');
@@ -444,8 +497,8 @@ test('the marked square still says when the keyboard is on it', async ({ page })
     MINIMUM_THICKNESS
   );
   expect(
-    contrast(mark.color, resting.behind),
-    `the focus ring against ${resting.behind}`
+    contrast(mark.color, mark.against),
+    `the focus ring against ${mark.against}`
   ).toBeGreaterThanOrEqual(MINIMUM_CONTRAST);
 });
 

@@ -526,10 +526,43 @@ export function Matrix({ config }: { config: Config }) {
                       // outer ring says "this is where the keyboard is", and neither can stand in
                       // for the other. It also stops the mark bleeding over the 2px `border-spacing`
                       // onto the neighbouring squares, which the offset ring did.
+                      //
+                      // **The inner frame is two tones, and the second one is not decoration.**
+                      // Moving it inside the cell moves it off the panel surface and onto the ramp,
+                      // and the accent is not readable there: against the seven steps of
+                      // `sequential` it measures 2.00, 1.48, 1.06, 1.38, 2.04, 3.07 and 4.52:1, so
+                      // an accent-only frame sits below the 3:1 non-text minimum on **304 of the
+                      // grid's 408 squares** — including the default selection, on `#3987e5` at
+                      // 1.38:1. On `#6da7ec` the two sit 0.022 apart in relative luminance (0.347
+                      // against 0.369) and measure 1.06:1 — a pure hue difference, which is #67's
+                      // own failure mode restated as a resting state, and gone in greyscale or to a
+                      // deuteranope. So the accent band carries a 1px `--color-surface`
+                      // separator on its inner edge — the dataviz surface ring, and the same
+                      // two-tone trick `Envelope.tsx` uses for its "you are here" mark on the same
+                      // ramp ("A ring, not a filled dot: the cell's own colour has to stay readable
+                      // underneath it"). The accent is then bounded by surface on both sides — the
+                      // 2px `border-spacing` outside, the separator inside — at 7.14:1, and *one of
+                      // the two tones* clears 3:1 against every step of the ramp: the separator on
+                      // the five light steps (14.26 to 3.50:1), the accent on the two dark ones
+                      // where the separator disappears (3.07 and 4.52:1). Worst case 3.07:1, zero
+                      // squares below the bar. `tokens.ts` validates the accent against `surface`
+                      // and never against the ramp, so a mark drawn on a cell has to bring its own
+                      // guarantee; `App.test.tsx` measures it over every fill the grid paints.
+                      //
+                      // The separator rides the `--tw-shadow` slot rather than a second inset ring
+                      // because Tailwind composes one box-shadow chain in a fixed order —
+                      // `inset-shadow, inset-ring, ring-offset, ring, shadow` — and only the last
+                      // slot paints *under* the accent. A 3px inset there shows through in the 2–3px
+                      // band the 2px accent does not cover, which is what keeps the accent 2px wide
+                      // instead of 1px. (Utility names are spelled out only in the class list below:
+                      // Tailwind scans comments too, and a bracketed example in prose compiles to a
+                      // rule of dead CSS.)
                       className={`h-7 w-full rounded-sm focus:ring-2 focus:ring-[var(--color-accent)] focus:outline-none [@media(pointer:coarse)]:h-11 ${
                         cell.runs ? '' : 'border border-dashed border-[var(--color-border)]'
                       } ${cell.raiseCeilingWouldHelp ? 'border-[var(--color-warning)]' : ''} ${
-                        isCurrent(cell) ? 'inset-ring-2 inset-ring-[var(--color-accent)]' : ''
+                        isCurrent(cell)
+                          ? 'inset-ring-2 inset-ring-[var(--color-accent)] shadow-[inset_0_0_0_3px_var(--color-surface)]'
+                          : ''
                       }`}
                       style={{ background: fill(cell, measure, max) }}
                     />

@@ -9,6 +9,7 @@ import { tokens } from '@/lib/format';
 import { DETAIL_ANCHOR_ID } from '@/components/Matrix';
 import { judgeWorkloads } from '@/engine/verdict';
 import { kvSubstitutionFor } from '@/data/runtimes';
+import { colors } from '@/design/tokens';
 
 /**
  * Wrapped rather than replaced, so every other test in this file still exercises the real verdict
@@ -2223,5 +2224,122 @@ describe('every control declares an indicator that says it has focus', () => {
         '--color-accent'
       );
     }
+  });
+});
+
+/**
+ * A mark drawn *on* the heatmap, measured against the heatmap.
+ *
+ * The rule above — focus and a resting state never share a channel — moved the Matrix's
+ * selected-square mark from an offset ring outside the cell to a frame inside it, and that moved it
+ * off `--color-surface`, where `tokens.ts` validated the accent at 7.14:1, and onto the ramp, where
+ * it was never validated at all. A single-tone accent frame measures **1.06:1 to 4.52:1** across
+ * the seven steps of `sequential` — below the 3:1 non-text minimum on 304 of the grid's 408 squares,
+ * the default selection among them. So the mark is two tones, and this is the arithmetic that says
+ * so: for every fill the grid actually paints, at least one of the mark's tones has to clear 3:1
+ * against it.
+ *
+ * **jsdom can answer this one, which is why it is here rather than in the browser suite.** The fill
+ * is an inline style and the mark's tones are token names in the class list; the rest is the WCAG
+ * contrast formula. What jsdom cannot answer — whether the two tones land in the geometry the class
+ * list implies, 2px of accent with the separator inside it — is `e2e/focus-indicators.spec.ts`.
+ */
+describe('a mark drawn on the heatmap stays visible on every step of the ramp', () => {
+  /** SC 1.4.11's floor for a non-text mark. */
+  const MINIMUM_CONTRAST = 3;
+
+  const parseColour = (value: string): [number, number, number] => {
+    if (value.startsWith('#')) {
+      const hex = value.slice(1);
+      return [0, 2, 4].map((i) => Number.parseInt(hex.slice(i, i + 2), 16)) as [
+        number,
+        number,
+        number,
+      ];
+    }
+    const parts = value.match(/[\d.]+/g)?.map(Number) ?? [];
+    return [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0];
+  };
+
+  const luminance = (value: string) => {
+    const [r, g, b] = parseColour(value)
+      .map((c) => c / 255)
+      .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+
+  const contrast = (a: string, b: string) => {
+    const [high, low] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (high + 0.05) / (low + 0.05);
+  };
+
+  /** `--color-surface-raised` -> `surfaceRaised`, so a token name resolves against `colors`. */
+  const token = (cssName: string) =>
+    cssName.replace('--color-', '').replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+
+  /**
+   * The tones a resting mark is drawn in, read off the element that wears it.
+   *
+   * Only the utilities that paint inside the cell count: the inset ring and the inset shadow
+   * separator beneath it. The `focus:`-gated ring is drawn *outside* the box, over the panel
+   * surface, so it is measured in the browser suite against a different colour entirely.
+   */
+  const restingTones = (el: Element) =>
+    (el.getAttribute('class') ?? '')
+      .split(/\s+/)
+      .filter((u) => !u.includes('focus') && /^(inset-ring|inset-shadow|shadow)-\[/.test(u))
+      .flatMap((u) => [...u.matchAll(/--color-[a-z-]+/g)].map((m) => m[0]))
+      .map(token)
+      .filter((name): name is keyof typeof colors => name in colors)
+      .map((name) => colors[name]);
+
+  it('keeps one of the selected square’s tones 3:1 against every fill it can land on', () => {
+    render(<App />);
+    const matrix = screen.getByRole('region', { name: /every model on every machine/i });
+    const cells = within(matrix)
+      .getAllByRole('button')
+      .filter((button) => button.closest('td'));
+
+    const marked = cells.filter((cell) => cell.getAttribute('aria-current') === 'true');
+    expect(marked, 'no square is marked, so there is no mark to measure').toHaveLength(1);
+    const tones = restingTones(marked[0]);
+
+    // Vacuity guards. A mark with no tones, or a grid the selector stopped matching, would
+    // otherwise report a clean sweep over nothing.
+    expect(tones.length, 'the marked square declares no mark of its own').toBeGreaterThan(0);
+    expect(cells.length, 'the grid is not rendering').toBeGreaterThan(300);
+
+    /** Every fill the grid paints, with how many squares wear it. `transparent` shows the panel. */
+    const fills = new Map<string, number>();
+    for (const cell of cells) {
+      const background = (cell as HTMLElement).style.background;
+      const behind = background === 'transparent' || !background ? colors.surface : background;
+      fills.set(behind, (fills.get(behind) ?? 0) + 1);
+    }
+    expect(
+      fills.size,
+      'the grid paints one colour, so the ramp is not being exercised'
+    ).toBeGreaterThan(4);
+
+    const best = (fill: string) => Math.max(...tones.map((tone) => contrast(tone, fill)));
+    const unreadable = [...fills.entries()]
+      .filter(([fill]) => best(fill) < MINIMUM_CONTRAST)
+      .map(([fill, count]) => `${fill} (${count} squares) at ${best(fill).toFixed(2)}:1`);
+    expect(unreadable, `the mark below ${MINIMUM_CONTRAST}:1 on a fill the grid paints`).toEqual(
+      []
+    );
+
+    /**
+     * And that the second tone is load-bearing rather than belt-and-braces. If every step of the
+     * ramp were readable under one tone, this test would pass on the single-tone frame that shipped
+     * 304 unreadable squares — the ramp is what makes it fail, so the ramp has to still be there.
+     */
+    const defeatsOneTone = tones.filter(
+      (tone) => ![...fills.keys()].every((fill) => contrast(tone, fill) >= MINIMUM_CONTRAST)
+    );
+    expect(
+      defeatsOneTone.length,
+      'every tone clears the bar alone, so this measures nothing the ramp can break'
+    ).toBeGreaterThan(0);
   });
 });
