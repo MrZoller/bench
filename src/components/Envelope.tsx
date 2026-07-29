@@ -269,6 +269,24 @@ export function Envelope({ config }: { config: Config }) {
       : { min: 0, max: 0 };
   }, [grid, measure]);
 
+  /**
+   * Whether the ramp has anything to say — and it is the *domain*, not a count of graded cells.
+   *
+   * The first version of this gate asked `some(graded)`, which is true with exactly one graded cell
+   * (found in review). One cell gives `{ min: v, max: v }`, and `magnitudeFill` returns the brightest
+   * step whenever its span is not positive — so all three measures paint that cell identically and
+   * every other cell keeps its categorical fill. The control was still offered, and pressing it moved
+   * `aria-pressed` and nothing else: the same defect the gate was added to fix, one cell further in.
+   *
+   * Reachable, and not only in theory: Qwen3-14B at Q5_K_M on one RTX 5070 under llama.cpp gives
+   * exactly 1 graded cell against 20 spilling and 35 over the ceiling.
+   *
+   * `max > min` rather than `length > 1`, because two graded cells reading the same value are the same
+   * degenerate domain as one. This is the condition `magnitudeFill` itself tests, so the control is
+   * offered exactly when the ramp it drives can differ across the field.
+   */
+  const rampCarriesVariation = domain.max > domain.min;
+
   const [resizeTick, setResizeTick] = useState(0);
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -417,7 +435,7 @@ export function Envelope({ config }: { config: Config }) {
         promising "the ramp runs between this grid's own extremes". Pressing a button moved
         `aria-pressed` and nothing else, which is a control that lies about having an effect.
       */}
-      {grid.cells.flat().some(graded) && (
+      {rampCarriesVariation && (
         <fieldset className="mt-4" aria-describedby={measureHintId}>
           <legend className="sr-only">Colour the field by</legend>
           <div className="flex flex-wrap gap-1 rounded-md border border-[var(--color-control-border)] bg-[var(--color-surface-raised)] p-1">
@@ -617,7 +635,7 @@ export function Envelope({ config }: { config: Config }) {
           and the trailing clause says what it is relative *to* — in the legend, rather than only in
           the caption under the control.
         */}
-        {grid.cells.flat().some(graded) && (
+        {rampCarriesVariation && (
           <li className="flex flex-wrap items-center gap-2 text-sm sm:col-span-2">
             <span className="text-[var(--color-text)]">{measured.ends[0]}</span>
             <span
@@ -850,9 +868,23 @@ function describe(
    * Repeating it here would say it twice to the one reader who hears both.
    */
   const { paints, ends } = measureVocabulary(measure);
-  const coloured = grid.cells.flat().some(graded)
-    ? `Cells that fit are coloured by ${paints} — ${ends[0]} to ${ends[1]}, ranked against the other cells on this grid rather than on an absolute scale.`
-    : '';
+  /**
+   * The same condition as the visible ramp key and the measure control, and for the same reason: with
+   * one graded cell the domain is degenerate, every measure paints it the brightest step, and a
+   * sentence promising "${ends[0]} to ${ends[1]}" describes a gradient the field does not contain.
+   *
+   * Computed here rather than passed in, because this function already takes the grid and the measure
+   * and a fourth parameter carrying a derivation of both is the shape that lets a caller supply one
+   * that disagrees. The values come from the same `measureOf` the fill does.
+   */
+  const spread = grid.cells
+    .flat()
+    .filter(graded)
+    .map((c) => measureOf(c, measure));
+  const coloured =
+    spread.length > 0 && Math.max(...spread) > Math.min(...spread)
+      ? `Cells that fit are coloured by ${paints} — ${ends[0]} to ${ends[1]}, ranked against the other cells on this grid rather than on an absolute scale.`
+      : '';
   // Suppressed only when it would print a zero — `closed.length > 0` is exactly the condition
   // under which `whyClosed` has something non-empty to report, in all three of its forms.
   const rest = [

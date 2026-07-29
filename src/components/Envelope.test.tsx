@@ -514,3 +514,56 @@ describe('the measure group says what it colours by', () => {
     expect(describedBy(group)).toMatch(/tokens per second/i);
   });
 });
+
+/**
+ * The boundary the first version of the gate got wrong (found in review on #65).
+ *
+ * `some(graded)` is true with exactly one graded cell, and one cell is a degenerate domain:
+ * `magnitudeFill` returns the brightest step whenever its span is not positive, so all three measures
+ * paint that cell identically while every other cell keeps its categorical fill. The control was still
+ * offered, and pressing it moved `aria-pressed` and nothing else — the same defect the gate was added
+ * to fix, one cell further in.
+ */
+describe('the ramp control needs a ramp, not merely a graded cell', () => {
+  /** Verified: 1 graded cell, 20 spilling, 35 over the ceiling. */
+  const oneCell = {
+    ...DEFAULT_CONFIG,
+    modelId: 'Qwen/Qwen3-14B',
+    deviceId: 'rtx-5070',
+    quantId: 'q5_k_m',
+    runtimeId: 'llama.cpp',
+  };
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it('offers no measures when exactly one cell is graded', async () => {
+    const user = userEvent.setup();
+    const painted = recordPainting();
+    render(<Envelope config={oneCell} />);
+
+    // The premise, asserted rather than assumed: exactly one cell takes a step of the ramp. Without
+    // this the test passes on any grid that happens to have no graded cells at all, which is the
+    // case one test above and a different branch.
+    const table = await openTable(user);
+    const rampCells = painted.fills.filter((f) => step(f) >= 0);
+    expect(rampCells, 'this scenario no longer has exactly one graded cell').toHaveLength(1);
+    expect(within(table).getAllByRole('cell').length).toBeGreaterThan(40);
+
+    expect(within(field()).queryByRole('button', { name: 'Does it fit' })).toBeNull();
+    expect(within(field()).queryByText(/the ramp runs between/i)).toBeNull();
+
+    // And the ramp key goes with it: a two-ended scale drawn over one value is a key for a gradient
+    // the picture does not contain.
+    expect(within(field()).queryByText('less room')).toBeNull();
+    expect(within(field()).queryByText('more room')).toBeNull();
+
+    // The canvas sentence makes the same claim to a screen reader, so it is withheld too.
+    const described = within(field()).getByRole('img').getAttribute('aria-label') ?? '';
+    expect(described).not.toMatch(/coloured by/i);
+    // It still says what the cells are, which is the part that does not depend on a ramp.
+    expect(described).toMatch(/spilling|will not run|context/i);
+  });
+});
