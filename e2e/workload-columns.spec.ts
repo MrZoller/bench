@@ -30,6 +30,13 @@ const AT_SM = { width: 640, height: 900 };
 /** Below `sm`, where the row deliberately stacks and keeps a grid of its own. */
 const PHONE = { width: 390, height: 844 };
 
+/**
+ * The narrowest width anything still ships at, matching `reflow.spec.ts` and `matrix-legend.spec.ts`
+ * — and the width the status cell's min-content is measured against, because that is where a floor
+ * set by one unbreakable word has the least room to hide.
+ */
+const NARROW = { width: 320, height: 900 };
+
 const strip = (page: Page) => page.getByRole('region', { name: /what you could do with it/i });
 
 /**
@@ -71,6 +78,63 @@ async function rows(page: Page) {
 }
 
 const spread = (values: number[]) => Math.max(...values) - Math.min(...values);
+
+/**
+ * The two spans *inside* each status cell — the aria-hidden glyph and the word.
+ *
+ * `rows()` above measures cell boxes, and every alignment assertion built on those kept passing
+ * while the fourth status word sat 4.1px left of the other six (#75): a grid item is stretched to
+ * its track, so the cell box is identical on all seven rows by construction and says nothing about
+ * where the *word* starts. That depends on the width of the glyph before it, and the dash is not the
+ * width of the circles.
+ */
+async function statusWords(page: Page) {
+  return strip(page)
+    .locator('li')
+    .evaluateAll((items) =>
+      items.map((li) => {
+        const cell = li.children[0] as HTMLElement;
+        const [icon, word] = Array.from(cell.children) as HTMLElement[];
+        return {
+          word: (word.textContent ?? '').trim(),
+          wordLeft: word.getBoundingClientRect().left,
+          iconWidth: icon.getBoundingClientRect().width,
+          whiteSpace: getComputedStyle(cell).whiteSpace,
+        };
+      })
+    );
+}
+
+/**
+ * A font deliberately wider than any the app will resolve, and the same one `reflow.spec.ts` uses —
+ * for the same reason recorded at length there: an earlier version of that file measured the host's
+ * own typography, passed on macOS with 18px to spare and failed on CI by 4px, on markup neither run
+ * had changed. Courier New is present or metric-aliased on all three platforms.
+ *
+ * Applied through `--font-sans`, because `body` sets `font-family: var(--font-sans)` and an inline
+ * `font-family` on `<html>` loses to that rule.
+ */
+const WIDE_FONT = "'Courier New', monospace";
+
+/** Whether the stress font actually widened anything, rather than falling back to the host's sans. */
+async function stressFontRatio(page: Page) {
+  const probe = () =>
+    page.evaluate(() => {
+      const span = document.createElement('span');
+      span.textContent = 'Not measured';
+      span.style.cssText =
+        'position:absolute;white-space:nowrap;visibility:hidden;font-size:32px;font-family:var(--font-sans)';
+      document.body.append(span);
+      const width = span.getBoundingClientRect().width;
+      span.remove();
+      return width;
+    });
+  const native = await probe();
+  await page.evaluate((f) => {
+    document.documentElement.style.setProperty('--font-sans', f);
+  }, WIDE_FONT);
+  return (await probe()) / native;
+}
 
 test.beforeEach(async ({ page }) => {
   await page.setViewportSize(DESKTOP);
@@ -149,15 +213,22 @@ for (const [name, size] of [
      *
      * The three original words were "Yes", "Tight" and "No"; the ungraded state added "Not measured",
      * which is roughly three times the widest of them. A fixed track does not grow for its content,
-     * and the cell is `whitespace-nowrap` — so a word too long for 9rem does not wrap and does not
-     * push the label column across, it simply paints over the label beside it. Every alignment
+     * and the cell is `whitespace-nowrap` here — so a word too long for 9rem does not wrap and does
+     * not push the label column across, it simply paints over the label beside it. Every alignment
      * assertion in this file keeps passing while the two columns overlap, because the *boxes* are
      * still where they should be.
      *
-     * jsdom cannot answer it — no layout engine, so the glyph width is 0 there and the comparison is
-     * a tautology — which is what puts a text-fits check in this directory rather than in Vitest. The
-     * precondition is asserted first: the default scenario is one concurrent user, so the seventh row
-     * really is the long word, and without that this measures three short ones against 144px.
+     * **This is the easy half of the question, and on its own it was the wrong half.** A fixed track
+     * cannot widen the layout, so this block — both its viewports are `sm`+ at root 16px, where the
+     * track is 144px and the word 98px — has 46px of slack and cannot reach the failure the long word
+     * actually caused, which is below `sm`, where the same cell sits in a `1fr` track and its
+     * min-content becomes a floor on the row. That is `the status column does not set a floor wider
+     * than the viewport` in the block below; this one guards the overlap, that one guards the reflow.
+     *
+     * jsdom cannot answer either — no layout engine, so the glyph width is 0 there and the comparison
+     * is a tautology — which is what puts a text-fits check in this directory rather than in Vitest.
+     * The precondition is asserted first: the default scenario is one concurrent user, so the seventh
+     * row really is the long word, and without that this measures three short ones against 144px.
      */
     test('every status word fits inside the fixed status column', async ({ page }) => {
       const measured = await rows(page);
@@ -167,6 +238,14 @@ for (const [name, size] of [
         'no row is ungraded at the default scenario, so the longest status word is not on screen'
       ).toBe(true);
 
+      // The mechanism the paragraph above depends on: at `sm` the cell must not wrap, or a word too
+      // long for the track becomes a two-line cell rather than an overlap, and this measures nothing.
+      for (const status of await statusWords(page)) {
+        expect(status.whiteSpace, `the status cell for "${status.word}" wraps at sm`).toBe(
+          'nowrap'
+        );
+      }
+
       for (const row of measured) {
         const status = row.cells[0];
         expect(
@@ -174,6 +253,45 @@ for (const [name, size] of [
           `the status word "${status.text}" is ${Math.round(status.textWidth)}px in a ${Math.round(status.width)}px column, so it paints over the label`
         ).toBeLessThanOrEqual(status.width);
       }
+    });
+
+    /**
+     * And every status word starts at the same x, whichever glyph precedes it.
+     *
+     * The word's left edge is the glyph's width plus the flex gap, so before the glyph was boxed the
+     * column had a jog in it exactly where the fourth state was added: measured at 1440px, the three
+     * circles are 11.1px wide and the dash 10.5px, so "Not measured" started 4.1px left of "Yes",
+     * "Tight" and "No" when the dash was the narrower en dash it first shipped as. Small, and in the
+     * one column #70 was about aligning.
+     *
+     * Not caught by anything above, and could not be: every other assertion in this file reads cell
+     * boxes, and a grid item is stretched to its track, so all seven are identical no matter what is
+     * inside them. This reads the spans.
+     *
+     * The icon widths are asserted equal as well, because that is the *mechanism* — a fixed `w-3` box
+     * with the glyph centred in it — and it is what makes the alignment hold on a runner whose fonts
+     * draw these four characters at four different widths. Without it this test is a claim about
+     * whatever font the runner happened to resolve.
+     */
+    test('every status word starts at the same x, whatever glyph precedes it', async ({ page }) => {
+      const measured = await statusWords(page);
+
+      expect(
+        measured.some((row) => row.word === 'Not measured'),
+        'no row is ungraded at the default scenario, so the odd glyph is not on screen'
+      ).toBe(true);
+
+      // The claim first, so a regression reports the jog rather than its cause.
+      expect(
+        spread(measured.map((row) => row.wordLeft)),
+        `the status words do not share a left edge: ${measured.map((r) => `${r.word} at ${Math.round(r.wordLeft * 10) / 10}`).join(', ')}`
+      ).toBeLessThanOrEqual(1);
+      // Then the mechanism, which is what makes the claim above hold on a runner whose fonts draw
+      // these four characters at four different widths rather than only on this one.
+      expect(
+        spread(measured.map((row) => row.iconWidth)),
+        `the status glyphs are not in equal boxes: ${measured.map((r) => Math.round(r.iconWidth * 10) / 10).join(', ')}`
+      ).toBeLessThanOrEqual(1);
     });
 
     /**
@@ -300,6 +418,92 @@ test.describe('below sm', () => {
       expect(row.cells[1].top, `row "${row.text}" overlaps the row above it`).toBeGreaterThan(
         measured[i - 1].cells[2].top
       );
+    }
+  });
+
+  /**
+   * And the status cell does not set a floor wider than the viewport (#75, #35).
+   *
+   * **This is the assertion the fourth status word needed and the `sm`+ block above cannot make.**
+   * Below `sm` the row is `grid-cols-[auto_1fr]` with the status cell in the `1fr`, whose automatic
+   * minimum is that cell's min-content — so an unbreakable string here is a hard floor on the row,
+   * and the row is inside a panel inside the document. Three short words never came near it. "Not
+   * measured" with a `whitespace-nowrap` on it took the seventh row's status cell to a 199px
+   * min-content against 55px for "○ No", the document to `scrollWidth` 371 in a 320px viewport, and
+   * 29 elements outside it — the 200%-text reflow failure of WCAG 1.4.4 that #35 fixed and
+   * `reflow.spec.ts` exists to keep fixed.
+   *
+   * Two stresses, and the defect needs both:
+   *
+   *   - **The root font size**, because at 16px the cell is 93px in a 390px row and has all the room
+   *     it wants. Set here with `style.fontSize` rather than by the browser's own default-size
+   *     switch, which is what the `reflow` project uses and what this project cannot. The usual
+   *     objection to doing it this way is recorded in `reflow.spec.ts` and is real — `rem` inside a
+   *     media query resolves against the browser default, so the breakpoints do *not* move, and a
+   *     sweep written this way reports on layout states no reader can reach. It does not apply at
+   *     320px: `sm` is unmatched at 320px whether it evaluates to 640px or to 1280px, so the stacked
+   *     row measured here is the same box a reader at 200% text gets. The `beforeEach` asserts that.
+   *     Anything about the layout *at or past* `sm` under real zoom stays in `reflow.spec.ts`.
+   *   - **A font wider than the host's**, because macOS resolves the app's stack to SF and passes the
+   *     unfixed markup at this viewport with 8px to spare, while a CI runner falls through to a wider
+   *     sans and fails. That exact green-here-red-there result has already shipped from this repo
+   *     once, which is why the stress font is a precondition rather than a hope.
+   *
+   * Scoped to the strip's own rows rather than to `document.scrollWidth`: the whole-document question
+   * belongs to `reflow.spec.ts`, which asks it at the real zoom, on four scenarios, at four widths.
+   * What this pins is that *this panel* is not the thing that breaks it.
+   */
+  test('the status column does not set a floor wider than the viewport', async ({ page }) => {
+    await page.setViewportSize(NARROW);
+    expect(
+      await page.evaluate(() => matchMedia('(min-width: 40rem)').matches),
+      'sm matches at 320px, so this is no longer the stacked layout'
+    ).toBe(false);
+
+    // Text at 200%, and the breakpoint deliberately left where it is — see above.
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = '32px';
+    });
+    // Applies the stress font and returns what it bought, so a runner without Courier New fails here
+    // rather than quietly measuring its own typography.
+    const ratio = await stressFontRatio(page);
+    expect(
+      ratio,
+      'the stress font did not widen the text, so this run proves nothing'
+    ).toBeGreaterThan(1.05);
+
+    const measured = await rows(page);
+    const statuses = await statusWords(page);
+
+    // The precondition: the long word has to be on screen, and at the default scenario's one
+    // concurrent user it is. Without this the case measures three short words that never had a
+    // problem.
+    expect(
+      statuses.some((row) => row.word === 'Not measured'),
+      'no row is ungraded at the default scenario, so the longest status word is not on screen'
+    ).toBe(true);
+
+    // The claim, first, so a regression reports the harm — the unfixed markup fails here on the
+    // seventh row at 371px against 320.
+    const clientWidth = await page.evaluate(() => document.documentElement.clientWidth);
+    for (const row of measured) {
+      for (const cell of row.cells) {
+        expect(
+          cell.right,
+          `"${row.text}" pushes its ${Math.round(cell.right)}px right edge past the ${clientWidth}px viewport`
+        ).toBeLessThanOrEqual(clientWidth + 1);
+      }
+    }
+
+    // Then the mechanism, because the assertion above passes if the cell is allowed to break *or* if
+    // something else happens to absorb it — a shorter word, a narrower label — and neither of those
+    // keeps holding when the next status word is added. The floor has to be the longest word rather
+    // than the whole string.
+    for (const status of statuses) {
+      expect(
+        status.whiteSpace,
+        `the status cell for "${status.word}" is nowrap below sm, so its min-content is the whole string`
+      ).toBe('normal');
     }
   });
 });

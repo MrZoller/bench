@@ -291,6 +291,50 @@ describe('an archetype the scenario never exercises is not graded', () => {
     expect(serving.fitness).toBe('good');
   });
 
+  /**
+   * The boundary, recorded rather than left to be rediscovered: **two users is a measurement, and a
+   * partial measurement is graded with a caveat, not left ungraded.**
+   *
+   * `BARS.serving.tight.users` is 2 and `BARS.serving.good.users` is 4, so at two or three users
+   * serving is `tight` on the strength of the user count alone — every other bar (fit, rate, TTFT,
+   * headroom) is inside `good` on this rig, which is `good` outright at four. Raised in review as the
+   * same shape of complaint as #75 one rung up: a grade reporting the reader's slider position.
+   *
+   * It is deliberately not changed, and the difference from the defect is the whole reason the fourth
+   * state exists. At one user *nothing about multi-user serving happens* — there is no second cache,
+   * no queue, no contention — so there is no measurement to grade, and `fail` claimed a refusal that
+   * never took place and subtracted the row from a "N of M" count. At two there is: two caches, a
+   * batched prefill, a shared device. That measurement is what `tight` reports, the row stays in both
+   * sides of the count as usable, and the sentence names exactly the gap between what the scenario
+   * exercised and what the archetype is graded from — which is a caveat a reader can act on by moving
+   * the slider, not a claim about the hardware.
+   *
+   * The two alternatives were both weighed and both are larger than this issue. Promoting it to
+   * `good` would delete the only enforcement of `BARS.serving.good.users` and let "Multi-user
+   * serving — Yes" be earned by a two-user measurement. Grading it at the archetype's own four users
+   * regardless of the slider — the issue's own listed alternative — is the coherent end state, since
+   * that is how the other six archetypes work, but it also removes the state this test file was just
+   * extended for and belongs to its own issue.
+   */
+  it.each([2, 3])(
+    'grades a partial exercise rather than leaving it ungraded, at %s users',
+    (concurrency) => {
+      const serving = judge(LLAMA_31_8B, 'q4_k_m', { device: RTX_5090, concurrency }).get(
+        'serving'
+      )!;
+
+      expect(serving.fitness).not.toBe('unmeasured');
+      expect(serving.fitness).toBe('tight');
+      // And the sentence says what was measured against what, rather than only naming the slider.
+      expect(serving.reason).toMatch(
+        new RegExp(`measuring ${concurrency} users against the ${WORKLOAD_BARS.serving.good.users}`)
+      );
+      // `tight` is usable, so unlike the ungraded row this one is counted on both sides of the panel's
+      // headline — see the `counts every row again as soon as they are all graded` case in App.test.
+      expect(rankOf(serving.fitness)).toBeGreaterThan(rankOf('fail'));
+    }
+  );
+
   it('is the only archetype that can go ungraded', () => {
     // Every other row is graded at its own declared prompt, so the slider cannot leave one of them
     // unanswered. A second ungraded archetype means an archetype stopped declaring its scenario.

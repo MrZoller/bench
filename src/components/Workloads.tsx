@@ -40,8 +40,16 @@ const FITNESS: Record<Fitness, { icon: string; word: string; color: string }> = 
    * that was never measured does not sit at the bottom of an ordering it is not in — a dash reads as
    * "no reading", the same convention Telemetry's `value: '—'` already uses for a figure it cannot
    * report. And it is `aria-hidden` below, like the other three: the word beside it is the grading.
+   *
+   * An em dash, U+2014, which is the character Telemetry actually uses — the first version of this
+   * said so in the comment and shipped an en dash, U+2013, which is a narrower glyph than any of the
+   * three circles. That is not only a typographic quibble: the word beside it starts after the glyph,
+   * so at 1440px "Not measured" began at x = 202.0 while "Yes", "Tight" and "No" all began at 206.1,
+   * a 4.1px jog in the column #70 exists to have aligned. The glyph is now inside a fixed box at
+   * `sm`, which is where the shared column exists, so the alignment no longer depends on which
+   * character this is — see the icon span below.
    */
-  unmeasured: { icon: '–', word: 'Not measured', color: 'var(--color-text-faint)' },
+  unmeasured: { icon: '—', word: 'Not measured', color: 'var(--color-text-faint)' },
 };
 
 export function Workloads({ evaluation, config }: { evaluation: Evaluation; config: Config }) {
@@ -197,12 +205,53 @@ export function Workloads({ evaluation, config }: { evaluation: Evaluation; conf
                */
               className="grid items-baseline gap-x-3 gap-y-0.5 max-sm:grid-cols-[auto_1fr] sm:col-span-3 sm:grid-cols-subgrid"
             >
-              {/* Icon and word together, so the grading survives without colour. */}
+              {/*
+                Icon and word together, so the grading survives without colour.
+
+                **The `nowrap` is `sm:`-scoped, and that is a reflow fix rather than a tidy-up.** At
+                `sm` and above this cell sits in a *fixed* `9rem` track: nothing it contains can widen
+                the layout, and a status word must not wrap there or the row's one line becomes two
+                and the column stops being a column. Below `sm` the row is its own
+                `grid-cols-[auto_1fr]` and this cell is the `1fr`, whose automatic minimum is its
+                min-content — so an unbreakable string here is a hard floor on the width of the whole
+                row, and the row is inside a panel inside the document.
+
+                Three short words never reached that floor. "Not measured" does: measured in Chromium
+                at `reflow.spec.ts`'s own configuration — 320x900, `defaultFontSize=32`, `--font-sans`
+                set to Courier New — the seventh row's status cell had a min-content of 199px against
+                55px for "○ No", which took `documentElement.scrollWidth` to 371px in a 320px viewport
+                and put 29 elements outside the document. That is WCAG 1.4.4 (#35), the criterion this
+                repo already shipped a failure of once. Letting the word wrap below `sm` drops the same
+                cell to 142px and the document back to 320/320, because the floor becomes the longest
+                *word* rather than the whole string.
+
+                At the default text size it never wraps — on a 390px phone the cell holds 96px of
+                content in a 188px track, and even at 320px 96px in 131px — so this costs nothing on
+                the layout anyone actually arrives at.
+              */}
               <span
-                className="order-2 flex items-center gap-1.5 text-xs whitespace-nowrap sm:order-none"
+                className="order-2 flex items-center gap-1.5 text-xs sm:order-none sm:whitespace-nowrap"
                 style={{ color: style.color }}
               >
-                <span aria-hidden="true">{style.icon}</span>
+                {/*
+                  A fixed box at `sm`, so the word beside it starts at the same x on all seven rows.
+
+                  The circles are ~11.1px at this size and the dash is 10.5px; before this the word's
+                  left edge moved with the glyph, which put "Not measured" 4.1px left of the other six
+                  in the column #70 exists to have aligned — and every alignment assertion in
+                  `e2e/workload-columns.spec.ts` kept passing, because they measure the *cell* box.
+
+                  `w-3` is `0.75rem`, the same length as `text-xs`, so the box is one em at every root
+                  size and a glyph wider than the box is centred rather than nudging the word.
+                  `shrink-0` so a cell tighter than its track cannot take the width back out of it.
+
+                  Scoped to `sm` because below it there is no shared column to align to — the status
+                  word follows a label of the row's own width — and because a fixed box is +10px of
+                  min-content at 200% text, which is most of the slack the wrap fix above just bought.
+                */}
+                <span aria-hidden="true" className="sm:w-3 sm:shrink-0 sm:text-center">
+                  {style.icon}
+                </span>
                 <span>{style.word}</span>
               </span>
 
