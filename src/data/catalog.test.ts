@@ -1051,4 +1051,32 @@ describe('the Hardware picker states a claim, not the catalog', () => {
       );
     }
   );
+
+  /**
+   * The curated field's own half of the rule, which the split changed the reason for rather than
+   * removing.
+   *
+   * `note` is no longer concatenated onto the derived clauses, so nothing appends a full stop to it
+   * any more and `sentences()` never sees it. The rule survives for a different reason: it renders
+   * as a paragraph of its own, with nothing after it to absorb a dangling clause, and prose that
+   * stops mid-clause is indistinguishable from prose that was truncated by the app. `devices.json`
+   * writes that rule down in `$comment-note`; this is what makes it a rule. The sibling field in
+   * `runtimes.ts` has the same guard in `runtimes.test.ts`, for the sibling reason — those two are
+   * interpolated mid-paragraph.
+   */
+  it('states every curated note in whole sentences', () => {
+    const noted = DEVICES.filter((d) => d.note !== undefined);
+    // Two thirds of the catalog carries one, so this is not a sweep over three rows.
+    expect(
+      noted.length,
+      'no row carries a curated note, so this sweep proves nothing'
+    ).toBeGreaterThan(20);
+
+    for (const device of noted) {
+      expect(
+        device.note!.trim(),
+        `${device.id}: its note is a paragraph of its own and does not end a sentence`
+      ).toMatch(/[.!?…][»”’"')\]]?$/);
+    }
+  });
 });

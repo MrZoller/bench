@@ -179,7 +179,15 @@ describe('a cache charged a width nobody established says so', () => {
    * above.
    */
   it('declares both axes, and every declared width is one the engine reads', () => {
-    for (const runtime of RUNTIMES.filter((r) => r.substituted)) {
+    const substituting = RUNTIMES.filter((r) => r.substituted);
+    // One runtime satisfies this filter today (MLX), so without this line dropping `substituted`
+    // from the catalog would empty the loop and pass every assertion in it silently.
+    expect(
+      substituting.length,
+      'no runtime substitutes, so this loop asserts nothing'
+    ).toBeGreaterThan(0);
+
+    for (const runtime of substituting) {
       const { nativeFormats, measuredKvPrecisions, note, kvNote } = runtime.substituted!;
 
       expect(nativeFormats.length, `${runtime.id} marks every weight format`).toBeGreaterThan(0);

@@ -23,40 +23,79 @@ import { DisclosureToggle } from './DisclosureToggle';
  */
 
 /**
- * The two inline marks the curated catalog notes are written with, rendered rather than printed.
+ * `*emphasis*`. The innermost mark: nothing renders inside it.
  *
- * `devices.json` is prose for a reader — `docs/ROADMAP.md`'s register — and it uses `**emphasis**`
- * and backticked identifiers throughout: "**This row is the 80-core GPU**", "`iogpu.wired_limit_mb`
- * accepts a value up to physical memory". Nothing rendered them, so five rows already printed literal
- * asterisks in the picker, and moving the prose to its own region would have moved the glitch with
- * it. Same root cause as the punctuation this issue is about: reference prose was being emitted as
- * UI copy without the transformation it needs.
+ * One capture group, like the two below, because `String.split` with a single group alternates
+ * unmatched text and matched spans — so the odd indices are the marked ones, and the parts in
+ * between cannot contain a pair of their own.
+ */
+const EMPHASIS = /(\*[^*]+\*)/;
+
+/**
+ * `**strong**`, whose content is prose and may carry an emphasis of its own: an interior `*` is
+ * part of the content precisely when it is not the closing pair, which is what `\*(?!\*)` says.
+ */
+const STRONG = /(\*\*(?:[^*]|\*(?!\*))+\*\*)/;
+
+/** A backticked identifier. Outermost, because its content is literal — marks and all. */
+const CODE = /(`[^`]+`)/;
+
+/** `*emphasis*` within one already-classified span. The last pass: nothing renders inside it. */
+function emphasised(text: string, key: string): ReactNode[] {
+  return text
+    .split(EMPHASIS)
+    .map((part, i) => (i % 2 === 0 ? part : <em key={`${key}.${i}`}>{part.slice(1, -1)}</em>));
+}
+
+/** `**strong**`, whose content is prose and goes back through the emphasis pass. */
+function strengthened(text: string, key: string): ReactNode[] {
+  return text.split(STRONG).flatMap((part, i): ReactNode[] =>
+    i % 2 === 0
+      ? emphasised(part, `${key}.${i}`)
+      : [
+          <strong key={`${key}.${i}`} className="font-semibold text-[var(--color-text)]">
+            {emphasised(part.slice(2, -2), `${key}.${i}b`)}
+          </strong>,
+        ]
+  );
+}
+
+/**
+ * The inline marks the curated catalog notes are written with, rendered rather than printed.
  *
- * Deliberately two patterns and no parser. Nested or unbalanced markers fall through as literal
- * text, which is the failure mode that stays legible; a curator who wants a bulleted list is asking
- * for something this field is not for.
+ * `devices.json` is prose for a reader — `docs/ROADMAP.md`'s register — and it uses `**strong**`,
+ * `*emphasis*` and backticked identifiers throughout: "**This row is the 80-core GPU**", "the FP16
+ * *matrix* rate", "`iogpu.wired_limit_mb` accepts a value up to physical memory". Nothing rendered
+ * any of them, so rows printed literal asterisks in the picker, and moving the prose to its own
+ * region would have moved the glitch with it. Same root cause as the punctuation this issue is
+ * about: reference prose emitted as UI copy without the transformation it needs.
+ *
+ * **One pass per mark, outermost first**, rather than one regex with three alternatives. A single
+ * pass has to decide `**a *b* c**` on a lookahead, and the version of this that went to review
+ * documented that input as falling through to literal text while actually emitting the whole
+ * fragment as bold — the two-marks-and-a-docstring shape could not state its own rule. Code is
+ * outermost and keeps its content literal, since an identifier is a thing you type; then `**`,
+ * whose content goes through the emphasis pass; then `*`. A marker with no partner matches nothing
+ * and reaches the output as the character the curator typed.
+ *
+ * Still three patterns and no parser: a curator who wants a list or a link is asking for something
+ * this field is not for. `src/App.test.tsx` renders every note in the catalog through this and
+ * asserts nothing of the markup survives as text, so a fourth mark fails a test rather than
+ * printing itself at a reader.
  */
 function inlineProse(text: string): ReactNode[] {
-  return text.split(/(\*\*[^*]+\*\*|`[^`]+`)/).map((part, i) => {
-    if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
-      return (
-        <strong key={i} className="font-semibold text-[var(--color-text)]">
-          {part.slice(2, -2)}
-        </strong>
-      );
-    }
-    if (part.startsWith('`') && part.endsWith('`') && part.length > 2) {
-      // `tabular` is the app's only mono utility — named for the figures it was written for, but it
-      // is `--font-mono` and this is `iogpu.wired_limit_mb`, a thing you type. A second class that
-      // set the same family would be the drift this repo keeps removing.
-      return (
-        <code key={i} className="tabular">
-          {part.slice(1, -1)}
-        </code>
-      );
-    }
-    return part;
-  });
+  return text.split(CODE).flatMap((part, i): ReactNode[] =>
+    i % 2 === 0
+      ? strengthened(part, `p${i}`)
+      : [
+          // `tabular` is the app's only mono utility — named for the figures it was written for, but
+          // it is `--font-mono` and this is `iogpu.wired_limit_mb`, a thing you type. A second class
+          // that set the same family would be the drift this repo keeps removing.
+          <code key={`p${i}`} className="tabular">
+            {part.slice(1, -1)}
+          </code>,
+        ]
+  );
 }
 
 export function Select<T extends string>({

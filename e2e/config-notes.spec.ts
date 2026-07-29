@@ -72,6 +72,15 @@ async function panelGeometry(page: Page) {
       return {
         cell: cell.getBoundingClientRect().toJSON(),
         /**
+         * The note's text, so every budget below has something to be a budget *of*.
+         *
+         * A line count is a one-sided measurement: deleting the picker note entirely takes every
+         * count to zero and satisfies every "no more than two lines" assertion in this file. That
+         * is not a hypothetical failure — the curated note was dropped from this control once
+         * before, and it took the 3090's NVLink caveat with it. So the sweeps assert on this too.
+         */
+        text: note?.textContent?.trim() ?? '',
+        /**
          * Where this cell's own content stops, which is not where its box stops.
          *
          * Read off the last element in the stack rather than off the note, because not every
@@ -128,15 +137,29 @@ test('no Hardware note runs past two lines, on any row in the catalog', async ({
   ).toBeGreaterThan(20);
 
   const overflowing: string[] = [];
+  const stated: string[] = [];
   for (const id of ids) {
     await page.getByLabel('Hardware', { exact: true }).selectOption(id);
     const { hardware } = await panelGeometry(page);
     if (hardware.lines > MAX_NOTE_LINES) overflowing.push(`${id} (${hardware.lines} lines)`);
+    if (hardware.text !== '') stated.push(id);
   }
 
   // Before the split this was every row with a curated note: the M5 Ultra's 146 words wrapped to
   // eleven lines in a 540px column, and the shortest note in the catalog is still 25 words.
   expect(overflowing, 'Hardware notes wrapping past a claim into reference prose').toEqual([]);
+
+  // The other side of it. Most of the catalog derives no claim and correctly says nothing, so this
+  // cannot be a per-row assertion — but the nine rows that do derive one have to have said it, or
+  // every line count above was counting an element that is not there. `src/data/catalog.test.ts`
+  // owns which nine; here it is a floor plus the row the issue names.
+  expect(stated, 'the rumoured Mac rendered no picker note at all').toContain(
+    'mac-studio-m5-ultra-512'
+  );
+  expect(
+    stated.length,
+    'fewer rows state a claim than the catalog derives one for'
+  ).toBeGreaterThanOrEqual(9);
 });
 
 /**
@@ -150,6 +173,15 @@ test('the Hardware cell no longer sets the height of the row Model is in', async
   const voidUnderModel = closed.model.cell.bottom - closed.model.contentBottom;
   const line = closed.model.lineHeight;
   expect(line, 'no computed line height, so the budget below is meaningless').toBeGreaterThan(0);
+
+  // The claim is on the page before the budget is applied to it. `voidUnderModel` only shrinks as
+  // the Hardware cell loses content, so deleting the note outright would pass the assertion below
+  // — this is the row whose claim is two clauses, and it has to be stating both of them.
+  expect(
+    closed.hardware.text,
+    'the M5 Ultra states no claim, so this measures an empty cell'
+  ).toMatch(/raiseable to \d+ GiB\.$/);
+  expect(closed.hardware.lines, 'the claim occupies no line box').toBeGreaterThan(0);
 
   // Five lines of slack covers what the Hardware cell legitimately carries beyond what Model does:
   // a claim of one or two lines, plus the disclosure button and its margin. The unfixed layout put

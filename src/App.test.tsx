@@ -8,6 +8,9 @@ import { DEVICES, getDevice, getModel } from '@/data/catalog';
 import { tokens } from '@/lib/format';
 import { SETTING_LABELS, SETTING_NOTES, deviceCountNote } from '@/lib/stops';
 import { DETAIL_ANCHOR_ID } from '@/components/Matrix';
+// The one component this file mounts on its own, and only to sweep a renderer over all 43 catalog
+// rows — see "leaves none of the markup in any note the catalog carries".
+import { Select } from '@/components/Controls';
 import { judgeWorkloads } from '@/engine/verdict';
 import { RUNTIMES, getRuntime, kvSubstitutionFor, runtimeDrives } from '@/data/runtimes';
 import { canShard, maxAllocatablePerDevice } from '@/engine/placement';
@@ -3542,9 +3545,9 @@ describe('the controls that drive every figure explain what they are', () => {
     it('renders the catalog’s prose rather than printing its markup', async () => {
       const user = userEvent.setup();
       render(<App />);
-      // Five rows write `**emphasis**` and most write backticked identifiers; nothing rendered
-      // either, so the picker printed literal asterisks. Moving the prose to its own region without
-      // this would have moved the glitch with it.
+      // Five rows write `**strong**`, two write `*emphasis*` and nine write backticked identifiers;
+      // nothing rendered any of them, so the picker printed literal asterisks. Moving the prose to
+      // its own region without this would have moved the glitch with it.
       await user.selectOptions(hardware(), 'mac-studio-m3-ultra-96');
       await user.click(toggle());
 
@@ -3552,11 +3555,86 @@ describe('the controls that drive every figure explain what they are', () => {
       expect(region).not.toBeNull();
       expect(region!.querySelector('strong')?.textContent).toMatch(/80-core GPU/);
       expect(region!.querySelector('code')?.textContent).toBe('iogpu.wired_limit_mb');
-      // Verbatim apart from the two marks: the note is provenance, and losing a clause of it in a
+      // Verbatim apart from the marks: the note is provenance, and losing a clause of it in a
       // renderer would be worse than printing the asterisks.
       expect(region!.textContent).toBe(
-        getDevice('mac-studio-m3-ultra-96').note!.replace(/\*\*|`/g, '')
+        getDevice('mac-studio-m3-ultra-96').note!.replace(/\*\*|\*|`/g, '')
       );
+
+      // The single-asterisk register, which the first version of this renderer did not read: two
+      // rows write their contrast with one mark rather than two, and both printed the asterisks in
+      // the region this change created for them.
+      await user.selectOptions(hardware(), 'rx-9070-xt');
+      expect(detail()!.querySelector('em')?.textContent).toBe('matrix');
+    });
+
+    /**
+     * And over the whole catalog, because "five rows write `**strong**`" is a fact about the file on
+     * the day it was read.
+     *
+     * The property is that nothing of the markup reaches the reader as text: the region's text is
+     * the note with its marks removed, exactly, which fails both ways — an unrendered mark shows up
+     * as a stray asterisk, and a renderer that ate a clause shows up as missing prose. A fourth
+     * mark, or a stray `*` in a figure, fails here rather than printing itself at a reader.
+     *
+     * `Select` on its own rather than the whole Bench, which is the one place in this file that
+     * mounts a component instead of the app: the wiring from the catalog through `devicePickerNote`
+     * to this control is what the tests above assert, on the real picker. What is swept here is the
+     * renderer against every note in the file, and mounting the Matrix's 408 cells 29 times to read
+     * one paragraph cost 19 seconds of a suite that runs in two minutes. One mount and one click
+     * either way, since the disclosure deliberately stays open across a change of selection.
+     */
+    it('leaves none of the markup in any note the catalog carries', async () => {
+      const user = userEvent.setup();
+      const noted = DEVICES.filter((d) => d.note !== undefined);
+      expect(noted.length, 'no row carries a note, so this sweep proves nothing').toBeGreaterThan(
+        20
+      );
+
+      const picker = (value: string) => (
+        <Select
+          label={SETTING_LABELS.deviceId}
+          value={value}
+          onChange={() => {}}
+          options={noted.map((d) => ({ value: d.id, label: d.name, detail: d.note }))}
+        />
+      );
+
+      const { rerender } = render(picker(noted[0].id));
+      await user.click(toggle());
+
+      const wrong: string[] = [];
+      for (const device of noted) {
+        rerender(picker(device.id));
+        if (detail()?.textContent !== device.note!.replace(/\*\*|\*|`/g, '')) wrong.push(device.id);
+      }
+      expect(wrong, 'notes whose markup reached the reader as text').toEqual([]);
+    });
+
+    /**
+     * The other 34 rows, where the split leaves the control with no accessible description at all.
+     *
+     * That is what #68 asks for — the derivation was never a description of the control — but a
+     * description that is deliberately absent and one that vanished by accident are the same DOM,
+     * and nothing else in the suite looks at this panel's descriptions. So the sanctioned state is
+     * pinned: no description, and the prose one click away in the disclosure. This row is the one
+     * whose note was dropped from the picker entirely once before.
+     */
+    it('describes the control only where it has derived a claim', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.selectOptions(hardware(), 'rtx-3090');
+
+      const device = getDevice('rtx-3090');
+      expect(device.status).toBe('shipping');
+      expect(device.allocatableTunable).toBeUndefined();
+      expect(device.note).toBeDefined();
+
+      expect(hardware()).not.toHaveAttribute('aria-describedby');
+      expect(description(hardware())).toBe('');
+
+      await user.click(toggle());
+      expect(detail()!.textContent).toMatch(/NVLink/);
     });
 
     it('offers no disclosure for a row the catalog says nothing extra about', async () => {
