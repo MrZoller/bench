@@ -299,15 +299,24 @@ export function Matrix({ config }: { config: Config }) {
     cells.flat().some((cell) => cell.evaluated);
 
   /**
-   * Tall enough for the longest label this grid actually renders.
+   * The header: its labels, and the space the rotation needs for them in *both* axes.
    *
-   * A fixed 96px was set for the names that existed then and is short for several shipping ones —
-   * the catalog reaches 40 characters. The table sits in an `overflow-x-auto` container, which
-   * clips vertically rather than scrolling, and the Mac Studio variants differ only in the
-   * trailing capacity suffix that got cut, so two columns became indistinguishable — the exact
-   * failure the rotation was introduced to fix.
+   * One object, computed once, because the bug this replaces was two derivations of one quantity.
+   * A 45-degree rotation costs `sin(45) × label` of height and `cos(45) × label` of width, and
+   * those are the same number — but only the height was ever reserved. So the band was 246px tall
+   * at every viewport while the four longest names leaned up-and-*right* past the last column, out
+   * of the `overflow-x-auto` container: a grid that fits its panel exactly at 1440 and 1024 got
+   * 142px of overflow and a scrollbar anyway, and the default view hid the names the 246px was
+   * calculated from. The app paid a phone screen of vertical space for labels it then cut off (#64).
    *
-   * Rotated 45 degrees, so the vertical extent is the label's width times sin(45).
+   * The two lengths are the same number and are now written once. Which direction the width is spent
+   * in is the other half of the repair, and it is argued under **Lean** below.
+   *
+   * **Height.** A fixed 96px was set for the names that existed then and is short for several
+   * shipping ones — the catalog reaches 40 characters. The table sits in an `overflow-x-auto`
+   * container, which clips vertically rather than scrolling, and the Mac Studio variants differ
+   * only in the trailing capacity suffix that got cut, so two columns became indistinguishable —
+   * the exact failure the rotation was introduced to fix.
    *
    * 8px per character is an estimate rather than a measurement, and the point of the estimate is
    * that it errs *long*: the cost of erring is whitespace, where the cost of erring short is a
@@ -327,10 +336,33 @@ export function Matrix({ config }: { config: Config }) {
    * did not, so the container clipped the names again: the exact failure the rotation exists to
    * prevent, reintroduced at the one setting a low-vision reader would be using. 0.5rem per
    * character is 8px at the default root, so nothing moves there. Raised by Codex on PR #36 (#44).
+   *
+   * **Lean** is the same length, spent sideways — and the labels are turned to spend it *leftward*,
+   * over the model-name column, which is the half of this that had to be got right.
+   *
+   * A trailing lane on the right cannot be made to work, and both versions were built and measured.
+   * As `padding-right` it is non-negotiable, so at 1024px — the grid's own min-content is 857px
+   * inside a 934px panel — it forces 65px of scrolling onto a grid that fits. As a yielding grid
+   * track, `minmax(0, lean)`, it takes only the free space that happens to exist: fine at 1440 and
+   * 1280, and between a 857px grid and its 920px painted extent there is *less free space than the
+   * labels need*. Measured at 960px of viewport: container 870px, grid 857px — it fits — scrollWidth
+   * 920px anyway, with "Threadripper PRO 7995WX" painted 50px outside the visible right edge. That
+   * is #64 narrowed to a 60px window of viewport, not repaired.
+   *
+   * Leaning the other way has no width dependence at all. The space a left-leaning label needs is
+   * the model-name column, which is already in flow and already inside the container, and — unlike
+   * free space — it is measured from *text*, so it grows with the font exactly as the labels do.
+   * The reservation below (`minWidth` on the stub header cell) is what makes that safe rather than
+   * lucky: today the longest model name asks for 133px and the lean for 141px, so the guard is worth
+   * 8px, and without it a catalog of short model names would lean labels past the container's left
+   * edge — where, unlike the right, the overflow is not scrollable and the name is simply gone.
    */
-  const headerHeight = useMemo(() => {
-    const longest = Math.max(0, ...devices.map((d) => shortName(d.name).length));
-    return `${longest * 0.5 * Math.SQRT1_2 + 1.25}rem`;
+  const headerBand = useMemo(() => {
+    const columns = headerColumns(devices);
+    const longest = Math.max(0, ...columns.map((c) => c.label.length));
+    // sin(45) and cos(45) are one number, which is the whole point of computing it once.
+    const lean = longest * 0.5 * Math.SQRT1_2;
+    return { columns, height: `${lean + 1.25}rem`, lean: `${lean}rem` };
   }, [devices]);
 
   return (
@@ -408,29 +440,60 @@ export function Matrix({ config }: { config: Config }) {
           </caption>
           <thead>
             <tr>
-              <th scope="col" className="sticky left-0 bg-[var(--color-surface)] pr-2 font-normal">
+              {/*
+                  The model column, and the lane the rotated labels lean into — the same cell, which
+                  is the point. `minWidth` is the sideways half of `headerBand`, so the column that
+                  the leftmost label leans over is never narrower than the lean itself.
+
+                  On today's catalog it is worth 8px: the longest model name asks for 133px and the
+                  lean for 141px. It is not decoration. Overflow to the *right* of a scroll container
+                  is at least reachable by panning; overflow to the left is not scrollable at all, so
+                  a catalog of short model names would put the first device's name somewhere no
+                  reader can get to. A reservation measured from text, guarding space measured from
+                  text, both of which grow together when the font does.
+                */}
+              <th
+                scope="col"
+                className="sticky left-0 bg-[var(--color-surface)] pr-2 font-normal"
+                style={{ minWidth: headerBand.lean }}
+              >
                 <span className="sr-only">Model</span>
               </th>
-              {devices.map((d) => (
+              {/* Iterated from `headerBand.columns` rather than `devices`, so the label a column
+                  renders is the same string the band was measured from. Two loops over two lists
+                  is how a reservation and the thing it reserves for come to disagree. */}
+              {headerBand.columns.map(({ device, label }) => (
                 <th
-                  key={d.id}
+                  key={device.id}
                   scope="col"
                   // Fixed width, and the label taken out of flow below, so a long name cannot
                   // stretch its own column — "RTX PRO 6000 Blackwell" was three times the width
                   // of its neighbours and skewed the whole grid.
                   className="relative w-7 min-w-7 p-0 align-bottom font-normal text-[var(--color-text-faint)] [@media(pointer:coarse)]:w-11 [@media(pointer:coarse)]:min-w-11"
-                  style={{ height: headerHeight }}
+                  style={{ height: headerBand.height }}
                 >
                   {/*
-                    Rotated rather than truncated. Horizontally these clipped to "GeForc…" four
-                    times over — a header that cannot distinguish its own columns is worse than
-                    none, and the names are what make the grid readable at all.
-                  */}
+                      Rotated rather than truncated. Horizontally these clipped to "GeForc…" four
+                      times over — a header that cannot distinguish its own columns is worse than
+                      none, and the names are what make the grid readable at all.
+
+                      The full name stays in the `title`, and in every cell's `aria-label` below, so
+                      what the shortening drops is one hover or one screen-reader cell away.
+
+                      Anchored bottom-*right* and turned clockwise, so each label ends at its own
+                      column and runs up-and-left over the grid it belongs to, rather than starting
+                      at its column and running up-and-right past the last one. Geometry, not taste:
+                      text that ascends left-to-right has to lean right, and to the right of the last
+                      column there is nothing but the edge of the scroll container — which is how a
+                      grid that fits its panel came to report 142px of overflow (#64). Leaning the
+                      other way spends the same length over the model-name column, which is inside
+                      the container and reserved for it above.
+                    */}
                   <span
-                    className="absolute bottom-1 left-1/2 origin-bottom-left -rotate-45 whitespace-nowrap"
-                    title={d.name}
+                    className="absolute right-1/2 bottom-1 origin-bottom-right rotate-45 whitespace-nowrap"
+                    title={device.name}
                   >
-                    {shortName(d.name)}
+                    {label}
                   </span>
                 </th>
               ))}
@@ -511,11 +574,57 @@ export function Matrix({ config }: { config: Config }) {
                       // wrong scenario is the likely outcome rather than the unlucky one. Coarse
                       // pointers get the full target; a mouse keeps the dense grid, which is what
                       // makes the comparison legible in one screen.
+                      //
+                      // The selected square is marked *inside* its own box, and the focus ring
+                      // stays outside it, because the two used to be the same mark. Selection was
+                      // `ring-2 ring-[accent] ring-offset-1` and focus is `focus:ring-2
+                      // ring-[accent]` — the same channel, the same width and the same colour, so
+                      // focusing the marked square changed nothing whatsoever: a 1:1 change
+                      // contrast, which is #67's 1.95:1 select border in its most extreme form. And
+                      // it is not a corner case. Clicking a cell makes it both the selection and
+                      // the roving tab stop, so the marked square is exactly where Tab lands when a
+                      // reader comes back to the grid.
+                      //
+                      // An inner frame now says "this is the scenario the Bench is showing" and an
+                      // outer ring says "this is where the keyboard is", and neither can stand in
+                      // for the other. It also stops the mark bleeding over the 2px `border-spacing`
+                      // onto the neighbouring squares, which the offset ring did.
+                      //
+                      // **The inner frame is two tones, and the second one is not decoration.**
+                      // Moving it inside the cell moves it off the panel surface and onto the ramp,
+                      // and the accent is not readable there: against the seven steps of
+                      // `sequential` it measures 2.00, 1.48, 1.06, 1.38, 2.04, 3.07 and 4.52:1, so
+                      // an accent-only frame sits below the 3:1 non-text minimum on **304 of the
+                      // grid's 408 squares** — including the default selection, on `#3987e5` at
+                      // 1.38:1. On `#6da7ec` the two sit 0.022 apart in relative luminance (0.347
+                      // against 0.369) and measure 1.06:1 — a pure hue difference, which is #67's
+                      // own failure mode restated as a resting state, and gone in greyscale or to a
+                      // deuteranope. So the accent band carries a 1px `--color-surface`
+                      // separator on its inner edge — the dataviz surface ring, and the same
+                      // two-tone trick `Envelope.tsx` uses for its "you are here" mark on the same
+                      // ramp ("A ring, not a filled dot: the cell's own colour has to stay readable
+                      // underneath it"). The accent is then bounded by surface on both sides — the
+                      // 2px `border-spacing` outside, the separator inside — at 7.14:1, and *one of
+                      // the two tones* clears 3:1 against every step of the ramp: the separator on
+                      // the five light steps (14.26 to 3.50:1), the accent on the two dark ones
+                      // where the separator disappears (3.07 and 4.52:1). Worst case 3.07:1, zero
+                      // squares below the bar. `tokens.ts` validates the accent against `surface`
+                      // and never against the ramp, so a mark drawn on a cell has to bring its own
+                      // guarantee; `App.test.tsx` measures it over every fill the grid paints.
+                      //
+                      // The separator rides the `--tw-shadow` slot rather than a second inset ring
+                      // because Tailwind composes one box-shadow chain in a fixed order —
+                      // `inset-shadow, inset-ring, ring-offset, ring, shadow` — and only the last
+                      // slot paints *under* the accent. A 3px inset there shows through in the 2–3px
+                      // band the 2px accent does not cover, which is what keeps the accent 2px wide
+                      // instead of 1px. (Utility names are spelled out only in the class list below:
+                      // Tailwind scans comments too, and a bracketed example in prose compiles to a
+                      // rule of dead CSS.)
                       className={`h-7 w-full rounded-sm focus:ring-2 focus:ring-[var(--color-accent)] focus:outline-none [@media(pointer:coarse)]:h-11 ${
                         cell.runs ? '' : 'border border-dashed border-[var(--color-border)]'
                       } ${cell.raiseCeilingWouldHelp ? 'border-[var(--color-warning)]' : ''} ${
                         isCurrent(cell)
-                          ? 'ring-2 ring-[var(--color-accent)] ring-offset-1 ring-offset-[var(--color-surface)]'
+                          ? 'inset-ring-2 inset-ring-[var(--color-accent)] shadow-[inset_0_0_0_3px_var(--color-surface)]'
                           : ''
                       }`}
                       style={{ background: fill(cell, measure, max) }}
@@ -633,13 +742,63 @@ export function Matrix({ config }: { config: Config }) {
 }
 
 /**
- * A device name with the parts every row shares removed.
+ * The trailing qualifier a catalog name carries — `(12-ch DDR5-4800)`, `(512 GB)`, `(GB10)`.
  *
- * "GeForce RTX 5090" and "GeForce RTX 5080" differ in one character at the end, so a truncating
- * header shows the same string for both. The vendor line is the redundant part.
+ * What the brackets hold is a *spec* rather than an identity: the memory configuration, the capacity
+ * variant, the SoC. It belongs in the name the tooltip and the cell labels use, and it is what took
+ * the longest header label to 40 characters.
  */
-function shortName(name: string): string {
-  return name.replace(/^(GeForce|Instinct|Radeon)\s+/, '');
+const QUALIFIER = /\s*\(([^)]*)\)\s*$/;
+
+/**
+ * The label each column shows: as short as it can be while still naming its own column.
+ *
+ * Two rules, in order.
+ *
+ * **The vendor line goes**, always. "GeForce RTX 5090" and "GeForce RTX 5080" differ in one
+ * character at the end, so a truncating header shows the same string for both.
+ *
+ * **The qualifier goes too — but only where the rest of the name is already unique.** That condition
+ * is the whole function. Stripping it unconditionally is the obvious version and it reintroduces the
+ * defect the rotation exists to prevent: the three Mac Studio M3 Ultra rows differ *only* in their
+ * capacity, so they would collapse to one string three columns wide, and a header that cannot
+ * distinguish its own columns is worse than none. Where the qualifier is load-bearing it comes back,
+ * minus the brackets and the space before the unit — punctuation that carries nothing in a 45-degree
+ * label and costs three characters of band on every column.
+ *
+ * Computed over the rendered set rather than name by name, because uniqueness is a property of the
+ * set: the same row shortens differently depending on what else is on the grid, and a catalog
+ * addition that collides with an existing stem lengthens *both* labels rather than quietly making
+ * one of them ambiguous.
+ *
+ * On today's catalog this takes the longest label from 40 characters to 25 and the reserved band from
+ * 246px to 161px with every column still distinguishable — asserted in `App.test.tsx`, and
+ * geometrically in `e2e/matrix-header.spec.ts`.
+ */
+function headerColumns<T extends { name: string }>(
+  devices: readonly T[]
+): { device: T; label: string }[] {
+  const parts = devices.map((device) => {
+    const short = device.name.replace(/^(GeForce|Instinct|Radeon)\s+/, '');
+    const qualifier = QUALIFIER.exec(short);
+    return {
+      device,
+      stem: qualifier ? short.slice(0, qualifier.index) : short,
+      qualifier: qualifier ? qualifier[1] : '',
+    };
+  });
+
+  const shared = new Set(
+    parts
+      .filter((part, i) => parts.some((other, j) => j !== i && other.stem === part.stem))
+      .map((part) => part.stem)
+  );
+
+  return parts.map(({ device, stem, qualifier }) => ({
+    device,
+    label:
+      shared.has(stem) && qualifier ? `${stem} ${qualifier.replace(/\s+(?=[GT]B$)/, '')}` : stem,
+  }));
 }
 
 /** Colour for a cell: a step of the ramp, or the recessive "did not run" fill. */

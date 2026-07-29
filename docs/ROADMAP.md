@@ -400,8 +400,117 @@ reading the test that guards them.
   all three are one shape — **a length derived from a glyph width, written in pixels**: the
   Envelope's `MIN_COLUMN_PX` (the column those labels sit inside) and the Matrix's `headerHeight`
   (a character count times a pixel constant, sizing a `text-xs` label whose rotation clips when the
-  row is short). The general form is the thing to keep: a length measured from text belongs in the
-  same units as the text. (#42, #44.)
+  row is short — since #64 it is `headerBand`, and both of its lengths are `rem`). The general form
+  is the thing to keep: a length measured from text belongs in the same units as the text. (#42, #44.)
+
+- **A rotation costs two lengths, and `headerHeight` only ever charged for one** ([#64](https://github.com/MrZoller/bench/issues/64)).
+  `sin(45)` and `cos(45)` are the same number, so the Matrix's device labels leaned as far sideways
+  as they stood tall — 246px of reserved band at every viewport, and 142px of the same quantity
+  leaking out of a scroll container the grid otherwise fitted _exactly_ at both 1440 and 1024. The
+  grid got a scrollbar it did not need, the default view hid the last four device names, and the one
+  it cut off first was the 40-character label the 246px had been calculated from. Both numbers now
+  come from one expression, which is the actual repair; the rest is what the repair had to get right.
+
+  **The obvious label fix reintroduces the bug the rotation exists to prevent.** The filed
+  suggestion is to strip the parenthetical — `(12-ch DDR5-4800)`, `(512 GB)` — since it is already
+  in the tooltip and every cell's `aria-label`. Unconditionally, that collapses the three Mac Studio
+  M3 Ultra rows into one string three columns wide, which is precisely the "a header that cannot
+  distinguish its own columns is worse than none" failure the 45-degree labels were introduced to
+  fix. The qualifier is dropped only where the rest of the name is already unique across the
+  _rendered set_, so a catalog addition that collides with an existing stem lengthens both labels
+  instead of quietly making one ambiguous. 40 characters becomes 25, and the band 161px.
+
+  **No trailing lane works, and two were built before one did.** The filed suggestion is to reserve
+  `cos(45) × longest` to the right of the grid. As `padding-right` it is non-negotiable, so at 1024 —
+  min-content 857px inside a 934px panel — a 141px lane forces 65px of scrolling onto a grid that
+  fits. As a yielding grid track, `minmax(min-content, 1fr) minmax(0, lean)`, it takes only the free
+  space that happens to exist, which is not a quantity anyone controls: at 960px of viewport the
+  container is 870px, the grid 857px — it fits — and `scrollWidth` was 920px anyway, with
+  "Threadripper PRO 7995WX" painted 50px outside the visible right edge. That version shipped to
+  review with both of its own geometry assertions sitting above the 948–1009px window it broke. The
+  lesson is the one this file keeps writing down in other words: **a reservation whose size is "the
+  space left over" has not reserved anything.**
+
+  **Leaning the labels the other way has no width dependence at all** — the issue's third lever, and
+  the one that holds. Anchored `right-1/2` and turned `+45deg` about `origin-bottom-right`, each label
+  ends at its own column and runs up-and-_left_ over the model-name column, which is in flow and
+  inside the scroll container at every width. `scrollWidth == clientWidth` at 1440, 1280, 1060 and
+  1024, and `scrollWidth == the grid's own width` at 960, 390 and 320; the grid also gets back the
+  141px the lane was taking off its width at 1440. Text that ascends left-to-right has to lean right,
+  so this is geometry rather than taste: the direction and the anchor are one choice.
+
+  **What that buys has to be reserved, because overflow to the left is worse than overflow to the
+  right.** Right-side overflow is at least reachable by panning; left-side overflow is not scrollable
+  at all — the name is gone at every scroll position. So the model column carries an explicit
+  `min-width` of the same `lean` the band is derived from: 8px of real effect today (the longest model
+  name asks 133px, the lean 141px), inert at 1440 where auto table layout hands the column 338px, and
+  binding at 390 and under 200% text. `matrix-header.spec.ts` asserts the contract — the reservation
+  covers the furthest any label actually leans — at the two widths where it binds, since at 1440 the
+  slack would make it pass without testing anything.
+
+  **And the sweep is the interesting half.** The defect class is not "a rotated label" — it is _any_
+  scroll container whose scrollable area is enlarged by something out of flow: a rotation, an
+  absolute label, a ring, a shadow. All three of the app's `overflow-x-auto` containers can do it,
+  so `matrix-header.spec.ts` now checks every one of them: a container may only scroll as far as its
+  **in-flow** content reaches. That sweep was wrong twice, in ways worth keeping. First it measured
+  each child's `scrollWidth`, which counts the rotated labels because they are descendants of the
+  table — green against the filed defect with 142px of overflow in front of it. Then it compared
+  in-flow content against `clientWidth` instead of against `scrollWidth`, which is trivially true of
+  everything that scrolls at all: green again, at 390px, against the same defect. Both versions read
+  as coverage. The rule has to name the two quantities it is actually about, and out-of-flow boxes
+  have to be excluded by hand.
+
+- **The Envelope's axis titles are stacked rather than rotated, and the cost of rotating is smaller
+  than it first looks — a fraction of a column, not a column.** Both axes were bare number strips:
+  the gutter ran 1…128, the strip under the plot ran 2K…128K, and the only thing separating "128
+  users" from "128K tokens" was a `K` in the smallest and faintest type on the page — while the
+  hidden table, the caption and the canvas `aria-label` all named both quantities. The picture was
+  the one representation that did not say, and its y axis runs bottom-up, which was stated only in a
+  source comment, so a reader assuming top-to-bottom read the default field as "128 users at 2K is
+  the comfortable cell" when it is 1 user at 2K.
+
+  Width on this surface is genuinely scarce — `MIN_COLUMN_REM` floors every column and the plot
+  already scrolls inside its own box at 320px, where it measures 364px of content in a 230px
+  viewport — but **the first version of this note priced a rotated title at that whole ~110px
+  label and that is wrong.** `writing-mode: vertical-rl` costs one line box of horizontal space, and
+  costs the plot's _content_ width nothing at all; only its scroll viewport narrows. (`rotate-90` is
+  the expensive one: transforms do not affect layout, so the element still reserves its unrotated
+  box. That is the implementation the ~110px figure described, and not the one anyone would reach
+  for.) Recorded because a later session reading the old wording as a hard constraint would decline a
+  rotated title on the Matrix — whose axes are still untitled — on a number that is wrong for the CSS
+  it would actually write. **The real reason to stack is legibility**: 12px type on its side is the
+  least readable ink on a surface whose entire complaint was that its meaning rode on the least
+  readable ink, and the ↑ has to read as up. Vertical space is the axis this panel has spare.
+
+  The x title sits _outside_ the scroller so it stays centred on what the reader can see rather than
+  on the scrolled content. Both titles are `aria-hidden`, like the tick strips, because the canvas
+  `aria-label` is the textual equivalent and a visible title in the accessible tree has a screen
+  reader hear each axis named twice. `e2e/envelope-axes.spec.ts` holds the geometry at 320px — the
+  title above the canvas, the plot's width accounted for by the tick gutter and the row gap alone —
+  and it is red with the titles deleted, checked. Its three box comparisons measure a **`Range` over
+  the glyphs, not the paragraph**: both titles are block children of full-width containers, so their
+  element rects are their containers' rects for any alignment and for text that overflows, and the
+  centring and in-panel assertions were all true with `text-center` deleted before that substitution.
+  Same lesson as the `getClientRects().length === 1` note below. (#81.)
+
+- **One name per setting, and `SETTING_LABELS` is where it lives.** The same #81 fix found the Usage
+  sliders saying "Context per sequence" and "Concurrent users" while the Envelope's table caption
+  said "context length" and its row-header column said "Users" — two settings under three spellings,
+  in one panel, with the field's own axes naming neither. Same failure `kvLabel` exists to prevent,
+  one level up, and the same shape the "expect a subset of a class" rule predicts: the issue named
+  the two missing titles, and more hand-written copies were live. The constant is keyed by `Config`
+  field and `satisfies Record<keyof Config, string>`, so the keying is a claim the compiler checks
+  rather than a comment — including the four setup labels, whose second reader is the Matrix's
+  `sr-only` "Model" row axis, agreeing with the control today by coincidence.
+
+  **The line is whether a surface names a setting or says something in a sentence**, and prose stays
+  prose. "Currently at 32K context and 1 user" is a sentence about a cell; so is the Envelope's
+  subhead, "How much room is left — context against concurrent users", which is also the section's
+  `aria-labelledby` target. Substituting the labels there was tried and reverted: it renders "How
+  much room is left Context per sequence against Concurrent users", announced verbatim every time
+  the landmark is, which is worse English than the drift it prevents and out of register with the
+  Matrix's sibling subhead. Axis titles, captions and column headers name settings; headings and
+  hints talk. (#81.)
 
 - **Simulating text zoom by setting the root font size is not text zoom, and a test built on it
   reports layouts nobody can reach.** Widening the reflow sweep to the `sm` and `lg` boundaries —
@@ -455,6 +564,74 @@ reading the test that guards them.
   about what the page leads with rather than a keyboard-reachability bug, and the fix above already
   takes the walk from 422 presses to 15.
 
+- **A focus indicator is a mark of its own, never a colour swap and never a channel a resting state
+  already uses** ([#67](https://github.com/MrZoller/bench/issues/67)). The four primary selects —
+  Model, Hardware, Quantization, Runtime — removed the outline and replaced it with a 1px border
+  colour change measuring **1.95:1 against the unfocused edge**, where SC 2.4.13 asks for 3:1 at a
+  2px minimum. `--color-control-border` had been raised to `#646d88` specifically so a control's
+  edge cleared 3:1 _before_ focus; the focused state never got the same treatment, so the most
+  important controls on the page were the only ones whose indicator you could not see.
+
+  Two more instances came out of the sweep, both of them listed in the issue as already correct:
+
+  - The budget legend drew `focus:ring-1` — 1px, half the minimum, and with the outline suppressed
+    it is the whole indicator rather than a decoration on top of one.
+  - The Matrix marked its selected square with `ring-2 ring-[accent] ring-offset-1` and lit
+    `focus:ring-2 ring-[accent]` on focus: **the same channel, width and colour**, so focusing the
+    marked square changed nothing whatsoever. A 1:1 change contrast, which is the select's 1.95:1
+    in its most extreme form, and reachable in one click — clicking a cell makes it both the
+    selection and the roving tab stop, so the marked square is exactly where Tab lands coming back
+    to the grid. Selection is drawn inside the cell now, and focus stays outside it.
+
+  **Moving a mark onto the heatmap changes what it has to contrast against, and the accent was never
+  validated there.** Separating the two channels put the selection mark inside the cell, which took
+  it off `--color-surface` — where `tokens.ts` measures the accent at 7.14:1 — and onto the ramp,
+  where a single-tone accent frame measures **2.00, 1.48, 1.06, 1.38, 2.04, 3.07 and 4.52:1** across
+  the seven steps of `sequential`. That is below the 3:1 non-text minimum on **304 of the grid's 408
+  squares**, including the default selection at 1.38:1 on `#3987e5`; on `#6da7ec` the two colours sit
+  0.022 apart in relative luminance, so the mark was a pure hue difference at 1.06:1 — #67's own
+  failure mode, re-shipped as the resting state. The first attempt at this fix did exactly that, and
+  the only reason it looked measured is that the browser spec scored the mark against the panel
+  behind the cell instead of the fill on top of it.
+
+  So the selected square wears **two tones**: 2px of accent bounded by `--color-surface` on both
+  sides — the 2px `border-spacing` outside, a 1px separator inside — which is the dataviz surface
+  ring, and the same trick `Envelope.tsx` already used for its "you are here" mark on the same ramp
+  ("A ring, not a filled dot: the cell's own colour has to stay readable underneath it"). The
+  invariant is _not_ that either tone clears 3:1 everywhere; it is that **one of them always does**:
+  the separator on the five light steps (14.26 down to 3.50:1), the accent on the two dark ones where
+  the separator disappears into the fill (3.07 and 4.52:1). Worst case 3.07:1, zero squares under the
+  bar. Anything drawn on a cell in future — a value label, a comparison marker — inherits this
+  obligation and none of the existing measurements, because `--color-accent` is validated against
+  `surface` and nothing in `tokens.ts` says a word about the ramp. The separator rides the
+  `--tw-shadow` slot rather than a second inset ring because Tailwind composes one box-shadow chain in
+  a fixed order — `inset-shadow, inset-ring, ring-offset, ring, shadow` — and only the last slot
+  paints _under_ the accent, which is what keeps the accent 2px wide rather than 1px. Spelling a
+  bracketed utility out in prose is worth avoiding for its own small reason: Tailwind scans comments
+  and Markdown as source, so an example in a sentence compiles to a rule of dead CSS.
+
+  **The mechanism differs by control and the bar does not**, which is the decision rather than an
+  oversight. The selects use `outline` where their neighbours use `ring`, because a ring is a
+  `box-shadow` and a native `menulist` select is painted by the platform in WebKit — the fix that
+  matched the rest of the app would have shipped nothing at all on Safari, and Chromium cannot tell
+  you that. What is uniform is 2px and 3:1 against whatever the mark is drawn on, measured per
+  surface rather than assumed from the token.
+
+  **Split across both suites, for the reason #52's counting was.** Which indicator a control
+  _declares_ is a class-list property, so `App.test.tsx` sweeps all 400-odd focusable elements in a
+  second and pins the declared width, colour, and the channel collision — and, because the fill is an
+  inline style and the tones are token names, it also does the ramp arithmetic above over every fill
+  the grid paints. Whether an indicator _paints_ 2px at 3:1 needs a real stylesheet and a real focus
+  ring, and jsdom has neither: that is `e2e/focus-indicators.spec.ts`, which walks the tab sequence
+  with Tab rather than `focus()` — the UA ring is `:focus-visible`-gated and a scripted focus does not
+  reliably satisfy the heuristic, so a sweep driven by `focus()` reports every slider on the page as
+  painting nothing. Two things in that reader are easy to get wrong and both have now been wrong
+  once: it exempts `outline-style: auto` from the thickness check, because Chromium reports 1px for a
+  dual-tone ring it paints at 2px (asserted to still match something, or the exemption quietly
+  becomes the rule), and it scores each layer against the colour that layer actually covers — an
+  `inset` shadow over the element's own fill, everything else over the first opaque ancestor. Scoring
+  every mark against the ancestor is what certified a 1.06:1 mark as 7.14:1.
+
 - **`pointer: coarse` does not mean "this user can touch the screen".** It describes the _primary_
   pointing device, so a touchscreen laptop, a Surface, or an iPad with a keyboard case reports
   `fine` — and the disclosure toggles dropped back to 16px for someone who can still put a thumb on
@@ -486,6 +663,51 @@ reading the test that guards them.
   half the page's controls do not exist until something opens them, including the Envelope's table.
   Exemptions are data with a written reason, and each is asserted to still match an element, since
   an exception list is the one part of a sweep that fails open.
+
+- **A row that declares its own grid is a table that measures its columns once per row**
+  ([#70](https://github.com/MrZoller/bench/issues/70)). The workload strip put
+  its three column tracks on each `<li>`, so every row was its own grid container and the middle
+  `auto` track was sized from that row's own label — the reason column, the third one, started at
+  444, 446, 457, 475, 495, 499 and 503px at 1440. Columns 1 and 2 lined up because the first track is
+  fixed, and _that_ is what makes the third read as a column rather than as prose. It carries the
+  panel's argument: seven archetypes, seven answers, and the written reasons are what explain the
+  differences, so they have to be scannable against each other.
+
+  A subgrid on the row, with the tracks moved to the `<ul>`. Not `display: contents`, which is the
+  same idea and the tempting one-liner: a row that generates no box is a `<li>` shipping browsers drop
+  from the accessibility tree, and `order` applies among siblings of _one_ container, so dissolving
+  the rows would sort all twenty-one cells into a block of labels, a block of status words and a block
+  of reasons at the stacked width. The row therefore keeps its own two-column grid below `sm` and only
+  hands its columns back above it.
+
+  **The row's own template has to be `max-sm:`-scoped, and that is the silent part.** Subgrid is
+  Baseline widely available — Firefox 71, Safari 16, Chrome and Edge 117 — but it is _not_ inside
+  Vite's default build target, which floors at Chrome 111 (`baseline-widely-available` resolves to
+  chrome111/edge111/firefox114/safari16.4), so Chrome and Edge 111–116 are browsers this build targets
+  and the feature is missing from. There `grid-template-columns: subgrid` is invalid and dropped —
+  and anything the row declares _unconditionally_ survives, so an unscoped two-column template leaves
+  the row a two-column grid at every width while `sm:order-none` cancels the stacking: `● Yes` renders
+  before the label, which is neither of the two layouts the component supports. Verified by serving
+  the built CSS with the subgrid value invalidated: tracks of 269.016px and 780.984px, status word at
+  x=189, label at x=470, reason wrapped to a second line at x=189. Scoped to `max-sm:`, the same
+  browsers get a row with no template — one implicit 1062px column, three cells stacked in DOM order,
+  which is the order they read in left to right. `App.test.tsx` pins the scope, because no browser in
+  CI can show the fallback.
+
+  **The trap is that fixing it makes the obvious precondition vacuous.** With the tracks shared,
+  every label _cell_ is exactly one width — the column's — so a spec that reads
+  `getBoundingClientRect().width` off the label to prove the labels differ from each other reports
+  0px of spread and fails on the fixed markup. It has to measure the glyphs: a `Range` over the
+  cell's contents. Written the wrong way first and caught by running it, which is the argument for
+  running a geometry spec against both states rather than one.
+
+  **Swept rather than assumed.** A throwaway probe walked every container on the page whose children
+  are same-tagged multi-child flex or grid boxes, at 640/768/1024/1440 across three scenarios, and
+  reported the spread of each nth child's offset. One true instance — this one. The two candidates
+  worth naming both measure clean: the Telemetry tiles are three independent flex columns whose
+  internal rows could rag on the row axis and do not (0px at every width), and the BudgetBar and
+  Envelope legends are wrap-flow rows where a shared column is not the reading. The Matrix and the
+  two disclosure tables are real `<table>`s, which is this fix by other means.
 
 - **A bar that scales to its own overflow stops measuring anything, and the answer is words rather
   than a broken axis** ([#73](https://github.com/MrZoller/bench/issues/73)). `scale = max(used,
@@ -634,6 +856,127 @@ ceiling)` keeps an over-budget stack on screen, which is right and stays. What i
 - **Multi-Token Prediction modules inflate reported totals** (DeepSeek V3/R1 by ~13B, GLM-4.5-Air
   by ~4B) and inference never loads them. Detected via `num_nextn_predict_layers` and _refused_,
   not estimated; the seed list carries the published figure with a written reason.
+- **There is a third attention family in the wild, and the generator refuses it rather than
+  flattening it into GQA** ([#76](https://github.com/MrZoller/bench/issues/76)). `deriveAttention`
+  knew two, and any model whose layer stack mixes attention with linear or state-space layers fell
+  through to the GQA branch and was catalogued as if _every_ layer cached keys and values.
+  Qwen3-Next-80B is 12 attention layers of 48, so it derived at 96.0 KiB/token against a true 24.0 —
+  12.0 GiB against 3.0 at 128K, the README's own failure mode pointed the other way.
+  granite-4.0-h-small is 4 of 40, which is 10x.
+
+  **Two guards looked like they would catch it and did not**, which is the part worth keeping.
+  Qwen3-Next carries `num_attention_heads`, `num_key_value_heads` and `head_dim` exactly where GQA
+  expects them, so the branch reads as a clean hit with no signal that 36 layers were just charged
+  for a cache they never allocate. And `deriveLayerWindows` _did_ refuse a `layer_types` array it
+  could not trust — but its filter was `t.includes('sliding')`, so Granite's all-`mamba` array
+  matched nothing, `sliding.length === 0` returned `undefined`, and every layer read as full
+  attention. **An unrecognised layer type is the same defect as a missing one, one axis over**; the
+  vocabulary is closed now (`full_attention`, `attention`, `sliding_attention`) and anything else
+  throws.
+
+  **The family presents under at least eight spellings, the issue named two, and the first draft of
+  the guard enumerated four and believed that was all of them.** Do not trust a count here. What the
+  guard matches, and why it is shaped that way:
+
+  | Spelling                                                         | Model                      | Matched by             |
+  | ---------------------------------------------------------------- | -------------------------- | ---------------------- |
+  | `full_attention_interval` + `linear_*`, no per-layer array       | Qwen3-Next-80B             | exact key + `^linear_` |
+  | `layer_types: ["mamba", ...]` + `mamba_d_*`                      | Granite 4.0-h-small        | vocabulary + `^mamba_` |
+  | `hybrid_override_pattern` + `mamba_state_dim` / `mamba_head_dim` | Nemotron-H, Nemotron-Nano  | exact key + `^mamba_`  |
+  | `attn_type_list` (per-layer `1`/`0`)                             | MiniMax-M1                 | per-entry test         |
+  | nested `linear_attn_config.full_attn_layers`                     | Kimi-Linear-48B            | `^linear_`             |
+  | `full_attn_idxs` + `conv_L_cache`, no per-layer array            | LFM2-1.2B, LFM2-350M       | exact keys             |
+  | `layer_types: ["conv", ...]`                                     | LFM2-2.6B, LFM2-8B-A1B     | vocabulary             |
+  | `mb_per_layer`                                                   | Phi-4-mini-flash-reasoning | exact key              |
+
+  **The lesson is that an enumerated list of exact key names is a list of the configs its author
+  happened to open.** The first draft listed thirteen and was already incomplete against configs
+  fetched the same afternoon: Granite declares `mamba_chunk_size` / `mamba_conv_bias` /
+  `mamba_proj_bias` beside the six that were on it, Nemotron-Nano spells the same block
+  `mamba_state_dim` / `mamba_head_dim` / `mamba_num_heads` and shares **no** exact name with
+  Granite's spelling, and Kimi-Linear puts its whole Kimi-Delta block inside one nested
+  `linear_attn_config` object where a flat lookup sees nothing at all — so Kimi derived as clean
+  27-layer MLA, 30.375 KiB/token against a true 7.875, 3.86x, on a model whose headline claim is a
+  75%-smaller KV cache. So the guard matches **key prefixes** (`^linear_`, `^mamba_`) plus the
+  handful of names that carry no generalisable prefix, and the prefixes are verified against all 17
+  seeds: none matches, so this rejects nothing already in the product.
+
+  `attn_type_list` is the one entry that has to _admit_ something — M2's list is all `1`, so M2
+  really is full attention throughout and a guard keyed on the key's presence would have rejected
+  the model that turned out not to be a hybrid. `layer_types` length is `!==` rather than `<` for the
+  same reason the entries are: a longer array and `num_hidden_layers` disagree about the stack, and
+  slicing chose one silently. And the split-count clause fires only when the config states a
+  count _and_ the count is a genuine split: `full_attention_interval: 1` is legal and means every
+  layer attends, which otherwise produced "48 of 48 layers attend and cache; the other 0 hold a
+  recurrent state" — one sentence contradicting itself, the failure this file's own rule about
+  predicates and their prose exists to prevent.
+
+  **Chunked attention is a fourth window convention and needed its own guard, not a vocabulary
+  entry.** Leaving `chunked_attention` out of `LAYER_TYPES` does not refuse Llama 4: Scout and
+  Maverick ship no `layer_types` at all, so the vocabulary never runs and all 48 layers read as full
+  attention — 192.0 KiB/token, 24.0 GiB at 128K, against 7.125 for the real 12-global /
+  36-chunked-at-8192 split. 3.4x. **A closed vocabulary only fires for configs that use the key it is
+  a vocabulary for.** `attention_chunk_size` is now its own refusal. Note what is deliberately _not_
+  the signal: `cache_implementation: "hybrid"` is on `unsloth/gemma-3-12b-it` and `-27b-it`, two
+  shipped seeds whose windows derive correctly from `sliding_window_pattern`, so guarding on it would
+  have refused two rows that are already right — a fixture in the test file carries the key for
+  exactly that reason. And unlike the linear stacks, Llama 4's split _is_ derivable (`no_rope_layers`
+  is 48 entries of 1/0, one global layer every fourth); what is not derivable is how many tokens a
+  chunked layer's cache holds, because the mask is block-diagonal rather than trailing and residency
+  comes from the runtime's chunked-cache implementation. That is what [#77](https://github.com/MrZoller/bench/issues/77)
+  needs to settle before Scout can be seeded — the refusal is what makes that visible instead of
+  shipping a 3.4x row.
+
+  **Refused rather than derived, deliberately, and this is the decision to reopen with new
+  information.** Pricing a hybrid properly means a third `AttentionCore` kind carrying the per-layer
+  split _and_ the block's constant state term, which `kv.ts` would dispatch on the way it already
+  dispatches MLA. Only the first half is in `config.json`: the state's shape is specific to the block
+  (DeltaNet's `num_v_heads * head_k_dim * head_v_dim` plus its conv window, Mamba-2's
+  `n_heads * d_head * d_state` plus its own) and its width is set by the runtime rather than by
+  `torch_dtype` — llama.cpp keeps recurrent state in fp32. Adding the field and filling it with a
+  plausible figure would put an invented number inside the fix for an invented number, and a field is
+  an invitation: that is exactly how `measuredBandwidthGBs` came to exist. So the error carries the
+  evidence instead — which layers cache, which do not, and the key that said so — and adding one of
+  these models is a real piece of work rather than a seed-list edit.
+
+  **DeepSeek V3.2-Exp is refused on the same doctrine and a different quantity.** Its capacity
+  derives correctly through the existing MLA path; what is wrong is that the lightning indexer keeps
+  an `index_n_heads * index_head_dim` cache nothing here counts, and its main attention reads at most
+  `index_topk` selected positions rather than everything before it. Right about the latent and
+  silently short by the indexer is not a smaller version of deriving both.
+
+  **The refusal also has to be _reached_, and it was not.** `deriveStackShape` ran first, and
+  Qwen3-Next ships an MTP module under an `mtp.` prefix — so seeded, it was refused for 1,553
+  unclassified tensors instead: a true statement about a different problem, pointing whoever read it
+  at `LANGUAGE_PREFIXES` rather than at the layer split. Both derivations read `config.json` alone
+  and now run before anything that touches the network again, which also saves a dozen range
+  requests on a model that was never going to be admitted. Verified by seeding all four models named
+  here: Qwen3-Next, Granite 4 and V3.2-Exp each refuse with their own reason, and MiniMax-M2 is
+  admitted at 228.7B.
+
+  **What is still not covered, so the next session does not have to re-derive it.** The refusals are
+  the floor, not the fix: no model in the table above can be _added_ until the third `AttentionCore`
+  kind exists. Llama 4 needs a chunked-attention window term. `attn_type_list`'s non-`1` values are
+  refused without being read, so a future list using `2` for something benign would cost a false
+  refusal. Nothing here reads `ssm_cfg`, the raw `state-spaces/mamba` spelling, because no live
+  config checked carried it — if one appears it will refuse only if it also carries a `mamba_*` key.
+  The list of spellings is open by construction; treat any claim that it is complete, including this
+  one, as unverified until re-probed against live `config.json` files.
+
+  **And the reason all of this was untested is mechanical**: `build-catalog.ts` called `main()` at
+  module scope, so importing it started seventeen rounds of network fetches and no test could reach a
+  single derivation. It carries `catalog-diff.ts`'s guard now, and `scripts/build-catalog.test.ts`
+  pins both the refusals and the five shapes the shipped catalog is actually built from — the second
+  half mattering as much as the first, since a tightened vocabulary is exactly the kind of change
+  that quietly rejects the models already in the product.
+
+  One thing the tests get wrong easily: a refusal test whose pattern is loose enough to match
+  `require()`'s "could not determine \<field\> from config.json" passes whether or not the guard
+  exists. The headline Qwen3-Next test shipped with `/could not|declares|refus/i` and would have
+  stayed green with `refuseLinearStack` deleted. Match the guard's own wording, and read the
+  before-figures out of what `deriveAttention` returns for the same fields with the hybrid keys
+  removed — arithmetic on literals beside a refusal is documentation, not a test.
+
 - **`activeParams` excludes the input embedding unconditionally, and that is the _published_
   convention, not the physical one.** It is what reconciles every derived figure with its
   vendor's, and it is the wrong basis for decode. The engine reads `activeDenseParams`:

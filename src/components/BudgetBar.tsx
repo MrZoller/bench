@@ -328,7 +328,11 @@ export function BudgetBar({
             key={segment.key}
             tabIndex={0}
             aria-describedby={`${tableId}-hint`}
-            className={`flex items-center gap-2 rounded text-sm transition-opacity focus:ring-1 focus:ring-[var(--color-accent)] focus:outline-none ${
+            // `ring-2`, not `ring-1`: with the UA outline suppressed, the ring *is* the focus
+            // indicator, and SC 2.4.13's minimum thickness is 2px. This was the same under-thick
+            // indicator #67 measured on the four selects, one control class over — the issue named
+            // the selects and listed this one as already correct, which it was not.
+            className={`flex items-center gap-2 rounded text-sm transition-opacity focus:ring-2 focus:ring-[var(--color-accent)] focus:outline-none ${
               hovered && hovered !== segment.key ? 'opacity-50' : 'opacity-100'
             }`}
             onMouseEnter={() => setHovered(segment.key)}

@@ -101,13 +101,62 @@ export function Workloads({ evaluation, config }: { evaluation: Evaluation; conf
         </p>
       )}
 
-      <ul className="mt-4 flex flex-col gap-2">
+      {/*
+        The three tracks live on the list, not on the row.
+
+        With the grid on each `<li>` every row was its own grid container, so the middle `auto`
+        track was sized from that row's own label — and the written reason, which is the third
+        column, started at a different x on all seven rows: 444 to 503 at 1440px, 59px of rag. The
+        first track is fixed at `9rem`, so the status word and the label lined up regardless, and
+        that alignment is exactly what makes the third one read as a column rather than as prose.
+        It is the column that carries the panel's whole argument — seven archetypes, seven answers,
+        each explained in writing — and scanning those reasons against each other is what a
+        wandering left edge stops the eye doing (#70).
+
+        Subgrid on the row rather than `display: contents`, which is the other way to share one set
+        of tracks. Two reasons, and neither is the one this repo was bitten by before (the Bench's
+        `contents` scroll anchor, which generated no principal box): a row that generates no box is
+        a `<li>` that shipping browsers drop from the accessibility tree, so a seven-item list is
+        announced as an empty one; and `order` applies among siblings of one container, so with the
+        rows dissolved the mobile stacking below would sort all twenty-one cells into a block of
+        labels, a block of status words and a block of reasons instead of seven rows. Subgrid keeps
+        the row a real box and keeps its `order` scoped to it.
+
+        Fixing the middle track instead — a guessed 11rem in place of `auto` — aligns the columns
+        today and silently overflows on the first archetype label longer than "Inline code
+        completion". A subgrid over an `auto` track is that measurement taken rather than guessed.
+
+        The support check the issue asked for: subgrid is Baseline widely available — Firefox 71,
+        Safari 16, Chrome and Edge 117, which is September 2023 plus the thirty months Baseline
+        waits. It is *not*, however, inside Vite's default build target, which floors at Chrome 111
+        (`baseline-widely-available` resolves to chrome111/edge111/firefox114/safari16.4), so Chrome
+        and Edge 111 to 116 are browsers this build targets and the feature is missing from. There
+        the value is invalid, the declaration is dropped, and the row is left with no column
+        template — which is the reason the row's own two-column template is `max-sm:`-scoped rather
+        than unscoped. Unscoped it survives into those browsers past `sm` and, with `sm:order-none`
+        cancelling the stacking, renders `● Yes` *before* the label — reversing both layouts we
+        actually support. Scoped, the row falls back to one implicit column and the three cells
+        stack in DOM order, which is the same sequence they read in left to right: ugly, complete,
+        and confined to browsers older than the feature. No `@supports` branch to restore the
+        three-column table for them, because that branch would have to re-declare the per-row
+        tracks this issue is about, unexercised by any test, for browsers that update themselves.
+      */}
+      <ul className="mt-4 grid gap-y-2 sm:grid-cols-[9rem_auto_1fr] sm:gap-x-3">
         {verdicts.map(({ workload, fitness, reason }) => {
           const style = FITNESS[fitness];
           return (
             <li
               key={workload.id}
-              className="grid grid-cols-[auto_1fr] items-baseline gap-x-3 gap-y-0.5 sm:grid-cols-[9rem_auto_1fr]"
+              /*
+               * Below `sm` the row is its own two-column grid, exactly as it was: the stacked
+               * layout is built from `order` and a spanning third cell, both of which are
+               * relationships among one row's three children. Only at `sm`, where every child is
+               * `order-none` anyway, does the row hand its columns back to the list.
+               *
+               * `max-sm:` and not bare, so that in a browser without subgrid the row is left with
+               * no template rather than with this one — see the note above the list.
+               */
+              className="grid items-baseline gap-x-3 gap-y-0.5 max-sm:grid-cols-[auto_1fr] sm:col-span-3 sm:grid-cols-subgrid"
             >
               {/* Icon and word together, so the grading survives without colour. */}
               <span
