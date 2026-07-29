@@ -136,8 +136,22 @@ export function Workloads({ evaluation, config }: { evaluation: Evaluation; conf
         <h2 id={headingId} className="text-sm font-semibold tracking-wide">
           What you could do with it
         </h2>
+        {/*
+          The noun qualifies the denominator whenever it is short of the list (found in review).
+
+          `graded.length` deliberately omits an ungraded row, so that a row nobody asked about is
+          not counted as a failure — but the fraction it produces is read as a headline, and
+          "6 of 6 workloads" beside seven visible rows claims complete coverage. That is the same
+          false implication the omission exists to avoid, arriving through the total instead of
+          through the numerator.
+
+          Naming the denominator is the smallest fix that removes the claim: "6 of 6 measured
+          workloads" is true, and the row saying "Not measured" is on screen to account for the
+          seventh. The alternative — counting all seven and marking the ungraded one as neither —
+          needs a three-part fraction, which is a bigger change to a headline than this earns.
+        */}
         <PanelCount count={usable} total={graded.length}>
-          workloads
+          {graded.length === verdicts.length ? 'workloads' : 'measured workloads'}
         </PanelCount>
       </header>
 

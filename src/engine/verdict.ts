@@ -917,7 +917,14 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
                 // plural copy below, which would read "0.6 tok/s each once 1 users share the
                 // device" and describe a shared deployment that is not what was measured.
                 rateOf('serving') < BARS.serving.tight.rate
-                ? `${fmt(rateOf('serving'))} tok/s for a single served turn, under the ${BARS.serving.tight.rate} tok/s a shared deployment needs — every user added divides it further.`
+                ? // "every user added divides it further" was wrong, and wrong against the figures
+                  // in this file's own docblock (found in review). Decode is memory-bound, so a
+                  // dense model's weight read is shared across the batch and the tenth user is
+                  // nearly free — the 5090/DeepSeek case goes 0.8 to 0.6 tok/s from one user to
+                  // two, not to a half or a tenth. What justifies the grade is that the rate cannot
+                  // *rise*, which is a weaker claim than division and the only one the arithmetic
+                  // supports. The sentence says that instead.
+                  `${fmt(rateOf('serving'))} tok/s for a single served turn, under the ${BARS.serving.tight.rate} tok/s a shared deployment needs — and sharing the device between more users cannot raise it.`
                 : `${secs(servingTtft())}s to a first token for one prompt, past the ${BARS.serving.tight.ttft}s bar — and each prompt added is read on top of it.`
               : rateOf('serving') < BARS.serving.tight.rate
                 ? `${fmt(rateOf('serving'))} tok/s each once ${usage.concurrency} users share the device.`

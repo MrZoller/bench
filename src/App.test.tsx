@@ -651,8 +651,20 @@ describe('the workload strip keeps up with the scenario', () => {
     // Neutral, not the strongest negative in the vocabulary: `fail` renders "No".
     expect(serving).not.toMatch(/\bNo\b/);
 
-    expect(headline()).toBe('5 of 6 workloads');
+    /**
+     * **The denominator has to name itself while it is short of the list** (found in review on #94).
+     *
+     * Dropping the ungraded row from both sides is right — it is not evidence in either direction —
+     * but the fraction it leaves is read as a headline, and "5 of 6 workloads" beside seven visible
+     * rows claims the panel covered all of them. That is the same false implication the omission
+     * exists to prevent, arriving through the total instead of through the numerator. It is most
+     * visible one step from here: a rig that clears every graded bar renders "6 of 6", which reads as
+     * a clean sweep of a list whose seventh row says it was never measured.
+     */
+    expect(headline()).toBe('5 of 6 measured workloads');
     expect(headline()).not.toMatch(/of 7 workloads/);
+    // The qualifier is what stops the fraction claiming coverage it does not have.
+    expect(headline()).not.toBe('5 of 6 workloads');
   });
 
   it('does not paint an ungraded row in the colour that means "will not run"', () => {
@@ -682,6 +694,9 @@ describe('the workload strip keeps up with the scenario', () => {
 
     expect(rows().filter((text) => text.includes('Not measured'))).toHaveLength(0);
     expect(headline()).toMatch(/of 7 workloads$/);
+    // And the qualifier goes away with the shortfall: once the denominator is the whole list there
+    // is nothing to disclose, and "of 7 measured workloads" would imply some other total exists.
+    expect(headline()).not.toMatch(/measured/);
   });
 
   /**
