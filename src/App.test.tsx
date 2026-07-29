@@ -8,9 +8,12 @@ import { DEVICES, getDevice, getModel } from '@/data/catalog';
 import { tokens } from '@/lib/format';
 import { SETTING_LABELS, SETTING_NOTES, deviceCountNote } from '@/lib/stops';
 import { DETAIL_ANCHOR_ID } from '@/components/Matrix';
+// The one component this file mounts on its own, and only to sweep a renderer over all 43 catalog
+// rows — see "leaves none of the markup in any note the catalog carries".
+import { Select } from '@/components/Controls';
 import { judgeWorkloads } from '@/engine/verdict';
 import { RUNTIMES, getRuntime, kvSubstitutionFor, runtimeDrives } from '@/data/runtimes';
-import { canShard } from '@/engine/placement';
+import { canShard, maxAllocatablePerDevice } from '@/engine/placement';
 import { colors, marks } from '@/design/tokens';
 
 /**
@@ -842,6 +845,11 @@ describe('the Bench keeps its claims consistent with its own numbers', () => {
     // one really is raiseable — and the curated note still has to survive beside the warning.
     await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
     expect(screen.getByText(/raiseable to/i)).toBeInTheDocument();
+    // "Beside" is now "behind a disclosure under": the derivation is 96 words and was the control's
+    // accessible description (#68). Still on the page, still one interaction away, no longer read
+    // out before the reader can choose.
+    await user.click(screen.getByRole('button', { name: /show the full hardware note/i }));
+    expect(screen.getByText(/what the sysctl parses/i)).toBeInTheDocument();
   });
 
   it('does not promise a ceiling the platform will not raise', async () => {
@@ -852,7 +860,9 @@ describe('the Bench keeps its claims consistent with its own numbers', () => {
     // at its ceiling, so telling the user to raise it is advice they cannot take.
     await user.selectOptions(screen.getByLabelText('Hardware'), 'ryzen-ai-max-395');
     expect(screen.queryByText(/raiseable/i)).not.toBeInTheDocument();
-    // The curated bandwidth note is a separate claim and must still be there.
+    // The curated bandwidth note is a separate claim and must still be there — in the disclosure,
+    // which is where the provenance for a row a reader has already picked now lives.
+    await user.click(screen.getByRole('button', { name: /show the full hardware note/i }));
     expect(screen.getByText(/213/)).toBeInTheDocument();
   });
 });
@@ -3565,5 +3575,206 @@ describe('the controls that drive every figure explain what they are', () => {
      */
     await user.click(within(group).getByRole('button', { name: 'How fast' }));
     expect(description(group)).toMatch(/tokens per second/i);
+  });
+
+  /**
+   * The Hardware picker, whose note was doing two jobs and neither of them well (#68).
+   *
+   * `[statusWarning, ceilingClause, row.note].join(' ')` fused a derived claim onto 40-180 words of
+   * catalog provenance with a bare space, and handed the whole thing to the control as its
+   * `aria-describedby`. Two consequences, and the DOM is where both are visible:
+   *
+   *   - **The punctuation.** "raiseable to 240 GiB The allocation ceiling reserves 16 GiB for
+   *     macOS" reads as a parse error on the most prominent control on the page, and on the M5
+   *     Ultra the sentence that ran on was the warning that its specs are rumour-grade.
+   *   - **The audience.** A screen-reader user heard the entire derivation — `iogpu.wired_limit_mb`,
+   *     unwired allocations, what the sysctl parses — every time focus landed on the picker, before
+   *     they could choose anything.
+   *
+   * `src/data/catalog.test.ts` sweeps the composition across all 43 rows. These assert the wiring:
+   * that the short claim is what the control is described by, that the provenance is still reachable,
+   * and that it is reachable somewhere other than the description.
+   */
+  describe('the Hardware picker', () => {
+    const hardware = () => screen.getByLabelText(SETTING_LABELS.deviceId);
+    const toggle = () => screen.getByRole('button', { name: /the full hardware note/i });
+
+    /** The disclosure's region, found through the button that controls it. */
+    const detail = () => {
+      const id = toggle().getAttribute('aria-controls');
+      return id === null ? null : document.getElementById(id);
+    };
+
+    /**
+     * Every row where a derived clause used to be followed immediately by a curated note — the nine
+     * seams, derived from the catalog rather than listed, so a row added later joins the sweep.
+     * The issue named seven of them and one of those (`ryzen-ai-max-395`, already at its own
+     * ceiling) composes a single fragment and never had a seam at all.
+     */
+    const seams = DEVICES.filter(
+      (d) =>
+        d.note !== undefined &&
+        (d.status !== 'shipping' ||
+          (d.allocatableTunable === true && maxAllocatablePerDevice(d) > d.allocatableBytes))
+    );
+
+    it('describes the rumoured Mac with closed sentences instead of one fused figure', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.selectOptions(hardware(), 'mac-studio-m5-ultra-512');
+
+      // The only three-fragment row, and the one the issue calls out: the rumour warning was fused
+      // to a capacity figure, which is the sentence on that row that most needs to stand alone.
+      const note = description(hardware());
+      expect(note).toMatch(/^Rumoured — specs may change\. /);
+      expect(note).toMatch(/384 GiB allocatable by default, raiseable to 480 GiB\.$/);
+
+      // Fourteen words, against 146 before — and none of the derivation.
+      expect(note.split(/\s+/)).toHaveLength(14);
+      expect(note).not.toMatch(/iogpu|window server|sysctl|per-core rate|rumour-grade/i);
+    });
+
+    it.each(seams.map((d) => [d.id, d] as const))(
+      'gives %s a description that is a claim, not a derivation',
+      async (_id, device) => {
+        const user = userEvent.setup();
+        render(<App />);
+        await user.selectOptions(hardware(), device.id);
+
+        const note = description(hardware());
+        // Something is still said about every one of these rows — this is not a deletion.
+        expect(note).not.toBe('');
+        // The claim ends as a sentence, so nothing that follows it can look like part of it.
+        expect(note).toMatch(/[.!?…]$/);
+        // And the curated prose is not in it. First 40 characters rather than the whole string,
+        // because a substring is what a bare join produces.
+        expect(note).not.toContain(device.note!.slice(0, 40));
+      }
+    );
+
+    it('keeps the curated note reachable, and out of the description while open', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.selectOptions(hardware(), 'mac-studio-m3-ultra-512');
+
+      // Collapsed: the provenance is not on the page at all, which is what stops it setting the
+      // height of a grid cell whose row also holds the Quantization and Runtime pickers.
+      expect(screen.queryByText(/what the sysctl parses/i)).not.toBeInTheDocument();
+
+      await user.click(toggle());
+      expect(screen.getByText(/what the sysctl parses/i)).toBeInTheDocument();
+      // Open, and still not part of the control's accessible description. A disclosure that got
+      // wired into `aria-describedby` when expanded would be the same defect with a click in front
+      // of it.
+      expect(description(hardware())).not.toMatch(/sysctl/i);
+    });
+
+    it('renders the catalog’s prose rather than printing its markup', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      // Five rows write `**strong**`, two write `*emphasis*` and nine write backticked identifiers;
+      // nothing rendered any of them, so the picker printed literal asterisks. Moving the prose to
+      // its own region without this would have moved the glitch with it.
+      await user.selectOptions(hardware(), 'mac-studio-m3-ultra-96');
+      await user.click(toggle());
+
+      const region = detail();
+      expect(region).not.toBeNull();
+      expect(region!.querySelector('strong')?.textContent).toMatch(/80-core GPU/);
+      expect(region!.querySelector('code')?.textContent).toBe('iogpu.wired_limit_mb');
+      // Verbatim apart from the marks: the note is provenance, and losing a clause of it in a
+      // renderer would be worse than printing the asterisks.
+      expect(region!.textContent).toBe(
+        getDevice('mac-studio-m3-ultra-96').note!.replace(/\*\*|\*|`/g, '')
+      );
+
+      // The single-asterisk register, which the first version of this renderer did not read: two
+      // rows write their contrast with one mark rather than two, and both printed the asterisks in
+      // the region this change created for them.
+      await user.selectOptions(hardware(), 'rx-9070-xt');
+      expect(detail()!.querySelector('em')?.textContent).toBe('matrix');
+    });
+
+    /**
+     * And over the whole catalog, because "five rows write `**strong**`" is a fact about the file on
+     * the day it was read.
+     *
+     * The property is that nothing of the markup reaches the reader as text: the region's text is
+     * the note with its marks removed, exactly, which fails both ways — an unrendered mark shows up
+     * as a stray asterisk, and a renderer that ate a clause shows up as missing prose. A fourth
+     * mark, or a stray `*` in a figure, fails here rather than printing itself at a reader.
+     *
+     * `Select` on its own rather than the whole Bench, which is the one place in this file that
+     * mounts a component instead of the app: the wiring from the catalog through `devicePickerNote`
+     * to this control is what the tests above assert, on the real picker. What is swept here is the
+     * renderer against every note in the file, and mounting the Matrix's 408 cells 29 times to read
+     * one paragraph cost 19 seconds of a suite that runs in two minutes. One mount and one click
+     * either way, since the disclosure deliberately stays open across a change of selection.
+     */
+    it('leaves none of the markup in any note the catalog carries', async () => {
+      const user = userEvent.setup();
+      const noted = DEVICES.filter((d) => d.note !== undefined);
+      expect(noted.length, 'no row carries a note, so this sweep proves nothing').toBeGreaterThan(
+        20
+      );
+
+      const picker = (value: string) => (
+        <Select
+          label={SETTING_LABELS.deviceId}
+          value={value}
+          onChange={() => {}}
+          options={noted.map((d) => ({ value: d.id, label: d.name, detail: d.note }))}
+        />
+      );
+
+      const { rerender } = render(picker(noted[0].id));
+      await user.click(toggle());
+
+      const wrong: string[] = [];
+      for (const device of noted) {
+        rerender(picker(device.id));
+        if (detail()?.textContent !== device.note!.replace(/\*\*|\*|`/g, '')) wrong.push(device.id);
+      }
+      expect(wrong, 'notes whose markup reached the reader as text').toEqual([]);
+    });
+
+    /**
+     * The other 34 rows, where the split leaves the control with no accessible description at all.
+     *
+     * That is what #68 asks for — the derivation was never a description of the control — but a
+     * description that is deliberately absent and one that vanished by accident are the same DOM,
+     * and nothing else in the suite looks at this panel's descriptions. So the sanctioned state is
+     * pinned: no description, and the prose one click away in the disclosure. This row is the one
+     * whose note was dropped from the picker entirely once before.
+     */
+    it('describes the control only where it has derived a claim', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.selectOptions(hardware(), 'rtx-3090');
+
+      const device = getDevice('rtx-3090');
+      expect(device.status).toBe('shipping');
+      expect(device.allocatableTunable).toBeUndefined();
+      expect(device.note).toBeDefined();
+
+      expect(hardware()).not.toHaveAttribute('aria-describedby');
+      expect(description(hardware())).toBe('');
+
+      await user.click(toggle());
+      expect(detail()!.textContent).toMatch(/NVLink/);
+    });
+
+    it('offers no disclosure for a row the catalog says nothing extra about', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+
+      // The 5090 carries no curated note, so there is nothing to disclose — and an empty
+      // disclosure is a control that promises something and does nothing.
+      await user.selectOptions(hardware(), 'rtx-5090');
+      expect(getDevice('rtx-5090').note).toBeUndefined();
+      expect(
+        screen.queryByRole('button', { name: /the full hardware note/i })
+      ).not.toBeInTheDocument();
+    });
   });
 });

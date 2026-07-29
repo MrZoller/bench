@@ -10,7 +10,7 @@ import { Workloads } from './Workloads';
 import { Envelope } from './Envelope';
 import { DETAIL_ANCHOR_ID, Matrix } from './Matrix';
 import { Segmented, Select, StopSlider } from './Controls';
-import { compact, gibLabel, params, percent, tokens } from '@/lib/format';
+import { compact, gibLabel, params, percent, sentences, tokens } from '@/lib/format';
 import {
   canShard,
   maxAllocatablePerDevice,
@@ -28,6 +28,7 @@ import {
   SETTING_NOTES,
   contextStopsFor,
   deviceCountNote,
+  devicePickerNote,
   kvLabel,
   withStored,
 } from '@/lib/stops';
@@ -96,13 +97,13 @@ export function Bench() {
         // same forty words twice on one screen taught people to skip both. `Select` renders only
         // the *selected* option's note, so this was never what informs a choice between formats
         // anyway; what it does is tag the control that caused the panel.
-        note:
-          [
-            substitutionFor(runtime, q.id) && `Stand-in for a format ${runtime.label} cannot load.`,
-            q.qualityNote,
-          ]
-            .filter(Boolean)
-            .join(' ') || undefined,
+        // Composed with `sentences` rather than a bare join for the reason `deviceOptions` below
+        // records: both fragments happen to end in a full stop today, and "happens to" is what the
+        // device note also had until a curated one did not (#68). `quants.ts` is hand-written too.
+        note: sentences(
+          substitutionFor(runtime, q.id) && `Stand-in for a format ${runtime.label} cannot load.`,
+          q.qualityNote
+        ),
       })),
     [model, device, runtime]
   );
@@ -191,37 +192,42 @@ export function Bench() {
     []
   );
 
+  /**
+   * Status warning, then the tunable ceiling, then — behind a disclosure — whatever the curator
+   * wrote. All three used to be one string joined on a bare space, which is two separate problems
+   * in one line of code (#68).
+   *
+   * **The punctuation.** Neither generated clause ended in a full stop, so nine rows read
+   * "raiseable to 240 GiB The allocation ceiling reserves 16 GiB for macOS…" — and on the M5 Ultra,
+   * the only three-fragment row, the sentence that ran on was the rumour warning fused to a
+   * capacity figure. `devicePickerNote` terminates each clause and composes them with `sentences`,
+   * so a curated note that forgets its own full stop cannot reintroduce it.
+   *
+   * **The length, and where it was announced.** The curated note is 40 to 180 words of catalog
+   * provenance, and it was the control's `aria-describedby` — so a screen-reader user heard the
+   * whole derivation, backticked sysctl names and all, before they could choose anything. It is
+   * still on screen and still reachable; it is one click away instead of unavoidable.
+   *
+   * Combined rather than ranked, which is the one thing about the original that was right: the
+   * Ryzen AI Max+ is tunable *and* carries a note — that its 256 GB/s is AMD's rating, real
+   * workloads land near 213, and the engine charges that gap through its calibration constants
+   * rather than the catalog. Ranking these dropped the provenance.
+   */
   const deviceOptions = useMemo(
     () =>
-      DEVICES.map((d) => ({
-        value: d.id,
-        label: `${d.name} — ${gibLabel(d.capacityBytes)}`,
-        // Pre-release specs must stay visibly labelled, not silently mixed in with shipping ones.
-        // The tunable note matters for the same reason in reverse: the ceiling is a default, and
-        // treating it as a hardware limit turns a raiseable setting into a flat "will not run".
-        // Status warning first, then the tunable ceiling, then whatever the curator wrote. The
-        // last of those was being dropped entirely — including the 3090's note that estimates
-        // assume PCIe and do not model its optional NVLink bridge, which is precisely the
-        // caveat an owner of a bridged pair needs.
-        // Combined rather than ranked: the Ryzen AI Max+ is both tunable *and* carries a note —
-        // that its 256 GB/s is AMD's rating, real workloads land near 213, and the engine charges
-        // that gap through its calibration constants rather than the catalog. Ranking these
-        // dropped the provenance.
-        note:
-          [
-            d.status !== 'shipping'
-              ? `${d.status === 'rumored' ? 'Rumoured' : 'Announced'} — specs may change`
-              : undefined,
-            d.allocatableTunable && maxAllocatablePerDevice(d) > d.allocatableBytes
-              ? `${gibLabel(d.allocatableBytes)} allocatable by default, raiseable to ${gibLabel(
-                  maxAllocatablePerDevice(d)
-                )}`
-              : undefined,
-            d.note,
-          ]
-            .filter(Boolean)
-            .join(' ') || undefined,
-      })),
+      DEVICES.map((d) => {
+        // Mapped field by field rather than spread: the helper's two keys say what each string *is*
+        // — a claim you choose by, and reference prose about what you chose — and `Select`'s are
+        // named for where they go. A spread would have compiled and silently left `note` unset,
+        // because an excess property arriving through one is not an error.
+        const { claim, detail } = devicePickerNote(d, maxAllocatablePerDevice(d));
+        return {
+          value: d.id,
+          label: `${d.name} — ${gibLabel(d.capacityBytes)}`,
+          note: claim,
+          detail,
+        };
+      }),
     []
   );
 
@@ -257,7 +263,7 @@ export function Bench() {
         label: r.label,
         note: !runtimeDrives(r, device)
           ? `Does not run on ${device.name}.`
-          : [
+          : sentences(
               /* "every weight" was wrong in a configuration two clicks away. BF16 is a real format
                  here — MLX coerces to it — and there is nothing to dequantize when the checkpoint is
                  already FP16-or-wider, so the claim was false for the one selection where it is
@@ -268,12 +274,12 @@ export function Bench() {
               r.nativeLowPrecision
                 ? 'Sends low-precision weights straight to the tensor cores.'
                 : 'Dequantizes a quantized checkpoint to FP16 before the matmul, so a card’s low-precision peak is out of reach.',
+              // Truthiness, not `!== undefined`: a runtime that preallocates nothing has nothing to
+              // say here, and "Reserves 0% of the device up front" is a sentence about no reservation.
               r.preallocFraction
                 ? `Reserves ${Math.round(r.preallocFraction * 100)}% of the device up front.`
-                : undefined,
-            ]
-              .filter(Boolean)
-              .join(' '),
+                : undefined
+            ),
       })),
     [device]
   );

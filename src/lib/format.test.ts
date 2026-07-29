@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { contextStopsFor } from './stops';
-import { gib, multiple, params, percent, rate, seconds, tokens, uniqueLabels } from './format';
+import {
+  gib,
+  multiple,
+  params,
+  percent,
+  rate,
+  seconds,
+  sentences,
+  tokens,
+  uniqueLabels,
+} from './format';
 
 /**
  * Formatting is where a correct number becomes a wrong statement. These guard the cases where
@@ -129,5 +139,54 @@ describe('axis labels', () => {
     const labels = uniqueLabels([2048, 131072, 131073]);
     expect(labels[0]).toBe('2K');
     expect(labels.slice(1)).toEqual(['131,072', '131,073']);
+  });
+});
+
+/**
+ * Prose assembled from optional clauses, which is where a correct set of facts becomes an
+ * unreadable one (#68).
+ *
+ * The picker note was `[warning, ceiling, curatedNote].filter(Boolean).join(' ')`, and neither of
+ * the first two ended in punctuation — so nine Hardware rows read "raiseable to 240 GiB The
+ * allocation ceiling reserves 16 GiB for macOS", and on the rumoured Mac the sentence that ran on
+ * was the rumour warning. The fragments now terminate themselves *and* go through this, because
+ * half of them come from a hand-curated JSON file where the convention is a habit rather than an
+ * invariant.
+ */
+describe('composing prose from independent fragments', () => {
+  it('starts a new sentence where the previous fragment did not end one', () => {
+    // The exact failure from the issue, minus the 55 words of derivation that followed it.
+    expect(
+      sentences('384 GiB allocatable, raiseable to 480 GiB', 'The ceiling reserves 32 GiB')
+    ).toBe('384 GiB allocatable, raiseable to 480 GiB. The ceiling reserves 32 GiB');
+  });
+
+  it('leaves a fragment that already ends a sentence alone', () => {
+    expect(sentences('Rumoured — specs may change.', 'Unreleased.')).toBe(
+      'Rumoured — specs may change. Unreleased.'
+    );
+    // Every mark that ends a sentence, including the two that hand over rather than stop.
+    for (const mark of ['.', '!', '?', '…', '—']) {
+      expect(sentences(`a${mark}`, 'B')).toBe(`a${mark} B`);
+    }
+    // And behind a closing delimiter, so "(as the datasheet says.)" is not given a second stop.
+    expect(sentences('a (as stated.)', 'B')).toBe('a (as stated.) B');
+  });
+
+  it('leaves the last fragment exactly as the curator wrote it', () => {
+    // Nothing follows it, so there is nothing to run into — and a curator who ended on a clause
+    // rather than a sentence is not overruled here.
+    expect(sentences('First.', 'trailing clause')).toBe('First. trailing clause');
+    expect(sentences('only fragment')).toBe('only fragment');
+  });
+
+  it('drops the clauses that do not apply, without leaving their spaces behind', () => {
+    expect(sentences(undefined, 'Only this.', false, null, '')).toBe('Only this.');
+    expect(sentences('  padded  ', ' and trimmed ')).toBe('padded. and trimmed');
+  });
+
+  it('returns undefined when nothing applies, so no description points at an empty node', () => {
+    expect(sentences()).toBeUndefined();
+    expect(sentences(undefined, false, '', '   ')).toBeUndefined();
   });
 });

@@ -135,3 +135,46 @@ export function uniqueLabels(values: readonly number[]): string[] {
     seen.get(label)! > 1 ? values[i].toLocaleString('en-US') : label
   );
 }
+
+/**
+ * The marks that end a sentence, optionally behind a closing quote or bracket.
+ *
+ * `—` is in the set because a fragment that trails off into an em dash is already handing over to
+ * whatever follows it, and `…` for the same reason. A closing delimiter is allowed *after* the
+ * mark so that a fragment ending `(as the datasheet says.)` is recognised as finished.
+ */
+const TERMINAL = /[.!?…—][»”’"')\]]?$/;
+
+/**
+ * Independent fragments composed into prose, each one ending as its own sentence.
+ *
+ * `[a, b, c].filter(Boolean).join(' ')` is the obvious way to assemble a note out of clauses that
+ * may or may not apply, and it is wrong the moment a clause does not end in punctuation. Nine
+ * Hardware rows read "192 GiB allocatable by default, raiseable to 240 GiB The allocation ceiling
+ * reserves 16 GiB for macOS…" — and on the one rumoured machine the sentence that ran on was the
+ * rumour warning, fused to a capacity figure (#68).
+ *
+ * **Both halves of the fix, deliberately.** The clauses the app generates now carry their own full
+ * stops, because a fragment that reads as a sentence where it is written is a fragment a future
+ * caller cannot misuse. This function is the guarantee behind that convention: half of these
+ * fragments come from `devices.json`, which is curated by hand, so source discipline there is a
+ * habit and not an invariant — and the next note added is exactly where the habit lapses.
+ *
+ * **The last fragment is left exactly as written.** There is nothing after it to run into, and
+ * appending a full stop would overrule a curator who chose to end on a question or an ellipsis.
+ *
+ * Returns `undefined` rather than `''` for an empty composition, because every caller feeds this
+ * to an optional `note` and an empty string would emit an `aria-describedby` pointing at nothing.
+ */
+export function sentences(...fragments: (string | false | null | undefined)[]): string | undefined {
+  const present = fragments
+    .filter((f): f is string => typeof f === 'string' && f.trim() !== '')
+    .map((f) => f.trim());
+  if (present.length === 0) return undefined;
+
+  return present
+    .map((fragment, i) =>
+      i === present.length - 1 || TERMINAL.test(fragment) ? fragment : `${fragment}.`
+    )
+    .join(' ');
+}
