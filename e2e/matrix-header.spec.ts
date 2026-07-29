@@ -119,74 +119,87 @@ test('does not reserve more header height than the labels need', async ({ page }
  * reserved height was calculated from. The labels now lean the other way, into the model column,
  * where the space is reserved and inside the container at every width.
  *
- * Three widths, because they catch different mistakes. 1280 is where the panel is at its widest and
- * the overflow was pure decoration. 1024 is the width the bug was filed at. 1060 is the interesting
- * one: the grid's own min-content is 865px (868 under a wider font) inside a 970px panel, so the
- * header's sideways extent and the columns are competing for the same 100px, and every version of
- * this fix that reserved a *trailing* lane for the labels — padding, or a `minmax(0, …)` grid track
- * fed by free space — either scrolled here or scrolled at some narrower width. Both were built and
- * measured before this one; the numbers are in the component and in ROADMAP.
+ * **This asserted "nothing scrolls at all" until #78, and that premise is now unreachable by
+ * design.** The original form required the grid to fit its panel, which was true at 25 devices —
+ * min-content 865px inside a 970–1063px panel — and it hard-coded 1280/1060/1024 on that basis. The
+ * Matrix is models × devices, so #78's jump to 43 devices took the grid to 1405px. The shell is
+ * `max-w-6xl`, capped at 1152px, so the container's content box is **1062px at every viewport from
+ * 1280 to 2560** — measured, all four. There is no viewport at which this grid fits its panel, and no
+ * wider trio of hard-coded widths would change that: the cap is the binding constraint, not the
+ * screen. A test whose premise the product has outgrown is not a test.
  *
- * **Below about 950 the premise stops holding, and that is honest.** The grid's own min-content is
- * 865px, so a panel narrower than that scrolls because the *grid* does not fit, which is what a
- * scroll container is for. At 960 the premise holds by 4.6px here and by 2px under `'Courier New'`,
- * which is a measurement of this machine rather than of the layout — the sweep below covers those
- * widths instead, by the general rule rather than by a hard-coded fit.
+ * So the claim is restated the way the sweep below already states it, and the way review asked for it
+ * on #64: **a container may scroll only as far as its in-flow content reaches** — `scrollWidth`
+ * against the table's width, never against `clientWidth`. That is the same detector at a weaker
+ * premise, and it is the filed defect exactly: 142px of scrollable width with no child that wide. It
+ * holds at any device count, which is precisely what the previous form did not.
+ *
+ * In practice it is an equality — 1405 against 1405, zero decoration overflow. Leaning the labels
+ * back up-and-right adds ~142px to the left side of that comparison and nothing to the right, so this
+ * fails by the margin the bug was filed with. Verified by doing it, not by reasoning about it.
+ *
+ * The label bound moves with the premise. "Inside what the reader can see without panning" meant
+ * something while the grid fitted; now that it honestly scrolls, panning *is* how the right-hand
+ * columns are reached, so the bound is the **table's own box**. Decoration must stay inside the
+ * layout — that is what makes the scrollbar honest.
  *
  * jsdom reports every one of these widths as 0, which is why this survived.
  */
-for (const width of [1280, 1060, 1024]) {
-  test(`the grid does not scroll sideways for a header leaning past it at ${width}px`, async ({
-    page,
-  }) => {
-    await page.setViewportSize({ width, height: 800 });
-    await page.goto('/');
+test('the grid scrolls no further than its own columns reach', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto('/');
 
-    const scroller = page
-      .getByRole('region', { name: /every model on every machine/i })
-      .locator('div.overflow-x-auto');
-    await expect(scroller).toBeVisible();
+  const scroller = page
+    .getByRole('region', { name: /every model on every machine/i })
+    .locator('div.overflow-x-auto');
+  await expect(scroller).toBeVisible();
 
-    const measured = await scroller.evaluate((el) => {
-      const table = el.querySelector('table')!;
-      const labels = [...el.querySelectorAll('thead th span[title]')];
-      const box = el.getBoundingClientRect();
-      return {
-        client: el.clientWidth,
-        scroll: el.scrollWidth,
-        table: table.getBoundingClientRect().width,
-        // The container's own right edge, at the resting scroll position — what a reader can see
-        // without panning.
-        visibleRight: box.left + el.clientWidth,
-        rightmostLabel: Math.max(...labels.map((l) => l.getBoundingClientRect().right)),
-        labelCount: labels.length,
-      };
-    });
-
-    expect(measured.labelCount).toBeGreaterThan(1);
-
-    /**
-     * The premise, asserted rather than assumed: the grid itself fits the panel here. Without it
-     * this test would pass on any layout wide enough to scroll for honest reasons, which is the
-     * "measures the wrong thing and cannot fail" shape the roadmap keeps recording.
-     */
-    expect(measured.table, 'the grid no longer fits its panel at this width').toBeLessThanOrEqual(
-      measured.client + 1
-    );
-
-    // So nothing may scroll. One pixel of tolerance for a fractional layout; the defect was 142.
-    expect(measured.scroll, 'the grid scrolls sideways for its header alone').toBeLessThanOrEqual(
-      measured.client + 1
-    );
-
-    // And the last thing the header paints is inside what the reader can see, rather than 116px
-    // past it.
-    expect(
-      measured.rightmostLabel,
-      'a device label is painted outside the scroll container'
-    ).toBeLessThanOrEqual(measured.visibleRight + 1);
+  const measured = await scroller.evaluate((el) => {
+    const table = el.querySelector('table')!;
+    const labels = [...el.querySelectorAll('thead th span[title]')];
+    const box = table.getBoundingClientRect();
+    return {
+      client: el.clientWidth,
+      scroll: el.scrollWidth,
+      table: box.width,
+      tableLeft: box.left,
+      tableRight: box.right,
+      rightmostLabel: Math.max(...labels.map((l) => l.getBoundingClientRect().right)),
+      leftmostLabel: Math.min(...labels.map((l) => l.getBoundingClientRect().left)),
+      labelCount: labels.length,
+    };
   });
-}
+
+  expect(measured.labelCount).toBeGreaterThan(1);
+
+  /**
+   * The premise this form *can* assert: the grid is genuinely wider than its box, so there is a real
+   * scrollbar whose extent is worth measuring. If the grid ever fits again — a much shorter catalog,
+   * a wider shell — the assertion below goes trivially true, so the condition for it meaning
+   * anything is stated rather than assumed.
+   */
+  expect(
+    measured.table,
+    'the grid now fits its panel, so the scroll-extent assertion below proves nothing'
+  ).toBeGreaterThan(measured.client);
+
+  // The defect: scrollable width with no child that wide. One pixel for fractional layout.
+  expect(
+    measured.scroll,
+    'the container scrolls past everything in flow inside it, so decoration is asking for a scrollbar'
+  ).toBeLessThanOrEqual(measured.table + 1);
+
+  // And the header stays inside the layout at both ends. Right is where #64's labels escaped to;
+  // left is where this fix would lose them instead — unreachably — if the reservation ran out.
+  expect(
+    measured.rightmostLabel,
+    'a device label is painted past the right edge of the grid it labels'
+  ).toBeLessThanOrEqual(measured.tableRight + 1);
+  expect(
+    measured.leftmostLabel,
+    'a device label is painted left of the grid, where no scroll position reaches it'
+  ).toBeGreaterThanOrEqual(measured.tableLeft - 1);
+});
 
 /**
  * The bill for leaning the other way, and why it is a reservation rather than an assumption.

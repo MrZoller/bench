@@ -40,7 +40,7 @@ zoller.ai subdomain is one repository variable away. See **Deployment**, below.
 | ---------------------------------- | ----------------- | --------------------------------------------------------------------------------------------------- |
 | 1. Scaffold                        | **done**          | React 19 + TS strict + Vite + Tailwind v4 + Zustand. CI: lint → format:check → test → build         |
 | 2. Engine                          | **done**          | `src/engine/`, pure, no React. Pinned to published measurements at both ends of the hardware range  |
-| 3. Catalogs                        | **done** (#1)     | 17 models derived from HF, 25 devices curated. `npm run catalog` regenerates it.                    |
+| 3. Catalogs                        | **done** (#1)     | 17 models derived from HF, 43 devices curated (#78). `npm run catalog` regenerates the models.      |
 | 4. Design tokens + the Bench       | **done** (#5)     | Hero surface. Load the `dataviz` skill before any chart/meter/palette code                          |
 | 5. Verdict + explain layers        | **done** (#4)     | Seven workload archetypes. See **Verdicts**, below                                                  |
 | 6. Envelope + Matrix surfaces      | **done** (#7, #8) | Context × concurrency feasibility field; model × device heatmap                                     |
@@ -1097,7 +1097,8 @@ section is for the questions those issues cannot settle.
   convention for the whole build is now the rule — including for whoever writes the next commit,
   who can no longer push to `main` even by accident.
 - ~~Device specs need a verification pass before publishing.~~ **Done, 28 July 2026.** All 25 rows
-  checked against vendor documentation. Bandwidth — the number that governs everything — is
+  as they then stood — the catalog is 43 rows since #78 — checked against vendor documentation.
+  Bandwidth — the number that governs everything — is
   confirmed on every one: the four CPU rows are exact by arithmetic (12 channels × DDR5-4800 × 8
   bytes is 460.8 GB/s to the digit, and the other three likewise), and the rest match their
   datasheets. **One real error, in MI355X:** its whole compute row was the air-cooled MI350X's
@@ -1143,6 +1144,71 @@ section is for the questions those issues cannot settle.
     present.
 
   The `rumored` row (M5 Ultra) is still press-rumour grade and must stay visibly labelled in the UI.
+
+- ~~The catalog was accurate about 25 machines and silent about the ones the audience owns.~~
+  **43 rows since [#78](https://github.com/MrZoller/bench/issues/78).** Coverage is a different
+  property from accuracy and fails where accuracy checks cannot look: a machine that is absent is not
+  wrong about anything. Three vendors' consumer lines and the whole sub-$1000 tier were missing — the
+  cheapest catalogued GPU was the 5080 at $999, AMD appeared only as datacenter Instinct parts, Intel
+  not at all, and every Apple row was a maxed configuration — so most "will it run" questions had no
+  row to ask about rather than an incomplete answer. `catalog.test.ts` now asserts the _shape_ of the
+  coverage (a sub-$350 GPU, consumer silicon from all three vendors, Intel in both classes it
+  competes in, an Apple row at 16 GiB and one back at M1) rather than a list of ids, and one of those
+  checks runs the engine: at least one machine under $400 has to genuinely hold a 12B at Q4_K_M and
+  decode above 15 tok/s, since coverage by a row that cannot run the model is coverage in name only.
+  **`some`, not `every`, and the distinction is the test's whole correctness:** that tier is where the
+  next rows will be an 8 GiB 5060 or a 10 GiB Arc B570, which are honest rows that cannot hold a 12B
+  at all, so a swept assertion would fail on exactly the coverage work it was written to protect.
+
+  Four things worth keeping, since each was a decision rather than a transcription:
+
+  - **Every vendor states compute in a different unit, so each row's `tflops` is a derivation** and
+    the derivation is now written at the top of `devices.json` per vendor. Intel publishes a peak
+    INT8 figure and no FP16 one, and XMX runs INT8 at exactly twice FP16 (4096 against 2048 ops per
+    Xe-core per clock), so the Arc rows are half the stated TOPS. AMD publishes both an FP16 _matrix_
+    and an FP16 _vector_ rate and the two differ by 2x on RDNA 4 — the matrix one is what a tensor
+    kernel reaches, and quoting the other would halve prefill on the generation that doubled it.
+    NVIDIA's single "AI TOPS" headline is sparse _and_ quoted at the lowest precision the generation
+    reaches, so dense fp16 is the headline over 8 on Blackwell (sparse FP4: 3352 → 419 on a 5090) and
+    over 4 on Ada (sparse FP8: 1321 → 330 on a 4090) — and the datacenter parts are transcribed, not
+    derived, because A100's dense 312 fp16 is 16x its FP32 rather than the 4x that holds on GA10x.
+    **The first draft of that paragraph stated all three NVIDIA clauses wrongly** while the rows were
+    right, which is the #51 failure again: a curator applying the sentence to the next Blackwell row
+    would have entered double the correct fp16, and no test could see it. The check that now exists
+    pins the dense _ladder_ inside each row (int8 and fp8 at 2x fp16, fp4 at 4x); the divisor itself
+    is only guarded by the worked examples beside it naming the headline they start from.
+  - **The Apple allocation rules cross over below 32 GiB.** The default is Metal's recommended
+    working set (two thirds of RAM at 32 GiB and below, three quarters above) and the ceiling is
+    capacity minus `max(8 GiB, 1/16 of RAM)`, per #53. On a 24 GiB machine both land on 16 GiB, and on
+    a 16 GiB machine the reserve would put the ceiling _below_ the default. Six maxed configurations
+    all sat far above the crossover, so the rule looked universal. Those rows state no raiseable
+    ceiling at all rather than one promising less than the machine already offers — #53's
+    under-promising direction, applied at curation time instead of in `maxAllocatablePerDevice`. Both
+    rules are swept over every Apple row rather than spot-checked, because the next small Mac added
+    will hit the same crossover.
+  - **A device id is in other people's links, so renaming a row is a compatibility change.**
+    `rtx-a6000-ada` fused two products that both exist (the Ampere RTX A6000 and the Ada RTX 6000
+    Ada Generation) while every spec on it was the Ada card's. `url.ts` writes `deviceId` as `d`, and
+    the failure without an alias is not a broken link: `coerce` cannot resolve the id, falls back to
+    the default device, and shows a stranger a DGX Spark's numbers under the sender's URL. Hence
+    `DEVICE_ID_ALIASES` and `canonicalDeviceId`, which the **store** applies before it keeps the
+    value — resolving only inside `getDevice` would load the right device while leaving the stale id
+    to re-encode into the URL and match no `<option>` in the picker. Two things about it are worth
+    the next session's attention. The lookup uses `Object.hasOwn` rather than `?? id`, because the id
+    comes from a querystring and `DEVICE_ID_ALIASES['toString']` otherwise resolves up the prototype
+    chain to a function. And **`d` is the only one of the four ids in a shared link that has a
+    canonicaliser at all**: `url.ts` writes `m`, `q` and `r` too, so renaming a model, quant or
+    runtime id degrades in exactly the silent way this entry is about. Latent rather than live —
+    nothing in those three catalogs has been renamed — and recorded here so the next rename is not
+    where it gets discovered.
+  - **The unit suite is 2.5x slower** (45s to ~110s) and nothing is wrong. `App.test.tsx` renders the
+    whole page per test and the Matrix is 17 models × 42 shipping devices, so ~700 buttons are built
+    per render against the old ~400. It is the cost of the coverage, not a regression to chase.
+
+  Deliberately not done: **GB200 and B300**. The issue lists them as lower priority, and the
+  per-GPU dense FP4 figures do not reconcile across NVIDIA's own rack-level claims — a `rumored` row
+  is for specs that are uncertain, not for arithmetic the curator cannot close. MI325X went in
+  because AMD publishes it as a part.
 
 - **Final subdomain** on zoller.ai. The only thing genuinely left, and it is a naming decision
   rather than work: the site is live at the Pages project URL, and moving it is two repository

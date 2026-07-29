@@ -13,7 +13,36 @@ cross-surface invariants. Heavily-reviewed code pushes its bugs to the edges, an
 these were: in the curated data, in the periphery nothing exercises, in a latent sibling of a fixed
 bug, and on the one accessibility axis with no spec behind it.
 
+### Added
+
+- **The hardware catalog covers the machines the audience owns: 25 rows to 43**
+  ([#78](https://github.com/MrZoller/bench/issues/78)). The accuracy work had been thorough and the
+  coverage had not. The cheapest catalogued GPU was the RTX 5080 at $999, AMD appeared only as
+  datacenter Instinct parts, Intel not at all, and every Apple row was a maxed configuration — so most
+  "will it run" questions had no row to ask about rather than an incomplete answer. Added: the
+  sub-$1000 NVIDIA tier (5070 Ti, 5070, 5060 Ti 16GB, 4060 Ti 16GB, 3060 12GB), consumer Radeon
+  (9070 XT, 7900 XTX, 7900 XT), Intel as a vendor for the first time (Arc B580, Arc Pro B60,
+  A770 16GB, and Xeon 6980P at 844.8 GB/s, which stops `cpu-ram` reading as an AMD-only technique),
+  five Apple rows from a 16 GiB MacBook Air up to the 192 GiB M2 Ultra Studio, and the MI325X. Every
+  row carries its own source, and each vendor's compute derivation — Intel's INT8-to-FP16 halving,
+  AMD's matrix rate against the vector one published beside it, NVIDIA's single sparse "AI TOPS"
+  headline over 8 on Blackwell and 4 on Ada — is written down next to the rows that use it, with the
+  headline figure each worked example starts from.
+
 ### Fixed
+
+- **A device id named a product that does not exist**
+  ([#78](https://github.com/MrZoller/bench/issues/78)). `rtx-a6000-ada` fused the Ampere RTX A6000
+  with the Ada RTX 6000 Ada Generation, while every spec on the row was the Ada card's. It is
+  `rtx-6000-ada` now, and the old id is kept as an alias because `url.ts` puts `deviceId` into every
+  shared scenario link: without one the old link still opens and silently shows the default machine's
+  numbers under the sender's URL.
+- **Below 32 GiB, an Apple row would have promised a ceiling under its own default**
+  ([#78](https://github.com/MrZoller/bench/issues/78)). The `max(8 GiB, 1/16 of RAM)` reserve from
+  #53 and Metal's recommended working set cross over there — on a 24 GiB machine both land on 16 GiB —
+  and all six rows that existed sat far above the crossover, so the rule looked universal. Rows at or
+  under it state no raiseable ceiling rather than one that promises less than the machine already
+  gives, and both rules are now swept across every Apple row rather than spot-checked.
 
 - **Strix Halo was charged the bandwidth gap twice**
   ([#51](https://github.com/MrZoller/bench/issues/51)). It was the only device carrying a
