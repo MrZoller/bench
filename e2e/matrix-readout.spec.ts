@@ -129,3 +129,68 @@ test('a whole sentence wraps at 320px instead of scrolling the page', async ({ p
   }));
   expect(doc.scrollWidth, 'the page scrolls sideways').toBeLessThanOrEqual(doc.clientWidth + 1);
 });
+
+/**
+ * The readout has to be *visible* from wherever the focused cell is (found in review on #71).
+ *
+ * The paragraph sits after the table, and the table is 17 rows plus a rotated header band. So a
+ * sighted keyboard reader arrowing across the first rows had the figures rendered below the fold —
+ * #71's defect surviving its own fix, for the reader who had the least before it. The cell's native
+ * `title` does not cover that case: it needs a pointer and a dwell, and this reader has neither.
+ *
+ * `sticky bottom-0` on an element already in flow, so it reflows nothing — which the sibling test
+ * above pins from the other side.
+ */
+test('the readout stays on screen while a cell near the top of the grid is focused', async ({
+  page,
+}) => {
+  /**
+   * A laptop rather than `DESKTOP`, and the height is the whole reason.
+   *
+   * The grid measures 745px tall at this width, so at `DESKTOP`'s 900 the readout after it is on
+   * screen anyway and the sticky placement is doing nothing to observe — the test would pass against
+   * the unfixed markup. 600px is where the defect lives, which is also the range the finding named:
+   * laptops and smaller.
+   */
+  const LAPTOP = { width: 1280, height: 600 };
+  await page.setViewportSize(LAPTOP);
+  await page.goto('/');
+  await expect(grid(page)).toBeVisible();
+
+  /**
+   * Viewport coordinates, deliberately not `boxOf` — which adds `scrollY` back to give *document*
+   * coordinates so the sibling reflow tests are not fooled by focus scrolling. This test asks the
+   * opposite question: where the thing is relative to the screen right now.
+   */
+  const onScreen = (locator: Locator) =>
+    locator.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom, height: r.height };
+    });
+
+  // The state a keyboard reader is in immediately after tabbing into the grid: focused on the first
+  // cell, with the top of the panel in view.
+  const first = grid(page).locator('td button').first();
+  await first.focus();
+  await first.scrollIntoViewIfNeeded();
+
+  // The premise, asserted rather than assumed: the grid is taller than the viewport, so there is
+  // something for the sticky placement to do. Without it this passes on any short grid.
+  const table = await onScreen(grid(page));
+  expect(table.height, 'the grid fits the viewport, so this proves nothing').toBeGreaterThan(
+    LAPTOP.height
+  );
+
+  const cell = await onScreen(first);
+  const line = await onScreen(readout(page));
+
+  // The focused cell is on screen…
+  expect(cell.top).toBeGreaterThanOrEqual(-1);
+  expect(cell.bottom).toBeLessThanOrEqual(LAPTOP.height + 1);
+  // …and so is the sentence describing it, which is the whole claim.
+  expect(
+    line.bottom,
+    'the readout is below the fold while the cell it describes is on screen'
+  ).toBeLessThanOrEqual(LAPTOP.height + 1);
+  expect(await readout(page).textContent()).toBeTruthy();
+});

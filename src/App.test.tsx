@@ -1432,6 +1432,45 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
   });
 
   /**
+   * And the way back that `mouseenter` alone cannot provide (found in review on #71).
+   *
+   * The test above proves the pointer can reclaim the line by entering a *different* cell. It cannot
+   * prove it can reclaim the cell it is already in, and it could not: `mouseenter` needs a boundary
+   * crossing, so once `onFocus` expired the hover claim, a reader whose mouse was resting on a cell
+   * had to leave it and come back. Last-input-wins held in one direction only, and the direction it
+   * failed in is the one a mixed keyboard-and-mouse reader hits first — the mouse is where they left
+   * it, and the hand that moves is the one already on it.
+   *
+   * `mousemove` without a preceding `mouseenter` is exactly that state, and it is why the contrivance
+   * is the *absence* of an enter rather than the presence of a move.
+   */
+  it('lets a pointer that never left reclaim the line by moving in place', () => {
+    render(<App />);
+    const resting = cells()[3];
+
+    fireEvent.mouseEnter(resting);
+    expect(readout()).toBe(resting.getAttribute('aria-label'));
+
+    // Keyboard takes it, which also expires the pointer's claim.
+    const stepped = cells()[200];
+    act(() => stepped.focus());
+    expect(readout()).toBe(stepped.getAttribute('aria-label'));
+
+    // The pointer has not moved between cells and so fires no `mouseenter` — only a move inside the
+    // one it is already in.
+    fireEvent.mouseMove(resting);
+    expect(
+      readout(),
+      'a pointer resting on a cell cannot get the line back without leaving it'
+    ).toBe(resting.getAttribute('aria-label'));
+
+    // The focus ring has not moved, so the fallback is still the stepped cell once the pointer goes.
+    expect(document.activeElement).toBe(stepped);
+    fireEvent.mouseLeave(resting);
+    expect(readout()).toBe(stepped.getAttribute('aria-label'));
+  });
+
+  /**
    * The line is derived from where the reader is, not stored when they get there.
    *
    * Reachable without contriving anything: a pointer resting on a cell while the keyboard drives one

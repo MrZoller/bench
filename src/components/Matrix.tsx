@@ -866,6 +866,29 @@ export function Matrix({ config }: { config: Config }) {
                       onMouseEnter={() => setHovered({ kind: 'cell', row: r, col: c })}
                       onMouseLeave={() => setHovered(null)}
                       /**
+                       * How the pointer gets its claim *back*, which `onMouseEnter` alone cannot do
+                       * (found in review).
+                       *
+                       * `onFocus` expires the hover claim, for the reason argued above. But a pointer
+                       * already resting inside this cell fires no further `mouseenter` — that event
+                       * needs a boundary crossing — so after focus moved elsewhere by keyboard, moving
+                       * the mouse within the cell it is already in reclaimed nothing and the line went
+                       * on printing the focused cell. Last-input-wins held in one direction only, and
+                       * the reader had to leave the cell and come back to fix it.
+                       *
+                       * The functional update is what makes this affordable: `mousemove` fires per
+                       * pixel, and returning the *same* object when the claim is already this cell
+                       * lets React bail out of the re-render rather than reconciling 700 cells on
+                       * every mouse move. Only the first move after a loss allocates.
+                       */
+                      onMouseMove={() =>
+                        setHovered((claim) =>
+                          claim?.kind === 'cell' && claim.row === r && claim.col === c
+                            ? claim
+                            : { kind: 'cell', row: r, col: c }
+                        )
+                      }
+                      /**
                        * The native tooltip stays, now as an echo rather than the only route.
                        *
                        * It is the one channel that appears *at* the cell, and this grid is 17 rows
@@ -1011,9 +1034,28 @@ export function Matrix({ config }: { config: Config }) {
 
           `tabular`, because the figures change under the sliders and a readout whose digits shift
           width as it counts is the thing `index.css` reserves that class for. */}
+      {/* **Sticky to the bottom of the viewport while the grid is on screen** (found in review).
+
+          The comment on the cell's `title` above concedes that this grid is 17 rows tall and a reader
+          at the top of it can have the readout below the fold — and treats the native tooltip as the
+          channel that covers that case. It does not: `title` needs a pointer and a dwell, so a sighted
+          *keyboard* reader arrowing across the first rows had the figures rendered somewhere they
+          could not see, which is #71's defect surviving its own fix for the reader who had the least
+          before it.
+          `sticky` rather than `fixed`, and `bottom-0` on the element that is already in flow, so it
+          occupies its own space in the layout and reflows nothing: the paragraph sits where it always
+          did and merely stops scrolling out of view while the panel is. `min-h` already reserved the
+          line against text scaling, which is what keeps this from shifting the legend below it as the
+          sentence appears and disappears.
+          A surface of its own — `--color-surface` plus the panel's horizontal padding pulled back out
+          with negative margins — because a line of text pinned over a scrolling grid of coloured
+          squares is unreadable against half of them. No vertical padding with it: `min-h` is a
+          border-box floor, so padding is inside it while the line is empty and *adds* to it once
+          there is a line of text — 4px of legend movement every time a sentence appears, which is
+          precisely the reflow the reservation exists to prevent. The sibling test caught it. */}
       <p
         aria-hidden="true"
-        className="tabular mt-3 min-h-[1.25rem] text-sm text-[var(--color-text)]"
+        className="tabular sticky bottom-0 -mx-[min(1.25rem,5vw)] mt-3 min-h-[1.25rem] bg-[var(--color-surface)] px-[min(1.25rem,5vw)] text-sm text-[var(--color-text)]"
       >
         {readout}
       </p>
