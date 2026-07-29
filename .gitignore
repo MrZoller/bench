@@ -1,5 +1,11 @@
 # Dependencies
+# Both forms, deliberately: the trailing slash matches a directory and not a *symlink* of the same
+# name, and a symlinked node_modules is exactly what you get when running the suite from a git
+# worktree — `ln -s ../../node_modules` is the only way to avoid a per-worktree `npm ci`. Under the
+# slash-only pattern a `git add -A` in such a worktree stages the link itself, which is how one got
+# committed during the #64-#81 sweep.
 node_modules/
+node_modules
 
 # Build output
 dist/
@@ -19,6 +25,10 @@ test-results/
 
 # Claude Code local overrides
 .claude/settings.local.json
+# Agent worktrees. `.claude/settings.json` is checked in, so this directory cannot be ignored
+# wholesale — and these are real checkouts of this repo, so an `add -A` in the parent stages a
+# nested copy of the whole tree per agent.
+.claude/worktrees/
 
 # Editor / OS cruft
 .DS_Store
