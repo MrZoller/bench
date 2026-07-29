@@ -1309,6 +1309,20 @@ const TOKEN = process.env.HF_TOKEN;
 const headers: Record<string, string> = TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {};
 
 async function fetchJson<T>(url: string, what: string): Promise<T> {
+  return (await fetchPage<T>(url, what)).body;
+}
+
+/**
+ * The same fetch, plus the cursor the Hub hands back for the next page.
+ *
+ * `/api/models` paginates through a `Link: <…>; rel="next"` header carrying an opaque cursor, which
+ * is the mechanism the Hub documents. A `skip` offset also works today — measured, not assumed: the
+ * first five text-generation rows by downloads and the five at `skip=5` are disjoint — so the loop
+ * that used it was not looping forever as review supposed. But it was relying on an undocumented
+ * parameter to walk a list that is being reordered by downloads while it is walked, where the cursor
+ * is both documented and stable across those updates. Following the header costs one function.
+ */
+async function fetchPage<T>(url: string, what: string): Promise<{ body: T; next?: string }> {
   const response = await fetch(url, { headers });
   if (!response.ok) {
     const hint =
@@ -1317,7 +1331,9 @@ async function fetchJson<T>(url: string, what: string): Promise<T> {
         : '';
     throw new DerivationError(`${what}: HTTP ${response.status} from ${url}${hint}`);
   }
-  return (await response.json()) as T;
+  // `<url>; rel="next"`, and only that relation — the header may carry others.
+  const next = /<([^>]+)>;\s*rel="next"/.exec(response.headers.get('link') ?? '')?.[1];
+  return { body: (await response.json()) as T, next };
 }
 
 /**
@@ -2013,20 +2029,37 @@ async function reportSeedCandidates(): Promise<void> {
    */
   const PIPELINES = ['text-generation', 'image-text-to-text', 'image-to-text'];
   const PAGE = 200;
+  /**
+   * A ceiling on pages, because the stopping condition depends on the Hub's ordering holding.
+   *
+   * The loop stops when a page ends below `MIN_DOWNLOADS`, which is a fact about descending-sorted
+   * data — if a future API change stopped honouring `sort`, that condition would never fire and a
+   * scheduled job would page until it was rate-limited. Ten pages is 2,000 rows per pipeline, far
+   * past where anything can still clear the download bar, so hitting this is a bug rather than a
+   * catalog that outgrew it: it says so and stops.
+   */
+  const MAX_PAGES = 10;
   const live: LiveModel[] = [];
   try {
     for (const pipeline of PIPELINES) {
-      for (let page = 0; ; page++) {
-        const batch = await fetchJson<LiveModel[]>(
-          `https://huggingface.co/api/models?pipeline_tag=${pipeline}&sort=downloads` +
-            `&direction=-1&limit=${PAGE}&skip=${page * PAGE}` +
-            '&expand[]=downloads&expand[]=createdAt',
+      let url: string | undefined =
+        `https://huggingface.co/api/models?pipeline_tag=${pipeline}&sort=downloads` +
+        `&direction=-1&limit=${PAGE}&expand[]=downloads&expand[]=createdAt`;
+      for (let page = 0; url && page < MAX_PAGES; page++) {
+        const { body: batch, next }: { body: LiveModel[]; next?: string } = await fetchPage(
+          url,
           `seed candidates (${pipeline}, page ${page + 1})`
         );
         live.push(...batch);
         // Sorted by downloads descending, so once a page ends below the bar every later one is too.
         const lowest = batch.at(-1)?.downloads ?? 0;
-        if (batch.length < PAGE || lowest < MIN_DOWNLOADS) break;
+        url = batch.length < PAGE || lowest < MIN_DOWNLOADS ? undefined : next;
+        if (page === MAX_PAGES - 1 && url) {
+          console.warn(
+            `\n  ${pipeline}: still above ${MIN_DOWNLOADS} downloads after ${MAX_PAGES} pages — ` +
+              'stopping. Either the download bar wants raising or the listing is no longer sorted.'
+          );
+        }
       }
     }
   } catch (error) {
