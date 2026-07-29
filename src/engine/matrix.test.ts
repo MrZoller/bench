@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeMatrix, measureMax, measureValue, type MatrixMeasure } from './matrix';
+import { computeMatrix, measureRange, measureValue, type MatrixMeasure } from './matrix';
 import { MODELS, DEVICES } from '@/data/catalog';
 import { getQuant } from '@/data/quants';
 import { getRuntime } from '@/data/runtimes';
@@ -150,12 +150,56 @@ describe('the model-by-device grid', () => {
   it('scales each measure against the grid it is drawn on', () => {
     const cells = matrix();
     for (const measure of ['fit', 'decode', 'ttft'] as MatrixMeasure[]) {
-      const max = measureMax(cells, measure);
-      expect(max).toBeGreaterThan(0);
+      const range = measureRange(cells, measure);
+      expect(range).toBeDefined();
+      expect(range!.max).toBeGreaterThan(0);
       for (const cell of cells.flat()) {
         const value = measureValue(cell, measure);
-        if (value !== undefined) expect(value).toBeLessThanOrEqual(max);
+        if (value !== undefined) expect(value).toBeLessThanOrEqual(range!.max);
       }
+    }
+  });
+
+  /**
+   * The span the legend names, and the one thing about it that is easy to get backwards.
+   *
+   * `low` and `high` are ordered by `measureValue` — the ramp's own ordering — not by any field on
+   * the cell, and for TTFT the two disagree by construction: the measure is inverted so that larger
+   * is better, so the *slowest* cell belongs at the worst end. A range picked by "smallest
+   * `ttftSeconds`" would put the fastest machine under the word `worse`, and every colour on the
+   * grid would still be right, which is what makes it the kind of error nothing else catches.
+   */
+  it('puts the worst cell at the low end of every measure, including the inverted one', () => {
+    const cells = matrix();
+
+    for (const measure of ['fit', 'decode', 'ttft'] as MatrixMeasure[]) {
+      const range = measureRange(cells, measure)!;
+      const values = cells
+        .flat()
+        .map((cell) => measureValue(cell, measure))
+        .filter((value): value is number => value !== undefined);
+
+      expect(measureValue(range.low, measure)).toBe(Math.min(...values));
+      expect(measureValue(range.high, measure)).toBe(Math.max(...values));
+      expect(range.max).toBe(Math.max(...values));
+      // Both ends are cells that ran, so a caller can read any field off them and get a figure.
+      expect(range.low.runs && range.high.runs).toBe(true);
+    }
+
+    // The direction the ramp reads, said in the units a reader sees: the worst TTFT cell is the one
+    // that takes the longest, however the ranking is stored.
+    const ttft = measureRange(cells, 'ttft')!;
+    expect(ttft.low.ttftSeconds).toBeGreaterThan(ttft.high.ttftSeconds);
+    const decode = measureRange(cells, 'decode')!;
+    expect(decode.low.tokensPerSec).toBeLessThan(decode.high.tokensPerSec);
+  });
+
+  it('reports no span at all for a grid where nothing runs', () => {
+    // Nothing ran, so there is nothing for a ramp to scale against and nothing for a legend to
+    // name — an absence the caller can render, rather than a zero it has to interpret.
+    const cells = matrix({ runtime: MLX, devices: [RTX_5090] });
+    for (const measure of ['fit', 'decode', 'ttft'] as MatrixMeasure[]) {
+      expect(measureRange(cells, measure)).toBeUndefined();
     }
   });
 

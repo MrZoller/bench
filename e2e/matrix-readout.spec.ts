@@ -1,0 +1,131 @@
+import { expect, test, type Locator, type Page } from '@playwright/test';
+
+/**
+ * The readout under the comparison grid, and the only question about it jsdom cannot answer.
+ *
+ * Every figure the grid computes used to live in a native `title` (#71), so a sighted keyboard user
+ * arrowing a row got the colour and nothing else. The fix is a reserved line under the grid that
+ * fills on hover *and* on focus — and the word doing the work is **reserved**. A line that appears
+ * when it has something to say reflows whatever sits under it on every move between two cells, and if
+ * the line were above the grid it would reflow the cells themselves: the square under the pointer
+ * moves as the readout describes it, which is a hover trap rather than a readout.
+ *
+ * Which string the line holds, when it fills and when it clears is DOM, and `App.test.tsx` pins all
+ * of it in a second — including the pointer half, via synthetic mouse events. What no unit test can
+ * see is whether `min-h` is worth a line of height and whether a filled line leaves the geometry
+ * where it was: jsdom has no layout engine, so every rect below reads 0 there and every assertion
+ * would be a tautology. That is the split this directory exists for.
+ */
+
+/** Wide enough that the sentence fits one line, which is what makes "nothing moved" a real claim. */
+const DESKTOP = { width: 1280, height: 900 };
+
+/**
+ * 320px, the narrowest width anything ships at — and the width the legend's own overflow history
+ * lives at (#34). A whole sentence is a much longer string than the legend's keys, and it lands in
+ * the same panel with no scroll container of its own.
+ */
+const NARROW = { width: 320, height: 640 };
+
+const matrix = (page: Page) => page.getByRole('region', { name: /every model on every machine/i });
+
+/**
+ * The readout is the section's only direct paragraph — the workload caveat is inside the `header` and
+ * the measure hint inside the `fieldset`. It carries no role of its own on purpose: the sentence is a
+ * verbatim copy of the focused cell's accessible name, so a live region would announce every cell
+ * twice. Asserted below to hold a cell's sentence before anything is measured, so a locator that
+ * found some other paragraph cannot pass for the wrong reason.
+ */
+const readout = (page: Page) => matrix(page).locator(':scope > p');
+const grid = (page: Page) => matrix(page).locator('table[role="grid"]');
+/** The legend: the section's last direct `div`, the other one being the table's scroll wrapper. */
+const legend = (page: Page) => matrix(page).locator(':scope > div').last();
+
+/**
+ * A box in *document* coordinates.
+ *
+ * Focusing a cell scrolls it into view, so viewport rects move for a reason that has nothing to do
+ * with the readout — and a spec that measured those would report a shift on every run. Adding the
+ * scroll offset back means only a real reflow can change these numbers.
+ */
+const boxOf = (locator: Locator) =>
+  locator.evaluate((el) => {
+    const rect = el.getBoundingClientRect();
+    return {
+      top: rect.top + window.scrollY,
+      left: rect.left + window.scrollX,
+      width: rect.width,
+      height: rect.height,
+    };
+  });
+
+test('the reserved line holds a line of height while it is empty', async ({ page }) => {
+  await page.setViewportSize(DESKTOP);
+  await page.goto('/');
+  await expect(grid(page).locator('td button').first()).toBeVisible();
+
+  // Empty, and still occupying the space the sentence will need. `min-h-[1.25rem]` is 20px at the
+  // default root, which is exactly one line of `text-sm` — so the fill below can cost nothing.
+  await expect(readout(page)).toHaveText('');
+  const box = await boxOf(readout(page));
+  expect(
+    box.height,
+    'the line collapses while empty, so filling it must push something'
+  ).toBeGreaterThanOrEqual(19);
+});
+
+test('filling it moves neither the grid above nor the legend below', async ({ page }) => {
+  await page.setViewportSize(DESKTOP);
+  await page.goto('/');
+  const cell = grid(page).locator('td button[tabindex="0"]');
+  // Brought into view first, so the only scrolling in this test happens before anything is measured.
+  await cell.scrollIntoViewIfNeeded();
+
+  await expect(readout(page)).toHaveText('');
+  const before = { grid: await boxOf(grid(page)), legend: await boxOf(legend(page)) };
+
+  await cell.focus();
+  // The precondition. Without this the two comparisons below are satisfied by a readout that never
+  // filled at all, which is the shape of spec this suite has already produced three of.
+  await expect(readout(page)).toContainText(/ on .+:/);
+
+  const after = { grid: await boxOf(grid(page)), legend: await boxOf(legend(page)) };
+
+  // The grid cannot move, because the line is under it — which is the reason it is under it.
+  expect(after.grid.top, 'the grid moved under the pointer').toBeCloseTo(before.grid.top, 0);
+  expect(after.grid.height).toBeCloseTo(before.grid.height, 0);
+  // And the legend does not move either, because the space was already reserved.
+  expect(after.legend.top, 'the reservation was not worth the sentence').toBeCloseTo(
+    before.legend.top,
+    0
+  );
+});
+
+test('a whole sentence wraps at 320px instead of scrolling the page', async ({ page }) => {
+  await page.setViewportSize(NARROW);
+  await page.goto('/');
+  // The last cell: the longest device name in the catalog, and a row far enough down the popularity
+  // sort to have a long model name — the longest sentence the grid can produce.
+  const cell = grid(page).locator('td button').last();
+  await cell.focus();
+  await expect(readout(page)).toContainText(/ on .+:/);
+
+  const box = await readout(page).evaluate((el) => ({
+    right: el.getBoundingClientRect().right,
+    panelRight: el.closest('section')!.getBoundingClientRect().right,
+    scrollWidth: el.scrollWidth,
+    clientWidth: el.clientWidth,
+  }));
+  expect(box.scrollWidth, 'the sentence overflows its own box').toBeLessThanOrEqual(
+    box.clientWidth + 1
+  );
+  expect(box.right, 'the readout escapes the panel').toBeLessThanOrEqual(box.panelRight + 1);
+
+  // The point of measuring at all: the grid has an `overflow-x-auto` of its own and this paragraph
+  // has none, so a line that cannot wrap scrolls the document, exactly as the legend did in #34.
+  const doc = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  }));
+  expect(doc.scrollWidth, 'the page scrolls sideways').toBeLessThanOrEqual(doc.clientWidth + 1);
+});
