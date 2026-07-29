@@ -2306,7 +2306,11 @@ describe('a mark drawn on the heatmap stays visible on every step of the ramp', 
 
     // Vacuity guards. A mark with no tones, or a grid the selector stopped matching, would
     // otherwise report a clean sweep over nothing.
-    expect(tones.length, 'the marked square declares no mark of its own').toBeGreaterThan(0);
+    expect(
+      tones.length,
+      'the selected square declares no mark inside the cell — if selection moved back outside it, ' +
+        'the channel-collision rule above is what has to hold instead of this one'
+    ).toBeGreaterThan(0);
     expect(cells.length, 'the grid is not rendering').toBeGreaterThan(300);
 
     /** Every fill the grid paints, with how many squares wear it. `transparent` shows the panel. */
