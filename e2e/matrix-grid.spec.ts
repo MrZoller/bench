@@ -1,12 +1,11 @@
 import { expect, test } from '@playwright/test';
 
 /**
- * How far the keyboard actually is from the Usage controls.
+ * How long the keyboard walk across this page actually is.
  *
- * The Matrix is 408 cells, every one a `<button>` with a full-sentence `aria-label`, and it sits
- * above the Usage panel in DOM order. With each cell in the tab sequence, reaching the context
- * slider — which drives every figure on the page — took 422 presses of Tab, and a screen-reader
- * user heard 408 sentences on the way.
+ * The Matrix is 408 cells at the catalog #52 was measured against and 714 today, every one a
+ * `<button>` with a full-sentence `aria-label`. With each cell in the tab sequence, crossing the page
+ * took 422 presses of Tab, and a screen-reader user heard 408 sentences on the way.
  *
  * **jsdom cannot answer this.** It implements no sequential focus navigation at all: dispatching a
  * Tab keydown moves nothing, and `document.activeElement` stays where it was. So a unit test can
@@ -15,45 +14,64 @@ import { expect, test } from '@playwright/test';
  * the `display: contents` scroll-anchor bug this suite exists for: a property every unit test
  * agreed on, and no unit test could falsify.
  *
+ * **The walk is measured across `<main>` rather than to a named panel**, which is a change #66 forced
+ * and an improvement anyway. This used to count the presses to reach the Usage controls, because they
+ * were the panel *after* the grid; #66 moved them to the top of the page, two stops in, so the
+ * original bound would have been satisfied without the roving index doing anything at all. Counting
+ * every stop inside `<main>` asks the same question of whatever the page's last panel happens to be:
+ * 714 cells in the sequence blows any bound, one does not.
+ *
  * Written as a bound rather than an exact count on purpose. The figure that matters is the order
- * of magnitude — nobody presses Tab 422 times — and pinning 15 exactly would fail the next time an
+ * of magnitude — nobody presses Tab 422 times — and pinning 25 exactly would fail the next time an
  * unrelated control is added, which is how a spec stops being read.
  */
 
-/** Presses Tab until the focused element is inside `selector`, or gives up. */
-async function tabsUntilInside(
+/**
+ * Tab from the top of the document and count the stops inside `<main>`.
+ *
+ * Counted from entry to exit rather than from the first press, so the masthead's own controls are not
+ * in the figure and adding one there cannot move it. `Infinity` when the walk never gets out of
+ * `<main>` inside `limit` presses, which is the pre-#52 result and the failure this reports.
+ */
+async function tabStopsInsideMain(
   page: import('@playwright/test').Page,
-  selector: string,
   limit: number
 ): Promise<number> {
-  for (let presses = 1; presses <= limit; presses++) {
-    await page.keyboard.press('Tab');
-    const arrived = await page.evaluate((sel) => {
-      const target = document.querySelector(sel);
-      return target !== null && document.activeElement !== null
-        ? target.contains(document.activeElement)
-        : false;
-    }, selector);
-    if (arrived) return presses;
-  }
-  return Number.POSITIVE_INFINITY;
-}
-
-test('the Usage controls are a short walk from the top of the page', async ({ page }) => {
-  await page.goto('/');
-  // The grid has to actually be there, or this measures a page without the problem on it.
-  const cells = page.locator('table[role="grid"] td button');
-  expect(await cells.count()).toBeGreaterThan(300);
-
   await page.evaluate(() => {
     (document.activeElement as HTMLElement | null)?.blur();
     document.body.focus();
   });
 
-  const presses = await tabsUntilInside(page, 'section[aria-label="Usage"]', 60);
+  let stops = 0;
+  for (let presses = 1; presses <= limit; presses++) {
+    await page.keyboard.press('Tab');
+    const inside = await page.evaluate(() => {
+      const main = document.querySelector('main');
+      return main !== null && document.activeElement !== null
+        ? main.contains(document.activeElement)
+        : false;
+    });
+    if (inside) stops++;
+    // Focus has been in `<main>` and is not any more, so the walk is over. Whether the browser hands
+    // focus to its own chrome or wraps to the masthead, either lands outside `<main>`.
+    else if (stops > 0) return stops;
+  }
+  return Number.POSITIVE_INFINITY;
+}
 
-  // 422 before the roving tabindex landed, which the 60-press ceiling would not have reached.
-  expect(presses).toBeLessThan(40);
+test('the whole page is a short keyboard walk, grid included', async ({ page }) => {
+  await page.goto('/');
+  // The grid has to actually be there, or this measures a page without the problem on it.
+  const cells = page.locator('table[role="grid"] td button');
+  expect(await cells.count()).toBeGreaterThan(300);
+
+  const stops = await tabStopsInsideMain(page, 80);
+
+  // 25 as it stands: eleven controls (four selects, four sliders, three KV options), four
+  // disclosures, three legend keys, six measure buttons, and exactly one cell. 422 before the roving
+  // tabindex landed, which the 80-press ceiling never reaches — so that regression reports Infinity.
+  expect(stops).toBeLessThan(40);
+  expect(stops, 'the walk never entered or never left <main>').toBeGreaterThan(0);
 });
 
 test('the whole comparison grid costs one press of Tab to cross', async ({ page }) => {

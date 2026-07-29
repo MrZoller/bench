@@ -3143,10 +3143,128 @@ describe('the cache-width marker', () => {
 });
 
 /**
- * The Matrix is 408 cells, each a `<button>` carrying a full-sentence `aria-label`, and it sits
- * above the Usage controls in DOM order. Every one of those cells in the tab sequence put 422 Tab
- * presses between the top of the page and the context slider that drives every figure on the page,
- * and a screen-reader user heard 408 sentences on the way.
+ * Tabbable, not merely focusable — the distinction #52's whole fix turns on, since `tabindex="-1"`
+ * is reachable by script and never by Tab. Shared by the two suites below because they are two
+ * readings of one sequence: which stops exist, and what order a reader meets them in.
+ */
+const TABBABLE = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]',
+]
+  .map((selector) => `${selector}:not([tabindex="-1"])`)
+  .join(', ');
+
+/**
+ * The page leads with the controls that drive it, which #52 explicitly left open.
+ *
+ * The five Usage sliders set the scenario every figure here is computed at — the memory bar, the three
+ * verdict tiles, the workload strip, the Envelope, and a Matrix heading that prints the very numbers
+ * they hold ("32K context, 8K prompt, 1 user, FP16 KV"). They used to render after all five: 2,260px
+ * below the memory bar at 1440x900, two and a half viewport heights, and past four screens of grid on
+ * an iPhone 14, where the slider and the bar it fills were never on screen together at any scroll
+ * position. #52 took the keyboard cost from 422 Tab presses to 15 and closed by naming this as the
+ * open question — "whether the Usage controls should sit above the two large grids in DOM order. They
+ * are the primary input of the tool and are currently last." #66 is that question answered.
+ *
+ * **DOM order is the half jsdom can answer, and it is not the lesser half.** Whether the slider and
+ * the bar land in one viewport is geometry, so it is `e2e/usage-placement.spec.ts` — every rect here
+ * reads 0. But DOM order *is* reading order: it is the sequence a screen-reader user is handed, one
+ * panel at a time, and no amount of CSS `order` changes it. Six panels of output before the first
+ * input was the same defect in the channel that has no viewport at all. So the sequence is pinned
+ * here, where it costs a second, and where a panel slipped in between later fails a test.
+ */
+describe('the controls come before the figures they drive', () => {
+  /** True when `a` is announced before `b` — document order, which is reading order. */
+  const precedes = (a: Element, b: Element) =>
+    Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+  /**
+   * Every landmark the Bench renders, in the order a reader must meet them.
+   *
+   * Named rather than indexed, so the assertion survives a panel being added and fails on one being
+   * moved — which is the direction that matters. The two inputs first, then the four figures they
+   * drive, then the two grids as the terminal panels.
+   */
+  const ORDER: readonly (string | RegExp)[] = [
+    'Configuration',
+    'Usage',
+    /memory budget/i,
+    'Verdicts',
+    /what you could do with it/i,
+    /how much room is left/i,
+    /every model on every machine/i,
+  ];
+
+  it('announces the two control panels before any of the six they drive', () => {
+    render(<App />);
+    const landmarks = ORDER.map((name) => screen.getByRole('region', { name }));
+
+    for (let i = 1; i < landmarks.length; i++) {
+      expect(
+        precedes(landmarks[i - 1], landmarks[i]),
+        `${String(ORDER[i])} is announced before ${String(ORDER[i - 1])}`
+      ).toBe(true);
+    }
+  });
+
+  /**
+   * The same claim in the channel a keyboard reader travels, and a stronger form of it: the controls
+   * are not merely early, they are a *prefix* of the page's tab sequence. Nothing that reports a
+   * figure is reachable before every control that sets one.
+   *
+   * Scoped to `<main>` so the masthead's share button — a real stop, and legitimately first — is not
+   * counted as a figure sitting ahead of the sliders.
+   */
+  it('offers every control before any figure in the tab sequence', () => {
+    const { container } = render(<App />);
+    const main = container.querySelector<HTMLElement>('main')!;
+    const setup = main.querySelector<HTMLElement>('section[aria-label="Configuration"]')!;
+    const usage = main.querySelector<HTMLElement>('section[aria-label="Usage"]')!;
+
+    const stops = [...main.querySelectorAll<HTMLElement>(TABBABLE)];
+    const controls = stops.filter((el) => setup.contains(el) || usage.contains(el));
+
+    // Both panels are actually in the sweep — twelve stops today: four selects, the hardware note's
+    // disclosure, four sliders and three KV options. A zero here would satisfy the prefix trivially.
+    expect(controls.length).toBeGreaterThan(8);
+    expect(stops.slice(0, controls.length), 'a figure is reachable before a control').toEqual(
+      controls
+    );
+  });
+
+  /**
+   * And the anchor a Matrix click scrolls back to still aims at the figures.
+   *
+   * It is the one thing in this section that had to *stay* where it was. A Matrix click rewrites the
+   * model and device, so the detail it loads is the budget bar and the tiles; moving the anchor up
+   * with the controls would scroll two panels of input into view and push the figures the click
+   * actually changed back under the fold. #66 named this as the thing to check when moving the panel.
+   */
+  it('leaves the detail anchor between the controls and the figures', () => {
+    const { container } = render(<App />);
+    const anchor = container.querySelector(`#${DETAIL_ANCHOR_ID}`)!;
+    const usage = container.querySelector('section[aria-label="Usage"]')!;
+    const budget = screen.getByRole('region', { name: /memory budget/i });
+
+    expect(anchor, 'the anchor is missing, so a Matrix click scrolls nowhere').not.toBeNull();
+    expect(precedes(usage, anchor), 'the anchor scrolls the controls into view').toBe(true);
+    expect(precedes(anchor, budget), 'the anchor sits past the detail it is meant to show').toBe(
+      true
+    );
+  });
+});
+
+/**
+ * The Matrix is 408 cells at the catalog #52 was measured against — 714 today — each a `<button>`
+ * carrying a full-sentence `aria-label`, and it sat above the Usage controls in DOM order. Every one
+ * of those cells in the tab sequence put 422 Tab presses between the top of the page and the context
+ * slider that drives every figure on the page, and a screen-reader user heard 408 sentences on the
+ * way. #66 has since moved those controls above the grid; the grid is still 714 stops from anything
+ * after it, and a reader who Tabs into it still needs one press to get out.
  *
  * The counting lives here rather than in `e2e/` because the tab *sequence* is a DOM property —
  * `tabindex="-1"` is reachable by script and never by Tab — and jsdom can answer it in a second.
@@ -3154,18 +3272,6 @@ describe('the cache-width marker', () => {
  * it implements no sequential focus navigation at all; that assertion is in `e2e/matrix-grid.spec.ts`.
  */
 describe('the comparison grid is one tab stop, not four hundred', () => {
-  /** Tabbable, not merely focusable — the distinction the whole fix turns on. */
-  const TABBABLE = [
-    'a[href]',
-    'button:not([disabled])',
-    'input:not([disabled])',
-    'select:not([disabled])',
-    'textarea:not([disabled])',
-    '[tabindex]',
-  ]
-    .map((selector) => `${selector}:not([tabindex="-1"])`)
-    .join(', ');
-
   const grid = (container: HTMLElement) =>
     container.querySelector<HTMLTableElement>('table[role="grid"]')!;
   const cellsOf = (container: HTMLElement) => [
@@ -3182,16 +3288,25 @@ describe('the comparison grid is one tab stop, not four hundred', () => {
     expect(cells.filter((c) => c.tabIndex === -1)).toHaveLength(cells.length - 1);
   });
 
-  it('leaves the Usage controls a short walk from the top of the page', () => {
+  /**
+   * The whole page, not the walk to one panel — which is what this counted until #66.
+   *
+   * It measured the index of the first Usage control, because the Usage panel was the one *after* the
+   * grid: 422 before the roving index, 19 after it. #66 moved those controls to the top of the page,
+   * where their index is 6 whatever the grid does with its 714 cells, so the original assertion would
+   * have passed against a grid that had never been fixed. The total is the property #52 actually
+   * bought, and it is indifferent to where any panel sits.
+   */
+  it('keeps the whole page inside thirty tab stops', () => {
     const { container } = render(<App />);
     const stops = [...container.querySelectorAll<HTMLElement>(TABBABLE)];
-    const usage = container.querySelector<HTMLElement>('section[aria-label="Usage"]')!;
-    const firstControl = usage.querySelector<HTMLElement>(TABBABLE)!;
 
-    // 422 before this. The bound is deliberately loose — what matters is the order of magnitude,
-    // and pinning the exact figure would fail on any unrelated control being added.
-    expect(stops.indexOf(firstControl)).toBeLessThan(30);
-    expect(stops.indexOf(firstControl)).toBeGreaterThan(0);
+    // The grid has to be in this page, or the count is of a page without the problem on it.
+    expect(cellsOf(container).length).toBeGreaterThan(300);
+    // 26 as it stands, one of which is the grid. 740 if every cell were in the sequence again. The
+    // bound is deliberately loose — what matters is the order of magnitude, and pinning the exact
+    // figure would fail on any unrelated control being added.
+    expect(stops.length).toBeLessThan(30);
   });
 
   it('moves between cells with the arrow keys', async () => {

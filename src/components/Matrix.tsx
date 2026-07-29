@@ -269,9 +269,12 @@ export function Matrix({ config }: { config: Config }) {
    *
    * Every cell is a `<button>` with a full-sentence `aria-label`, so before this the grid was one tab
    * stop per cell — 408 of them at the catalog #52 was measured against, 714 as it stands now — and
-   * it sits *above* the Usage controls in DOM order, which meant 422 presses of Tab between the top
+   * it sat *above* the Usage controls in DOM order, which meant 422 presses of Tab between the top
    * of the page and the context slider that drives every figure on it. A screen-reader user heard
-   * every one of those sentences on the way. That is the one accessibility affordance this repo had no
+   * every one of those sentences on the way. #66 has since moved those controls above this grid, and
+   * that does not make this pattern optional: 714 stops still stand between the grid and anything
+   * after it, and a reader who Tabs *into* the grid still needs a way out of it. That is the one
+   * accessibility affordance this repo had no
    * spec behind, which is exactly why it survived: touch targets, reflow at 200%, coarse-pointer
    * queries and palette contrast all have tokens and tests, and nothing was looking at focus order.
    *
@@ -562,9 +565,14 @@ export function Matrix({ config }: { config: Config }) {
       <header className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
         {/* The grid moves materially with context, concurrency, prompt and KV precision — the fit
             counts and the throughput colours all change — and the heading named only the format
-            and the runtime. The sliders that control it sit below this section, so a screenshot of
-            the Matrix carried no record of the request it answers, and two of them taken at
-            different settings are indistinguishable. Every input that moves a cell is stated. */}
+            and the runtime. So a screenshot of the Matrix carried no record of the request it
+            answers, and two of them taken at different settings are indistinguishable. Every input
+            that moves a cell is stated.
+
+            Still stated now that the sliders sit at the top of the page rather than below this
+            section (#66). Being able to scroll up to the controls is not the same as the panel
+            saying what it was computed at: this grid is 17 rows tall, a screenshot carries no
+            scrollback at all, and the heading is also the section's `aria-labelledby` target. */}
         <h2 id={headingId} className="text-sm font-semibold tracking-wide">
           Every model on every machine
           <span className="ml-2 font-normal text-[var(--color-text-faint)]">
@@ -1246,9 +1254,12 @@ export function Matrix({ config }: { config: Config }) {
 
           Last in the panel, which is necessary and — as review pointed out — **not sufficient, and my
           first rationale for it was wrong.** "Nothing follows it to push" is true inside this panel
-          and false on the page: `Bench.tsx` renders the Usage section immediately after `<Matrix>`,
-          so a paragraph whose height changes changes this section's height and shoves that panel
-          down. Being last removes the legend from the blast radius; it does not remove the page.
+          and false on the page: a paragraph whose height changes changes this section's height and
+          shoves whatever is downstream of it down. When #71 landed that was the Usage panel, which
+          `Bench.tsx` rendered immediately after `<Matrix>`; #66 moved those controls to the top of the
+          page, so today it is the MoE aside and the document's own height. Being last removes the
+          legend from the blast radius; it does not remove the page, and which panel happens to be
+          downstream is not something this reservation should depend on.
 
           So the height is **reserved per breakpoint**, from measurement rather than taste. The
           sentence is a full model-and-device line, and its widest rendering is 80px at 320, 60 at
