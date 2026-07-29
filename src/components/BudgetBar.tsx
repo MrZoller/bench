@@ -32,6 +32,10 @@ import { DisclosureToggle } from './DisclosureToggle';
  * is the absolute overage said a second way — "over by 3.1 GiB" *and* "1.1x the ceiling" — and a
  * clause that appears on every overflow is a clause people learn to skip, including on the
  * configurations where it is the only thing telling them the scale.
+ *
+ * It is also the boundary the table's ratio column switches form at (`shareOfCeiling`), so this
+ * panel has one answer to "has this ratio left the neighbourhood of 1" rather than two thresholds
+ * that can disagree about the same figure in two channels.
  */
 const OVERSHOOT_STATED = 3;
 
@@ -128,6 +132,26 @@ export function BudgetBar({
    */
   const overshoot = used / ceiling;
   const statesOvershoot = Number.isFinite(overshoot) && overshoot >= OVERSHOOT_STATED;
+
+  /**
+   * One row's size against the ceiling, in the table — the channel with no shape at all.
+   *
+   * Same readability rule as the sentence above, and it has to be, because this is where it matters
+   * most: the table exists for anyone who cannot use the bar, so a reader who never sees the shape
+   * invert was the one still being handed "1222%" for a component twelve times the size of the whole
+   * budget. `percent` is right while a ratio is near 1 and stops being read as a magnitude past it —
+   * "1222%" is the same arithmetic as "12x" and only one of them lands.
+   *
+   * Per row rather than per column, which is the part worth stating: the *stack* is what overshoots,
+   * but the rows are not, and 0.7 GiB of overhead against a 31 GiB ceiling is 0.02x — which `multiple`
+   * would print as "0x", a real quantity rendered as nothing. That is exactly the failure `percent`'s
+   * own `<1%` floor exists to prevent, so a column-wide switch would fix one row by breaking another.
+   * Mixed forms in one column are the cost, and the alternative is a wrong number.
+   */
+  const shareOfCeiling = (bytes: number) => {
+    const ratio = bytes / ceiling;
+    return ratio >= OVERSHOOT_STATED ? multiple(ratio) : percent(ratio);
+  };
 
   /**
    * What the overflow line should say, which is not always "spill the weights".
@@ -249,7 +273,15 @@ export function BudgetBar({
             already put between themselves via `marks.gap`, and the same mechanism the Envelope's
             "you are here" ring and the Matrix's selected cell already use — a mark that overlaps
             another is separated by surface, never by more ink. The dashes then read against the
-            track wherever the line falls. */}
+            track wherever the line falls.
+
+            What the halo does not survive is either edge of the bar, and the position is what gives
+            way rather than the reference. It is a fixed `lineWidth + 2·gap` centred on the rule, and
+            the bar clips its children, so a stack barely over the ceiling puts the rule at 99.5% and
+            loses the right gap, and one hundreds of times over loses the left. Clamping it inward
+            would keep the separation whole by drawing the ceiling somewhere the ceiling is not, which
+            is the one thing this panel cannot do — and the sentence below now carries the magnitude
+            in either case. */}
         {overflows && (
           <div
             className="absolute inset-y-0 flex justify-center"
@@ -262,7 +294,15 @@ export function BudgetBar({
             }}
             aria-hidden="true"
           >
-            <div className="h-full w-0 shrink-0 border-l-2 border-dashed border-[var(--color-critical)]" />
+            {/* Width from the token the halo is sized against, not `border-l-2`. Two literals for
+                one line weight is how the rule leaves the ceiling by half a pixel: the halo is
+                `lineWidth + 2·gap` wide and centres its child, so a token bumped to 3 while the
+                border stayed at 2 would distribute 2.5px per side and move the ink. Centred by
+                arithmetic that closes on the true position for any weight. */}
+            <div
+              className="h-full w-0 shrink-0 border-dashed border-[var(--color-critical)]"
+              style={{ borderLeftWidth: marks.lineWidth }}
+            />
           </div>
         )}
       </div>
@@ -324,9 +364,12 @@ export function BudgetBar({
             figure for the same reason every other row carries its bytes. */}
         {overflows && (
           <li className="flex items-center gap-2 text-sm">
+            {/* Same token as the mark itself, for the same reason: a key is only findable if it is
+                the same line the reader is looking for. */}
             <span
               aria-hidden="true"
-              className="inline-block h-3 w-0 shrink-0 border-l-2 border-dashed border-[var(--color-critical)]"
+              className="inline-block h-3 w-0 shrink-0 border-dashed border-[var(--color-critical)]"
+              style={{ borderLeftWidth: marks.lineWidth }}
             />
             <span className="text-[var(--color-text-muted)]">Ceiling</span>
             <span className="tabular text-[var(--color-text)]">{gibLabel(ceiling)}</span>
@@ -377,7 +420,7 @@ export function BudgetBar({
                   {segment.label}
                 </th>
                 <td className="tabular py-1 text-right">{gibLabel(segment.bytes)}</td>
-                <td className="tabular py-1 text-right">{percent(segment.bytes / ceiling)}</td>
+                <td className="tabular py-1 text-right">{shareOfCeiling(segment.bytes)}</td>
                 <td className="py-1 pl-4">{segment.hint}</td>
               </tr>
             ))}

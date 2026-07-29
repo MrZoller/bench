@@ -167,10 +167,26 @@ for (const { name, url } of SCENARIOS) {
       expect(band.background, 'the halo is not the track colour').toBe(track.background);
       expect(band.background).not.toBe('rgba(0, 0, 0, 0)');
 
-      // And the whole thing is inside the bar, which clips its children: a halo half outside the
-      // rounded corner is the failure this would otherwise hide at very large overshoots.
-      expect(band.left).toBeGreaterThanOrEqual(track.left - 0.5);
-      expect(band.right).toBeLessThanOrEqual(track.right + 0.5);
+      /**
+       * And nothing of it is lost to the bar's clip — in these two positions, which is as far as
+       * the promise goes, so it is asserted as an overhang rather than as `>= track.left`.
+       *
+       * The halo is a fixed `lineWidth + 2·gap` centred on the rule, and the bar clips its children,
+       * so it survives whole exactly while the rule is one gap clear of each edge. Both scenarios
+       * here are (6.9% and ~50%). A stack 0.5% over the ceiling is not: the rule lands at 99.5% and
+       * the right 1–4px of separation is clipped away, and one hundreds of times over does the same
+       * on the left. That is what a fixed-width mark does near an edge, and the alternative is to
+       * draw the ceiling where the ceiling is not — so a scenario added there should not read this
+       * as a regression. The invariant that holds at every position is the pair of offsets above.
+       */
+      expect(
+        Math.max(0, track.left - (line.left - marks.gap)),
+        'the halo is clipped at the left edge'
+      ).toBeLessThan(0.5);
+      expect(
+        Math.max(0, line.right + marks.gap - track.right),
+        'the halo is clipped at the right edge'
+      ).toBeLessThan(0.5);
     });
   });
 }

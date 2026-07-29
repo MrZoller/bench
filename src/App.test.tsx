@@ -9,6 +9,7 @@ import { tokens } from '@/lib/format';
 import { DETAIL_ANCHOR_ID } from '@/components/Matrix';
 import { judgeWorkloads } from '@/engine/verdict';
 import { kvSubstitutionFor } from '@/data/runtimes';
+import { marks } from '@/design/tokens';
 
 /**
  * Wrapped rather than replaced, so every other test in this file still exercises the real verdict
@@ -320,6 +321,111 @@ describe('the budget bar states an overshoot its shape cannot show', () => {
     expect(key).not.toBeNull();
     // The ceiling's own figure, for the same reason every other row carries its bytes.
     expect(key).toHaveTextContent('31 GiB');
+  });
+
+  /**
+   * The table says it the same way, because the table is the channel with no shape at all.
+   *
+   * It exists "for anyone who cannot use the bar", and the reader who cannot watch the bar invert
+   * was the one still handed "1222%" for a component twelve times the size of the whole budget —
+   * the exact form `multiple` was added to replace, in the one place there is nothing else to read.
+   *
+   * The KV row is the control, and it is why this is a per-row rule rather than a column-wide one:
+   * 2.2x is still inside the neighbourhood of 1 where a percentage is the better form, and the 0.7
+   * GiB overhead row would print as "0x" if the whole column switched.
+   */
+  it('states a large share as a multiple in the table, not as a four-digit percentage', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await fourteenTimesOver(user);
+
+    await user.click(within(budget()).getByRole('button', { name: /figures as a table/i }));
+    const table = within(budget()).getByRole('table', { name: /Memory budget breakdown/i });
+    const row = (name: string) => within(table).getByRole('rowheader', { name }).closest('tr');
+
+    expect(row('Weights')).toHaveTextContent('12x');
+    expect(row('Weights')).not.toHaveTextContent('1222%');
+    expect(row('KV cache')).toHaveTextContent('221%');
+  });
+
+  /**
+   * One line weight, not two — the placement invariant, checked where it can be checked cheaply.
+   *
+   * The halo is `lineWidth + 2·gap` wide and centres the rule inside itself, so the ink lands on the
+   * true ceiling position only while the two widths are the same number. Written as `border-l-2`
+   * beside a halo sized from `marks.lineWidth`, a token bumped to 3 would distribute 2.5px per side
+   * and move the rule half a pixel off the ceiling — the sentence and the line would stop being two
+   * readings of one expression, and the e2e position check's 3px tolerance would not notice.
+   *
+   * Geometry is e2e's job and this asserts none: jsdom lays nothing out, and it cannot see a Tailwind
+   * class either. What it can see is that the token reaches the element at all, which is the whole
+   * repair — reinstating the literal empties this style and fails here.
+   */
+  it('draws the ceiling rule from the same line-weight token its halo is sized from', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await fourteenTimesOver(user);
+
+    const bar = within(budget()).getByRole('img', { name: /allocatable used/i });
+    // Two children: the segment row, then the rule in its halo.
+    const halo = bar.children[bar.children.length - 1] as HTMLElement;
+    const line = halo.children[0] as HTMLElement;
+
+    expect(line.style.borderLeftWidth).toBe(`${marks.lineWidth}px`);
+    expect(halo.style.width).toBe(`${marks.lineWidth + marks.gap * 2}px`);
+    // And the halo starts one gap early, which is what leaves the centred ink on the ceiling.
+    expect(halo.style.left).toContain(`- ${marks.gap}px`);
+  });
+});
+
+/**
+ * A mark drawn on top of another mark is named where a reader can find it (#73's class).
+ *
+ * The budget bar's ceiling rule was the case the issue named, and the audit of the rest found the
+ * same shape twice more: three overlay marks, all of them keyed only in an `aria-label` or in a hue,
+ * none of them in a legend. A legend is the channel that does not depend on the mark being legible,
+ * which is exactly the property an overlay cannot promise — it is drawn on whatever is beneath it.
+ *
+ * Whether each mark is *distinguishable* where it lands is geometry and pixels, and lives in
+ * `e2e/budget-overshoot.spec.ts`. That it is identified at all is DOM, so it is here.
+ */
+describe('every mark drawn over another is named in a legend', () => {
+  const envelope = () => screen.getByRole('region', { name: /how much room is left/i });
+  const matrix = () => screen.getByRole('region', { name: /every model on every machine/i });
+
+  /**
+   * The Envelope's ring. Its `aria-label` already said "Currently at 32K context and 1 user", so a
+   * screen-reader user was told what the ring was and a sighted reader was not — the one inversion
+   * of the usual gap, and no less a gap for it.
+   */
+  it('keys the ring that marks your scenario on the feasibility grid', () => {
+    render(<App />);
+
+    const key = within(envelope()).getByText('You are here').closest('li');
+    expect(key).not.toBeNull();
+    // In the legend itself, beside the state keys, rather than as a caption of its own somewhere.
+    expect(key?.parentElement).toBe(within(envelope()).getByText('Comfortable').closest('ul'));
+  });
+
+  /**
+   * The Matrix's selection ring, keyed only when the grid actually holds the marked cell — which is
+   * the pairing that matters, since `isCurrent` is false for every cell on a linked rig. A key to a
+   * mark that appears nowhere is the failure this file's neighbour comment names.
+   */
+  it('keys the marked cell in the comparison grid, and only while a cell is marked', () => {
+    render(<App />);
+
+    expect(matrix().querySelectorAll('[aria-current="true"]')).toHaveLength(1);
+    expect(within(matrix()).getByText(/the cell the Bench above is set to/)).toBeInTheDocument();
+
+    // Every cell here is scored at one device, so a two-card rig marks nothing.
+    act(() => {
+      useConfig.getState().set('deviceCount', 2);
+    });
+    expect(matrix().querySelectorAll('[aria-current="true"]')).toHaveLength(0);
+    expect(
+      within(matrix()).queryByText(/the cell the Bench above is set to/)
+    ).not.toBeInTheDocument();
   });
 });
 

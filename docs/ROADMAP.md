@@ -511,14 +511,23 @@ ceiling)` keeps an over-budget stack on screen, which is right and stays. What i
   reference line to sit on — at 1.1x it falls at 91%, inside the amber cache that took the
   configuration over. The overshoot only decides _which_ fill.
 
-  The class check is the useful part of the rest. The rule was the only overlay mark in the app drawn
-  straight onto one — the Envelope's "you are here" ring strokes a 1px background counter-line under
-  itself and the Matrix's selected cell carries `ring-offset` in the surface colour, so both were
-  already right, and the house idiom was already "separate an overlapping mark with surface, never
-  with more ink". The rule now sits in a track-coloured halo one `marks.gap` wide on each side, the
-  same mechanism the segments already use between themselves. It was also the one mark in the bar with
-  no legend key at all — every fill had one — so it has one now, on overflow only, since the legend is
-  the dependable identity channel exactly when the mark is hard to see.
+  The class check is the useful part of the rest, and it split into two classes that look like one.
+  On **separation**, the rule was the only overlay mark in the app drawn straight onto a fill — the
+  Envelope's "you are here" ring strokes a 1px background counter-line under itself and the Matrix's
+  selected cell carries `ring-offset` in the surface colour, so both were already right, and the house
+  idiom was already "separate an overlapping mark with surface, never with more ink". The rule now sits
+  in a track-coloured halo one `marks.gap` wide on each side, the same mechanism the segments already
+  use between themselves.
+
+  On **identity**, all three were wrong, and scoping the first pass to "the only mark in this bar"
+  is what hid it: every fill in the app had a legend key and not one overlay did. The Envelope's ring
+  was named only inside the canvas `aria-label` — so a screen-reader user was told what it was and a
+  sighted reader met a double ring with nothing on the page saying so — and the Matrix's selection
+  ring had only `aria-current` plus the accent hue, which is a channel a legend does not get to rely
+  on. All three are keyed now, each only while its mark is drawn, which for the Matrix means "while a
+  cell is marked at all": `isCurrent` is false for every cell on a linked rig, since the grid is
+  scored at one device. A legend is the identity channel that does not depend on the mark being
+  legible, which is exactly the property an overlay cannot promise.
 
   **Verification splits, and the e2e half records what it cannot claim.** The clause and the key are
   DOM and are asserted in Vitest against a reinjected defect in each direction, including the
@@ -530,6 +539,24 @@ ceiling)` keeps an over-budget stack on screen, which is right and stays. What i
   a screenshot, so it asserts the mechanism — halo width, halo colour taken off the bar, the rule
   still at the true position — which fails if the bare 2px line comes back. Same shape of compromise
   as `hybrid-targets.spec.ts` makes for the pointer queries.
+
+  **Three things review caught, all of them the same lesson: a rule stated in one channel is not
+  applied until every channel states it.** (1) The table still printed `percent(bytes / ceiling)`, so
+  the issue's own URL read "Weights 379 GiB / 1222%" — the exact form `multiple` exists to replace, in
+  the channel that exists "for anyone who cannot use the bar" and therefore has no shape to fall back
+  on. It switches at the same `OVERSHOOT_STATED`, so the two channels cannot disagree about whether a
+  ratio is large, and **per row rather than per column**: the stack overshoots, the rows do not, and
+  0.7 GiB of overhead against a 31 GiB ceiling is 0.02x, which `multiple` prints as "0x" — a real
+  quantity rendered as nothing, the failure `percent`'s own `<1%` floor exists to prevent. Mixed forms
+  in one column are the cost of not printing a wrong number. (2) The rule's ink was `border-l-2` while
+  its halo was sized from `marks.lineWidth`; two literals for one weight means a token bumped to 3
+  centres a 2px line inside 7px and moves the rule half a pixel off the ceiling, which the e2e
+  position check's 3px tolerance would pass. Both now come from the token. (3) The e2e halo test
+  asserted containment unconditionally, which the code does not promise: a fixed-width mark centred on
+  a position within a gap of either edge is clipped by the bar, so a stack 0.5% over loses the right
+  1–4px of separation and one hundreds of times over loses the left. The position is what is kept —
+  clamping it inward would draw the ceiling where the ceiling is not — so the assertion now names the
+  overhang and its own precondition instead of implying a guarantee.
 
 **Verdicts**
 
