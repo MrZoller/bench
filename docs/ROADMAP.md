@@ -740,8 +740,11 @@ section is for the questions those issues cannot settle.
   row to ask about rather than an incomplete answer. `catalog.test.ts` now asserts the _shape_ of the
   coverage (a sub-$350 GPU, consumer silicon from all three vendors, Intel in both classes it
   competes in, an Apple row at 16 GiB and one back at M1) rather than a list of ids, and one of those
-  checks runs the engine: a machine under $400 has to genuinely hold a 12B at Q4_K_M and decode above
-  15 tok/s, since coverage by a row that cannot run the model is coverage in name only.
+  checks runs the engine: at least one machine under $400 has to genuinely hold a 12B at Q4_K_M and
+  decode above 15 tok/s, since coverage by a row that cannot run the model is coverage in name only.
+  **`some`, not `every`, and the distinction is the test's whole correctness:** that tier is where the
+  next rows will be an 8 GiB 5060 or a 10 GiB Arc B570, which are honest rows that cannot hold a 12B
+  at all, so a swept assertion would fail on exactly the coverage work it was written to protect.
 
   Four things worth keeping, since each was a decision rather than a transcription:
 
@@ -751,6 +754,15 @@ section is for the questions those issues cannot settle.
     Xe-core per clock), so the Arc rows are half the stated TOPS. AMD publishes both an FP16 _matrix_
     and an FP16 _vector_ rate and the two differ by 2x on RDNA 4 — the matrix one is what a tensor
     kernel reaches, and quoting the other would halve prefill on the generation that doubled it.
+    NVIDIA's single "AI TOPS" headline is sparse _and_ quoted at the lowest precision the generation
+    reaches, so dense fp16 is the headline over 8 on Blackwell (sparse FP4: 3352 → 419 on a 5090) and
+    over 4 on Ada (sparse FP8: 1321 → 330 on a 4090) — and the datacenter parts are transcribed, not
+    derived, because A100's dense 312 fp16 is 16x its FP32 rather than the 4x that holds on GA10x.
+    **The first draft of that paragraph stated all three NVIDIA clauses wrongly** while the rows were
+    right, which is the #51 failure again: a curator applying the sentence to the next Blackwell row
+    would have entered double the correct fp16, and no test could see it. The check that now exists
+    pins the dense _ladder_ inside each row (int8 and fp8 at 2x fp16, fp4 at 4x); the divisor itself
+    is only guarded by the worked examples beside it naming the headline they start from.
   - **The Apple allocation rules cross over below 32 GiB.** The default is Metal's recommended
     working set (two thirds of RAM at 32 GiB and below, three quarters above) and the ceiling is
     capacity minus `max(8 GiB, 1/16 of RAM)`, per #53. On a 24 GiB machine both land on 16 GiB, and on
@@ -767,7 +779,14 @@ section is for the questions those issues cannot settle.
     the default device, and shows a stranger a DGX Spark's numbers under the sender's URL. Hence
     `DEVICE_ID_ALIASES` and `canonicalDeviceId`, which the **store** applies before it keeps the
     value — resolving only inside `getDevice` would load the right device while leaving the stale id
-    to re-encode into the URL and match no `<option>` in the picker.
+    to re-encode into the URL and match no `<option>` in the picker. Two things about it are worth
+    the next session's attention. The lookup uses `Object.hasOwn` rather than `?? id`, because the id
+    comes from a querystring and `DEVICE_ID_ALIASES['toString']` otherwise resolves up the prototype
+    chain to a function. And **`d` is the only one of the four ids in a shared link that has a
+    canonicaliser at all**: `url.ts` writes `m`, `q` and `r` too, so renaming a model, quant or
+    runtime id degrades in exactly the silent way this entry is about. Latent rather than live —
+    nothing in those three catalogs has been renamed — and recorded here so the next rename is not
+    where it gets discovered.
   - **The unit suite is 2.5x slower** (45s to ~110s) and nothing is wrong. `App.test.tsx` renders the
     whole page per test and the Matrix is 17 models × 42 shipping devices, so ~700 buttons are built
     per render against the old ~400. It is the cost of the coverage, not a regression to chase.

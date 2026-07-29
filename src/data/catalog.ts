@@ -210,9 +210,14 @@ export const DEVICE_ID_ALIASES: Readonly<Record<string, string>> = {
  * `getDevice` would return the right device while leaving the stale id in the config, which then
  * re-encodes into the URL and matches no `<option>` in the hardware picker — a control showing
  * nothing selected beside figures for a device that is genuinely loaded.
+ *
+ * `Object.hasOwn` rather than a lookup with `??`, for the same reason `narrow` above uses it: the
+ * ids arrive from a querystring, and `DEVICE_ID_ALIASES['toString']` resolves up the prototype chain
+ * to a function. That is not nullish, so `??` would not fire and this would return something that is
+ * not a string at all from a signature promising one.
  */
 export function canonicalDeviceId(id: string): string {
-  return DEVICE_ID_ALIASES[id] ?? id;
+  return Object.hasOwn(DEVICE_ID_ALIASES, id) ? DEVICE_ID_ALIASES[id] : id;
 }
 
 /**

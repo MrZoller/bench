@@ -4,6 +4,7 @@ import {
   DEVICES,
   DEVICE_ID_ALIASES,
   MODELS,
+  canonicalDeviceId,
   getDevice,
   getModel,
   modelsByPopularity,
@@ -81,6 +82,38 @@ describe('device catalog', () => {
     expect(strix.note).toMatch(/256 GB\/s/);
     expect(strix.note).toMatch(/213/);
     expect(strix.note).toMatch(/bandwidthEfficiency|CLASS_BANDWIDTH_UTILIZATION/);
+  });
+
+  /**
+   * The other convention `devices.json` states in prose: every rate in a row is *dense*, so the
+   * ladder doubles at each halving of element width — int8 and fp8 at 2x fp16, fp4 at 4x.
+   *
+   * Worth pinning because the derivation is per-vendor and per-generation prose (a sparse FP4
+   * headline is an eighth of dense fp16 on Blackwell, a sparse FP8 one a quarter on Ada, and the
+   * datacenter parts are transcribed rather than derived) and a curator applying the wrong step to
+   * one dtype produces a row where only the ratios disagree. That is the shape of the #51 failure:
+   * a stated convention and the catalog coming apart without either looking wrong on its own. What
+   * this cannot see is a row halved consistently but the wrong number of times, which is why the
+   * worked examples in `$comment-compute` name the headline figure they start from.
+   */
+  it('states every rate in a row on the same dense basis', () => {
+    for (const device of DEVICES) {
+      const { fp16, bf16, fp8, int8, fp4 } = device.flops;
+      if (fp16 === undefined) continue;
+
+      for (const [dtype, value, multiple] of [
+        ['bf16', bf16, 1],
+        ['fp8', fp8, 2],
+        ['int8', int8, 2],
+        ['fp4', fp4, 4],
+      ] as const) {
+        if (value === undefined) continue;
+        expect(
+          value / fp16,
+          `${device.id} states ${dtype} at ${(value / fp16).toFixed(2)}x its fp16 rate`
+        ).toBeCloseTo(multiple, 1);
+      }
+    }
   });
 
   /**
@@ -169,24 +202,35 @@ describe('the catalog covers the hardware the audience owns', () => {
   });
 
   it('does not make CPU inference look like an AMD technique', () => {
-    const cpus = DEVICES.filter((d) => d.class === 'cpu-ram');
-    const fastest = cpus.reduce((a, b) =>
-      b.bandwidthBytesPerSec > a.bandwidthBytesPerSec ? b : a
-    );
-    // 12 channels of MRDIMM-8800 is 844.8 GB/s, above every EPYC row here.
-    expect(fastest.vendor).toBe('Intel');
+    const intel = DEVICES.filter((d) => d.class === 'cpu-ram' && d.vendor === 'Intel');
+    const fastest = Math.max(...intel.map((d) => d.bandwidthBytesPerSec));
+
+    // 12 channels of MRDIMM-8800 is 844.8 GB/s to the digit — exact arithmetic, like the EPYC rows.
+    expect(fastest).toBe(844.8 * 1e9);
+    // And well above the fastest EPYC row in the catalog (the 9755 at 576), which is the point: the
+    // class had four rows and three vendors' worth of nothing, so high-bandwidth CPU inference read
+    // as an AMD technique. Stated as a floor on the Intel figure rather than as "Intel is the
+    // fastest cpu-ram row", because a 12-channel EPYC arriving later is not a failure of a claim
+    // about Intel being here — the same containment reasoning as the vendor check above.
+    expect(fastest).toBeGreaterThan(576 * 1e9);
   });
 
   /**
    * The 3060 12GB argument from the issue, checked against the engine rather than asserted: the
    * tier matters because it is where the *verdict* boundary sits, and a row that could not actually
    * run the model would be coverage in name only.
+   *
+   * One row has to clear it, not all of them. This tier is where most of the will-it-run questions
+   * come from, so the next cards added to it are things like a 10 GiB Arc B570 at $219 or an 8 GiB
+   * 5060 at $299 — correct rows that cannot hold a 12B, which needs 8.3 GiB of weights before any
+   * cache. Swept with `every`, this guard would fail on exactly the coverage work it exists to
+   * protect, and the only ways back to green would be deleting the row or lowering the bar.
    */
   it('has a machine under $400 that really runs a 12B at Q4_K_M', () => {
     const budget = gpus.filter((d) => (d.msrpUsd ?? Number.POSITIVE_INFINITY) < 400);
     expect(budget.length).toBeGreaterThan(0);
 
-    for (const device of budget) {
+    const verdicts = budget.map((device) => {
       const result = evaluate({
         model: getModel('unsloth/gemma-3-12b-it'),
         quant: getQuant('q4_k_m'),
@@ -195,10 +239,19 @@ describe('the catalog covers the hardware the audience owns', () => {
         runtime: LLAMA_CPP,
       });
 
-      expect(result.placement.fits, `${device.id} cannot hold it`).toBe(true);
-      // Fast enough to be worth doing, not merely resident.
-      expect(result.decode.perUserTokensPerSec, `${device.id} is too slow`).toBeGreaterThan(15);
-    }
+      return {
+        id: device.id,
+        fits: result.placement.fits,
+        // Fast enough to be worth doing, not merely resident.
+        tokensPerSec: Math.round(result.decode.perUserTokensPerSec),
+      };
+    });
+
+    const capable = verdicts.filter((v) => v.fits && v.tokensPerSec > 15);
+    expect(
+      capable.length,
+      `no sub-$400 row holds a 12B at 8K above 15 tok/s: ${JSON.stringify(verdicts)}`
+    ).toBeGreaterThan(0);
   });
 
   /**
@@ -822,6 +875,21 @@ describe('a renamed device keeps the links that already name it', () => {
   it('still refuses an id that never existed', () => {
     expect(() => getDevice('rtx-a6000')).toThrow(/unknown device/i);
   });
+
+  /**
+   * The alias table is a plain object and the ids arrive from a querystring, so `?d=toString` reads
+   * a *function* off the prototype chain. With a `??` lookup that is not nullish, so the fallback
+   * does not fire and a function is returned from a signature promising a string. The degradation
+   * is the same either way — `getDevice` misses and `coerce` falls back to the default — but the
+   * type is a lie, and `narrow` in this same file uses `Object.hasOwn` for exactly this shape.
+   */
+  it.each(['toString', 'constructor', 'hasOwnProperty', '__proto__'])(
+    'does not read %s off the prototype of the alias table',
+    (id) => {
+      expect(canonicalDeviceId(id)).toBe(id);
+      expect(() => getDevice(id)).toThrow(/unknown device/i);
+    }
+  );
 
   /**
    * The invariant rather than the one entry: an alias pointing at a row that has since been renamed

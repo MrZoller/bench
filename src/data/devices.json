@@ -1,7 +1,7 @@
 {
   "$comment": "Hand-curated, unlike models.generated.json — no vendor publishes machine-readable specs, and this landscape moves slowly enough that curation is tractable. Units are the ones datasheets use: capacity in GiB (binary, as memory is sold), bandwidth in GB/s (decimal), compute in dense TFLOPS. NVIDIA and AMD headline 'AI TOPS' figures are sparse; these are halved to dense, because inference does not use structured sparsity. Every row carries a source and a status. allocatableGiB is what a model can actually have, which is below capacity on shared-memory machines. Where a platform lets the user raise that ceiling, maxAllocatableGiB is how far it can actually go, and it is never physical capacity: AMD's Variable Graphics Memory states its own maximum, and the Apple rows reserve max(8 GiB, 1/16 of RAM) for the OS.",
 
-  "$comment-compute": "Three vendors state compute in three different units, so each row's tflops is a derivation and the derivation is the same for every row of that vendor. NVIDIA: dense fp16 is a quarter of the sparse FP4 'AI TOPS' headline on Blackwell (3352 -> 419 on a 5090), half the sparse FP8 one on Ada, and 4x the FP32 shader rate on Ampere, which has no FP8 units at all. AMD Radeon: the FP16 *matrix* rate of the AI accelerators, not the packed-vector figure published beside it — the two differ by 2x on RDNA 4. Intel: Intel publishes a peak INT8 figure and no FP16 one, and XMX runs INT8 at twice FP16 (4096 against 2048 ops per Xe-core per clock), so fp16 on the Arc rows is exactly half the stated TOPS. Apple: FP32 at 2x, from the per-GPU-core rate of that generation.",
+  "$comment-compute": "Three vendors state compute in three different units, so each row's tflops is a derivation and the derivation is the same for every row of that vendor. NVIDIA: a consumer card publishes one 'AI TOPS' headline, and it is sparse *and* quoted at the lowest precision that generation's tensor cores reach — so dense fp16 is one halving for the sparsity plus one for every precision step above it. Blackwell headlines sparse FP4, three halvings away, hence an eighth: 3352 -> 419 on a 5090, 1801 -> 225 on a 5080, 759 -> 95 on a 5060 Ti. Ada headlines sparse FP8, two halvings, hence a quarter: 1321 -> 330 on a 4090, 353 -> 88 on a 4060 Ti. Consumer Ampere has neither FP4 nor FP8 units and publishes no such headline; its dense fp16 tensor rate is 4x the FP32 shader rate (35.58 -> 142 on a 3090, 12.74 -> 51 on a 3060). The datacenter parts are transcribed rather than derived, because their datasheets state dense tensor rates directly and that shader multiple is GA10x's rather than GA100's: A100 states 312 fp16 against 19.5 FP32, which is 16x. AMD Radeon: the FP16 *matrix* rate of the AI accelerators, not the packed-vector figure published beside it — the two differ by 2x on RDNA 4. Intel: Intel publishes a peak INT8 figure and no FP16 one, and XMX runs INT8 at twice FP16 (4096 against 2048 ops per Xe-core per clock), so fp16 on the Arc rows is exactly half the stated TOPS. Apple: FP32 at 2x, from the per-GPU-core rate of that generation.",
 
   "$comment-apple-ceiling": "allocatableGiB on the Apple rows is what Metal reports as its recommended working set — two thirds of RAM at 32 GiB and below, three quarters above it — because that is the figure llama.cpp warns against exceeding, and it is the default a user has before touching anything. maxAllocatableGiB is capacity minus max(8 GiB, 1/16 of RAM). Those two rules *cross over* below 32 GiB: on a 24 GiB machine the recommendation and the reserve both land on 16 GiB, and on a 16 GiB machine the reserve would put the ceiling below the default. Those rows therefore state no raiseable ceiling at all rather than one that promises less than what the machine already offers — the sysctl still exists, there is simply no figure above the default this size of machine survives.",
 
@@ -126,7 +126,7 @@
       "msrpUsd": 499,
       "releasedAt": "2023-07-18",
       "source": "https://www.nvidia.com/en-us/geforce/graphics-cards/40-series/rtx-4060-4060ti/",
-      "note": "One of the two cards that dominate the used local-LLM market, and the clearest case for reporting capacity and speed separately: it holds two thirds of what a 4090 holds at 29% of its bandwidth, so what fits and what is worth waiting for are different questions here. PCIe 4.0 x8 is 15.75 GB/s, the slowest host link in the catalog, so it is also the worst card to spill from."
+      "note": "One of the two cards that dominate the used local-LLM market, and the clearest case for reporting capacity and speed separately: it holds two thirds of what a 4090 holds at 29% of its bandwidth, so what fits and what is worth waiting for are different questions here. PCIe 4.0 x8 is 15.75 GB/s, the slowest host link in the catalog alongside the Arc B580's, so it is also among the worst cards to spill from."
     },
     {
       "id": "rtx-3090",
@@ -337,6 +337,57 @@
     },
 
     {
+      "id": "mi300x",
+      "name": "Instinct MI300X",
+      "vendor": "AMD",
+      "class": "discrete-gpu",
+      "status": "shipping",
+      "capacityGiB": 192,
+      "allocatableGiB": 190,
+      "bandwidthGBs": 5300,
+      "tflops": { "fp16": 1307, "fp8": 2615 },
+      "interconnect": "Infinity Fabric",
+      "hostLinkGBs": 63.0,
+      "tdpWatts": 750,
+      "releasedAt": "2023-12-06",
+      "source": "https://www.amd.com/en/products/accelerators/instinct/mi300/mi300x.html"
+    },
+    {
+      "id": "mi325x",
+      "name": "Instinct MI325X",
+      "vendor": "AMD",
+      "class": "discrete-gpu",
+      "status": "shipping",
+      "capacityGiB": 256,
+      "allocatableGiB": 253,
+      "bandwidthGBs": 6000,
+      "tflops": { "fp16": 1307, "fp8": 2615 },
+      "interconnect": "Infinity Fabric",
+      "hostLinkGBs": 63.0,
+      "tdpWatts": 1000,
+      "releasedAt": "2024-10-10",
+      "source": "https://www.amd.com/en/products/accelerators/instinct/mi300/mi325x.html",
+      "note": "The step that was missing between the catalogued MI300X and MI355X: the same CDNA 3 compute as the MI300X, with 256 GiB of HBM3E at 6 TB/s in place of 192 GiB at 5.3."
+    },
+    {
+      "id": "mi355x",
+      "name": "Instinct MI355X",
+      "vendor": "AMD",
+      "class": "discrete-gpu",
+      "status": "shipping",
+      "capacityGiB": 288,
+      "allocatableGiB": 285,
+      "bandwidthGBs": 8000,
+      "tflops": { "fp16": 2500, "fp8": 5000, "fp4": 10000 },
+      "note": "Compute was MI350X's, not this part's: the row read 2300/4600/9200 — the air-cooled sibling's dense figures — because the source pointed at the MI350 family page rather than the MI355X one. Same silicon and the same 288 GB at 8 TB/s; MI355X is the 1400W liquid-cooled bin at 2400 MHz against MI350X's 1000W at 2200, which is the ~9% this restores. Found in the pre-publish verification pass.",
+      "interconnect": "Infinity Fabric",
+      "hostLinkGBs": 63.0,
+      "tdpWatts": 1400,
+      "releasedAt": "2025-06-12",
+      "source": "https://www.amd.com/en/products/accelerators/instinct/mi350/mi355x.html"
+    },
+
+    {
       "id": "arc-b580",
       "name": "Arc B580",
       "vendor": "Intel",
@@ -388,57 +439,6 @@
       "releasedAt": "2022-10-12",
       "source": "https://www.intel.com/content/www/us/en/products/sku/229151/intel-arc-a770-graphics-16gb/specifications.html",
       "note": "The previous Arc generation, still widely deployed and the cheapest 16 GiB in the catalog. The 8 GB card of the same name is a different machine for this purpose, which is why the capacity is in the row's name."
-    },
-
-    {
-      "id": "mi300x",
-      "name": "Instinct MI300X",
-      "vendor": "AMD",
-      "class": "discrete-gpu",
-      "status": "shipping",
-      "capacityGiB": 192,
-      "allocatableGiB": 190,
-      "bandwidthGBs": 5300,
-      "tflops": { "fp16": 1307, "fp8": 2615 },
-      "interconnect": "Infinity Fabric",
-      "hostLinkGBs": 63.0,
-      "tdpWatts": 750,
-      "releasedAt": "2023-12-06",
-      "source": "https://www.amd.com/en/products/accelerators/instinct/mi300/mi300x.html"
-    },
-    {
-      "id": "mi325x",
-      "name": "Instinct MI325X",
-      "vendor": "AMD",
-      "class": "discrete-gpu",
-      "status": "shipping",
-      "capacityGiB": 256,
-      "allocatableGiB": 253,
-      "bandwidthGBs": 6000,
-      "tflops": { "fp16": 1307, "fp8": 2615 },
-      "interconnect": "Infinity Fabric",
-      "hostLinkGBs": 63.0,
-      "tdpWatts": 1000,
-      "releasedAt": "2024-10-10",
-      "source": "https://www.amd.com/en/products/accelerators/instinct/mi300/mi325x.html",
-      "note": "The step that was missing between the catalogued MI300X and MI355X: the same CDNA 3 compute as the MI300X, with 256 GiB of HBM3E at 6 TB/s in place of 192 GiB at 5.3."
-    },
-    {
-      "id": "mi355x",
-      "name": "Instinct MI355X",
-      "vendor": "AMD",
-      "class": "discrete-gpu",
-      "status": "shipping",
-      "capacityGiB": 288,
-      "allocatableGiB": 285,
-      "bandwidthGBs": 8000,
-      "tflops": { "fp16": 2500, "fp8": 5000, "fp4": 10000 },
-      "note": "Compute was MI350X's, not this part's: the row read 2300/4600/9200 — the air-cooled sibling's dense figures — because the source pointed at the MI350 family page rather than the MI355X one. Same silicon and the same 288 GB at 8 TB/s; MI355X is the 1400W liquid-cooled bin at 2400 MHz against MI350X's 1000W at 2200, which is the ~9% this restores. Found in the pre-publish verification pass.",
-      "interconnect": "Infinity Fabric",
-      "hostLinkGBs": 63.0,
-      "tdpWatts": 1400,
-      "releasedAt": "2025-06-12",
-      "source": "https://www.amd.com/en/products/accelerators/instinct/mi350/mi355x.html"
     },
 
     {

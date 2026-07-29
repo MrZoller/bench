@@ -25,8 +25,9 @@ bug, and on the one accessibility axis with no spec behind it.
   A770 16GB, and Xeon 6980P at 844.8 GB/s, which stops `cpu-ram` reading as an AMD-only technique),
   five Apple rows from a 16 GiB MacBook Air up to the 192 GiB M2 Ultra Studio, and the MI325X. Every
   row carries its own source, and each vendor's compute derivation — Intel's INT8-to-FP16 halving,
-  AMD's matrix rate against the vector one published beside it — is written down next to the rows
-  that use it.
+  AMD's matrix rate against the vector one published beside it, NVIDIA's single sparse "AI TOPS"
+  headline over 8 on Blackwell and 4 on Ada — is written down next to the rows that use it, with the
+  headline figure each worked example starts from.
 
 ### Fixed
 
