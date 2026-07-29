@@ -487,6 +487,39 @@ reading the test that guards them.
   Exemptions are data with a written reason, and each is asserted to still match an element, since
   an exception list is the one part of a sweep that fails open.
 
+- **A row that declares its own grid is a table that measures its columns once per row**
+  ([#70](https://github.com/MrZoller/bench/issues/70)). The workload strip put
+  `grid-cols-[9rem_auto_1fr]` on each `<li>`, so every row was its own grid container and the middle
+  `auto` track was sized from that row's own label — the reason column, the third one, started at
+  444, 446, 457, 475, 495, 499 and 503px at 1440. Columns 1 and 2 lined up because the first track is
+  fixed, and _that_ is what makes the third read as a column rather than as prose. It carries the
+  panel's argument: seven archetypes, seven answers, and the written reasons are what explain the
+  differences, so they have to be scannable against each other.
+
+  `grid-cols-subgrid` on the row, with the tracks moved to the `<ul>`. Not `display: contents`, which
+  is the same idea and the tempting one-liner: a row that generates no box is a `<li>` shipping
+  browsers drop from the accessibility tree, and `order` applies among siblings of _one_ container,
+  so dissolving the rows would sort all twenty-one cells into a block of labels, a block of status
+  words and a block of reasons at the stacked width. The row therefore keeps its own two-column grid
+  below `sm` and only hands its columns back above it. Subgrid is Baseline widely available — Firefox
+  71, Safari 16, Chrome 117 — and where it is absent the declaration is invalid, so the row stacks:
+  ugly, complete, and 2023 browsers only.
+
+  **The trap is that fixing it makes the obvious precondition vacuous.** With the tracks shared,
+  every label _cell_ is exactly one width — the column's — so a spec that reads
+  `getBoundingClientRect().width` off the label to prove the labels differ from each other reports
+  0px of spread and fails on the fixed markup. It has to measure the glyphs: a `Range` over the
+  cell's contents. Written the wrong way first and caught by running it, which is the argument for
+  running a geometry spec against both states rather than one.
+
+  **Swept rather than assumed.** A throwaway probe walked every container on the page whose children
+  are same-tagged multi-child flex or grid boxes, at 640/768/1024/1440 across three scenarios, and
+  reported the spread of each nth child's offset. One true instance — this one. The two candidates
+  worth naming both measure clean: the Telemetry tiles are three independent flex columns whose
+  internal rows could rag on the row axis and do not (0px at every width), and the BudgetBar and
+  Envelope legends are wrap-flow rows where a shared column is not the reading. The Matrix and the
+  two disclosure tables are real `<table>`s, which is this fix by other means.
+
 **Verdicts**
 
 - **Grade a tier on the measurement its own sentence quotes, and on the scenario it recommends.**

@@ -363,6 +363,43 @@ describe('the workload strip keeps up with the scenario', () => {
     act(() => useConfig.getState().set('concurrency', 4));
     expect(graded).toHaveBeenCalled();
   });
+
+  /**
+   * One set of column tracks for the whole list, which is the invariant behind #70.
+   *
+   * The measurement belongs to `e2e/workload-columns.spec.ts` and cannot be made here: jsdom has no
+   * layout engine, so every one of those offsets reads back as 0 and an equality assertion over them
+   * is a tautology. What jsdom *can* see is where the tracks are declared, and that is the thing a
+   * later edit would undo — putting `grid-cols-[9rem_auto_1fr]` back on the row makes each `<li>` its
+   * own grid container, so the middle `auto` is sized from that row's own label and the reason column
+   * starts at a different x on all seven rows.
+   *
+   * So this asserts the mechanism rather than its effect, deliberately, in the suite that runs in a
+   * second. If the mechanism is ever changed on purpose — `display: contents` and `subgrid` are the
+   * same idea in three forms — this assertion and that spec both want editing, and that is the point
+   * of it failing.
+   */
+  it('declares its column tracks once, on the list rather than on each row', () => {
+    render(<App />);
+
+    const list = within(strip()).getAllByRole('listitem')[0].parentElement;
+    expect(list).not.toBeNull();
+    expect(list!.className, 'the list does not own the three tracks').toMatch(
+      /sm:grid-cols-\[9rem_auto_1fr\]/
+    );
+
+    for (const row of within(strip()).getAllByRole('listitem')) {
+      expect(row.className, 'a row declares column tracks of its own past sm').not.toMatch(
+        /sm:grid-cols-\[/
+      );
+      // And takes the list's instead, spanning all three of them.
+      expect(row.className).toMatch(/sm:grid-cols-subgrid/);
+      expect(row.className).toMatch(/sm:col-span-3/);
+      // Below `sm` the row keeps its own two-column grid, because the stacked layout is built from
+      // `order` and a spanning third cell — both relationships among one row's own children.
+      expect(row.className).toMatch(/grid-cols-\[auto_1fr\]/);
+    }
+  });
 });
 
 describe('the Bench keeps the controls and the engine in step', () => {

@@ -101,13 +101,50 @@ export function Workloads({ evaluation, config }: { evaluation: Evaluation; conf
         </p>
       )}
 
-      <ul className="mt-4 flex flex-col gap-2">
+      {/*
+        The three tracks live on the list, not on the row.
+
+        With the grid on each `<li>` every row was its own grid container, so the middle `auto`
+        track was sized from that row's own label — and the written reason, which is the third
+        column, started at a different x on all seven rows: 444 to 503 at 1440px, 59px of rag. The
+        first track is fixed at `9rem`, so the status word and the label lined up regardless, and
+        that alignment is exactly what makes the third one read as a column rather than as prose.
+        It is the column that carries the panel's whole argument — seven archetypes, seven answers,
+        each explained in writing — and scanning those reasons against each other is what a
+        wandering left edge stops the eye doing (#70).
+
+        `grid-cols-subgrid` rather than `display: contents` on the row, which is the other way to
+        share one set of tracks. Two reasons, and neither is the one this repo was bitten by before
+        (the Bench's `contents` scroll anchor, which generated no principal box): a row that
+        generates no box is a `<li>` that shipping browsers drop from the accessibility tree, so a
+        seven-item list is announced as an empty one; and `order` applies among siblings of one
+        container, so with the rows dissolved the mobile stacking below would sort all twenty-one
+        cells into a block of labels, a block of status words and a block of reasons instead of
+        seven rows. Subgrid keeps the row a real box and keeps its `order` scoped to it.
+
+        Fixing the middle track instead — `sm:grid-cols-[9rem_11rem_1fr]` — aligns the columns
+        today and silently overflows on the first archetype label longer than "Inline code
+        completion". `auto` over a subgrid is that measurement taken rather than guessed.
+
+        The support check the issue asked for: subgrid is Baseline widely available — Firefox 71,
+        Safari 16, Chrome and Edge 117 — which is inside the window Vite's default `target` builds
+        for. Where it is missing the declaration is simply invalid, so the row keeps `display: grid`
+        with no template and stacks its three cells; legible, ugly, and confined to browsers from
+        2023 and earlier.
+      */}
+      <ul className="mt-4 grid gap-y-2 sm:grid-cols-[9rem_auto_1fr] sm:gap-x-3">
         {verdicts.map(({ workload, fitness, reason }) => {
           const style = FITNESS[fitness];
           return (
             <li
               key={workload.id}
-              className="grid grid-cols-[auto_1fr] items-baseline gap-x-3 gap-y-0.5 sm:grid-cols-[9rem_auto_1fr]"
+              /*
+               * Below `sm` the row is its own two-column grid, exactly as it was: the stacked
+               * layout is built from `order` and a spanning third cell, both of which are
+               * relationships among one row's three children. Only at `sm`, where every child is
+               * `order-none` anyway, does the row hand its columns back to the list.
+               */
+              className="grid grid-cols-[auto_1fr] items-baseline gap-x-3 gap-y-0.5 sm:col-span-3 sm:grid-cols-subgrid"
             >
               {/* Icon and word together, so the grading survives without colour. */}
               <span
