@@ -220,13 +220,25 @@ test('the disclosure names the control it belongs to', async ({ page }) => {
 
   const toggle = showFullNote(page);
   await expect(toggle).toBeVisible();
+
+  /**
+   * Read before the click, and that ordering is the whole of it.
+   *
+   * A Playwright locator re-queries on every use, and this toggle's accessible name is its label:
+   * clicking it turns "Show the full hardware note" into "Hide …". So reading `aria-controls` off
+   * `showFullNote(page)` *after* the click waits thirty seconds for a button that no longer exists
+   * and fails pointing at the region lookup, which is not where the mistake is. The name changing is
+   * the component behaving correctly — it is asserted two lines below.
+   */
+  const controls = await toggle.getAttribute('aria-controls');
+  expect(controls, 'the disclosure controls nothing').toBeTruthy();
   await toggle.click();
 
   // Resolved through `aria-controls` rather than with `getByText`, which matches every ancestor
   // containing the phrase and would decide this on strict mode rather than on the region. An
   // attribute selector rather than `#id`, because the id comes from `useId` and its punctuation is
   // React's business, not something a spec should have to escape.
-  const region = page.locator(`[id="${await toggle.getAttribute('aria-controls')}"]`);
+  const region = page.locator(`[id="${controls}"]`);
   await expect(region).toBeVisible();
   // The 3090's caveat, which was dropped from the picker entirely once before — the estimates
   // assume PCIe and do not model its optional NVLink bridge.
