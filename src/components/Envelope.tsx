@@ -270,22 +270,39 @@ export function Envelope({ config }: { config: Config }) {
   }, [grid, measure]);
 
   /**
-   * Whether the ramp has anything to say — and it is the *domain*, not a count of graded cells.
+   * Two questions, and conflating them built a trap door (both found in review).
    *
-   * The first version of this gate asked `some(graded)`, which is true with exactly one graded cell
-   * (found in review). One cell gives `{ min: v, max: v }`, and `magnitudeFill` returns the brightest
-   * step whenever its span is not positive — so all three measures paint that cell identically and
-   * every other cell keeps its categorical fill. The control was still offered, and pressing it moved
-   * `aria-pressed` and nothing else: the same defect the gate was added to fix, one cell further in.
+   * **Whether *this* measure's ramp means anything** is the domain, not a count of graded cells. The
+   * first gate asked `some(graded)`, which is true with exactly one graded cell — and one cell gives
+   * `{ min: v, max: v }`, where `magnitudeFill` returns the brightest step for any non-positive span.
+   * All three measures then paint that cell identically while every other cell keeps its categorical
+   * fill, so the control was offered and pressing it moved `aria-pressed` and nothing else. Reachable:
+   * Qwen3-14B at Q5_K_M on one RTX 5070 under llama.cpp has exactly 1 graded cell against 20 spilling
+   * and 35 over the ceiling. `max > min` rather than `length > 1`, because two cells reading the same
+   * value are the same degenerate domain as one — and because that is the condition `magnitudeFill`
+   * itself tests.
    *
-   * Reachable, and not only in theory: Qwen3-14B at Q5_K_M on one RTX 5070 under llama.cpp gives
-   * exactly 1 graded cell against 20 spilling and 35 over the ceiling.
+   * **Whether the switch should exist at all is a different question**, and deriving it from the
+   * selected measure removed the way back. One measure can be flat while another varies: Gemma 3 27B
+   * at INT8 on the 36 GiB M4 Max under MLX with a 512-token prompt has two graded cells whose headroom
+   * and decode rate differ and whose TTFT is identical to the last digit. The control appeared under
+   * `fit`, the reader chose "How responsive", and the fieldset — the only route to any other measure —
+   * disappeared with it. A control that removes itself in response to being used is worse than the
+   * dead one this gate replaced.
    *
-   * `max > min` rather than `length > 1`, because two graded cells reading the same value are the same
-   * degenerate domain as one. This is the condition `magnitudeFill` itself tests, so the control is
-   * offered exactly when the ramp it drives can differ across the field.
+   * So the switch is offered while *any* measure varies, and the ramp key, the ramp clause and the
+   * canvas sentence are withheld per selected measure. A flat measure is then a legible state rather
+   * than a dead end: the buttons stay, the caption still says what this measure paints, and nothing
+   * claims a gradient the field does not contain.
    */
-  const rampCarriesVariation = domain.max > domain.min;
+  const selectedMeasureVaries = domain.max > domain.min;
+  const anyMeasureVaries = useMemo(() => {
+    const cells = grid.cells.flat().filter(graded);
+    return MEASURES.some(({ value }) => {
+      const values = cells.map((cell) => measureOf(cell, value));
+      return values.length > 1 && Math.max(...values) > Math.min(...values);
+    });
+  }, [grid]);
 
   const [resizeTick, setResizeTick] = useState(0);
   useEffect(() => {
@@ -435,7 +452,7 @@ export function Envelope({ config }: { config: Config }) {
         promising "the ramp runs between this grid's own extremes". Pressing a button moved
         `aria-pressed` and nothing else, which is a control that lies about having an effect.
       */}
-      {rampCarriesVariation && (
+      {anyMeasureVaries && (
         <fieldset className="mt-4" aria-describedby={measureHintId}>
           <legend className="sr-only">Colour the field by</legend>
           <div className="flex flex-wrap gap-1 rounded-md border border-[var(--color-control-border)] bg-[var(--color-surface-raised)] p-1">
@@ -466,8 +483,14 @@ export function Envelope({ config }: { config: Config }) {
             control, while the legend beside the picture says "worse" and "better", is a caveat the
             reader meets after they have already read the field. */}
           <p id={measureHintId} className="mt-1.5 text-xs text-[var(--color-text-muted)]">
-            {measured.hint} The ramp runs between this grid&rsquo;s own extremes, so it says which
-            way the region falls off rather than by how much — the table has the figures.
+            {measured.hint}{' '}
+            {selectedMeasureVaries
+              ? // The relativity caveat, which only means something when there is a ramp to be
+                // relative about.
+                'The ramp runs between this grid’s own extremes, so it says which way the region falls off rather than by how much — the table has the figures.'
+              : // Flat under this measure. Said plainly, because a caption that simply stopped after
+                // the hint leaves the reader to work out why the field has no gradient in it.
+                'Every cell that fits reads the same on this measure, so the field is not shaded by it — the table has the figures.'}
           </p>
         </fieldset>
       )}
@@ -635,7 +658,7 @@ export function Envelope({ config }: { config: Config }) {
           and the trailing clause says what it is relative *to* — in the legend, rather than only in
           the caption under the control.
         */}
-        {rampCarriesVariation && (
+        {selectedMeasureVaries && (
           <li className="flex flex-wrap items-center gap-2 text-sm sm:col-span-2">
             <span className="text-[var(--color-text)]">{measured.ends[0]}</span>
             <span

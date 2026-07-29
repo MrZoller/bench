@@ -552,6 +552,7 @@ describe('the ramp control needs a ramp, not merely a graded cell', () => {
     expect(rampCells, 'this scenario no longer has exactly one graded cell').toHaveLength(1);
     expect(within(table).getAllByRole('cell').length).toBeGreaterThan(40);
 
+    // No measure varies over a single cell, so the switch itself has nothing to offer.
     expect(within(field()).queryByRole('button', { name: 'Does it fit' })).toBeNull();
     expect(within(field()).queryByText(/the ramp runs between/i)).toBeNull();
 
@@ -565,5 +566,61 @@ describe('the ramp control needs a ramp, not merely a graded cell', () => {
     expect(described).not.toMatch(/coloured by/i);
     // It still says what the cells are, which is the part that does not depend on a ramp.
     expect(described).toMatch(/spilling|will not run|context/i);
+  });
+});
+
+/**
+ * The trap door the previous version of that gate opened (found in review on #65).
+ *
+ * One measure can be flat while another varies, and deriving the *switch* from the *selected* measure
+ * meant choosing the flat one removed the only route to any other. A control that deletes itself in
+ * response to being used is worse than the dead control the gate replaced.
+ *
+ * Gemma 3 27B at INT8 on the 36 GiB M4 Max under MLX with a 512-token prompt is the case: two graded
+ * cells whose headroom (0.0071 vs 0.0129) and decode rate (11.81 vs 11.88 tok/s) differ, and whose
+ * time to first token is identical to the last digit — so `fit` and `decode` have a ramp and `ttft`
+ * has none.
+ */
+describe('a flat measure is a state, not a dead end', () => {
+  const flatTtft = {
+    ...DEFAULT_CONFIG,
+    modelId: 'unsloth/gemma-3-27b-it',
+    deviceId: 'mac-studio-m4-max-36',
+    quantId: 'int8',
+    runtimeId: 'mlx',
+    promptTokens: 512,
+  };
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it('keeps the switch reachable after choosing a measure with no ramp', async () => {
+    const user = userEvent.setup();
+    recordPainting();
+    render(<Envelope config={flatTtft} />);
+
+    const group = () => within(field()).getByRole('group', { name: /colour the field by/i });
+    expect(within(group()).getByRole('button', { name: 'How responsive' })).toBeInTheDocument();
+
+    await user.click(within(group()).getByRole('button', { name: 'How responsive' }));
+
+    // The switch survives its own use — this is the assertion the previous gate failed.
+    expect(
+      within(field()).queryByRole('group', { name: /colour the field by/i }),
+      'choosing a flat measure removed the only route back'
+    ).not.toBeNull();
+    expect(within(group()).getByRole('button', { name: 'Does it fit' })).toBeInTheDocument();
+
+    // But nothing claims a gradient: no ramp key, and the caption says why rather than trailing off.
+    expect(within(field()).queryByText('slower to start')).toBeNull();
+    expect(within(field()).queryByText(/the ramp runs between/i)).toBeNull();
+    expect(within(field()).getByText(/reads the same on this measure/i)).toBeInTheDocument();
+
+    // And switching back restores it, which is what makes the flat state a state.
+    await user.click(within(group()).getByRole('button', { name: 'Does it fit' }));
+    expect(within(field()).getByText('less room')).toBeInTheDocument();
+    expect(within(field()).getByText(/the ramp runs between/i)).toBeInTheDocument();
   });
 });
