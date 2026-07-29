@@ -1185,6 +1185,288 @@ describe('the Matrix stays informative', () => {
 });
 
 /**
+ * "Will not run" and "this runtime cannot drive it" were the same empty cell (#72).
+ *
+ * Select vLLM and every Mac, every Strix Halo and every CPU host empties out completely — 10 of the
+ * 24 shipping columns as the catalog stands at this commit — every cell drawn `transparent` behind
+ * the same dashed border as a pair that was measured and did not fit, under the same one-line
+ * legend. A uniformly empty column is the pattern that reads as a confident finding, so the picture
+ * said "this hardware cannot hold the model" — quantitatively backwards, since a 256 GB Mac Studio
+ * holds Qwen3 8B many times over, and the fix a reader would derive from it (buy more memory) is not
+ * the fix (change runtime). Every other surface already split them: the Envelope has an
+ * `unsupported` state with its own sentence, Telemetry says `Unsupported` rather than `Will not
+ * run`, and BudgetBar draws no stack at all.
+ *
+ * All of it is DOM, so all of it is here. The one thing jsdom cannot answer is whether
+ * `line-through` and a dropped border actually *paint* — Tailwind classes are strings in this
+ * environment — which is `e2e/matrix-undrivable.spec.ts`.
+ */
+describe('the Matrix tells a runtime refusal from a memory one', () => {
+  const matrix = () => screen.getByRole('region', { name: /every model on every machine/i });
+
+  /**
+   * Every device column, paired with its own cells.
+   *
+   * Read out of the DOM in column order rather than zipped against the catalog, for the reason the
+   * header suite gives about its own pairing: the association between a heading and the cells under
+   * it is part of what is being tested, and an assertion that assumes it cannot catch it going
+   * wrong.
+   */
+  const columns = () => {
+    const rows = [...matrix().querySelectorAll('tbody tr')];
+    return [...matrix().querySelectorAll('thead th')].slice(1).map((th, i) => {
+      const label = th.querySelector<HTMLElement>('span[title]')!;
+      return {
+        head: th,
+        device: label.getAttribute('title') ?? '',
+        struck: label.className.includes('line-through'),
+        spoken: th.getAttribute('aria-label'),
+        cells: rows.map((row) => row.querySelectorAll<HTMLButtonElement>('td button')[i]),
+      };
+    });
+  };
+
+  const legendKey = () =>
+    within(matrix()).queryByText(/does not support this hardware, at any size/i);
+
+  const caption = () => matrix().querySelector('caption')!.textContent ?? '';
+
+  it('strikes the columns the runtime cannot drive, and only those', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // llama.cpp drives every class of hardware in the catalog, so nothing is struck and nothing is
+    // keyed — the precondition that keeps the vLLM half below from passing for a trivial reason.
+    expect(columns().every((c) => !c.struck)).toBe(true);
+    expect(legendKey()).not.toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'vllm');
+
+    const struck = columns().filter((c) => c.struck);
+    // Both sides populated: vLLM drives NVIDIA and AMD cards and drives no Mac, no Strix Halo and
+    // no CPU host. A grid struck everywhere, or nowhere, would make every claim below vacuous.
+    expect(struck.length).toBeGreaterThan(1);
+    expect(struck.length).toBeLessThan(columns().length);
+    expect(struck.some((c) => /Mac Studio/.test(c.device))).toBe(true);
+    expect(columns().some((c) => !c.struck && /RTX 5090/.test(c.device))).toBe(true);
+
+    /**
+     * And the strike is the engine's own verdict rather than a second opinion about it.
+     *
+     * The component decides from `runtimeDrives` while every cell's refusal comes from
+     * `planPlacement`'s own copy of that check, so this is the assertion that keeps the two from
+     * drifting: a struck column's cells must *all* carry the runtime-level reason, and no cell
+     * anywhere else may carry it.
+     *
+     * Marking a column that merely came up empty would be the same misattribution pointed the other
+     * way. At #72's own URL the two sets happen to coincide — the DGX Spark still runs 11 of its 17
+     * rows there, so the only empty columns are the undrivable ones — which is exactly why deriving
+     * from emptiness looks safe. Take that grid to 32 concurrent users and the RTX 3090, 4090 and
+     * 5080 columns empty out too, on counted bytes, under a runtime that drives all three.
+     */
+    for (const column of struck) {
+      for (const cell of column.cells) {
+        expect(cell).toHaveAccessibleName(/vLLM does not run on/i);
+      }
+      expect(column.spoken).toMatch(/vLLM does not support this hardware, at any size/i);
+      // The device name stays in it: the visible label is deliberately shortened, so a name that
+      // said only the runtime would trade one missing fact for another.
+      expect(column.spoken).toContain(column.device);
+      // And the sentence really is the column's accessible name rather than an attribute nothing
+      // reads — this is the whole channel a reader who cannot see the strike has.
+      expect(column.head).toHaveAccessibleName(column.spoken!);
+    }
+    for (const column of columns().filter((c) => !c.struck)) {
+      for (const cell of column.cells) {
+        expect(cell).not.toHaveAccessibleName(/does not run on/i);
+      }
+      // No name at all, so the heading keeps announcing the device it names.
+      expect(column.spoken).toBeNull();
+    }
+  });
+
+  it('keeps the dashed swatch for the cells that were actually measured', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'vllm');
+
+    const dashed = (cell: HTMLButtonElement) => cell.className.includes('border-dashed');
+
+    // The swatch keys "measured, and over the ceiling". A column the runtime cannot open at all was
+    // never measured, so it wears no ink — which is what stops the two states being byte-identical.
+    for (const column of columns().filter((c) => c.struck)) {
+      expect(column.cells.some(dashed)).toBe(false);
+    }
+
+    /**
+     * And the capacity refusal still has its swatch, on a column the runtime does drive.
+     *
+     * Asserted rather than assumed: DeepSeek V3 does not fit a 3090 under any runtime that can load
+     * it, so this is reachable — but if it ever stopped being, the assertion above would be the only
+     * one left and "no cell has a dashed border" is a state this fix must not produce.
+     */
+    const measured = columns()
+      .filter((c) => !c.struck)
+      .flatMap((c) => c.cells)
+      .filter(dashed);
+    expect(measured.length).toBeGreaterThan(0);
+    for (const cell of measured) {
+      expect(cell).toHaveAccessibleName(/does not fit|past the default allocation/i);
+    }
+  });
+
+  /**
+   * Every hole on the grid, and nothing else, sits under a struck heading.
+   *
+   * The exhaustive version of the assertion above, and the one that keeps the two predicates from
+   * coming apart in the direction nothing else watches. The heading is struck from `runtimeDrives`;
+   * the cell's ink is dropped on `evaluated`, which `planPlacement` clears on **five** categorical
+   * grounds, of which "this runtime does not drive this device" is one. The other four are filtered
+   * out upstream today — the store coerces `kvPrecision` into `runtime.kvPrecisions`, `quantFor`
+   * only ever returns a format the runtime lists, and this grid hardcodes one device per cell — so
+   * the two sets coincide, and an assertion that only checked the `!drives` wording would keep
+   * passing on the day one of the other four became reachable. That day the grid grows a column of
+   * identical unexplained holes, which is #72 restated with a different ground.
+   *
+   * A hole is read off what the grid paints rather than out of the engine: `transparent` and no
+   * dashed border is exactly "not judged on its numbers", since `fill` returns the panel surface for
+   * anything that does not run and the border is what separates counted bytes from a categorical
+   * refusal. Asserted as an equality in both directions, so it fails for a stray hole *and* for a
+   * struck column whose cells kept their ink.
+   */
+  it('leaves no hole on the grid that a struck heading does not explain', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'vllm');
+
+    const hole = (cell: HTMLButtonElement) =>
+      (cell.getAttribute('style') ?? '').includes('transparent') &&
+      !cell.className.includes('border-dashed');
+
+    const holes = columns()
+      .filter((c) => !c.struck)
+      .flatMap((c) => c.cells.filter(hole).map((cell) => `${c.device}: ${cell.ariaLabel}`));
+    expect(holes, 'cells refused before the arithmetic with no struck heading saying why').toEqual(
+      []
+    );
+
+    const closed = columns().filter((c) => c.struck);
+    expect(closed.length).toBeGreaterThan(1);
+    for (const column of closed) {
+      expect(column.cells.every(hole)).toBe(true);
+      // And the proxy really is reading refusals rather than figures, so "every cell is a hole"
+      // cannot be satisfied by a grid that stopped measuring.
+      for (const cell of column.cells) {
+        expect(cell).not.toHaveAccessibleName(
+          /of the ceiling free|tok\/s|to first token|spilling/i
+        );
+      }
+    }
+  });
+
+  /**
+   * A square with no ink is not a control.
+   *
+   * The other half of narrowing the border: these cells now have nothing drawn in them at all, and
+   * they were still enabled buttons in the arrow-key sequence whose click set five config keys and
+   * smooth-scrolled three sections up to a Bench that can only blank. `tokens.ts` puts the rule as
+   * "a control's boundary is what identifies it as interactive, so it needs the 3:1 non-text minimum
+   * *before* it is focused", and records `--color-border` at 1.18:1 — so no hairline was going to
+   * make these look interactive either. They are inert instead.
+   *
+   * Still focusable and still named, which is why `aria-disabled` rather than `disabled`: a disabled
+   * button takes no focus, so the arrows would stop dead at the first struck column and the per-cell
+   * sentence — the only channel that says which machine and which runtime — would go with it.
+   */
+  it('makes a closed column inert without taking it out of the grid', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'vllm');
+
+    const closed = columns().filter((c) => c.struck);
+    const open = columns().filter((c) => !c.struck);
+    expect(closed.length).toBeGreaterThan(1);
+    expect(open.length).toBeGreaterThan(1);
+
+    for (const column of closed) {
+      for (const cell of column.cells) {
+        expect(cell).toHaveAttribute('aria-disabled', 'true');
+        expect(cell.className).toContain('cursor-not-allowed');
+        // Not `disabled`: it has to keep taking focus for the roving tab stop to cross the column.
+        expect(cell.disabled).toBe(false);
+      }
+    }
+    for (const column of open) {
+      for (const cell of column.cells) {
+        expect(cell).not.toHaveAttribute('aria-disabled');
+        expect(cell.className).not.toContain('cursor-not-allowed');
+      }
+    }
+
+    // And clicking one loads nothing. `aria-disabled` is advisory — the browser still fires the
+    // click — so the handler has to refuse it, which is what this actually checks.
+    const before = useConfig.getState();
+    await user.click(closed[0].cells[0]);
+    const after = useConfig.getState();
+    expect(`${after.modelId}/${after.deviceId}/${after.quantId}`).toBe(
+      `${before.modelId}/${before.deviceId}/${before.quantId}`
+    );
+
+    // While a column the runtime does drive still adopts its cell, so the refusal above is the
+    // narrow one and not a click handler that stopped working.
+    await user.click(open[0].cells[0]);
+    expect(useConfig.getState().deviceId).not.toBe(before.deviceId);
+  });
+
+  it('keys the strike in the legend, and only while the grid holds one', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'vllm');
+    // The Envelope's reviewed sentence, with the runtime named — one wording for one refusal.
+    expect(legendKey()).toBeInTheDocument();
+    expect(legendKey()).toHaveTextContent(/vLLM does not support this hardware, at any size/i);
+    // The sample is the mark: struck text, not a swatch beside it.
+    expect(legendKey()!.querySelector('.line-through')).not.toBeNull();
+
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+    // Still keyed, and now naming MLX — the sentence follows the runtime rather than being frozen
+    // at whichever one first rendered it.
+    expect(legendKey()).toHaveTextContent(/MLX \(Apple\) does not support this hardware/i);
+
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'llama.cpp');
+    expect(legendKey()).not.toBeInTheDocument();
+  });
+
+  it('states the closed columns in the caption, which is the channel with no strike to see', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    expect(caption()).not.toMatch(/does not support/i);
+
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'vllm');
+
+    /**
+     * The count read back out of the sentence and checked against the grid, rather than written
+     * here as a literal.
+     *
+     * A hard-coded "10 of 24" would pass a caption that had stopped counting and would fail every
+     * time the catalog gains a device. What matters is that the three channels agree: the number of
+     * struck headings, the number of columns, and the sentence a screen-reader user hears instead of
+     * seeing either.
+     */
+    const stated = caption().match(
+      /(\d+) of the (\d+) device columns are hardware vLLM does not support at any size/i
+    );
+    expect(stated, `the caption does not state the closed columns: "${caption()}"`).not.toBeNull();
+    expect(Number(stated![1])).toBe(columns().filter((c) => c.struck).length);
+    expect(Number(stated![2])).toBe(columns().length);
+    // And it says which way to read the empty column, since that is the whole misreading.
+    expect(caption()).toMatch(/not for want of memory/i);
+  });
+});
+
+/**
  * The device headers are rotated 45 degrees, which costs height *and* width — one length, spent
  * twice. #64 is what happened when the component derived it once: 246px of header band reserved at
  * every viewport, from a 40-character label, while the same label's sideways extent went unreserved
