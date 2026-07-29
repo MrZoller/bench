@@ -1,4 +1,7 @@
 import type { KvPrecision, RuntimeSpec } from '@/engine/types';
+// The scenario *shape*, not the store: `scenario.ts` deliberately depends on nothing but engine
+// types so that everything needing the shape can have it without a cycle. Type-only, so it erases.
+import type { Config } from '@/store/scenario';
 
 /**
  * The values the controls can actually produce.
@@ -19,6 +22,44 @@ export const CONTEXT_STOPS = [
 export const CONCURRENCY_STOPS = [1, 2, 4, 8, 16, 32, 64, 128] as const;
 export const PROMPT_STOPS = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072] as const;
 export const DEVICE_COUNT_STOPS = [1, 2, 4, 8] as const;
+
+/**
+ * What each setting is called, wherever it is *labelled*.
+ *
+ * One entry per `Config` field, because every field is something a control sets and a picture can
+ * then draw. The Envelope draws two of them as its axes — so its axis titles, its table's caption
+ * and its row-header column read from here rather than restating them. They had already drifted
+ * three ways for one setting: the slider said "Concurrent users", the table header said "Users",
+ * and the field's own y axis named it nowhere at all (#81).
+ *
+ * Same reasoning as `kvLabel` below, one level up: two surfaces naming one setting differently is
+ * the failure this repo keeps hitting, and it is cheaper to remove than to remember. The four setup
+ * settings are here for the same reason and not because a second surface reads them yet — the
+ * Matrix's row axis is `<span class="sr-only">Model</span>`, which agrees with the control by
+ * coincidence today, exactly the coincidence recorded on `kvLabel`.
+ *
+ * `satisfies Record<keyof Config, string>` is what makes the keying a claim rather than a comment:
+ * rename a `Config` field, or add one, and this fails to compile instead of silently keeping a
+ * label for a setting that no longer exists.
+ *
+ * **Prose is not a label and does not read from here.** "Currently at 32K context and 1 user" is a
+ * sentence about a cell, and the Envelope's subhead ("context against concurrent users") is a
+ * sentence about the panel; forcing a control's name into either produces "Currently at 32K Context
+ * per sequence", which is worse English than the drift it would prevent. The test of which side a
+ * surface falls on is whether it *names a setting* — a control label, an axis title, a caption or a
+ * column header — or whether it says something about the state in a sentence.
+ */
+export const SETTING_LABELS = {
+  modelId: 'Model',
+  deviceId: 'Hardware',
+  quantId: 'Quantization',
+  runtimeId: 'Runtime',
+  contextTokens: 'Context per sequence',
+  concurrency: 'Concurrent users',
+  promptTokens: 'Prompt length',
+  kvPrecision: 'KV precision',
+  deviceCount: 'Device count',
+} as const satisfies Record<keyof Config, string>;
 
 /**
  * The cache precisions a control can offer, with the name to use when a runtime has none of

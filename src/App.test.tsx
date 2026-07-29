@@ -6,6 +6,7 @@ import { useConfig, DEFAULT_CONFIG } from '@/store/config';
 import { configToShareSearch } from '@/store/url';
 import { DEVICES, getModel } from '@/data/catalog';
 import { tokens } from '@/lib/format';
+import { SETTING_LABELS } from '@/lib/stops';
 import { DETAIL_ANCHOR_ID } from '@/components/Matrix';
 import { judgeWorkloads } from '@/engine/verdict';
 import { kvSubstitutionFor } from '@/data/runtimes';
@@ -1613,6 +1614,85 @@ describe('the Matrix names the cache the runtime actually has', () => {
     act(() => useConfig.getState().set('kvPrecision', 'q8'));
 
     expect(heading()).toHaveTextContent(/Q8 KV/);
+  });
+});
+
+/**
+ * Neither Envelope axis said what it measured (#81).
+ *
+ * The left gutter ran 1…128 and the strip under the plot ran 2K…128K — powers of two in
+ * overlapping ranges, with a single `K` at the smallest and faintest type on the page carrying the
+ * entire distinction between "128 users" and "128K tokens". Every *other* representation of the
+ * same grid named both quantities: the hidden table has a caption and a column header, and the
+ * canvas's `aria-label` opens by naming both. The picture — the default representation — was the
+ * one that did not say, and its y axis runs bottom-up, which was stated only in a source comment.
+ *
+ * Every assertion here reads `SETTING_LABELS` rather than a string literal, and that is the point of
+ * the test rather than a stylistic choice: what is being guarded is that an axis title and the
+ * control that drives it cannot come apart. A test holding its own copy of the wording keeps
+ * passing while the two surfaces drift, which is exactly the failure `kvLabel` was written for.
+ */
+describe('the Envelope names both of its axes', () => {
+  const region = () => screen.getByRole('region', { name: /how much room is left/i });
+
+  it('titles each axis with the words its own control uses', () => {
+    render(<App />);
+
+    // The controls first, so the constant is anchored to something a user can actually operate
+    // rather than asserted against itself.
+    expect(screen.getByLabelText(SETTING_LABELS.contextTokens)).toHaveAttribute('type', 'range');
+    expect(screen.getByLabelText(SETTING_LABELS.concurrency)).toHaveAttribute('type', 'range');
+
+    // Matched as the whole text of an element, so the title is the element that says exactly this
+    // and nothing else. The subhead a few pixels above it names the pair as prose, deliberately —
+    // it is a sentence, so it keeps its own English rather than reading the constant.
+    expect(within(region()).getByText(SETTING_LABELS.contextTokens)).toBeInTheDocument();
+
+    // The y title carries the direction as well as the name, so it is found by prefix and the cue
+    // asserted separately. Rows are drawn bottom-up, and a reader who assumes top-to-bottom reads
+    // the default field as "128 users at 2K is the comfortable one" when it is 1 user at 2K.
+    const upward = within(region()).getByText(new RegExp(`^${SETTING_LABELS.concurrency}\\b`));
+    expect(upward).toHaveTextContent('↑');
+  });
+
+  it('keeps the titles out of the accessible tree, which names the axes already', () => {
+    render(<App />);
+
+    /*
+     * The canvas `aria-label` is this picture's only textual equivalent and it already names both
+     * quantities, which is why both tick strips are `aria-hidden`. Visible titles that joined the
+     * accessible tree would have a screen reader hear the axes named twice — so they are hidden
+     * the same way, and this is the assertion that says so.
+     */
+    const titles = [
+      within(region()).getByText(SETTING_LABELS.contextTokens),
+      within(region()).getByText(new RegExp(`^${SETTING_LABELS.concurrency}\\b`)),
+    ];
+    for (const title of titles) {
+      expect(title.closest('[aria-hidden="true"]')).not.toBeNull();
+    }
+  });
+
+  /**
+   * The same two settings, named the same way on the surface that is the picture's equivalent.
+   *
+   * This is the part the issue did not name and the grep found: the caption said "context length"
+   * and the row-header column said "Users" while the sliders said "Context per sequence" and
+   * "Concurrent users" — two settings under four spellings inside one panel, which is how a reader
+   * comparing the table against the field has to work out that they are the same axis.
+   */
+  it('names them the same way in the table, not in two more spellings', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(within(region()).getByRole('button', { name: /region as a table/i }));
+
+    const table = within(region()).getByRole('table', {
+      name: `Feasibility by ${SETTING_LABELS.contextTokens} and ${SETTING_LABELS.concurrency}`,
+    });
+    expect(
+      within(table).getByRole('columnheader', { name: SETTING_LABELS.concurrency })
+    ).toBeInTheDocument();
   });
 });
 

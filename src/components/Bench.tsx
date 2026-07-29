@@ -24,6 +24,7 @@ import {
   DEVICE_COUNT_STOPS,
   KV_PRECISIONS,
   PROMPT_STOPS,
+  SETTING_LABELS,
   contextStopsFor,
   kvLabel,
   withStored,
@@ -258,31 +259,37 @@ export function Bench() {
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-5 p-[min(1rem,4vw)] sm:p-6">
-      {/* Setup: what you are running, and on what. */}
+      {/* Setup: what you are running, and on what.
+
+          Labels from `SETTING_LABELS`, like the Usage panel below: these controls own the wording,
+          they just no longer own the only copy of it. The Matrix already names one of these settings
+          a second time — its row axis is an `sr-only` "Model" — and agrees with the control here by
+          coincidence rather than by construction, which is the coincidence `kvLabel` was written
+          after. */}
       <section
         aria-label="Configuration"
         className="panel grid gap-4 p-[min(1.25rem,5vw)] sm:grid-cols-2"
       >
         <Select
-          label="Model"
+          label={SETTING_LABELS.modelId}
           value={config.modelId}
           onChange={(v) => set('modelId', v)}
           options={modelOptions}
         />
         <Select
-          label="Hardware"
+          label={SETTING_LABELS.deviceId}
           value={config.deviceId}
           onChange={(v) => set('deviceId', v)}
           options={deviceOptions}
         />
         <Select
-          label="Quantization"
+          label={SETTING_LABELS.quantId}
           value={config.quantId}
           onChange={(v) => set('quantId', v)}
           options={quantOptions}
         />
         <Select
-          label="Runtime"
+          label={SETTING_LABELS.runtimeId}
           value={config.runtimeId}
           onChange={(v) => set('runtimeId', v)}
           options={runtimeOptions}
@@ -350,38 +357,41 @@ export function Bench() {
       <Envelope config={config} />
       <Matrix config={config} />
 
-      {/* Usage: the half of the question that is about you, not the hardware. */}
+      {/* Usage: the half of the question that is about you, not the hardware.
+
+          The labels come from `SETTING_LABELS` rather than being written here, because the Envelope
+          draws two of these settings as its axes and titles them with the same words. */}
       <section aria-label="Usage" className="panel grid gap-5 p-[min(1.25rem,5vw)] sm:grid-cols-2">
         <StopSlider
-          label="Context per sequence"
+          label={SETTING_LABELS.contextTokens}
           stops={contextStops}
           value={nearestStop(contextStops, config.contextTokens)}
           onChange={(v) => set('contextTokens', v)}
           format={tokens}
         />
         <StopSlider
-          label="Concurrent users"
+          label={SETTING_LABELS.concurrency}
           stops={concurrencyStops}
           value={nearestStop(concurrencyStops, config.concurrency)}
           onChange={(v) => set('concurrency', v)}
           format={(v) => String(v)}
         />
         <StopSlider
-          label="Prompt length"
+          label={SETTING_LABELS.promptTokens}
           stops={promptStops}
           value={nearestStop(promptStops, config.promptTokens)}
           onChange={(v) => set('promptTokens', v)}
           format={tokens}
         />
         <Segmented
-          label="KV precision"
+          label={SETTING_LABELS.kvPrecision}
           value={config.kvPrecision}
           onChange={(v) => set('kvPrecision', v)}
           options={kvOptions}
         />
         {shardable ? (
           <StopSlider
-            label="Device count"
+            label={SETTING_LABELS.deviceCount}
             stops={deviceCountStops}
             value={nearestStop(deviceCountStops, config.deviceCount)}
             onChange={(v) => set('deviceCount', v)}
