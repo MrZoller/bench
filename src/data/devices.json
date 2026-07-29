@@ -625,12 +625,12 @@
       "capacityGiB": 16,
       "allocatableGiB": 10,
       "bandwidthGBs": 120,
-      "tflops": { "fp16": 8.5 },
+      "tflops": { "fp16": 6.8 },
       "tdpWatts": 30,
       "msrpUsd": 999,
       "releasedAt": "2025-03-12",
       "source": "https://support.apple.com/en-us/122209",
-      "note": "The Mac most Mac owners actually have, and it has a real answer rather than no answer: 10 GiB of working set at 120 GB/s takes a 4B at Q4 comfortably, a 12B slowly, and nothing above that. Metal recommends two thirds of 16 GiB, and the 8 GiB reserve the larger rows apply would put a ceiling *below* that default — so this row states none. The sysctl exists; there is no figure above the default a machine this size survives."
+      "note": "The Mac most Mac owners actually have, and it has a real answer rather than no answer: 10 GiB of working set at 120 GB/s takes a 4B at Q4 comfortably, a 12B slowly, and nothing above that. Metal recommends two thirds of 16 GiB, and the 8 GiB reserve the larger rows apply would put a ceiling *below* that default — so this row states none. The sysctl exists; there is no figure above the default a machine this size survives. **The compute is the 8-core GPU's, because the price is the 8-core machine's.** The $999 Air ships 8 GPU cores; 10 is a paid upgrade. M4 cores are 0.85 TFLOPS fp16 each — the M4 Pro row's 13.6 over 16 cores — so this row is 8 × 0.85 = 6.8, not the 8.5 that describes the configuration nobody gets at this price. Pairing a base price with an upgraded part overstated prefill and TTFT here by 25%, on the axis a $999 machine is least able to absorb it."
     },
     {
       "id": "ryzen-ai-max-395",
