@@ -4,11 +4,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 import { useConfig, DEFAULT_CONFIG } from '@/store/config';
 import { configToShareSearch } from '@/store/url';
-import { getModel } from '@/data/catalog';
+import { DEVICES, getModel } from '@/data/catalog';
 import { tokens } from '@/lib/format';
+import { SETTING_LABELS } from '@/lib/stops';
 import { DETAIL_ANCHOR_ID } from '@/components/Matrix';
 import { judgeWorkloads } from '@/engine/verdict';
 import { kvSubstitutionFor } from '@/data/runtimes';
+import { colors } from '@/design/tokens';
 
 /**
  * Wrapped rather than replaced, so every other test in this file still exercises the real verdict
@@ -362,6 +364,61 @@ describe('the workload strip keeps up with the scenario', () => {
     // And the spy is wired to something that does fire, so the assertion above is not vacuous.
     act(() => useConfig.getState().set('concurrency', 4));
     expect(graded).toHaveBeenCalled();
+  });
+
+  /**
+   * One set of column tracks for the whole list, which is the invariant behind #70.
+   *
+   * The measurement belongs to `e2e/workload-columns.spec.ts` and cannot be made here: jsdom has no
+   * layout engine, so every one of those offsets reads back as 0 and an equality assertion over them
+   * is a tautology. What jsdom *can* see is where the tracks are declared, and that is the thing a
+   * later edit would undo — putting the three tracks back on the row makes each `<li>` its own grid
+   * container, so the middle `auto` is sized from that row's own label and the reason column starts
+   * at a different x on all seven rows.
+   *
+   * So this asserts the mechanism rather than its effect, deliberately, in the suite that runs in a
+   * second. If the mechanism is ever changed on purpose — `display: contents` and `subgrid` are the
+   * same idea in three forms — this assertion and that spec both want editing, and that is the point
+   * of it failing.
+   *
+   * Three things, then, not one: that the list is a *grid* (tracks on a flex box are inert, and a
+   * subgrid whose parent is not a grid computes as `none` — both leave the rows stacked and satisfy
+   * a test that only looks at where the track string sits), that the tracks are on the list, and
+   * that the row's own template stays scoped below `sm` so it cannot outlive the subgrid it backs.
+   */
+  it('declares its column tracks once, on the list rather than on each row', () => {
+    render(<App />);
+
+    const list = within(strip()).getAllByRole('listitem')[0].parentElement;
+    expect(list).not.toBeNull();
+    // A grid container first: `grid-template-columns` is inert on a flex box and `subgrid` on an item
+    // whose parent is not a grid computes as `none`, so tracks on a non-grid list satisfy every
+    // assertion below while every cell in every row stacks at x=0.
+    expect(list!.className, 'the list is not a grid container, so its tracks are inert').toMatch(
+      /(^|\s)grid(\s|$)/
+    );
+    expect(list!.className, 'the list does not own the three tracks').toMatch(
+      /sm:grid-cols-\[9rem_auto_1fr\]/
+    );
+
+    for (const row of within(strip()).getAllByRole('listitem')) {
+      // Anchored, so the `max-sm:` template below is not read as a row declaring its own tracks
+      // past `sm` — and so a bare `sm:`-prefixed template still is.
+      expect(row.className, 'a row declares column tracks of its own past sm').not.toMatch(
+        /(^|\s)sm:grid-cols-\[/
+      );
+      // And takes the list's instead, spanning all three of them.
+      expect(row.className).toMatch(/sm:grid-cols-subgrid/);
+      expect(row.className).toMatch(/sm:col-span-3/);
+      // Below `sm` the row keeps its own two-column grid, because the stacked layout is built from
+      // `order` and a spanning third cell — both relationships among one row's own children. Scoped
+      // to `max-sm:` rather than left bare, because a browser without subgrid drops the declaration
+      // above and keeps whatever the row declares unconditionally: a bare template would put the
+      // status word before the label there, which is neither layout this component supports.
+      expect(row.className, 'the row template leaks past sm').toMatch(
+        /max-sm:grid-cols-\[auto_1fr\]/
+      );
+    }
   });
 });
 
@@ -934,6 +991,137 @@ describe('the Matrix stays informative', () => {
   });
 });
 
+/**
+ * The device headers are rotated 45 degrees, which costs height *and* width — one length, spent
+ * twice. #64 is what happened when the component derived it once: 246px of header band reserved at
+ * every viewport, from a 40-character label, while the same label's sideways extent went unreserved
+ * and leaned 142px out of a scroll container the grid otherwise fitted exactly. The app paid a phone
+ * screen of vertical space for four names it then cut off.
+ *
+ * Split across the two suites the way the quantity itself splits. The *derivation* is a string —
+ * label text, an inline height, an inline `min-width`, a rotation class — and jsdom reads all four in
+ * milliseconds. What those lengths buy in a laid-out browser is `e2e/matrix-header.spec.ts`, because
+ * jsdom reports every width on this surface as 0, which is exactly why the sideways half went
+ * unnoticed.
+ */
+describe('the Matrix header reserves the rotation once', () => {
+  const matrix = () => screen.getByRole('region', { name: /Every model on every machine/i });
+
+  /**
+   * The rendered labels, each paired with the device it names.
+   *
+   * Read off the `title`, which carries the full catalog name, rather than by zipping the header
+   * against `DEVICES` in column order — the pairing is the thing under test, and an assertion that
+   * assumes it cannot catch it going wrong.
+   */
+  const headerLabels = () =>
+    [...matrix().querySelectorAll('thead th span[title]')].map((span) => ({
+      name: span.getAttribute('title') ?? '',
+      label: span.textContent ?? '',
+    }));
+
+  /** The part of a name that is not the vendor line and not the trailing parenthetical. */
+  const stem = (name: string) =>
+    name.replace(/^(GeForce|Instinct|Radeon)\s+/, '').replace(/\s*\([^)]*\)\s*$/, '');
+
+  it('drops the qualifier from every column that can be identified without it', () => {
+    render(<App />);
+    const labels = headerLabels();
+    // The header is the whole shipping catalog; a locator that found four of them would make
+    // everything below it pass for the wrong reason.
+    expect(labels.length).toBe(DEVICES.filter((d) => d.status === 'shipping').length);
+
+    for (const { label } of labels) {
+      expect(label, `"${label}" still spends characters on brackets`).not.toMatch(/[()]/);
+    }
+
+    /**
+     * Minimal, stated as a rule rather than against a list of names: a label may only be longer
+     * than its own stem where another column answers to that same stem.
+     *
+     * This is the half of the fix that is easy to get wrong in the other direction. Stripping the
+     * parenthetical unconditionally is the obvious reading of the issue and it reintroduces the
+     * defect the rotation exists to prevent — the three Mac Studio M3 Ultra rows differ *only* in
+     * capacity, so they would collapse into one string three columns wide, and a header that
+     * cannot distinguish its own columns is worse than none.
+     */
+    const stems = labels.map((l) => stem(l.name));
+    for (const { name, label } of labels) {
+      if (label === stem(name)) continue;
+      expect(
+        stems.filter((s) => s === stem(name)).length,
+        `"${label}" is longer than "${stem(name)}", which no other column answers to`
+      ).toBeGreaterThan(1);
+      expect(label.startsWith(stem(name))).toBe(true);
+    }
+
+    // And the rule bites on the shipped catalog rather than being vacuously true of it.
+    expect(labels.filter(({ name, label }) => label !== stem(name)).length).toBeGreaterThan(1);
+    expect(new Set(labels.map((l) => l.label)).size).toBe(labels.length);
+  });
+
+  it('spends one derived length on the band and on the column it leans over, not two', () => {
+    render(<App />);
+
+    const band = matrix().querySelector<HTMLElement>('thead th:nth-child(2)');
+    const reservation = matrix().querySelector<HTMLElement>('thead th:first-child');
+    expect(band, 'the header row reserves no height at all').not.toBeNull();
+
+    const bandRem = parseFloat(band!.style.height);
+    const leanRem = parseFloat(reservation!.style.minWidth);
+    expect(
+      leanRem,
+      'the model column reserves no room for the labels leaning over it'
+    ).toBeGreaterThan(0);
+    // sin(45) and cos(45) are the same number: the band is the lean plus the row's own padding, so
+    // the two axes cannot drift apart without this failing.
+    expect(bandRem - leanRem).toBeCloseTo(1.25, 6);
+    // Both in `rem`, because both are lengths measured from text — a px reservation stops covering
+    // its own labels the moment the root font size moves, which is #44 twice over.
+    expect(band!.style.height.endsWith('rem')).toBe(true);
+    expect(reservation!.style.minWidth.endsWith('rem')).toBe(true);
+
+    /**
+     * And the labels lean the way the reservation faces.
+     *
+     * The reservation is on the model column, to the *left* of every label, which is only the right
+     * place if the labels lean left: anchored bottom-right and turned clockwise. The first fix for
+     * #64 kept them leaning right and reserved a trailing lane out of whatever free space the
+     * viewport had going spare, which is not a quantity — it ran out between 948px and 1009px, and
+     * the grid scrolled 50px for header text there while both browser assertions sat above the
+     * window. jsdom cannot see a pixel of that, but it can see that the two halves still agree.
+     */
+    const label = matrix().querySelector('thead th span[title]')!;
+    expect(label.className).toContain('origin-bottom-right');
+    expect(label.className).toMatch(/(?:^|\s)rotate-45(?:\s|$)/);
+  });
+
+  it('reserves a band for the labels it renders, not for the ones it used to', () => {
+    render(<App />);
+
+    const bandRem = parseFloat(
+      matrix().querySelector<HTMLElement>('thead th:nth-child(2)')!.style.height
+    );
+    const longest = Math.max(...headerLabels().map((l) => l.label.length));
+
+    // Still long enough for the longest label at the same 0.5rem-per-character estimate the
+    // rotation has always been sized by — the band may only shrink because the labels did, never
+    // because someone capped it. Clipping the names is the failure the rotation exists to prevent.
+    expect(bandRem).toBeGreaterThanOrEqual(longest * 0.5 * Math.SQRT1_2);
+
+    /**
+     * And the 246px in the issue has actually moved.
+     *
+     * 15.39rem was the band when the reservation carried `(12-ch DDR5-4800)` and its neighbours:
+     * 40 characters, 246px at the default root, 16% of the Matrix panel on a phone, and unchanged
+     * between a 320px screen and a 1440px one. 11rem is 176px — comfortably above the 10.09rem the
+     * shipped catalog now asks for, and far enough below 15.39 that restoring the parentheticals
+     * fails here rather than in review.
+     */
+    expect(bandRem).toBeLessThan(11);
+  });
+});
+
 describe('clicking a Matrix cell loads what that cell was scored under', () => {
   it('carries the quantization the cell was evaluated at, not the one selected', async () => {
     const user = userEvent.setup();
@@ -1427,6 +1615,85 @@ describe('the Matrix names the cache the runtime actually has', () => {
     act(() => useConfig.getState().set('kvPrecision', 'q8'));
 
     expect(heading()).toHaveTextContent(/Q8 KV/);
+  });
+});
+
+/**
+ * Neither Envelope axis said what it measured (#81).
+ *
+ * The left gutter ran 1…128 and the strip under the plot ran 2K…128K — powers of two in
+ * overlapping ranges, with a single `K` at the smallest and faintest type on the page carrying the
+ * entire distinction between "128 users" and "128K tokens". Every *other* representation of the
+ * same grid named both quantities: the hidden table has a caption and a column header, and the
+ * canvas's `aria-label` opens by naming both. The picture — the default representation — was the
+ * one that did not say, and its y axis runs bottom-up, which was stated only in a source comment.
+ *
+ * Every assertion here reads `SETTING_LABELS` rather than a string literal, and that is the point of
+ * the test rather than a stylistic choice: what is being guarded is that an axis title and the
+ * control that drives it cannot come apart. A test holding its own copy of the wording keeps
+ * passing while the two surfaces drift, which is exactly the failure `kvLabel` was written for.
+ */
+describe('the Envelope names both of its axes', () => {
+  const region = () => screen.getByRole('region', { name: /how much room is left/i });
+
+  it('titles each axis with the words its own control uses', () => {
+    render(<App />);
+
+    // The controls first, so the constant is anchored to something a user can actually operate
+    // rather than asserted against itself.
+    expect(screen.getByLabelText(SETTING_LABELS.contextTokens)).toHaveAttribute('type', 'range');
+    expect(screen.getByLabelText(SETTING_LABELS.concurrency)).toHaveAttribute('type', 'range');
+
+    // Matched as the whole text of an element, so the title is the element that says exactly this
+    // and nothing else. The subhead a few pixels above it names the pair as prose, deliberately —
+    // it is a sentence, so it keeps its own English rather than reading the constant.
+    expect(within(region()).getByText(SETTING_LABELS.contextTokens)).toBeInTheDocument();
+
+    // The y title carries the direction as well as the name, so it is found by prefix and the cue
+    // asserted separately. Rows are drawn bottom-up, and a reader who assumes top-to-bottom reads
+    // the default field as "128 users at 2K is the comfortable one" when it is 1 user at 2K.
+    const upward = within(region()).getByText(new RegExp(`^${SETTING_LABELS.concurrency}\\b`));
+    expect(upward).toHaveTextContent('↑');
+  });
+
+  it('keeps the titles out of the accessible tree, which names the axes already', () => {
+    render(<App />);
+
+    /*
+     * The canvas `aria-label` is this picture's only textual equivalent and it already names both
+     * quantities, which is why both tick strips are `aria-hidden`. Visible titles that joined the
+     * accessible tree would have a screen reader hear the axes named twice — so they are hidden
+     * the same way, and this is the assertion that says so.
+     */
+    const titles = [
+      within(region()).getByText(SETTING_LABELS.contextTokens),
+      within(region()).getByText(new RegExp(`^${SETTING_LABELS.concurrency}\\b`)),
+    ];
+    for (const title of titles) {
+      expect(title.closest('[aria-hidden="true"]')).not.toBeNull();
+    }
+  });
+
+  /**
+   * The same two settings, named the same way on the surface that is the picture's equivalent.
+   *
+   * This is the part the issue did not name and the grep found: the caption said "context length"
+   * and the row-header column said "Users" while the sliders said "Context per sequence" and
+   * "Concurrent users" — two settings under four spellings inside one panel, which is how a reader
+   * comparing the table against the field has to work out that they are the same axis.
+   */
+  it('names them the same way in the table, not in two more spellings', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(within(region()).getByRole('button', { name: /region as a table/i }));
+
+    const table = within(region()).getByRole('table', {
+      name: `Feasibility by ${SETTING_LABELS.contextTokens} and ${SETTING_LABELS.concurrency}`,
+    });
+    expect(
+      within(table).getByRole('columnheader', { name: SETTING_LABELS.concurrency })
+    ).toBeInTheDocument();
   });
 });
 
@@ -2016,5 +2283,333 @@ describe('the comparison grid is one tab stop, not four hundred', () => {
 
     expect(caption.textContent).toMatch(/single tab stop/i);
     expect(caption.textContent).toMatch(/arrow keys/i);
+  });
+});
+
+/**
+ * Which focus indicator each control declares.
+ *
+ * The four primary selects suppressed the outline and replaced it with a 1px border colour change
+ * measuring **1.95:1 against the unfocused edge** — WCAG 2.2 SC 2.4.13 asks for 3:1 at a 2px
+ * minimum thickness, and a colour-only change at that size is most of what a deuteranope loses
+ * (#67). Two further instances came out of the sweep for the same shape, both listed in the issue as
+ * already correct: the budget legend drew `focus:ring-1`, which is half the minimum thickness and is
+ * the whole indicator once the outline is suppressed; and the Matrix marked its selected square with
+ * the same channel, width and colour as its focus ring, so focusing the marked square changed
+ * nothing at all — a 1:1 change contrast, and the square Tab lands on after a click.
+ *
+ * **The split across the two suites is deliberate, and it is the one #52 made.** Whether an
+ * indicator paints 2px and clears 3:1 against what it sits on is a question about a real stylesheet
+ * and a real focus ring: jsdom has no Tailwind cascade, no layout and no painted outline, so
+ * `getComputedStyle` here says nothing about any of it. That half is `e2e/focus-indicators.spec.ts`.
+ * What jsdom can answer is which indicator each control *declares*, which is a DOM property — and it
+ * answers it for every focusable element on the page in a second, so a control added later is
+ * covered by default rather than by someone remembering this file exists.
+ */
+describe('every control declares an indicator that says it has focus', () => {
+  /** SC 2.4.13's minimum thickness, in px. */
+  const MINIMUM_THICKNESS = 2;
+
+  /** The channels an indicator can be drawn in. A border colour is deliberately not one — see below. */
+  type Channel = 'outline' | 'ring' | 'inset-ring';
+
+  /**
+   * Split a utility into its variants and its base, bracket-aware.
+   *
+   * A naive split on `:` loses `[@media(pointer:coarse)]:h-11` — the variant contains a colon of its
+   * own — and the Matrix cells carry exactly that, so the sweep would have quietly stopped reading
+   * the class list of all 408 of them.
+   */
+  const parse = (utility: string) => {
+    const parts: string[] = [];
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i < utility.length; i += 1) {
+      const char = utility[i];
+      if (char === '[' || char === '(') depth += 1;
+      else if (char === ']' || char === ')') depth -= 1;
+      else if (char === ':' && depth === 0) {
+        parts.push(utility.slice(start, i));
+        start = i + 1;
+      }
+    }
+    return { variants: parts, base: utility.slice(start) };
+  };
+
+  /**
+   * What one element declares.
+   *
+   * `restingChannels` is what is drawn while the element is *not* focused, which is what a focus
+   * indicator has to be distinguishable from. A `border-*` swap is not counted in either direction:
+   * treating it as an indicator is precisely the mistake #67 documents, and it stays on the select as
+   * a redundant second cue.
+   */
+  const declared = (el: Element) => {
+    const focusChannels = new Set<Channel>();
+    const restingChannels = new Set<Channel>();
+    const focusColours = new Set<string>();
+    let thickness: number | null = null;
+    let suppressesOutline = false;
+
+    for (const utility of (el.getAttribute('class') ?? '').split(/\s+/).filter(Boolean)) {
+      const { variants, base } = parse(utility);
+      const match = /^(inset-ring|ring|outline)(?:-(.*))?$/.exec(base);
+      if (!match) continue;
+
+      const channel = match[1] as Channel;
+      const rest = match[2] ?? '';
+      const onFocus = variants.some((v) => v.startsWith('focus'));
+
+      // `outline-none`/`outline-hidden` removes the indicator the browser supplies for free, which
+      // is the state that puts an element under any obligation here at all.
+      if (channel === 'outline' && (rest === 'none' || rest === 'hidden')) {
+        suppressesOutline = true;
+        continue;
+      }
+      // `ring-offset-*` and `outline-offset-*` place a mark; they never are one.
+      if (rest.startsWith('offset-')) continue;
+
+      // A bare `ring`/`outline` is 1px in Tailwind v4; anything else numeric is that many px.
+      const width = rest === '' ? 1 : Number(rest);
+      if (Number.isFinite(width)) {
+        if (onFocus) thickness = Math.max(thickness ?? 0, width);
+      } else if (onFocus) {
+        focusColours.add(rest);
+      }
+      (onFocus ? focusChannels : restingChannels).add(channel);
+    }
+
+    return { focusChannels, restingChannels, focusColours, thickness, suppressesOutline };
+  };
+
+  /**
+   * Everything with a focus state worth looking at: what Tab or a script can focus, plus anything
+   * hosting a `focus-within:` indicator on behalf of a control inside it. The segmented controls are
+   * the second kind — their radios are `sr-only`, so the mark belongs to the label around them, and a
+   * sweep of focusable elements alone would have looked straight past it.
+   */
+  const controls = (container: HTMLElement) => [
+    ...container.querySelectorAll<HTMLElement>(
+      'a[href], button, input, select, textarea, [tabindex], [class*="focus-within:"]'
+    ),
+  ];
+
+  /** `<button> "Qwen3 32B on ..."`, enough to find the offender from the failure message. */
+  const name = (el: Element) =>
+    `<${el.tagName.toLowerCase()}> "${
+      (el.textContent ?? '').trim().slice(0, 40) ||
+      el.getAttribute('aria-label')?.slice(0, 40) ||
+      el.getAttribute('id') ||
+      '(no text)'
+    }"`;
+
+  it('never declares an indicator thinner than the 2px minimum', () => {
+    const { container } = render(<App />);
+    const summaries = controls(container).map((el) => ({ el, ...declared(el) }));
+    const withIndicator = summaries.filter((s) => s.thickness !== null);
+
+    // Vacuity guards. The grid alone declares one on every cell, and the page has to have several
+    // outside it — a selector that stopped matching would otherwise report a clean sweep.
+    expect(withIndicator.length, 'nothing on the page declares a focus indicator').toBeGreaterThan(
+      300
+    );
+    expect(
+      withIndicator.filter((s) => !s.el.closest('table')).length,
+      'the sweep found no indicators outside the grid'
+    ).toBeGreaterThan(5);
+
+    const tooThin = withIndicator
+      .filter((s) => s.thickness! < MINIMUM_THICKNESS)
+      .map((s) => `${name(s.el)} declares ${s.thickness}px`);
+    expect(tooThin, `thinner than ${MINIMUM_THICKNESS}px`).toEqual([]);
+  });
+
+  it('never takes the browser’s indicator away without replacing it', () => {
+    const { container } = render(<App />);
+    const summaries = controls(container).map((el) => ({ el, ...declared(el) }));
+    const suppressing = summaries.filter((s) => s.suppressesOutline);
+
+    expect(
+      suppressing.length,
+      'nothing suppresses the outline, so this asserts nothing'
+    ).toBeGreaterThan(0);
+    expect(
+      suppressing.filter((s) => !s.el.closest('table')).length,
+      'only grid cells suppress it, so the rule is narrower than it reads'
+    ).toBeGreaterThan(0);
+
+    const unreplaced = suppressing
+      .filter((s) => (s.thickness ?? 0) < MINIMUM_THICKNESS)
+      .map((s) => `${name(s.el)} suppresses the outline and declares ${s.thickness ?? 'nothing'}`);
+    expect(unreplaced, 'outline removed with no compliant replacement').toEqual([]);
+  });
+
+  /**
+   * The Matrix instance, stated as the general rule it is. An indicator that shares its channel with
+   * a mark the element already wears cannot be a *change*, however thick it is — the selected square
+   * wore an accent ring at rest and lit an identical accent ring on focus.
+   */
+  it('never draws focus in a channel a resting state already uses', () => {
+    const { container } = render(<App />);
+    const summaries = controls(container).map((el) => ({ el, ...declared(el) }));
+
+    // At least one element has to wear a resting mark, or the rule is trivially satisfied. The
+    // marked square is that element, and it is the one this rule was written for.
+    expect(
+      summaries.filter((s) => s.restingChannels.size > 0).length,
+      'no element wears a resting mark, so this asserts nothing'
+    ).toBeGreaterThan(0);
+
+    const collisions = summaries
+      .filter((s) => [...s.focusChannels].some((c) => s.restingChannels.has(c)))
+      .map((s) => `${name(s.el)} draws focus and state both as ${[...s.focusChannels].join('/')}`);
+    expect(collisions, 'focus and a resting state share a channel').toEqual([]);
+  });
+
+  /**
+   * And the named instance, control by control.
+   *
+   * The channel is pinned as an outline rather than left free, because the reason for it is invisible
+   * from Chromium: a ring is a `box-shadow`, and a native `menulist` select is painted by the
+   * platform in WebKit, which does not reliably paint one. The browser spec would go on passing while
+   * Safari showed nothing, so this is the assertion that holds that decision.
+   */
+  it('gives each of the four primary selects a 2px accent outline', () => {
+    render(<App />);
+
+    for (const label of ['Model', 'Hardware', 'Quantization', 'Runtime']) {
+      const select = screen.getByLabelText(label);
+      const summary = declared(select);
+
+      expect(summary.suppressesOutline, `${label} suppresses its outline`).toBe(false);
+      expect([...summary.focusChannels], `${label}'s indicator channel`).toEqual(['outline']);
+      expect(summary.thickness, `${label}'s indicator thickness`).toBeGreaterThanOrEqual(
+        MINIMUM_THICKNESS
+      );
+      expect([...summary.focusColours].join(), `${label}'s indicator colour`).toContain(
+        '--color-accent'
+      );
+    }
+  });
+});
+
+/**
+ * A mark drawn *on* the heatmap, measured against the heatmap.
+ *
+ * The rule above — focus and a resting state never share a channel — moved the Matrix's
+ * selected-square mark from an offset ring outside the cell to a frame inside it, and that moved it
+ * off `--color-surface`, where `tokens.ts` validated the accent at 7.14:1, and onto the ramp, where
+ * it was never validated at all. A single-tone accent frame measures **1.06:1 to 4.52:1** across
+ * the seven steps of `sequential` — below the 3:1 non-text minimum on 304 of the grid's 408 squares,
+ * the default selection among them. So the mark is two tones, and this is the arithmetic that says
+ * so: for every fill the grid actually paints, at least one of the mark's tones has to clear 3:1
+ * against it.
+ *
+ * **jsdom can answer this one, which is why it is here rather than in the browser suite.** The fill
+ * is an inline style and the mark's tones are token names in the class list; the rest is the WCAG
+ * contrast formula. What jsdom cannot answer — whether the two tones land in the geometry the class
+ * list implies, 2px of accent with the separator inside it — is `e2e/focus-indicators.spec.ts`.
+ */
+describe('a mark drawn on the heatmap stays visible on every step of the ramp', () => {
+  /** SC 1.4.11's floor for a non-text mark. */
+  const MINIMUM_CONTRAST = 3;
+
+  const parseColour = (value: string): [number, number, number] => {
+    if (value.startsWith('#')) {
+      const hex = value.slice(1);
+      return [0, 2, 4].map((i) => Number.parseInt(hex.slice(i, i + 2), 16)) as [
+        number,
+        number,
+        number,
+      ];
+    }
+    const parts = value.match(/[\d.]+/g)?.map(Number) ?? [];
+    return [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0];
+  };
+
+  const luminance = (value: string) => {
+    const [r, g, b] = parseColour(value)
+      .map((c) => c / 255)
+      .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+
+  const contrast = (a: string, b: string) => {
+    const [high, low] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (high + 0.05) / (low + 0.05);
+  };
+
+  /** `--color-surface-raised` -> `surfaceRaised`, so a token name resolves against `colors`. */
+  const token = (cssName: string) =>
+    cssName.replace('--color-', '').replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+
+  /**
+   * The tones a resting mark is drawn in, read off the element that wears it.
+   *
+   * Only the utilities that paint inside the cell count: the inset ring and the inset shadow
+   * separator beneath it. The `focus:`-gated ring is drawn *outside* the box, over the panel
+   * surface, so it is measured in the browser suite against a different colour entirely.
+   */
+  const restingTones = (el: Element) =>
+    (el.getAttribute('class') ?? '')
+      .split(/\s+/)
+      .filter((u) => !u.includes('focus') && /^(inset-ring|inset-shadow|shadow)-\[/.test(u))
+      .flatMap((u) => [...u.matchAll(/--color-[a-z-]+/g)].map((m) => m[0]))
+      .map(token)
+      .filter((name): name is keyof typeof colors => name in colors)
+      .map((name) => colors[name]);
+
+  it('keeps one of the selected square’s tones 3:1 against every fill it can land on', () => {
+    render(<App />);
+    const matrix = screen.getByRole('region', { name: /every model on every machine/i });
+    const cells = within(matrix)
+      .getAllByRole('button')
+      .filter((button) => button.closest('td'));
+
+    const marked = cells.filter((cell) => cell.getAttribute('aria-current') === 'true');
+    expect(marked, 'no square is marked, so there is no mark to measure').toHaveLength(1);
+    const tones = restingTones(marked[0]);
+
+    // Vacuity guards. A mark with no tones, or a grid the selector stopped matching, would
+    // otherwise report a clean sweep over nothing.
+    expect(
+      tones.length,
+      'the selected square declares no mark inside the cell — if selection moved back outside it, ' +
+        'the channel-collision rule above is what has to hold instead of this one'
+    ).toBeGreaterThan(0);
+    expect(cells.length, 'the grid is not rendering').toBeGreaterThan(300);
+
+    /** Every fill the grid paints, with how many squares wear it. `transparent` shows the panel. */
+    const fills = new Map<string, number>();
+    for (const cell of cells) {
+      const background = (cell as HTMLElement).style.background;
+      const behind = background === 'transparent' || !background ? colors.surface : background;
+      fills.set(behind, (fills.get(behind) ?? 0) + 1);
+    }
+    expect(
+      fills.size,
+      'the grid paints one colour, so the ramp is not being exercised'
+    ).toBeGreaterThan(4);
+
+    const best = (fill: string) => Math.max(...tones.map((tone) => contrast(tone, fill)));
+    const unreadable = [...fills.entries()]
+      .filter(([fill]) => best(fill) < MINIMUM_CONTRAST)
+      .map(([fill, count]) => `${fill} (${count} squares) at ${best(fill).toFixed(2)}:1`);
+    expect(unreadable, `the mark below ${MINIMUM_CONTRAST}:1 on a fill the grid paints`).toEqual(
+      []
+    );
+
+    /**
+     * And that the second tone is load-bearing rather than belt-and-braces. If every step of the
+     * ramp were readable under one tone, this test would pass on the single-tone frame that shipped
+     * 304 unreadable squares — the ramp is what makes it fail, so the ramp has to still be there.
+     */
+    const defeatsOneTone = tones.filter(
+      (tone) => ![...fills.keys()].every((fill) => contrast(tone, fill) >= MINIMUM_CONTRAST)
+    );
+    expect(
+      defeatsOneTone.length,
+      'every tone clears the bar alone, so this measures nothing the ramp can break'
+    ).toBeGreaterThan(0);
   });
 });

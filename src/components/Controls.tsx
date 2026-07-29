@@ -40,7 +40,26 @@ export function Select<T extends string>({
         // The note carries load-bearing warnings ("Does not run on ..."), so it has to be part
         // of the control's accessible description rather than adjacent text.
         aria-describedby={note ? `${id}-note` : undefined}
-        className="w-full rounded-md border border-[var(--color-control-border)] bg-[var(--color-surface-raised)] px-3 py-2 text-sm text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none"
+        /**
+         * The focus indicator is an outline. Both halves of that sentence were wrong before.
+         *
+         * It was `focus:border-[accent] focus:outline-none` — a 1px edge measuring **1.95:1 against
+         * the unfocused edge**, where WCAG 2.2 SC 2.4.13 asks for 3:1 at a 2px minimum thickness,
+         * and colour-only, so a deuteranope or a protanope loses most of what separates violet from
+         * slate-blue at that size (#67). Every other control in the app already keeps a real 2px
+         * indicator; these four were the outlier, and they are the two inputs — model and hardware —
+         * that everything else on the page derives from.
+         *
+         * **`outline` rather than the `ring` its neighbours use**, because a ring is a `box-shadow`
+         * and this is a native `menulist` select, which WebKit paints through the platform rather
+         * than from the CSS box. A box-shadow is not reliably painted on one, so the fix that looks
+         * like the rest of the app would have shipped no indicator at all in Safari. An outline is
+         * drawn by the browser outside the control's box in every engine, and it is the mechanism
+         * the success criterion is written around.
+         *
+         * The border swap stays, as a redundant second cue. It is simply no longer the indicator.
+         */
+        className="w-full rounded-md border border-[var(--color-control-border)] bg-[var(--color-surface-raised)] px-3 py-2 text-sm text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-2 focus:outline-offset-2 focus:outline-[var(--color-accent)]"
       >
         {options.map((option) => (
           <option key={option.value} value={option.value} disabled={option.disabled}>
