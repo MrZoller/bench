@@ -20,10 +20,15 @@ import { expect, test } from '@playwright/test';
  * What a canvas is currently showing, reduced to something comparable.
  *
  * A colour *count* is not enough on its own to tell two fields apart: the Envelope fills every cell
- * from a five-colour palette, so the count is dominated by cell-edge anti-aliasing and moves by one
- * or two between wholly different scenarios. The first version of the repaint test below turned on
- * exactly that difference of one, which would have become a five-second poll timeout reporting
- * `expected true, received false` the moment a catalogue change made two counts collide.
+ * from a small fixed set — the seven steps of `magnitudeRamp` plus the flat `serious` and `critical`
+ * status hues, of which the default scenario paints five — so the count is dominated by cell-edge
+ * anti-aliasing and moves by one or two between wholly different scenarios. (It was a three-state
+ * palette when this was written and "five-colour" was the figure; #65 put the field on the ramp, and
+ * the reasoning survived the change while the number did not. A tolerance sized from a stale figure
+ * is exactly the mis-measurement this helper exists to prevent.) The first version of the repaint
+ * test below turned on exactly that difference of one, which would have become a five-second poll
+ * timeout reporting `expected true, received false` the moment a catalogue change made two counts
+ * collide.
  *
  * So this also returns a `digest` — an order-sensitive hash over the sampled bytes — which changes
  * if any sampled pixel changes. The counts stay because they are what a *human* reads out of a

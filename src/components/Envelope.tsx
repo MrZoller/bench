@@ -14,6 +14,7 @@ import {
   MEASURES,
   SETTING_LABELS,
   contextStopsFor,
+  measureVocabulary,
   withStored,
 } from '@/lib/stops';
 import { colors, magnitudeFill, magnitudeRamp, marks, withAlpha } from '@/design/tokens';
@@ -353,6 +354,15 @@ export function Envelope({ config }: { config: Config }) {
   }, {});
   const total = grid.cells.flat().length;
   const currentCell = grid.cells.flat().find((c) => isCurrent(c, config, model));
+  // One lookup for the four places this panel names its own colouring — see `measureVocabulary`.
+  const measured = measureVocabulary(measure);
+  /**
+   * Where the comfortable cells are, in words, for the legend line that defines the word.
+   *
+   * The header counts them and the field no longer draws them, so this is what makes the count
+   * locatable without putting the verdict back on the fill — see `frontier`.
+   */
+  const comfortableEdge = frontier(grid);
 
   return (
     <section aria-labelledby={headingId} className="panel p-[min(1.25rem,5vw)]">
@@ -404,14 +414,19 @@ export function Envelope({ config }: { config: Config }) {
             </button>
           ))}
         </div>
-        {/* The ramp's domain, stated. Its ends are this grid's own best and worst cell rather than
-            absolute figures — that is what makes a field whose variation sits on top of a large
-            constant legible at all, and it is also a thing a reader would otherwise assume the
-            other way round. */}
+        {/* The ramp's domain, stated. Its ends are this grid's own extremes rather than absolute
+            figures — that is what makes a field whose variation sits on top of a large constant
+            legible at all, and it is also a thing a reader would otherwise assume the other way
+            round.
+
+            It is no longer the *only* place that is disclosed, which was the half of this worth
+            fixing: the ramp key's own ends and its trailing clause now say it too, and so does the
+            canvas description. A relativity caveat that lives in one line of 12px type under a
+            control, while the legend beside the picture says "worse" and "better", is a caveat the
+            reader meets after they have already read the field. */}
         <p className="mt-1.5 text-xs text-[var(--color-text-muted)]">
-          {MEASURES.find((m) => m.value === measure)?.hint} The ramp runs between the best and worst
-          cell on this grid, so it says which way the region falls off rather than by how much — the
-          table has the figures.
+          {measured.hint} The ramp runs between this grid&rsquo;s own extremes, so it says which way
+          the region falls off rather than by how much — the table has the figures.
         </p>
       </fieldset>
 
@@ -566,10 +581,20 @@ export function Envelope({ config }: { config: Config }) {
           Only while some cell is actually graded. Under a runtime that cannot drive the device the
           whole field is one flat red, and a ramp key there describes a scale nothing on screen is
           painted from.
+
+          **The ends name the quantity, not a verdict, and the difference is measured.** They said
+          "worse" and "better" — the Matrix's words for the same seven hexes — while this ramp's
+          domain is the grid's own span and the Matrix's is floored at zero. On gpt-oss-20b against an
+          EPYC 9755 all 56 cells run, the `fit` domain is 0.726 to 0.991 of the ceiling free, and the
+          darkest step lands on the 128K x 128-user corner with 1.05 TB unused: keyed "worse", the
+          legend told the reader the emptiest machine in the catalogue was out of room. `MEASURES.ends`
+          says "less room" instead, which is the strongest claim a rank-relative ramp is entitled to,
+          and the trailing clause says what it is relative *to* — in the legend, rather than only in
+          the caption under the control.
         */}
         {grid.cells.flat().some(graded) && (
           <li className="flex flex-wrap items-center gap-2 text-sm sm:col-span-2">
-            <span className="text-[var(--color-text)]">worse</span>
+            <span className="text-[var(--color-text)]">{measured.ends[0]}</span>
             <span
               aria-hidden="true"
               className="flex h-3 min-w-[min(4rem,100%)] flex-1 overflow-hidden rounded-sm"
@@ -578,11 +603,14 @@ export function Envelope({ config }: { config: Config }) {
                 <span key={step} className="flex-1" style={{ background: step }} />
               ))}
             </span>
-            <span className="text-[var(--color-text)]">better</span>
+            <span className="text-[var(--color-text)]">{measured.ends[1]}</span>
             {/* Naming the measure again here would print the caption above twice on one panel; the
-                control is what says which of the three the ramp is currently spending itself on. */}
+                control is what says which of the three the ramp is currently spending itself on. What
+                this does have to say is the domain, because the two end labels above are comparatives
+                and a comparative needs its comparison class stated. */}
             <span className="text-xs text-[var(--color-text-muted)]">
-              Every cell that fits, graded by the selected measure.
+              Every cell that fits, graded against the others on this grid rather than against an
+              absolute scale.
             </span>
           </li>
         )}
@@ -621,7 +649,18 @@ export function Envelope({ config }: { config: Config }) {
                       label: 'Past the default allocation',
                       hint: 'Within the memory this machine has, but past the ceiling it hands out by default — which you can raise.',
                     }
-                : STATE_STYLE[state];
+                : /*
+                   * The comfort count in the header names a set the field no longer draws, so the line
+                   * that defines the word says where they are — see `frontier`. Computed from the grid
+                   * like the `over` branch above rather than written into `STATE_STYLE`, because it is
+                   * a fact about this scenario and not part of the vocabulary.
+                   */
+                  state === 'comfortable' && comfortableEdge
+                  ? {
+                      label: STATE_STYLE.comfortable.label,
+                      hint: `${STATE_STYLE.comfortable.hint} ${comfortableEdge}; the table marks each one.`,
+                    }
+                  : STATE_STYLE[state];
 
             const fill = STATE_STYLE[state].fill;
 
@@ -772,9 +811,22 @@ function describe(
    * under: on a grid the runtime cannot drive there is no ramp on screen and nothing for this clause
    * to describe. Without it the three measure buttons are silent for a screen-reader user — they
    * repaint a picture whose only textual equivalent never mentioned colour at all.
+   *
+   * **And it says what the ends are relative to, which the sighted caption said and this did not.**
+   * "Worst to best" is a claim about the configuration; this ramp's domain is the grid's own span, so
+   * the only claim available is about the other cells. The asymmetry was the same one adding this
+   * clause set out to close: on gpt-oss-20b against an EPYC 9755 the darkest step lands on a cell
+   * with 72.6% of a 1.45 TB ceiling free, and a screen-reader user was told it was the worst for room
+   * with none of the disclosure the 12px caption beside the picture carries. Both ends read from
+   * `MEASURES.ends`, so the sentence and the visible key cannot drift.
+   *
+   * It stops there rather than adding "the table has the figures": that pointer is in the caption
+   * under the toggle, which is ordinary visible text and therefore already in the accessible tree.
+   * Repeating it here would say it twice to the one reader who hears both.
    */
+  const { paints, ends } = measureVocabulary(measure);
   const coloured = grid.cells.flat().some(graded)
-    ? `Cells that fit are coloured by ${MEASURES.find((m) => m.value === measure)?.paints}, worst to best.`
+    ? `Cells that fit are coloured by ${paints} — ${ends[0]} to ${ends[1]}, ranked against the other cells on this grid rather than on an absolute scale.`
     : '';
   // Suppressed only when it would print a zero — `closed.length > 0` is exactly the condition
   // under which `whyClosed` has something non-empty to report, in all three of its forms.
@@ -794,14 +846,41 @@ function describe(
       .filter(Boolean)
       .join(' ');
   }
-  const widest = grid.cells[0].filter((c) => c.state === 'comfortable').at(-1);
+  const edge = frontier(grid);
   return [
     `${here}${comfortable} of ${total} combinations of context and concurrency are comfortable.`,
-    `At ${grid.concurrencies[0]} user, up to ${tokens(widest?.contextTokens ?? 0)} of context stays comfortable.`,
+    edge && `${edge} stays comfortable.`,
     ...rest,
   ]
     .filter(Boolean)
     .join(' ');
+}
+
+/**
+ * How far context reaches at the fewest users before comfort runs out — the comfortable region's
+ * frontier, as a phrase both the legend and the canvas description can finish their own way.
+ *
+ * **This exists because the header's comfort count has to be locatable somewhere a reader looks.**
+ * The field is a magnitude now (#65), so "comfortable" is deliberately not a colour: at the default
+ * scenario the one comfortable cell is painted `#cde2fb` and so are 27 tight ones, 28 of 56 sharing
+ * that hex. That is the right call for the fill — measured, the verdict channel carried 45 of 56 in
+ * one amber while hiding two orders of magnitude — but it left "1 of 56 comfortable" captioning a
+ * picture in which the 1 is half the grid, identifiable only in a table behind a disclosure. The
+ * verdict lives in the channels that carry words, so the *location* has to as well, and the legend's
+ * swatch-less "Comfortable" line is where a reader goes to find out what the word means.
+ *
+ * Derived once rather than written twice: the description already said this and the legend did not,
+ * which is the shape of drift this file has now hit four times.
+ *
+ * `undefined` when no cell in the fewest-users row is comfortable, which includes the whole grid
+ * being closed. Both callers are already inside a "some cell is comfortable" branch, and a row-0 miss
+ * with comfort further up is not a frontier this phrase could state honestly.
+ */
+function frontier(grid: EnvelopeGrid): string | undefined {
+  const widest = grid.cells[0]?.filter((c) => c.state === 'comfortable').at(-1);
+  if (!widest) return undefined;
+  const users = grid.concurrencies[0];
+  return `At ${users} ${users === 1 ? 'user' : 'users'}, up to ${tokens(widest.contextTokens)} of context`;
 }
 
 /** What a cell says in the table: its state, why, and what it costs. */

@@ -106,9 +106,43 @@ describe('the feasibility field', () => {
      * used all three: 45 amber, 10 red, 1 green. Both assertions fail on those figures, and the
      * second is the one that matters: a picture where four cells in five share a colour is not
      * carrying a shape however many colours exist in principle.
+     *
+     * **A claim about this scenario, and deliberately not a universal bar.** How flat the field is
+     * depends on the rig: on gpt-oss-20b against an EPYC 9755 the cache is negligible against a
+     * 1.45 TB ceiling until the far corner, so 50 of 56 cells genuinely do share a step — that is the
+     * machine, not the scale, and flooring the domain at zero makes it 55 of 56. What has to hold at
+     * every scenario is that the ramp is keyed as a ranking rather than as a verdict, which is the
+     * sweep below at exactly that rig.
      */
     expect(distinct.size, `only ${distinct.size} colours on the field`).toBeGreaterThanOrEqual(4);
     expect(share / painted.fills.length, 'one colour covers most of the field').toBeLessThan(0.6);
+  });
+
+  /**
+   * The comfort count, which the field deliberately stopped drawing.
+   *
+   * "1 of 56 comfortable" sits in this panel's header, and the one comfortable cell is painted the
+   * ramp's brightest step — as are 27 tight ones, 28 of 56 sharing that hex. Putting the verdict back
+   * on the fill is the defect #65 fixed, so the count is located in the channel that carries words:
+   * the legend line that is the only place on this surface saying what "comfortable" means.
+   */
+  it('locates the comfort count in words, since the field no longer draws it', () => {
+    const brightest = magnitudeRamp[magnitudeRamp.length - 1];
+    // The premise, asserted rather than assumed: the count cannot be found by colour because the
+    // comfortable cell's colour is not its own.
+    expect(
+      painted.fills.filter((f) => f === brightest).length,
+      'the brightest step is unique, so the count is locatable by colour after all'
+    ).toBeGreaterThan(1);
+
+    const description = within(field()).getByRole('img').getAttribute('aria-label') ?? '';
+    const edge = description.match(/At \d+ users?, up to [\d,.]+[KM]? of context/)?.[0];
+    expect(edge, 'the description does not state the comfortable frontier').toBeTruthy();
+
+    // The same phrase, from the same derivation, on the visible legend — which had the definition of
+    // the word and nothing about where the cells were.
+    const key = within(field()).getByText('Comfortable').closest('li');
+    expect(key?.textContent).toContain(edge);
   });
 
   it('spends the whole ramp, both ends of it, on the cells that fit', () => {
@@ -294,5 +328,87 @@ describe('the feasibility field', () => {
       defeatsOneTone.length,
       'every tone clears the bar alone, so this measures nothing the ramp can break'
     ).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The ramp's ends, on a rig where nothing is short of room.
+ *
+ * A domain of `{min, max}` over the grid's own cells is what makes a field whose variation sits on a
+ * large constant legible — and it is a *ranking*, so the legend and the description are only entitled
+ * to rank. Keyed "worse" and "better" (the Matrix's words for the same seven hexes, where the domain
+ * is floored at zero and a verdict is a claim it can make) this panel told the reader the emptiest
+ * machine in the catalogue was out of room.
+ *
+ * Measured at this scenario — gpt-oss-20b, llama.cpp, MXFP4, 32K, 1 user, 8K prompt, one EPYC 9755:
+ * all 56 cells run, the `fit` domain is headroom 0.726 to 0.991 of the ceiling, and the darkest step
+ * lands on the 128K x 128-user corner at 27.4% utilization — about 1.05 TB of 1.45 TB unused.
+ *
+ * The default scenario cannot show this: it has a red wall, so the darkest ramp step there really is
+ * next to one. Which is why this is its own render rather than another assertion on the block above.
+ */
+describe('the ramp keys itself as a ranking, not a verdict', () => {
+  /** A rig with room to spare in every cell, which the default deliberately does not have. */
+  const roomy = { ...DEFAULT_CONFIG, modelId: 'openai/gpt-oss-20b', deviceId: 'epyc-9755' };
+
+  let painted: Painted;
+
+  beforeEach(() => {
+    painted = recordPainting();
+    render(<Envelope config={roomy} />);
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  const description = () => within(field()).getByRole('img').getAttribute('aria-label') ?? '';
+
+  it('reaches the bottom of the ramp on a grid whose worst cell has room to spare', () => {
+    // The premise. Every cell on the ramp, no refusals — so nothing dark here is dark because it hit
+    // a wall, and the two assertions below are about a cell the reader can actually run.
+    expect(painted.fills.length).toBeGreaterThan(40);
+    expect(
+      painted.fills.filter((f) => step(f) < 0),
+      'a flat state colour on a grid where everything fits'
+    ).toEqual([]);
+    expect(painted.fills.map(step)).toContain(0);
+  });
+
+  it('names the ends by the measure rather than by a verdict', async () => {
+    const user = userEvent.setup();
+    const legend = () => field();
+
+    // The words that were there, and are a claim this domain cannot support.
+    expect(within(legend()).queryByText('worse')).toBeNull();
+    expect(within(legend()).queryByText('better')).toBeNull();
+
+    expect(within(legend()).getByText('less room')).toBeInTheDocument();
+    expect(within(legend()).getByText('more room')).toBeInTheDocument();
+
+    /*
+     * Per measure rather than one generic pair, and this is the assertion that pins it. `measureOf`
+     * inverts latency so larger is better throughout, so a generic "least to most" would read
+     * backwards against the caption beside it ("Time until the first token appears.") — a reader
+     * would take the dark end for the quick one.
+     */
+    await user.click(within(legend()).getByRole('button', { name: 'How responsive' }));
+    expect(within(legend()).getByText('slower to start')).toBeInTheDocument();
+    expect(within(legend()).getByText('quicker to start')).toBeInTheDocument();
+  });
+
+  it('states the comparison class in the legend and in the canvas description', () => {
+    // In the legend, not only in the 12px caption under the toggle — which was the sole disclosure,
+    // and a reader meets it after they have already read the field.
+    expect(
+      within(field()).getByText(/graded against the others on this grid rather than against an/i)
+    ).toBeInTheDocument();
+
+    // And in the picture's only textual equivalent, which said "worst to best" — the absolute reading,
+    // for the reader with none of the visible caveats.
+    expect(description()).not.toMatch(/worst to best/i);
+    expect(description()).toMatch(/less room to more room/i);
+    expect(description()).toMatch(/ranked against the other cells on this grid/i);
   });
 });

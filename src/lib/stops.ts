@@ -74,22 +74,72 @@ export const SETTING_LABELS = {
  * sentence in two registers: the toggle's caption states it as a heading would, and the picture's
  * `aria-label` needs it as a clause ("Coloured by tokens per second for one user"). Written twice,
  * a reworded caption leaves the screen-reader description describing the old colouring.
+ *
+ * **`ends` names what the two extremes of a ramp *are*, and deliberately not whether they are good.**
+ * A ramp whose domain is the grid's own span cannot label its dark end "worse": on gpt-oss-20b at
+ * llama.cpp/MXFP4 against an EPYC 9755 every one of the Envelope's 56 cells runs, the `fit` domain is
+ * headroom 0.726 to 0.991, and the darkest step — the one `tokens.ts` calls "the one that recedes
+ * into the panel" — lands on the 128K x 128-user corner, which still has 72.6% of a 1.45 TB ceiling
+ * free. "Worse" there is a claim about the machine; "less room" is a claim about the ramp, which is
+ * all a rank-relative scale is entitled to say. Comparatives rather than superlatives for the same
+ * reason.
+ *
+ * Per measure rather than one generic pair, because one of the three is inverted. `measureOf`
+ * returns `1 / ttftSeconds` so that larger is better throughout, which makes a generic "least → most"
+ * label read backwards against the caption beside it ("time until the first token appears"): a reader
+ * would take the dark end for the *quick* one. The direction has to be spelled in the measure's own
+ * units.
+ *
+ * The Matrix's ramp still says worse/better, and that is not drift: its domain is floored at zero
+ * over a grid spanning a desktop CPU to a B200, so a dark cell there really is near the bottom of
+ * what any hardware on the page achieves and a verdict word is a claim it can make. See the `fill`
+ * comment in `Matrix.tsx` and `magnitudeFill` in `tokens.ts` for the two domains and why they differ.
  */
-export const MEASURES: readonly { value: Measure; label: string; paints: string; hint: string }[] =
-  (
-    [
-      {
-        value: 'fit',
-        label: 'Does it fit',
-        paints: 'headroom left after weights, cache and overhead',
-      },
-      { value: 'decode', label: 'How fast', paints: 'tokens per second for one user' },
-      { value: 'ttft', label: 'How responsive', paints: 'time until the first token appears' },
-      // `as const` so each `value` stays its own literal and the annotation above checks it against
-      // `Measure` rather than against `string` — the same claim `SETTING_LABELS` makes with
-      // `satisfies`, and the reason a fourth measure cannot be added here without the engine agreeing.
-    ] as const
-  ).map((m) => ({ ...m, hint: `${m.paints[0].toUpperCase()}${m.paints.slice(1)}.` }));
+export const MEASURES: readonly {
+  value: Measure;
+  label: string;
+  paints: string;
+  hint: string;
+  ends: readonly [string, string];
+}[] = (
+  [
+    {
+      value: 'fit',
+      label: 'Does it fit',
+      paints: 'headroom left after weights, cache and overhead',
+      ends: ['less room', 'more room'],
+    },
+    {
+      value: 'decode',
+      label: 'How fast',
+      paints: 'tokens per second for one user',
+      ends: ['slower', 'faster'],
+    },
+    {
+      value: 'ttft',
+      label: 'How responsive',
+      paints: 'time until the first token appears',
+      ends: ['slower to start', 'quicker to start'],
+    },
+    // `as const` so each `value` stays its own literal and the annotation above checks it against
+    // `Measure` rather than against `string` — the same claim `SETTING_LABELS` makes with
+    // `satisfies`, and the reason a fourth measure cannot be added here without the engine agreeing.
+  ] as const
+).map((m) => ({ ...m, hint: `${m.paints[0].toUpperCase()}${m.paints.slice(1)}.` }));
+
+/**
+ * Everything a surface says about the measure in force, in one lookup.
+ *
+ * The Envelope names the same colouring in four places — the caption under the toggle, the ramp key's
+ * two ends, its trailing clause and the canvas `aria-label` — and a per-place `MEASURES.find(...)?.x`
+ * makes each of them independently optional for a value that cannot be missing. Total by
+ * construction: `Measure` is a closed union and the annotation on `MEASURES` checks that every arm
+ * has an entry, so the fallback is unreachable. Unreachable rather than asserted, because a
+ * non-null assertion would go on surviving if that annotation were ever loosened.
+ */
+export function measureVocabulary(measure: Measure): (typeof MEASURES)[number] {
+  return MEASURES.find((m) => m.value === measure) ?? MEASURES[0];
+}
 
 /**
  * The cache precisions a control can offer, with the name to use when a runtime has none of

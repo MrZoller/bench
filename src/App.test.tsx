@@ -409,8 +409,16 @@ describe('every mark drawn over another is named in a legend', () => {
      * Anchored on the ramp's key rather than on a state's since #65: the field is coloured by a
      * magnitude now, so the ramp is what the neighbouring *keys* key, and "Comfortable" is a line of
      * prose in the same list rather than a swatch.
+     *
+     * On the ramp key's own clause rather than on either end label, because the ends are per-measure
+     * ("less room", "slower", "quicker to start") and this test is about where a key sits, not about
+     * which measure is in force.
      */
-    expect(key?.parentElement).toBe(within(envelope()).getByText('better').closest('ul'));
+    expect(key?.parentElement).toBe(
+      within(envelope())
+        .getByText(/graded against the others on this grid/)
+        .closest('ul')
+    );
   });
 
   /**
