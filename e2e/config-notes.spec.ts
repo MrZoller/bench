@@ -188,10 +188,16 @@ test('the disclosure names the control it belongs to', async ({ page }) => {
 
   const toggle = showFullNote(page);
   await expect(toggle).toBeVisible();
-
   await toggle.click();
+
+  // Resolved through `aria-controls` rather than with `getByText`, which matches every ancestor
+  // containing the phrase and would decide this on strict mode rather than on the region. An
+  // attribute selector rather than `#id`, because the id comes from `useId` and its punctuation is
+  // React's business, not something a spec should have to escape.
+  const region = page.locator(`[id="${await toggle.getAttribute('aria-controls')}"]`);
+  await expect(region).toBeVisible();
   // The 3090's caveat, which was dropped from the picker entirely once before — the estimates
   // assume PCIe and do not model its optional NVLink bridge.
-  await expect(page.getByText(/NVLink bridge/i)).toBeVisible();
+  await expect(region).toContainText(/NVLink bridge/i);
   await expect(page.getByRole('button', { name: /hide the full hardware note/i })).toBeVisible();
 });
