@@ -370,34 +370,52 @@ describe('the workload strip keeps up with the scenario', () => {
    * The measurement belongs to `e2e/workload-columns.spec.ts` and cannot be made here: jsdom has no
    * layout engine, so every one of those offsets reads back as 0 and an equality assertion over them
    * is a tautology. What jsdom *can* see is where the tracks are declared, and that is the thing a
-   * later edit would undo — putting `grid-cols-[9rem_auto_1fr]` back on the row makes each `<li>` its
-   * own grid container, so the middle `auto` is sized from that row's own label and the reason column
-   * starts at a different x on all seven rows.
+   * later edit would undo — putting the three tracks back on the row makes each `<li>` its own grid
+   * container, so the middle `auto` is sized from that row's own label and the reason column starts
+   * at a different x on all seven rows.
    *
    * So this asserts the mechanism rather than its effect, deliberately, in the suite that runs in a
    * second. If the mechanism is ever changed on purpose — `display: contents` and `subgrid` are the
    * same idea in three forms — this assertion and that spec both want editing, and that is the point
    * of it failing.
+   *
+   * Three things, then, not one: that the list is a *grid* (tracks on a flex box are inert, and a
+   * subgrid whose parent is not a grid computes as `none` — both leave the rows stacked and satisfy
+   * a test that only looks at where the track string sits), that the tracks are on the list, and
+   * that the row's own template stays scoped below `sm` so it cannot outlive the subgrid it backs.
    */
   it('declares its column tracks once, on the list rather than on each row', () => {
     render(<App />);
 
     const list = within(strip()).getAllByRole('listitem')[0].parentElement;
     expect(list).not.toBeNull();
+    // A grid container first: `grid-template-columns` is inert on a flex box and `subgrid` on an item
+    // whose parent is not a grid computes as `none`, so tracks on a non-grid list satisfy every
+    // assertion below while every cell in every row stacks at x=0.
+    expect(list!.className, 'the list is not a grid container, so its tracks are inert').toMatch(
+      /(^|\s)grid(\s|$)/
+    );
     expect(list!.className, 'the list does not own the three tracks').toMatch(
       /sm:grid-cols-\[9rem_auto_1fr\]/
     );
 
     for (const row of within(strip()).getAllByRole('listitem')) {
+      // Anchored, so the `max-sm:` template below is not read as a row declaring its own tracks
+      // past `sm` — and so a bare `sm:`-prefixed template still is.
       expect(row.className, 'a row declares column tracks of its own past sm').not.toMatch(
-        /sm:grid-cols-\[/
+        /(^|\s)sm:grid-cols-\[/
       );
       // And takes the list's instead, spanning all three of them.
       expect(row.className).toMatch(/sm:grid-cols-subgrid/);
       expect(row.className).toMatch(/sm:col-span-3/);
       // Below `sm` the row keeps its own two-column grid, because the stacked layout is built from
-      // `order` and a spanning third cell — both relationships among one row's own children.
-      expect(row.className).toMatch(/grid-cols-\[auto_1fr\]/);
+      // `order` and a spanning third cell — both relationships among one row's own children. Scoped
+      // to `max-sm:` rather than left bare, because a browser without subgrid drops the declaration
+      // above and keeps whatever the row declares unconditionally: a bare template would put the
+      // status word before the label there, which is neither layout this component supports.
+      expect(row.className, 'the row template leaks past sm').toMatch(
+        /max-sm:grid-cols-\[auto_1fr\]/
+      );
     }
   });
 });

@@ -13,8 +13,8 @@ import { expect, test, type Page } from '@playwright/test';
  *
  * Why this is here and not in Vitest: jsdom has no layout engine, so every offset below reads back
  * as 0 and the equality assertions are tautologies there — the blind spot this directory exists
- * for. The mutation check is the same shape: restoring `grid-cols-[9rem_auto_1fr]` to the `<li>`
- * fails `the reason column starts at the same x on every row` by 59px and nothing else.
+ * for. The mutation check is the same shape: restoring the three tracks to the `<li>` fails
+ * `the reason column starts at the same x on every row` by 59px and nothing else.
  */
 
 /** The issue's own measuring width. */
@@ -175,7 +175,7 @@ for (const [name, size] of [
      * And with the descriptions shown, which is the state the third column is longest in.
      *
      * Worth its own case because the rows then have visibly different heights, and a shared set of
-     * tracks is where a row-axis mistake — `grid-rows-subgrid` on the row, say — would show up as
+     * tracks is where a row-axis mistake — a subgrid on the row axis as well, say — would show up as
      * every reason dragged to the tallest row's baseline. The columns are shared; the rows are
      * emphatically not.
      */

@@ -489,21 +489,33 @@ reading the test that guards them.
 
 - **A row that declares its own grid is a table that measures its columns once per row**
   ([#70](https://github.com/MrZoller/bench/issues/70)). The workload strip put
-  `grid-cols-[9rem_auto_1fr]` on each `<li>`, so every row was its own grid container and the middle
+  its three column tracks on each `<li>`, so every row was its own grid container and the middle
   `auto` track was sized from that row's own label — the reason column, the third one, started at
   444, 446, 457, 475, 495, 499 and 503px at 1440. Columns 1 and 2 lined up because the first track is
   fixed, and _that_ is what makes the third read as a column rather than as prose. It carries the
   panel's argument: seven archetypes, seven answers, and the written reasons are what explain the
   differences, so they have to be scannable against each other.
 
-  `grid-cols-subgrid` on the row, with the tracks moved to the `<ul>`. Not `display: contents`, which
-  is the same idea and the tempting one-liner: a row that generates no box is a `<li>` shipping
-  browsers drop from the accessibility tree, and `order` applies among siblings of _one_ container,
-  so dissolving the rows would sort all twenty-one cells into a block of labels, a block of status
-  words and a block of reasons at the stacked width. The row therefore keeps its own two-column grid
-  below `sm` and only hands its columns back above it. Subgrid is Baseline widely available — Firefox
-  71, Safari 16, Chrome 117 — and where it is absent the declaration is invalid, so the row stacks:
-  ugly, complete, and 2023 browsers only.
+  A subgrid on the row, with the tracks moved to the `<ul>`. Not `display: contents`, which is the
+  same idea and the tempting one-liner: a row that generates no box is a `<li>` shipping browsers drop
+  from the accessibility tree, and `order` applies among siblings of _one_ container, so dissolving
+  the rows would sort all twenty-one cells into a block of labels, a block of status words and a block
+  of reasons at the stacked width. The row therefore keeps its own two-column grid below `sm` and only
+  hands its columns back above it.
+
+  **The row's own template has to be `max-sm:`-scoped, and that is the silent part.** Subgrid is
+  Baseline widely available — Firefox 71, Safari 16, Chrome and Edge 117 — but it is _not_ inside
+  Vite's default build target, which floors at Chrome 111 (`baseline-widely-available` resolves to
+  chrome111/edge111/firefox114/safari16.4), so Chrome and Edge 111–116 are browsers this build targets
+  and the feature is missing from. There `grid-template-columns: subgrid` is invalid and dropped —
+  and anything the row declares _unconditionally_ survives, so an unscoped two-column template leaves
+  the row a two-column grid at every width while `sm:order-none` cancels the stacking: `● Yes` renders
+  before the label, which is neither of the two layouts the component supports. Verified by serving
+  the built CSS with the subgrid value invalidated: tracks of 269.016px and 780.984px, status word at
+  x=189, label at x=470, reason wrapped to a second line at x=189. Scoped to `max-sm:`, the same
+  browsers get a row with no template — one implicit 1062px column, three cells stacked in DOM order,
+  which is the order they read in left to right. `App.test.tsx` pins the scope, because no browser in
+  CI can show the fallback.
 
   **The trap is that fixing it makes the obvious precondition vacuous.** With the tracks shared,
   every label _cell_ is exactly one width — the column's — so a spec that reads
