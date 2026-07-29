@@ -4282,7 +4282,9 @@ describe('a picker states its caveats where the choice is made', () => {
       ).toBeGreaterThan(0);
 
       const wrong = options.filter(
-        (o) => runtimeDrives(getRuntime(o.value), device) === /does not run here/.test(o.text)
+        (o) =>
+          runtimeDrives(getRuntime(o.value), device) ===
+          /does not run on this hardware/.test(o.text)
       );
       expect(
         wrong.map((o) => `${deviceId}: “${o.text}”`),
@@ -4295,6 +4297,26 @@ describe('a picker states its caveats where the choice is made', () => {
     await user.selectOptions(screen.getByLabelText(SETTING_LABELS.runtimeId), 'mlx');
     expect(screen.getByLabelText(SETTING_LABELS.runtimeId)).toHaveAccessibleDescription(
       /Does not run on GeForce RTX 5090/
+    );
+  });
+
+  it('says what a runtime will not run on, rather than leaving the reader to supply it', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    /**
+     * Pinned whole, because the first version of this marker said "does not run here" and an option's
+     * own text is *all* that is announced for a row nobody has selected — so "here" resolved to
+     * nothing, and the string that names the machine is the selected option's note, which is exactly
+     * the dependency the marker exists to remove (found in review). The referent has to be inside the
+     * option: "this hardware" is the control one row up.
+     */
+    await user.selectOptions(
+      screen.getByLabelText(SETTING_LABELS.deviceId),
+      'mac-studio-m3-ultra-256'
+    );
+    expect(optionsOf(SETTING_LABELS.runtimeId).find((o) => o.value === 'vllm')?.text).toBe(
+      'vLLM · does not run on this hardware'
     );
   });
 });

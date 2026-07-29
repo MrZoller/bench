@@ -246,7 +246,7 @@ export function Bench() {
   /**
    * The runtimes, each with something to say about itself at every scenario.
    *
-   * The note is the control's accessible description, so a "does not run here" warning has to live
+   * The note is the control's accessible description, so a "Does not run on …" warning has to live
    * in it — a screen-reader user tabbing the picker hears nothing otherwise. That is also why the
    * first clause below is unconditional. `Select` renders only the *selected* option's note, and
    * the two conditions this used to hold — unsupported hardware, and a runtime that preallocates —

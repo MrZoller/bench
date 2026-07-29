@@ -343,6 +343,15 @@ export function deviceOptionLabel(device: DeviceSpec): string {
  * living in the one string a `<select>` will not show them until they have. Swept rather than waited
  * for, because these two pickers share a component and therefore share the failure.
  *
+ * **"on this hardware", not "here", and the difference is the whole point of moving the fact.** An
+ * option's own text is *all* that is announced for a row nobody has selected — a screen-reader user
+ * arrowing this listbox hears "vLLM · …" and no surrounding context — so a marker whose referent
+ * lives outside itself has reintroduced, one word smaller, the dependency it was written to remove:
+ * "here" resolves to nothing, and the string that names the machine is still the selected option's
+ * note. "this hardware" points at the control one row up, which is labelled Hardware (found in
+ * review). Not the machine's name, which is the note's job: this is a tag on a row being scanned, and
+ * `Does not run on Mac Studio M3 Ultra (256 GB).` inside three of them is a paragraph in a picker.
+ *
  * `drives` is a parameter for the reason `deviceCountNote` above takes one: this module reads engine
  * types and no engine values, and the caller already has the answer.
  *
@@ -351,7 +360,7 @@ export function deviceOptionLabel(device: DeviceSpec): string {
  * be clicked and says nothing about why.
  */
 export function runtimeOptionLabel(runtime: RuntimeSpec, drives: boolean): string {
-  return optionLabel(runtime.label, !drives && 'does not run here');
+  return optionLabel(runtime.label, !drives && 'does not run on this hardware');
 }
 
 /**

@@ -219,7 +219,9 @@ describe('marking an option a reader has not chosen yet', () => {
   });
 
   it('composes more than one marker without a second joiner somewhere else', () => {
-    expect(optionLabel('vLLM', false, 'does not run here')).toBe('vLLM · does not run here');
+    expect(optionLabel('vLLM', false, 'does not run on this hardware')).toBe(
+      'vLLM · does not run on this hardware'
+    );
     expect(optionLabel('a', 'one', undefined, ' two ')).toBe('a · one · two');
   });
 });
