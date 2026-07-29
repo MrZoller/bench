@@ -53,7 +53,15 @@ export default defineConfig({
       // a wrong roofline would, and neither was measured while this listed only the engine.
       include: ['src/engine/**', 'src/store/**', 'src/lib/**', 'src/data/**'],
     },
-    // Playwright specs live in e2e/ and run via `npm run test:e2e`.
-    exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**'],
+    /**
+     * Playwright specs live in e2e/ and run via `npm run test:e2e`.
+     *
+     * `.claude/worktrees/**` is the other kind of exclusion: a full checkout of this repo per
+     * background agent, each with its own copy of every spec. Without it a plain `vitest run` in the
+     * parent collected 22 copies of `App.test.tsx` and reported 44 failures belonging to whatever
+     * those agents were mid-way through writing — a red suite that says nothing about this checkout,
+     * which is worse than a slow one.
+     */
+    exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**', '**/.claude/worktrees/**'],
   },
 });
