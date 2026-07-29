@@ -495,7 +495,21 @@ export function Bench() {
             {model.name} holds{' '}
             <strong className="text-[var(--color-text)]">{params(model.totalParams)}</strong> of
             weights, so all of them occupy memory — but routes each token through only{' '}
-            <strong className="text-[var(--color-text)]">{params(model.activeParams)}</strong>
+            {/* `activeDenseParams`, not `activeParams`, because this sentence makes a claim about
+                what a token *physically* reads and then says that is what sets the speed — and the
+                engine agrees: `docs/ROADMAP.md` records that `activeParams` "excludes the input
+                embedding unconditionally, and that is the *published* convention, not the physical
+                one", which "is the wrong basis for decode", so `speed.ts` reads
+                `activeDenseParams` instead.
+
+                Raised in review on #77, where the gap widened enough to be visible: the newly
+                seeded multimodal MoEs carry non-language towers inside `activeParams`, so Mistral
+                Small 4 was printed as 6.524B active against a 6.096B physical basis and Command A+
+                as 24.403B against 24.981B — a headline contradicting the decode figure two panels
+                away. The picker keeps `activeParams` (line 179), which is right: that column exists
+                to reconcile with the figure a vendor publishes. This sentence is about the machine,
+                not the announcement. */}
+            <strong className="text-[var(--color-text)]">{params(model.activeDenseParams)}</strong>
             {/*
               Every branch below reads a decode estimate, so all of them are gated on `runnable`
               — not just `fast`. When the runtime cannot drive the device or the model cannot be

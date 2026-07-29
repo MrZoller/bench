@@ -1,3 +1,4 @@
+import { appendFile } from 'node:fs/promises';
 /**
  * Builds src/data/models.generated.json from Hugging Face.
  *
@@ -1992,13 +1993,42 @@ async function reportSeedCandidates(): Promise<void> {
   const since = new Date();
   since.setMonth(since.getMonth() - MONTHS);
 
-  let live: LiveModel[];
+  /**
+   * Every pipeline tag this catalog actually carries, paginated until the downloads fall below the
+   * bar. Both halves were wrong in the first version (found in review on #77).
+   *
+   * **`text-generation` alone hid the multimodal families the catalog already counts.** Gemma 3,
+   * Mistral Small 4 and Command A+ are published under image-text-to-text, and the generator
+   * deliberately classifies their non-language towers rather than refusing them — so a newly popular
+   * multimodal family could clear every threshold here and never appear. The tags are listed rather
+   * than dropped, because the point of the filter is to exclude the things this tool cannot price at
+   * all: embedders, rerankers, diffusion.
+   *
+   * **And one page of 200 is not the top of the chart, it is the top of the *unfiltered* chart.** The
+   * report's own prose says derivative uploads dominate the download ranking — GGUF conversions,
+   * AWQ requantisations, fine-tunes — and every one of those is discarded downstream by
+   * `unseededCandidates`. So the first 200 rows can be almost entirely noise and a qualifying model
+   * at position 201 is never examined. Paged until a page's lowest download count drops under
+   * `MIN_DOWNLOADS`, which is the point past which nothing can qualify however many pages remain.
+   */
+  const PIPELINES = ['text-generation', 'image-text-to-text', 'image-to-text'];
+  const PAGE = 200;
+  const live: LiveModel[] = [];
   try {
-    live = await fetchJson<LiveModel[]>(
-      'https://huggingface.co/api/models?pipeline_tag=text-generation&sort=downloads' +
-        '&direction=-1&limit=200&expand[]=downloads&expand[]=createdAt',
-      'seed candidates'
-    );
+    for (const pipeline of PIPELINES) {
+      for (let page = 0; ; page++) {
+        const batch = await fetchJson<LiveModel[]>(
+          `https://huggingface.co/api/models?pipeline_tag=${pipeline}&sort=downloads` +
+            `&direction=-1&limit=${PAGE}&skip=${page * PAGE}` +
+            '&expand[]=downloads&expand[]=createdAt',
+          `seed candidates (${pipeline}, page ${page + 1})`
+        );
+        live.push(...batch);
+        // Sorted by downloads descending, so once a page ends below the bar every later one is too.
+        const lowest = batch.at(-1)?.downloads ?? 0;
+        if (batch.length < PAGE || lowest < MIN_DOWNLOADS) break;
+      }
+    }
   } catch (error) {
     console.warn(
       `\nCould not list candidate models: ${error instanceof Error ? error.message : error}`
@@ -2014,22 +2044,54 @@ async function reportSeedCandidates(): Promise<void> {
     since,
   });
 
-  console.log(
-    `\nSeed candidates — released in the last ${MONTHS} months, over ` +
-      `${(MIN_DOWNLOADS / 1000).toFixed(0)}K downloads, neither seeded nor listed in NOT_SEEDED:`
-  );
-  if (candidates.length === 0) {
-    console.log('  (none — the seed list covers what the field is downloading)');
-    return;
-  }
+  const heading =
+    `Seed candidates — released in the last ${MONTHS} months, over ` +
+    `${(MIN_DOWNLOADS / 1000).toFixed(0)}K downloads, neither seeded nor listed in NOT_SEEDED`;
+
+  console.log(`\n${heading}:`);
   for (const model of candidates.slice(0, 25)) {
     console.log(
       `  ${String(model.downloads ?? 0).padStart(10)}  ${(model.createdAt ?? '').slice(0, 10)}  ${model.id}`
     );
   }
-  console.log(
-    `\n  ${candidates.length} candidate(s). Each one is either a seed or a line in NOT_SEEDED ` +
-      'saying why not — the list ages silently otherwise.'
+  if (candidates.length === 0) {
+    console.log('  (none — the seed list covers what the field is downloading)');
+  } else {
+    console.log(
+      `\n  ${candidates.length} candidate(s). Each one is either a seed or a line in NOT_SEEDED ` +
+        'saying why not — the list ages silently otherwise.'
+    );
+  }
+
+  /**
+   * And the same report somewhere that outlives the job log (found in review on #77).
+   *
+   * The mechanism's whole purpose is to tell a maintainer the seed list has aged, and on the common
+   * weekly run — figures unchanged, `changed != 'true'`, no pull request opened — the only trace was
+   * this `console.log` inside a step nobody has a reason to expand. The job ends on "Catalog is
+   * current", which is exactly the sentence that makes someone not look.
+   *
+   * `$GITHUB_STEP_SUMMARY` renders on the run's own page, so the candidates are visible from the
+   * Actions list without opening a log, on every path through the workflow. Guarded on the variable
+   * so a local `npm run catalog` is unchanged, and appended rather than written so a later step can
+   * add to it.
+   */
+  const summary = process.env.GITHUB_STEP_SUMMARY;
+  if (!summary) return;
+  const rows = candidates
+    .slice(0, 25)
+    .map(
+      (m) =>
+        `| \`${m.id}\` | ${(m.downloads ?? 0).toLocaleString()} | ${(m.createdAt ?? '').slice(0, 10)} |`
+    )
+    .join('\n');
+  await appendFile(
+    summary,
+    candidates.length === 0
+      ? `\n### ${heading}\n\nNone — the seed list covers what the field is downloading.\n`
+      : `\n### ${heading}\n\n${candidates.length} candidate(s). Each is either a new seed or a line in ` +
+          '`NOT_SEEDED` saying why not; the list ages silently otherwise.\n\n' +
+          `| model | downloads | released |\n| --- | --- | --- |\n${rows}\n`
   );
 }
 

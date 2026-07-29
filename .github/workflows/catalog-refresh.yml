@@ -185,4 +185,8 @@ jobs:
 
       - name: Say so when nothing moved
         if: steps.diff.outputs.changed != 'true'
-        run: echo "::notice::Catalog is current — no pull request opened."
+        # Names the summary, because this is the sentence that makes someone not look. Candidate
+        # discovery cannot be detected by re-deriving figures — an absence has no diff — so on this
+        # path the seed-candidate table on the run's own page is the entire output of the mechanism.
+        run: |
+          echo "::notice::Catalog is current — no pull request opened. Seed candidates are in this run's summary."
