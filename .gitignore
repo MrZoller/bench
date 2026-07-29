@@ -25,6 +25,10 @@ test-results/
 
 # Claude Code local overrides
 .claude/settings.local.json
+# Agent worktrees. `.claude/settings.json` is checked in, so this directory cannot be ignored
+# wholesale — and these are real checkouts of this repo, so an `add -A` in the parent stages a
+# nested copy of the whole tree per agent.
+.claude/worktrees/
 
 # Editor / OS cruft
 .DS_Store
