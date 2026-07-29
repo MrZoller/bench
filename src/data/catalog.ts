@@ -184,6 +184,38 @@ export function toDevice(row: DeviceRow): CatalogDevice {
 export const DEVICES: readonly CatalogDevice[] = (devicesJson.devices as DeviceRow[]).map(toDevice);
 
 /**
+ * Ids that used to name a row, and the row they name now.
+ *
+ * A device id is not an internal detail: `url.ts` writes it into every shared scenario link as `d`,
+ * and those links are meant to survive in forum threads for months. Renaming a row without an alias
+ * does not break such a link loudly — `coerce` cannot resolve the id, falls back to the default
+ * device, and the reader is shown a different machine's numbers under the sender's URL. That is the
+ * worst of the three possible outcomes, and the cheapest to avoid.
+ *
+ * Kept as data rather than as a rename-and-forget, because the pair (old id, new id) is the only
+ * record that the old one was ever real.
+ */
+export const DEVICE_ID_ALIASES: Readonly<Record<string, string>> = {
+  // `rtx-a6000-ada` fused two products that both exist: the Ampere card is the RTX A6000 and the
+  // Ada one is the RTX 6000 Ada Generation. Every spec on the row was the Ada card's and only the
+  // id was wrong, so this is a rename rather than a correction — but it is a rename of the thing
+  // that ends up in other people's links.
+  'rtx-a6000-ada': 'rtx-6000-ada',
+};
+
+/**
+ * The current id for a device, following an alias if the caller has an old one.
+ *
+ * Exported because the *store* has to canonicalise before it keeps the value: resolving only inside
+ * `getDevice` would return the right device while leaving the stale id in the config, which then
+ * re-encodes into the URL and matches no `<option>` in the hardware picker — a control showing
+ * nothing selected beside figures for a device that is genuinely loaded.
+ */
+export function canonicalDeviceId(id: string): string {
+  return DEVICE_ID_ALIASES[id] ?? id;
+}
+
+/**
  * A model plus the note explaining any hand-entered correction the generator applied.
  *
  * Mirrors {@link CatalogDevice}: the seed list requires a reason whenever a figure is typed by
@@ -235,7 +267,7 @@ const DEVICES_BY_ID = new Map(DEVICES.map((d) => [d.id, d]));
 const MODELS_BY_ID = new Map(MODELS.map((m) => [m.id, m]));
 
 export function getDevice(id: string): CatalogDevice {
-  const device = DEVICES_BY_ID.get(id);
+  const device = DEVICES_BY_ID.get(canonicalDeviceId(id));
   if (!device) throw new Error(`Unknown device: ${id}`);
   return device;
 }

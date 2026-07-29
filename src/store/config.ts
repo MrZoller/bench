@@ -8,7 +8,7 @@ import {
 } from '@/engine';
 import { canShard } from '@/engine/placement';
 import { FALLBACK_QUANT_ID, quantApplies } from '@/lib/quantChoice';
-import { getDevice, getModel, MODELS, DEVICES } from '@/data/catalog';
+import { canonicalDeviceId, getDevice, getModel, MODELS, DEVICES } from '@/data/catalog';
 import { getQuant } from '@/data/quants';
 import { getRuntime, RUNTIMES } from '@/data/runtimes';
 import { searchToConfig } from './url';
@@ -38,7 +38,15 @@ function coerce(config: Config): Config {
     }
   };
 
-  const deviceId = known(config.deviceId, getDevice, DEFAULT_CONFIG.deviceId);
+  /**
+   * Canonicalised before it is validated, not after.
+   *
+   * `getDevice` follows an alias, so a stale id from a shared link resolves to the right row either
+   * way — but what the store *keeps* is what re-encodes into the URL and what the hardware picker
+   * compares its options against. Keeping `rtx-a6000-ada` would load the Ada card, show its
+   * figures, and leave the `<select>` matching no option at all.
+   */
+  const deviceId = known(canonicalDeviceId(config.deviceId), getDevice, DEFAULT_CONFIG.deviceId);
   const device = getDevice(deviceId);
 
   const modelId = known(config.modelId, getModel, DEFAULT_CONFIG.modelId);

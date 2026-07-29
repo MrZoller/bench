@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CATALOG_GENERATED_AT,
   DEVICES,
+  DEVICE_ID_ALIASES,
   MODELS,
   getDevice,
   getModel,
@@ -116,6 +117,110 @@ describe('device catalog', () => {
     // High capacity and high bandwidth, but weaker compute than the Spark.
     expect(mac.bandwidthBytesPerSec).toBeGreaterThan(spark.bandwidthBytesPerSec * 2);
     expect(mac.flops.fp16!).toBeLessThan(spark.flops.fp16!);
+  });
+});
+
+/**
+ * Coverage, which is a different property from accuracy and fails in a way accuracy checks cannot
+ * see: a machine that is absent is not wrong about anything.
+ *
+ * Every assertion here is a measurement from #78 taken against the 25-row catalog. Three vendors'
+ * consumer lines and the entire sub-$1000 tier were missing, so the answer for most of the audience
+ * for a "will it run" tool was not an incomplete comparison but no row to select at all. Written as
+ * properties of the catalog rather than as a list of expected ids, because the point is the shape of
+ * the coverage and not which particular card satisfies it.
+ */
+describe('the catalog covers the hardware the audience owns', () => {
+  const gpus = DEVICES.filter((d) => d.class === 'discrete-gpu');
+  const priced = gpus.filter((d) => d.msrpUsd !== undefined);
+
+  /**
+   * The headline number from the issue: the cheapest catalogued GPU was the 5080 at $999, so every
+   * question from below that price — which is most of them — had no hardware to ask it about.
+   */
+  it('prices a GPU below the $999 floor the catalog used to start at', () => {
+    const cheapest = Math.min(...priced.map((d) => d.msrpUsd!));
+    expect(cheapest).toBeLessThan(350);
+
+    // A tier, not a token row. Six of the nine consumer NVIDIA/AMD/Intel rows sit under $999.
+    expect(priced.filter((d) => d.msrpUsd! < 999).length).toBeGreaterThanOrEqual(6);
+  });
+
+  /**
+   * A person running llama.cpp on ROCm or Vulkan against a Radeon, or on SYCL against an Arc, had
+   * nothing to select: AMD appeared only as datacenter Instinct parts and Intel not at all.
+   */
+  it('offers a consumer card from all three GPU vendors', () => {
+    const consumer = priced.filter((d) => d.msrpUsd! <= 1000);
+    expect(new Set(consumer.map((d) => d.vendor))).toEqual(new Set(['NVIDIA', 'AMD', 'Intel']));
+  });
+
+  it('catalogues Intel in both classes it competes in', () => {
+    const intel = DEVICES.filter((d) => d.vendor === 'Intel');
+    // `DEVICE_CLASSES` and the runtimes' `supports` checks never had an Intel problem — the rows
+    // simply were not written. Xeon 6 with MRDIMM is the other half of the CPU inference story,
+    // and without it `cpu-ram` read as an AMD-only technique.
+    expect(new Set(intel.map((d) => d.class))).toEqual(new Set(['discrete-gpu', 'cpu-ram']));
+  });
+
+  it('does not make CPU inference look like an AMD technique', () => {
+    const cpus = DEVICES.filter((d) => d.class === 'cpu-ram');
+    const fastest = cpus.reduce((a, b) =>
+      b.bandwidthBytesPerSec > a.bandwidthBytesPerSec ? b : a
+    );
+    // 12 channels of MRDIMM-8800 is 844.8 GB/s, above every EPYC row here.
+    expect(fastest.vendor).toBe('Intel');
+  });
+
+  /**
+   * The 3060 12GB argument from the issue, checked against the engine rather than asserted: the
+   * tier matters because it is where the *verdict* boundary sits, and a row that could not actually
+   * run the model would be coverage in name only.
+   */
+  it('has a machine under $400 that really runs a 12B at Q4_K_M', () => {
+    const budget = gpus.filter((d) => (d.msrpUsd ?? Number.POSITIVE_INFINITY) < 400);
+    expect(budget.length).toBeGreaterThan(0);
+
+    for (const device of budget) {
+      const result = evaluate({
+        model: getModel('unsloth/gemma-3-12b-it'),
+        quant: getQuant('q4_k_m'),
+        usage: { contextTokens: 8192, concurrency: 1, kvPrecision: 'fp16' },
+        rig: { device, count: 1 },
+        runtime: LLAMA_CPP,
+      });
+
+      expect(result.placement.fits, `${device.id} cannot hold it`).toBe(true);
+      // Fast enough to be worth doing, not merely resident.
+      expect(result.decode.perUserTokensPerSec, `${device.id} is too slow`).toBeGreaterThan(15);
+    }
+  });
+
+  /**
+   * Every Apple row was a maxed configuration, so the machine most Mac owners have — and the
+   * generation they are deciding whether to replace — were both missing.
+   */
+  it('covers Apple below 64 GiB, and back to the M1', () => {
+    const apple = DEVICES.filter((d) => d.vendor === 'Apple');
+
+    expect(apple.some((d) => d.capacityBytes <= 16 * GIB)).toBe(true);
+    expect(apple.some((d) => /M1 /.test(d.name))).toBe(true);
+    expect(apple.some((d) => /M2 Ultra/.test(d.name))).toBe(true);
+    // Four memory tiers below the old 64 GiB floor would be one machine repeated; the spread is
+    // what makes the class answerable.
+    expect(new Set(apple.map((d) => d.bandwidthBytesPerSec)).size).toBeGreaterThanOrEqual(6);
+  });
+
+  /**
+   * The Studio ships with an M4 Max and the only M4 Max row was a MacBook Pro — which is a
+   * different machine, because the Studio's base part is the binned bandwidth bin.
+   */
+  it('separates the Studio M4 Max from the MacBook Pro one', () => {
+    const studio = getDevice('mac-studio-m4-max-36');
+    const laptop = getDevice('macbook-pro-m4-max-128');
+
+    expect(studio.bandwidthBytesPerSec).toBe(410 * 1e9);
+    expect(laptop.bandwidthBytesPerSec).toBe(546 * 1e9);
   });
 });
 
@@ -515,8 +620,8 @@ describe('a raiseable allocation ceiling states how far it raises', () => {
   const tunable = DEVICES.filter((d) => d.allocatableTunable);
 
   it('covers every machine with a setting to raise', () => {
-    // Six Apple rows and the Ryzen. A sweep that silently matched nothing would prove nothing.
-    expect(tunable.length).toBeGreaterThanOrEqual(7);
+    // Nine Apple rows and the Ryzen. A sweep that silently matched nothing would prove nothing.
+    expect(tunable.length).toBeGreaterThanOrEqual(10);
   });
 
   it.each(tunable.map((d) => [d.id, d] as const))('%s reserves room for the OS', (_id, device) => {
@@ -539,7 +644,7 @@ describe('a raiseable allocation ceiling states how far it raises', () => {
    */
   it('leaves a band between the default and the ceiling on every Apple machine', () => {
     const apple = tunable.filter((d) => d.vendor === 'Apple');
-    expect(apple).toHaveLength(6);
+    expect(apple).toHaveLength(9);
 
     for (const device of apple) {
       expect(maxAllocatablePerDevice(device)).toBeGreaterThan(device.allocatableBytes);
@@ -564,6 +669,61 @@ describe('a raiseable allocation ceiling states how far it raises', () => {
     // But the configurations the setting really does rescue still say so.
     expect(raisingCeilingWouldHelp(studio, 80 * GIB)).toBe(true);
   });
+});
+
+/**
+ * Two rules, and the interesting part is where they cross.
+ *
+ * The default is what Metal reports as its recommended working set — two thirds of RAM at 32 GiB
+ * and below, three quarters above — because that is the figure llama.cpp warns against exceeding and
+ * the one a user has before touching a sysctl. The ceiling is capacity minus max(8 GiB, 1/16 of
+ * RAM), the reserve #53 established.
+ *
+ * Below 32 GiB those two meet and then invert: a 24 GiB machine recommends 16 GiB and reserves down
+ * to 16 GiB, and a 16 GiB machine would have a ceiling *under* its own default. Six maxed
+ * configurations all sat far above the crossover, so the rule looked universal; the machines most
+ * Mac owners have sit at or below it. Those rows state no raiseable ceiling rather than one that
+ * promises less than the default, which is `maxAllocatablePerDevice`'s under-promising direction
+ * applied one step earlier — at curation time.
+ */
+describe('the Apple rows derive both of their allocation figures', () => {
+  const apple = DEVICES.filter((d) => d.vendor === 'Apple');
+
+  it('covers machines on both sides of the crossover', () => {
+    expect(apple.length).toBeGreaterThanOrEqual(11);
+    expect(apple.some((d) => d.capacityBytes <= 32 * GIB)).toBe(true);
+    expect(apple.some((d) => d.capacityBytes > 32 * GIB)).toBe(true);
+  });
+
+  it.each(apple.map((d) => [d.id, d] as const))(
+    '%s defaults to what Metal recommends as a working set',
+    (_id, device) => {
+      const ram = device.capacityBytes / GIB;
+      const recommended = ram <= 32 ? Math.floor((ram * 2) / 3) : ram * 0.75;
+      expect(device.allocatableBytes / GIB).toBe(recommended);
+    }
+  );
+
+  it.each(apple.map((d) => [d.id, d] as const))(
+    '%s states a ceiling only where the OS reserve leaves one',
+    (_id, device) => {
+      const reserve = Math.max(8 * GIB, device.capacityBytes / 16);
+      const ceiling = device.capacityBytes - reserve;
+
+      if (ceiling > device.allocatableBytes) {
+        expect(device.allocatableTunable).toBe(true);
+        expect(device.maxAllocatableBytes).toBe(ceiling);
+      } else {
+        // Nothing to raise to. Stating the flag here would put "raiseable to 16 GiB" beside a
+        // default of 16 GiB in the picker, or — with the reserve applied literally — a ceiling
+        // below the memory the machine already offers.
+        expect(device.allocatableTunable).toBeUndefined();
+        expect(device.maxAllocatableBytes).toBeUndefined();
+        expect(maxAllocatablePerDevice(device)).toBe(device.allocatableBytes);
+        expect(raisingCeilingWouldHelp(device, device.allocatableBytes + 1)).toBe(false);
+      }
+    }
+  );
 });
 
 /**
@@ -624,11 +784,50 @@ describe('the catalog refuses a ceiling it cannot justify', () => {
 
   it('leaves a fixed-ceiling row alone', () => {
     // A card whose ceiling cannot be raised states no maximum, and must not be asked for one —
-    // otherwise the guard would reject 18 of the 25 committed rows.
+    // otherwise the guard would reject most of the committed rows.
     const fixed = withoutMax();
     delete fixed.allocatableTunable;
 
     expect(() => toDevice(fixed)).not.toThrow();
     expect(toDevice(fixed).maxAllocatableBytes).toBeUndefined();
+  });
+});
+
+/**
+ * A device id is in other people's links, so renaming a row is a compatibility change.
+ *
+ * `rtx-a6000-ada` named a product that does not exist: the Ampere card is the RTX A6000 and the Ada
+ * one is the RTX 6000 Ada Generation, and the id fused them while every spec on the row was the Ada
+ * card's. `url.ts` writes `deviceId` into every shared scenario as `d`, and the failure without an
+ * alias is not a broken link — it is `coerce` falling back to the default device and showing a
+ * stranger a different machine's numbers under the sender's URL.
+ */
+describe('a renamed device keeps the links that already name it', () => {
+  it('no longer ships the id that fused two real products', () => {
+    expect(DEVICES.map((d) => d.id)).not.toContain('rtx-a6000-ada');
+    expect(getDevice('rtx-6000-ada').name).toBe('RTX 6000 Ada');
+  });
+
+  it('resolves the old id to the row it always described', () => {
+    // Same object, not merely the same specs: an alias that produced a copy would compare unequal
+    // wherever the app holds a device by reference.
+    expect(getDevice('rtx-a6000-ada')).toBe(getDevice('rtx-6000-ada'));
+  });
+
+  it('still refuses an id that never existed', () => {
+    expect(() => getDevice('rtx-a6000')).toThrow(/unknown device/i);
+  });
+
+  /**
+   * The invariant rather than the one entry: an alias pointing at a row that has since been renamed
+   * again resolves to nothing, and an alias that shadows a live id makes that row unreachable. Both
+   * are silent, and both are one careless edit away.
+   */
+  it('points every alias at a row that exists, and shadows none', () => {
+    const ids = new Set(DEVICES.map((d) => d.id));
+    for (const [from, to] of Object.entries(DEVICE_ID_ALIASES)) {
+      expect(ids.has(to), `${from} aliases missing row ${to}`).toBe(true);
+      expect(ids.has(from), `${from} is both an alias and a row`).toBe(false);
+    }
   });
 });

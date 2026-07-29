@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CONFIG, evaluateConfig, useConfig, type Config } from './config';
+import { DEFAULT_CONFIG, DEVICES, evaluateConfig, useConfig, type Config } from './config';
 import { getModel } from '@/data/catalog';
 import { getQuant } from '@/data/quants';
 
@@ -94,6 +94,25 @@ describe('config coercion', () => {
     store.set('deviceId', 'epyc-9654');
     store.set('deviceCount', 8);
     expect(useConfig.getState().deviceCount).toBe(1);
+  });
+
+  /**
+   * A renamed device is not an unknown one, and must not degrade like one.
+   *
+   * `rtx-a6000-ada` named a product that never existed and is now `rtx-6000-ada`. The id is in every
+   * shared scenario link as `d`, so treating the old value as junk would silently swap the sender's
+   * workstation card for the default DGX Spark — a link that still opens and now means something
+   * else. Canonicalised on the way in rather than only inside `getDevice`, because what the store
+   * *keeps* is what re-encodes into the URL and what the hardware picker matches its options
+   * against.
+   */
+  it('follows a renamed device id instead of falling back to the default', () => {
+    const state = set('deviceId', 'rtx-a6000-ada');
+
+    expect(state.deviceId).toBe('rtx-6000-ada');
+    expect(state.deviceId).not.toBe(DEFAULT_CONFIG.deviceId);
+    // The id it keeps is one the picker actually offers, so the option really does select.
+    expect(DEVICES.some((d) => d.id === state.deviceId)).toBe(true);
   });
 });
 
