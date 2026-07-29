@@ -231,12 +231,17 @@ test.describe('at 200% text size', () => {
     }));
 
     expect(sizes.root, 'the launch switch did not take — this is a 100% run').toBe(ROOT_200);
-    // `text-xl` is 1.25rem, so 40px at this root and 20px at the default. Asserted so a change
-    // that pinned the root while leaving rem-derived text alone would still fail here.
-    expect(sizes.heading, 'rem-derived text did not follow the root').toBeCloseTo(
-      ROOT_200 * 1.25,
-      0
-    );
+    /*
+     * The masthead wordmark is `clamp(2rem, 10vw, 5rem)`. At this viewport the `10vw` preferred
+     * term is 32px, well under the 2rem floor, so the floor is what applies — 64px at this root
+     * and 32px at the default.
+     *
+     * Asserted so a change that pinned the root while leaving rem-derived text alone would still
+     * fail here. The floor being in `rem` is the load-bearing part: swapping it for a `px` or a
+     * `vw`-only size would leave the largest text on the page ignoring a low-vision reader's
+     * request outright, and this is the assertion that says so.
+     */
+    expect(sizes.heading, 'rem-derived text did not follow the root').toBeCloseTo(ROOT_200 * 2, 0);
   });
 
   /**

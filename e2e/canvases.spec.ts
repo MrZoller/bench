@@ -1,14 +1,19 @@
 import { expect, test } from '@playwright/test';
 
 /**
- * The Envelope draws its feasibility field on a 2D canvas — the only canvas on the page — and jsdom
- * stubs `getContext`. The unit suite emits "Not implemented: HTMLCanvasElement.getContext" on every
- * run and asserts nothing about the plot, which could be entirely blank in a real browser with
- * every test still passing.
+ * The Envelope draws its feasibility field on a 2D canvas, the masthead draws its backdrop on a
+ * second one, and jsdom stubs `getContext`. The unit suite emits "Not implemented:
+ * HTMLCanvasElement.getContext" on every run and asserts nothing about either, both of which could
+ * be entirely blank in a real browser with every test still passing.
  *
  * These read the pixels back. Not a visual comparison — a screenshot baseline would fail on every
  * font or catalogue change and teach people to re-bless it — just the claim that something was
  * painted, in more than one colour, at the size the layout gave it.
+ *
+ * Every canvas here is reached through a *scoped* locator, never `document.querySelector('canvas')`.
+ * That was how this file read the Envelope when it was the only canvas on the page, and the
+ * masthead lands earlier in the DOM: a bare selector would now hand every Envelope assertion below
+ * a picture of the backdrop instead, and all of them would still pass.
  */
 
 /**
@@ -23,29 +28,39 @@ import { expect, test } from '@playwright/test';
  * So this also returns a `digest` — an order-sensitive hash over the sampled bytes — which changes
  * if any sampled pixel changes. The counts stay because they are what a *human* reads out of a
  * failure; the digest is what the assertion compares.
+ *
+ * `opaqueTop` counts only the pixels in the upper half, and exists because `opaque` and `colours`
+ * cannot tell the masthead's intro from a dead one. Its bottom fade is painted unconditionally, at
+ * every value of the animation clock including zero — and being an alpha ramp it reads back through
+ * `getImageData` as many distinct RGB triplets, because the bitmap stores premultiplied alpha and
+ * un-premultiplying rounds. So a backdrop frozen on its first frame still reports thousands of
+ * opaque pixels in dozens of colours. Everything that actually depends on the clock — the bloom and
+ * the lattice — is the only thing that puts ink above the fade.
  */
-async function painted(page: import('@playwright/test').Page, selector: string) {
-  return page.evaluate((sel) => {
-    const canvas = document.querySelector<HTMLCanvasElement>(sel);
-    if (!canvas) return { error: 'no canvas' as const };
-    const ctx = canvas.getContext('2d');
+async function painted(canvas: import('@playwright/test').Locator) {
+  return canvas.evaluate((el: HTMLCanvasElement) => {
+    const ctx = el.getContext('2d');
     if (!ctx) return { error: 'no 2d context' as const };
-    if (canvas.width === 0 || canvas.height === 0) return { error: 'zero-sized bitmap' as const };
+    if (el.width === 0 || el.height === 0) return { error: 'zero-sized bitmap' as const };
 
-    const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const { data } = ctx.getImageData(0, 0, el.width, el.height);
     const colours = new Set<string>();
     let opaque = 0;
+    let opaqueTop = 0;
     let digest = 0;
+    // Comfortably above the fade, which starts at 55% of the height.
+    const topRows = Math.floor(el.height * 0.5);
     // Every 4th pixel: enough to characterise a grid of flat-filled cells, cheap enough to run on
     // a retina-scaled bitmap without serialising a megabyte back across the bridge.
     for (let i = 0; i < data.length; i += 16) {
       digest = (digest * 31 + data[i] + data[i + 1] * 7 + data[i + 2] * 13 + data[i + 3] * 17) | 0;
       if (data[i + 3] === 0) continue;
       opaque += 1;
+      if (Math.floor(i / 4 / el.width) < topRows) opaqueTop += 1;
       colours.add(`${data[i]},${data[i + 1]},${data[i + 2]}`);
     }
-    return { colours: colours.size, opaque, digest, area: canvas.width * canvas.height };
-  }, selector);
+    return { colours: colours.size, opaque, opaqueTop, digest, area: el.width * el.height };
+  });
 }
 
 test('the Envelope actually paints its feasibility field', async ({ page }) => {
@@ -58,7 +73,7 @@ test('the Envelope actually paints its feasibility field', async ({ page }) => {
   expect(box!.width).toBeGreaterThan(0);
   expect(box!.height).toBeGreaterThan(0);
 
-  const field = await painted(page, 'canvas');
+  const field = await painted(canvas);
   expect(field, 'the canvas could not be read back').not.toHaveProperty('error');
   if ('colours' in field) {
     expect(field.opaque).toBeGreaterThan(0);
@@ -78,7 +93,7 @@ test('the Envelope repaints when the scenario changes', async ({ page }) => {
   const canvas = page.getByRole('region', { name: /how much room/i }).locator('canvas');
   await expect(canvas).toBeVisible();
 
-  const before = await painted(page, 'canvas');
+  const before = await painted(canvas);
   // Checked here as well as in the test above: without it a zero-sized bitmap surfaces below as an
   // uninformative poll timeout rather than as the thing that actually went wrong.
   expect(before, 'the canvas could not be read back').not.toHaveProperty('error');
@@ -114,7 +129,7 @@ test('the Envelope repaints when the scenario changes', async ({ page }) => {
   await expect
     .poll(
       async () => {
-        const after = await painted(page, 'canvas');
+        const after = await painted(canvas);
         if ('error' in after || 'error' in before) return 'unreadable';
         if (after.digest === before.digest) return 'unchanged';
         if (after.opaque === 0) return 'cleared';
@@ -135,9 +150,9 @@ test('the Envelope bitmap matches its laid-out size', async ({ page }) => {
   const canvas = page.getByRole('region', { name: /how much room/i }).locator('canvas');
   await expect(canvas).toBeVisible();
 
-  // Measured through the locator asserted visible above, not a fresh `document.querySelector`:
-  // there is one canvas today, but the two would silently diverge the moment a second one lands
-  // earlier in the DOM, and this test would then assert about an element it never checked.
+  // Measured through the locator asserted visible above, not a fresh `document.querySelector`.
+  // The masthead's backdrop is now exactly the second canvas this anticipated, and it lands
+  // earlier in the DOM — a bare selector here would assert about an element it never checked.
   const { cssWidth, cssHeight, bitmapWidth, bitmapHeight, dpr } = await canvas.evaluate(
     (el: HTMLCanvasElement) => {
       const rect = el.getBoundingClientRect();
@@ -161,4 +176,108 @@ test('the Envelope bitmap matches its laid-out size', async ({ page }) => {
    * assertion in this file still finds nonzero, multicoloured, repainting pixels in that state.
    */
   expect(Math.abs(bitmapHeight - cssHeight * dpr)).toBeLessThanOrEqual(2);
+});
+
+/**
+ * And the masthead's backdrop, which has the same failure mode and one the Envelope does not: it
+ * animates in over ~700ms from a frame that is legitimately almost blank, so "it painted" and "the
+ * intro ran to completion" are different claims and only the second one is worth anything.
+ */
+test('the masthead actually paints its backdrop', async ({ page }) => {
+  await page.goto('/');
+
+  // Through the banner landmark rather than a positional selector: it is the semantic that puts
+  // this canvas outside <main>, and reaching it any other way would keep passing if that broke.
+  const canvas = page.getByRole('banner').locator('canvas');
+  await expect(canvas).toBeVisible();
+
+  /**
+   * Polled, not read once: a single read taken the moment the page loads can legitimately catch
+   * the first frame, where the bloom is still at zero alpha and the lattice unlit.
+   *
+   * And discriminated on `opaqueTop`, not on `opaque` or `colours`. Those two are the obvious
+   * choice and they are worthless here — the bottom fade satisfies both at every value of the
+   * animation clock, so an intro that never advanced past frame zero would poll straight to
+   * "painted" and this test would go green on exactly the regression it exists to catch. Ink above
+   * the fade line is the one thing only the bloom and the lattice can put there.
+   */
+  await expect
+    .poll(
+      async () => {
+        const back = await painted(canvas);
+        if ('error' in back) return 'unreadable';
+        if (back.opaque === 0) return 'blank';
+        if (back.opaqueTop === 0) return 'fade-only';
+        return 'painted';
+      },
+      { message: 'the masthead backdrop never settled into a painted state' }
+    )
+    .toBe('painted');
+});
+
+/**
+ * The masthead is a `banner` landmark holding the page's `h1`, and its backdrop is decoration.
+ *
+ * Both halves are structural claims that nothing else checks. The landmark exists only because the
+ * <header> sits outside <main> — nest it back inside and the role silently disappears, taking the
+ * "skip to header" affordance with it and failing no other test in the suite.
+ */
+test('the masthead is a banner landmark and its backdrop is not announced', async ({ page }) => {
+  await page.goto('/');
+
+  const banner = page.getByRole('banner');
+  await expect(banner.getByRole('heading', { level: 1 })).toHaveText('bench');
+
+  // The Envelope's canvas is `role="img"` carrying a described plot. This one encodes nothing, so
+  // it must not reach the accessibility tree at all — announcing "image" here describes a gradient.
+  await expect(banner.getByRole('img')).toHaveCount(0);
+});
+
+/**
+ * The backdrop still paints with reduced motion asked for.
+ *
+ * This is the branch the blanket CSS rule in index.css cannot reach — it collapses declared
+ * animations and transitions, and a `requestAnimationFrame` loop is neither. The component asks
+ * `matchMedia` itself and jumps to the settled frame instead of animating to it, so the failure
+ * this guards is not a stutter: get the branch wrong and a reduced-motion reader gets a masthead
+ * that never paints at all, which is the one outcome worse than the animation they opted out of.
+ */
+test('the masthead backdrop paints without animating under reduced motion', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/');
+
+  const canvas = page.getByRole('banner').locator('canvas');
+  await expect(canvas).toBeVisible();
+
+  /*
+   * Wait for it to be painted at all — on `opaqueTop`, so the unconditional bottom fade cannot
+   * answer for the bloom and the lattice. The draw runs in a passive effect rather than a layout
+   * one, so there is a real window between the canvas being visible and the first paint; asserting
+   * a single read here would race it and flake as blank on a loaded CI machine.
+   */
+  await expect
+    .poll(
+      async () => {
+        const back = await painted(canvas);
+        return 'error' in back ? -1 : back.opaqueTop;
+      },
+      { message: 'the backdrop never painted at all under reduced motion' }
+    )
+    .toBeGreaterThan(0);
+
+  /*
+   * Then that it is *static*, which is the claim this test is actually for and the one polling
+   * alone can never make. The intro runs 700ms, so two reads a fraction of that apart differ while
+   * it is animating and match once it is not. Reading the settled frame straight out of the
+   * `matchMedia` branch is what makes them match here.
+   */
+  const first = await painted(canvas);
+  await page.waitForTimeout(150);
+  const second = await painted(canvas);
+
+  expect(first, 'the backdrop could not be read back').not.toHaveProperty('error');
+  if ('error' in first || 'error' in second) return; // narrows the union past the assertion above
+
+  expect(second.digest, 'the backdrop is still animating with motion reduced').toBe(first.digest);
+  expect(second.opaqueTop, 'the backdrop went blank between reads').toBeGreaterThan(0);
 });
