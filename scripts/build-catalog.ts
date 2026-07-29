@@ -915,11 +915,27 @@ export function deriveAttention(
    * here as well as guarded in {@link refusePerBlockStack}, because the null is the more general
    * statement of the two: the next export to make it may not carry `block_configs` at all.
    */
-  if (Object.hasOwn(config, 'num_key_value_heads') && config.num_key_value_heads === null) {
+  /**
+   * Every *present but unreadable* value, not only the literal null (found in review).
+   *
+   * The guard tested `=== null` because that is the form Nemotron Super ships. Any other non-number
+   * — a per-layer array, an object, a string — walked straight past it: `num()` returns `undefined`
+   * for those, `?? heads` then reads it as full multi-head attention, and the overstatement this
+   * exists to refuse comes back for whichever exporter next represents per-layer grouping as a list.
+   * `Number.isFinite` rather than `=== undefined`, because `num()` passes a NaN straight through —
+   * so the `undefined` form of this fix still let `kvHeads: NaN` reach the catalog, which is worse
+   * than the overstatement it was replacing. The distinction that matters is present-and-unusable
+   * versus absent, and unusable includes every value arithmetic cannot survive.
+   */
+  if (
+    Object.hasOwn(config, 'num_key_value_heads') &&
+    !Number.isFinite(num(config, 'num_key_value_heads'))
+  ) {
     throw new DerivationError(
-      `${id}: states num_key_value_heads: null rather than omitting it, which is a config saying ` +
-        'the grouping is not a property of the stack. Reading that as full multi-head attention ' +
-        `charges ${heads} KV heads per layer where a grouped layer has a fraction of that — 8x for ` +
+      `${id}: states num_key_value_heads as ${JSON.stringify(config.num_key_value_heads)} rather ` +
+        'than a number or omitting it, which is a config saying the grouping is not a property of ' +
+        'the stack. Reading that as full multi-head attention charges ' +
+        `${heads} KV heads per layer where a grouped layer has a fraction of that — 8x for ` +
         'Nemotron Super, whose attending blocks state n_heads_in_group: 8. Refusing to pick one.'
     );
   }

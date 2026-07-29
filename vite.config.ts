@@ -43,8 +43,16 @@ export default defineConfig({
      * budget for an integration suite that renders ~700 buttons per test, and it is not a licence
      * to let a genuinely slow test sit — if a single test approaches this, the grid it renders is
      * the thing to question.
+     *
+     * **Raised a second time, on #77, and that is the signal rather than the fix.** The grid is
+     * models x devices and both axes grew in one sweep: 425 cells before it, 731 after #78 added
+     * eighteen devices, 1,505 after #77 doubled the model list. The suite went 42s to 837s — 3.5x
+     * the cells for 20x the wall clock, because `userEvent` slows superlinearly with tree size — and
+     * two PRs that touched no component have now failed CI on this limit alone. 30s unblocks the
+     * second one; the total is the actual problem and it is #101. If a third change trips this,
+     * raise #101 rather than this number.
      */
-    testTimeout: 20_000,
+    testTimeout: 30_000,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],

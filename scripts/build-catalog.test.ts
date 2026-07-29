@@ -641,8 +641,27 @@ describe('per-block NAS stacks are refused, not read off the top-level fields', 
     // `block_configs` for the guard above to catch.
     const nullKvHeads = { num_attention_heads: 64, num_key_value_heads: null, hidden_size: 8192 };
     expect(() => deriveAttention('hypothetical/null-kv-heads', nullKvHeads, 80)).toThrowError(
-      /states num_key_value_heads: null rather than omitting it/
+      /states num_key_value_heads as null rather than a number or omitting it/
     );
+
+    /**
+     * And every other *present but unreadable* shape, which the `=== null` form of this guard walked
+     * straight past (found in review). `num()` returns `undefined` for an array, an object or a
+     * string, `?? heads` then read that as full multi-head attention, and the overstatement came back
+     * for whichever exporter next writes per-layer grouping as a list. Null is simply the form the
+     * model that prompted the guard happens to ship.
+     */
+    for (const value of [[8, 8, 64], { layer0: 8 }, 'per-layer', Number.NaN]) {
+      expect(
+        () =>
+          deriveAttention(
+            'hypothetical/unreadable-kv-heads',
+            { num_attention_heads: 64, num_key_value_heads: value, hidden_size: 8192 },
+            80
+          ),
+        `num_key_value_heads: ${JSON.stringify(value)} was read as full multi-head attention`
+      ).toThrowError(/rather than a number or omitting it/);
+    }
 
     // And an *absent* one still means full multi-head attention, which is what Llama 2-era configs
     // leave unsaid — the distinction would be worthless if it rejected both.
