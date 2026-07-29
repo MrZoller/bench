@@ -942,9 +942,10 @@ describe('the Matrix stays informative', () => {
  * screen of vertical space for four names it then cut off.
  *
  * Split across the two suites the way the quantity itself splits. The *derivation* is a string —
- * label text, an inline height, an inline track list — and jsdom reads all three in milliseconds.
- * What those lengths buy in a laid-out browser is `e2e/matrix-header.spec.ts`, because jsdom reports
- * every width on this surface as 0, which is exactly why the sideways half went unnoticed.
+ * label text, an inline height, an inline `min-width`, a rotation class — and jsdom reads all four in
+ * milliseconds. What those lengths buy in a laid-out browser is `e2e/matrix-header.spec.ts`, because
+ * jsdom reports every width on this surface as 0, which is exactly why the sideways half went
+ * unnoticed.
  */
 describe('the Matrix header reserves the rotation once', () => {
   const matrix = () => screen.getByRole('region', { name: /Every model on every machine/i });
@@ -1002,34 +1003,47 @@ describe('the Matrix header reserves the rotation once', () => {
     expect(new Set(labels.map((l) => l.label)).size).toBe(labels.length);
   });
 
-  it('spends one derived length on the band and the lane, not two', () => {
+  it('spends one derived length on the band and on the column it leans over, not two', () => {
     render(<App />);
 
-    const band = matrix().querySelector<HTMLElement>('thead th[style]');
-    const lane = matrix().querySelector<HTMLElement>('.overflow-x-auto > div[style]');
+    const band = matrix().querySelector<HTMLElement>('thead th:nth-child(2)');
+    const reservation = matrix().querySelector<HTMLElement>('thead th:first-child');
     expect(band, 'the header row reserves no height at all').not.toBeNull();
-    expect(
-      lane,
-      'the scroll container reserves no lane for the labels to lean into'
-    ).not.toBeNull();
 
     const bandRem = parseFloat(band!.style.height);
-    // `minmax(0, …)`, so the lane is what is left over rather than a claim on the grid's width.
-    const laneRem = parseFloat(
-      /minmax\(\s*0\s*,\s*([\d.]+)rem\s*\)/.exec(lane!.style.gridTemplateColumns)?.[1] ?? 'NaN'
-    );
-
-    expect(laneRem).toBeGreaterThan(0);
+    const leanRem = parseFloat(reservation!.style.minWidth);
+    expect(
+      leanRem,
+      'the model column reserves no room for the labels leaning over it'
+    ).toBeGreaterThan(0);
     // sin(45) and cos(45) are the same number: the band is the lean plus the row's own padding, so
     // the two axes cannot drift apart without this failing.
-    expect(bandRem - laneRem).toBeCloseTo(1.25, 6);
+    expect(bandRem - leanRem).toBeCloseTo(1.25, 6);
+    // Both in `rem`, because both are lengths measured from text — a px reservation stops covering
+    // its own labels the moment the root font size moves, which is #44 twice over.
+    expect(band!.style.height.endsWith('rem')).toBe(true);
+    expect(reservation!.style.minWidth.endsWith('rem')).toBe(true);
+
+    /**
+     * And the labels lean the way the reservation faces.
+     *
+     * The reservation is on the model column, to the *left* of every label, which is only the right
+     * place if the labels lean left: anchored bottom-right and turned clockwise. The first fix for
+     * #64 kept them leaning right and reserved a trailing lane out of whatever free space the
+     * viewport had going spare, which is not a quantity — it ran out between 948px and 1009px, and
+     * the grid scrolled 50px for header text there while both browser assertions sat above the
+     * window. jsdom cannot see a pixel of that, but it can see that the two halves still agree.
+     */
+    const label = matrix().querySelector('thead th span[title]')!;
+    expect(label.className).toContain('origin-bottom-right');
+    expect(label.className).toMatch(/(?:^|\s)rotate-45(?:\s|$)/);
   });
 
   it('reserves a band for the labels it renders, not for the ones it used to', () => {
     render(<App />);
 
     const bandRem = parseFloat(
-      matrix().querySelector<HTMLElement>('thead th[style]')!.style.height
+      matrix().querySelector<HTMLElement>('thead th:nth-child(2)')!.style.height
     );
     const longest = Math.max(...headerLabels().map((l) => l.label.length));
 

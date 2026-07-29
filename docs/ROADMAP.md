@@ -400,8 +400,8 @@ reading the test that guards them.
   all three are one shape — **a length derived from a glyph width, written in pixels**: the
   Envelope's `MIN_COLUMN_PX` (the column those labels sit inside) and the Matrix's `headerHeight`
   (a character count times a pixel constant, sizing a `text-xs` label whose rotation clips when the
-  row is short). The general form is the thing to keep: a length measured from text belongs in the
-  same units as the text. (#42, #44.)
+  row is short — since #64 it is `headerBand`, and both of its lengths are `rem`). The general form
+  is the thing to keep: a length measured from text belongs in the same units as the text. (#42, #44.)
 
 - **A rotation costs two lengths, and `headerHeight` only ever charged for one** ([#64](https://github.com/MrZoller/bench/issues/64)).
   `sin(45)` and `cos(45)` are the same number, so the Matrix's device labels leaned as far sideways
@@ -420,31 +420,45 @@ reading the test that guards them.
   _rendered set_, so a catalog addition that collides with an existing stem lengthens both labels
   instead of quietly making one ambiguous. 40 characters becomes 25, and the band 161px.
 
-  **The trailing lane has to be able to yield, and padding cannot.** Reserving `cos(45) × longest`
-  as `padding-right` on the scroll container — also the filed suggestion — fixes 1440 and 1280 and
-  moves the defect at 1024: the grid's own min-content is 857px inside a 934px panel, so a
-  non-negotiable 141px lane forces 65px of scrolling onto a grid that fits. Measured on both
-  implementations. Two grid tracks express the priority instead —
-  `minmax(min-content, 1fr) minmax(0, lean)` — so the lane takes free space, shrinks to the 77px
-  going spare at 1024, and stands down to nothing on a phone, where the columns keep their 44px
-  coarse-pointer targets and the labels are reachable by the panning already happening.
+  **No trailing lane works, and two were built before one did.** The filed suggestion is to reserve
+  `cos(45) × longest` to the right of the grid. As `padding-right` it is non-negotiable, so at 1024 —
+  min-content 857px inside a 934px panel — a 141px lane forces 65px of scrolling onto a grid that
+  fits. As a yielding grid track, `minmax(min-content, 1fr) minmax(0, lean)`, it takes only the free
+  space that happens to exist, which is not a quantity anyone controls: at 960px of viewport the
+  container is 870px, the grid 857px — it fits — and `scrollWidth` was 920px anyway, with
+  "Threadripper PRO 7995WX" painted 50px outside the visible right edge. That version shipped to
+  review with both of its own geometry assertions sitting above the 948–1009px window it broke. The
+  lesson is the one this file keeps writing down in other words: **a reservation whose size is "the
+  space left over" has not reserved anything.**
 
-  **The 1024px case in the issue is fixed but deliberately not asserted.** Under `'Courier New'` —
-  `reflow.spec.ts`'s stress font, wider than any UI sans — the grid's min-content and the labels
-  both grow while the panel does not, and 1024 comes out 5px over. 142px becoming 5 is the fix
-  working; a spec that is green on a Mac and red on a Linux runner would be this suite's fourth
-  measuring the machine instead of the layout. The geometry assertions sit at 1280 and at **1060**,
-  the width where the lane and the columns compete hardest — a padding lane passes at 1280 and fails
-  at 1060 by 29px, so the spec separates the two implementations rather than merely the two axes.
+  **Leaning the labels the other way has no width dependence at all** — the issue's third lever, and
+  the one that holds. Anchored `right-1/2` and turned `+45deg` about `origin-bottom-right`, each label
+  ends at its own column and runs up-and-_left_ over the model-name column, which is in flow and
+  inside the scroll container at every width. `scrollWidth == clientWidth` at 1440, 1280, 1060 and
+  1024, and `scrollWidth == the grid's own width` at 960, 390 and 320; the grid also gets back the
+  141px the lane was taking off its width at 1440. Text that ascends left-to-right has to lean right,
+  so this is geometry rather than taste: the direction and the anchor are one choice.
+
+  **What that buys has to be reserved, because overflow to the left is worse than overflow to the
+  right.** Right-side overflow is at least reachable by panning; left-side overflow is not scrollable
+  at all — the name is gone at every scroll position. So the model column carries an explicit
+  `min-width` of the same `lean` the band is derived from: 8px of real effect today (the longest model
+  name asks 133px, the lean 141px), inert at 1440 where auto table layout hands the column 338px, and
+  binding at 390 and under 200% text. `matrix-header.spec.ts` asserts the contract — the reservation
+  covers the furthest any label actually leans — at the two widths where it binds, since at 1440 the
+  slack would make it pass without testing anything.
 
   **And the sweep is the interesting half.** The defect class is not "a rotated label" — it is _any_
   scroll container whose scrollable area is enlarged by something out of flow: a rotation, an
   absolute label, a ring, a shadow. All three of the app's `overflow-x-auto` containers can do it,
   so `matrix-header.spec.ts` now checks every one of them: a container may only scroll as far as its
-  **in-flow** content reaches. The first version of that sweep measured each child's `scrollWidth`
-  and passed against the filed defect with 142px of overflow in front of it — the rotated labels are
-  descendants of the table, so the table's own `scrollWidth` already counted them. Out-of-flow boxes
-  have to be excluded by hand, and that exclusion is the whole test.
+  **in-flow** content reaches. That sweep was wrong twice, in ways worth keeping. First it measured
+  each child's `scrollWidth`, which counts the rotated labels because they are descendants of the
+  table — green against the filed defect with 142px of overflow in front of it. Then it compared
+  in-flow content against `clientWidth` instead of against `scrollWidth`, which is trivially true of
+  everything that scrolls at all: green again, at 390px, against the same defect. Both versions read
+  as coverage. The rule has to name the two quantities it is actually about, and out-of-flow boxes
+  have to be excluded by hand.
 
 - **Simulating text zoom by setting the root font size is not text zoom, and a test built on it
   reports layouts nobody can reach.** Widening the reflow sweep to the `sm` and `lg` boundaries —

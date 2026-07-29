@@ -309,6 +309,9 @@ export function Matrix({ config }: { config: Config }) {
    * 142px of overflow and a scrollbar anyway, and the default view hid the names the 246px was
    * calculated from. The app paid a phone screen of vertical space for labels it then cut off (#64).
    *
+   * The two lengths are the same number and are now written once. Which direction the width is spent
+   * in is the other half of the repair, and it is argued under **Lean** below.
+   *
    * **Height.** A fixed 96px was set for the names that existed then and is short for several
    * shipping ones — the catalog reaches 40 characters. The table sits in an `overflow-x-auto`
    * container, which clips vertically rather than scrolling, and the Mac Studio variants differ
@@ -334,12 +337,25 @@ export function Matrix({ config }: { config: Config }) {
    * prevent, reintroduced at the one setting a low-vision reader would be using. 0.5rem per
    * character is 8px at the default root, so nothing moves there. Raised by Codex on PR #36 (#44).
    *
-   * **Lean** is the same length, spent sideways: a trailing lane inside the scroll container for the
-   * labels to lean into, so the container owns the space they occupy instead of overflowing by it.
-   * It over-reserves — a label leans from its column's centre and only the rightmost columns have
-   * nothing to lean over, so today's grid needs 63px of the 141px this asks for — which is the same
-   * erring-long trade as the height, and safe for the same reason: the lane is the *last* thing
-   * sized, so over-asking costs nothing that was not already spare. See the lane itself below.
+   * **Lean** is the same length, spent sideways — and the labels are turned to spend it *leftward*,
+   * over the model-name column, which is the half of this that had to be got right.
+   *
+   * A trailing lane on the right cannot be made to work, and both versions were built and measured.
+   * As `padding-right` it is non-negotiable, so at 1024px — the grid's own min-content is 857px
+   * inside a 934px panel — it forces 65px of scrolling onto a grid that fits. As a yielding grid
+   * track, `minmax(0, lean)`, it takes only the free space that happens to exist: fine at 1440 and
+   * 1280, and between a 857px grid and its 920px painted extent there is *less free space than the
+   * labels need*. Measured at 960px of viewport: container 870px, grid 857px — it fits — scrollWidth
+   * 920px anyway, with "Threadripper PRO 7995WX" painted 50px outside the visible right edge. That
+   * is #64 narrowed to a 60px window of viewport, not repaired.
+   *
+   * Leaning the other way has no width dependence at all. The space a left-leaning label needs is
+   * the model-name column, which is already in flow and already inside the container, and — unlike
+   * free space — it is measured from *text*, so it grows with the font exactly as the labels do.
+   * The reservation below (`minWidth` on the stub header cell) is what makes that safe rather than
+   * lucky: today the longest model name asks for 133px and the lean for 141px, so the guard is worth
+   * 8px, and without it a catalog of short model names would lean labels past the container's left
+   * edge — where, unlike the right, the overflow is not scrollable and the name is simply gone.
    */
   const headerBand = useMemo(() => {
     const columns = headerColumns(devices);
@@ -411,172 +427,168 @@ export function Matrix({ config }: { config: Config }) {
       </fieldset>
 
       <div className="mt-4 overflow-x-auto">
-        {/*
-          Two tracks: the grid, and the lane its rotated labels lean into.
+        {/* `role="grid"` rather than the native table role, because the cells are widgets a
+            keyboard drives rather than data a reader browses — which is the distinction the two
+            roles exist to draw, and what tells a screen reader to hand the arrow keys over. */}
+        <table role="grid" className="w-full border-separate border-spacing-0.5 text-left text-xs">
+          <caption className="sr-only">
+            Every catalogued model against every shipping device, coloured by{' '}
+            {MEASURES.find((m) => m.value === measure)?.label}. {runnable} of {cells.flat().length}{' '}
+            combinations run. This grid is a single tab stop: use the arrow keys to move between
+            cells, Home and End for the ends of a row, and Control with Home or End for the ends of
+            the grid.
+          </caption>
+          <thead>
+            <tr>
+              {/*
+                  The model column, and the lane the rotated labels lean into — the same cell, which
+                  is the point. `minWidth` is the sideways half of `headerBand`, so the column that
+                  the leftmost label leans over is never narrower than the lean itself.
 
-          `minmax(min-content, 1fr)` and `minmax(0, lean)` is the whole priority order, written
-          once. The table takes what it needs and grows into whatever is left; the lane takes only
-          free space and gives all of it back when there is none. Trailing padding on the scroll
-          container was the obvious version and it is subtly wrong: padding is not negotiable, so at
-          1024px — where the grid's own min-content is 857px inside a 934px panel — a fixed 141px
-          lane forced 65px of scrolling onto a grid that fits, which is the same defect as the
-          overflowing labels with the blame moved. A track that yields reserves the lane where it is
-          free (1440, 1280), shrinks it to the 77px going spare at 1024, and stands down entirely on
-          a phone, where the grid is panned anyway and the labels are reachable by panning with it.
-
-          Two tracks and no second element: a track is sized whether or not anything sits in it, and
-          an empty div would be one more thing to explain. A spacer *column* would have been worse
-          still — one more stop for the arrow keys, one more cell in the caption's count, nothing in
-          it.
-        */}
-        <div
-          className="grid"
-          style={{ gridTemplateColumns: `minmax(min-content, 1fr) minmax(0, ${headerBand.lean})` }}
-        >
-          {/* `role="grid"` rather than the native table role, because the cells are widgets a
-              keyboard drives rather than data a reader browses — which is the distinction the two
-              roles exist to draw, and what tells a screen reader to hand the arrow keys over. */}
-          <table
-            role="grid"
-            className="w-full border-separate border-spacing-0.5 text-left text-xs"
-          >
-            <caption className="sr-only">
-              Every catalogued model against every shipping device, coloured by{' '}
-              {MEASURES.find((m) => m.value === measure)?.label}. {runnable} of{' '}
-              {cells.flat().length} combinations run. This grid is a single tab stop: use the arrow
-              keys to move between cells, Home and End for the ends of a row, and Control with Home
-              or End for the ends of the grid.
-            </caption>
-            <thead>
-              <tr>
+                  On today's catalog it is worth 8px: the longest model name asks for 133px and the
+                  lean for 141px. It is not decoration. Overflow to the *right* of a scroll container
+                  is at least reachable by panning; overflow to the left is not scrollable at all, so
+                  a catalog of short model names would put the first device's name somewhere no
+                  reader can get to. A reservation measured from text, guarding space measured from
+                  text, both of which grow together when the font does.
+                */}
+              <th
+                scope="col"
+                className="sticky left-0 bg-[var(--color-surface)] pr-2 font-normal"
+                style={{ minWidth: headerBand.lean }}
+              >
+                <span className="sr-only">Model</span>
+              </th>
+              {/* Iterated from `headerBand.columns` rather than `devices`, so the label a column
+                  renders is the same string the band was measured from. Two loops over two lists
+                  is how a reservation and the thing it reserves for come to disagree. */}
+              {headerBand.columns.map(({ device, label }) => (
                 <th
+                  key={device.id}
                   scope="col"
-                  className="sticky left-0 bg-[var(--color-surface)] pr-2 font-normal"
+                  // Fixed width, and the label taken out of flow below, so a long name cannot
+                  // stretch its own column — "RTX PRO 6000 Blackwell" was three times the width
+                  // of its neighbours and skewed the whole grid.
+                  className="relative w-7 min-w-7 p-0 align-bottom font-normal text-[var(--color-text-faint)] [@media(pointer:coarse)]:w-11 [@media(pointer:coarse)]:min-w-11"
+                  style={{ height: headerBand.height }}
                 >
-                  <span className="sr-only">Model</span>
-                </th>
-                {/* Iterated from `headerBand.columns` rather than `devices`, so the label a column
-                    renders is the same string the band was measured from. Two loops over two lists
-                    is how a reservation and the thing it reserves for come to disagree. */}
-                {headerBand.columns.map(({ device, label }) => (
-                  <th
-                    key={device.id}
-                    scope="col"
-                    // Fixed width, and the label taken out of flow below, so a long name cannot
-                    // stretch its own column — "RTX PRO 6000 Blackwell" was three times the width
-                    // of its neighbours and skewed the whole grid.
-                    className="relative w-7 min-w-7 p-0 align-bottom font-normal text-[var(--color-text-faint)] [@media(pointer:coarse)]:w-11 [@media(pointer:coarse)]:min-w-11"
-                    style={{ height: headerBand.height }}
-                  >
-                    {/*
+                  {/*
                       Rotated rather than truncated. Horizontally these clipped to "GeForc…" four
                       times over — a header that cannot distinguish its own columns is worse than
                       none, and the names are what make the grid readable at all.
 
                       The full name stays in the `title`, and in every cell's `aria-label` below, so
                       what the shortening drops is one hover or one screen-reader cell away.
+
+                      Anchored bottom-*right* and turned clockwise, so each label ends at its own
+                      column and runs up-and-left over the grid it belongs to, rather than starting
+                      at its column and running up-and-right past the last one. Geometry, not taste:
+                      text that ascends left-to-right has to lean right, and to the right of the last
+                      column there is nothing but the edge of the scroll container — which is how a
+                      grid that fits its panel came to report 142px of overflow (#64). Leaning the
+                      other way spends the same length over the model-name column, which is inside
+                      the container and reserved for it above.
                     */}
-                    <span
-                      className="absolute bottom-1 left-1/2 origin-bottom-left -rotate-45 whitespace-nowrap"
-                      title={device.name}
-                    >
-                      {label}
-                    </span>
-                  </th>
+                  <span
+                    className="absolute right-1/2 bottom-1 origin-bottom-right rotate-45 whitespace-nowrap"
+                    title={device.name}
+                  >
+                    {label}
+                  </span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {models.map((model, r) => (
+              <tr key={model.id}>
+                <th
+                  scope="row"
+                  className="sticky left-0 max-w-[9rem] truncate bg-[var(--color-surface)] pr-2 font-normal text-[var(--color-text-muted)]"
+                  title={`${model.name} — ${params(model.totalParams)}`}
+                >
+                  {model.name}
+                </th>
+                {cells[r].map((cell, c) => (
+                  <td key={devices[c].id} role="gridcell" className="p-0">
+                    <button
+                      type="button"
+                      ref={(node) => {
+                        cellRefs.current.set(`${r}:${c}`, node);
+                      }}
+                      // The roving half of the pattern: exactly one cell is in the tab sequence,
+                      // and it is wherever the reader last was. `activeRow`/`activeCol` are the
+                      // clamped pair, so a grid that shrank under a remembered position still
+                      // offers a stop rather than none at all.
+                      tabIndex={r === activeRow && c === activeCol ? 0 : -1}
+                      onKeyDown={(event) => onCellKeyDown(event, r, c)}
+                      /**
+                       * Loads the *whole* scenario the cell was scored under, not just the pair.
+                       *
+                       * Setting only model and device meant a dense-model cell scored at the
+                       * Q4_K_M substitute landed in a Bench still holding MXFP4 — which `coerce`
+                       * then replaced with BF16, so the grid and the detail view disagreed about
+                       * the same square. The context and the single-device count matter for the
+                       * same reason.
+                       */
+                      onClick={() => {
+                        // So the tab stop follows the reader: leaving the grid and coming back
+                        // returns to the cell they last used, not to the top-left corner.
+                        setActive([r, c]);
+                        set('modelId', cell.modelId);
+                        set('deviceId', cell.deviceId);
+                        set('quantId', cell.quantId);
+                        set('deviceCount', 1);
+                        set('contextTokens', cell.contextTokens);
+                        /**
+                         * The detail this loads sits several sections above, and a cell already
+                         * matching the current selection changes nothing the Matrix renders — so
+                         * clicking one left the viewport on an unchanged grid and the action
+                         * appeared to do nothing at all. The selected square is now marked too,
+                         * so the click is acknowledged where it happened as well as where it
+                         * landed.
+                         */
+                        // Optional on the method as well as the element: `scrollIntoView` is
+                        // absent in jsdom and in some embedded browsers, and a click that throws
+                        // here would abandon the selection it had just made — trading a scroll
+                        // that did not happen for a scenario that did not load.
+                        //
+                        // The animation is gated on the motion preference, which the stylesheet's
+                        // reduced-motion block cannot do for it: that neutralises CSS animation
+                        // and transition durations and has no effect on a scroll asked for in JS.
+                        // A multi-section animated jump is exactly the motion it exists to
+                        // suppress, so the preference is read here instead.
+                        const reduce = window.matchMedia?.(
+                          '(prefers-reduced-motion: reduce)'
+                        )?.matches;
+                        document.getElementById(DETAIL_ANCHOR_ID)?.scrollIntoView?.({
+                          behavior: reduce ? 'auto' : 'smooth',
+                          block: 'start',
+                        });
+                      }}
+                      title={tooltip(cell, measure, quant.id, config.deviceCount)}
+                      aria-label={tooltip(cell, measure, quant.id, config.deviceCount)}
+                      aria-current={isCurrent(cell) ? 'true' : undefined}
+                      // 28px squares two pixels apart are under the 44px `marks.hitTarget` this
+                      // repo declares, and with hundreds of neighbours a touch user loading the
+                      // wrong scenario is the likely outcome rather than the unlucky one. Coarse
+                      // pointers get the full target; a mouse keeps the dense grid, which is what
+                      // makes the comparison legible in one screen.
+                      className={`h-7 w-full rounded-sm focus:ring-2 focus:ring-[var(--color-accent)] focus:outline-none [@media(pointer:coarse)]:h-11 ${
+                        cell.runs ? '' : 'border border-dashed border-[var(--color-border)]'
+                      } ${cell.raiseCeilingWouldHelp ? 'border-[var(--color-warning)]' : ''} ${
+                        isCurrent(cell)
+                          ? 'ring-2 ring-[var(--color-accent)] ring-offset-1 ring-offset-[var(--color-surface)]'
+                          : ''
+                      }`}
+                      style={{ background: fill(cell, measure, max) }}
+                    />
+                  </td>
                 ))}
               </tr>
-            </thead>
-            <tbody>
-              {models.map((model, r) => (
-                <tr key={model.id}>
-                  <th
-                    scope="row"
-                    className="sticky left-0 max-w-[9rem] truncate bg-[var(--color-surface)] pr-2 font-normal text-[var(--color-text-muted)]"
-                    title={`${model.name} — ${params(model.totalParams)}`}
-                  >
-                    {model.name}
-                  </th>
-                  {cells[r].map((cell, c) => (
-                    <td key={devices[c].id} role="gridcell" className="p-0">
-                      <button
-                        type="button"
-                        ref={(node) => {
-                          cellRefs.current.set(`${r}:${c}`, node);
-                        }}
-                        // The roving half of the pattern: exactly one cell is in the tab sequence,
-                        // and it is wherever the reader last was. `activeRow`/`activeCol` are the
-                        // clamped pair, so a grid that shrank under a remembered position still
-                        // offers a stop rather than none at all.
-                        tabIndex={r === activeRow && c === activeCol ? 0 : -1}
-                        onKeyDown={(event) => onCellKeyDown(event, r, c)}
-                        /**
-                         * Loads the *whole* scenario the cell was scored under, not just the pair.
-                         *
-                         * Setting only model and device meant a dense-model cell scored at the
-                         * Q4_K_M substitute landed in a Bench still holding MXFP4 — which `coerce`
-                         * then replaced with BF16, so the grid and the detail view disagreed about
-                         * the same square. The context and the single-device count matter for the
-                         * same reason.
-                         */
-                        onClick={() => {
-                          // So the tab stop follows the reader: leaving the grid and coming back
-                          // returns to the cell they last used, not to the top-left corner.
-                          setActive([r, c]);
-                          set('modelId', cell.modelId);
-                          set('deviceId', cell.deviceId);
-                          set('quantId', cell.quantId);
-                          set('deviceCount', 1);
-                          set('contextTokens', cell.contextTokens);
-                          /**
-                           * The detail this loads sits several sections above, and a cell already
-                           * matching the current selection changes nothing the Matrix renders — so
-                           * clicking one left the viewport on an unchanged grid and the action
-                           * appeared to do nothing at all. The selected square is now marked too,
-                           * so the click is acknowledged where it happened as well as where it
-                           * landed.
-                           */
-                          // Optional on the method as well as the element: `scrollIntoView` is
-                          // absent in jsdom and in some embedded browsers, and a click that throws
-                          // here would abandon the selection it had just made — trading a scroll
-                          // that did not happen for a scenario that did not load.
-                          //
-                          // The animation is gated on the motion preference, which the stylesheet's
-                          // reduced-motion block cannot do for it: that neutralises CSS animation
-                          // and transition durations and has no effect on a scroll asked for in JS.
-                          // A multi-section animated jump is exactly the motion it exists to
-                          // suppress, so the preference is read here instead.
-                          const reduce = window.matchMedia?.(
-                            '(prefers-reduced-motion: reduce)'
-                          )?.matches;
-                          document.getElementById(DETAIL_ANCHOR_ID)?.scrollIntoView?.({
-                            behavior: reduce ? 'auto' : 'smooth',
-                            block: 'start',
-                          });
-                        }}
-                        title={tooltip(cell, measure, quant.id, config.deviceCount)}
-                        aria-label={tooltip(cell, measure, quant.id, config.deviceCount)}
-                        aria-current={isCurrent(cell) ? 'true' : undefined}
-                        // 28px squares two pixels apart are under the 44px `marks.hitTarget` this
-                        // repo declares, and with hundreds of neighbours a touch user loading the
-                        // wrong scenario is the likely outcome rather than the unlucky one. Coarse
-                        // pointers get the full target; a mouse keeps the dense grid, which is what
-                        // makes the comparison legible in one screen.
-                        className={`h-7 w-full rounded-sm focus:ring-2 focus:ring-[var(--color-accent)] focus:outline-none [@media(pointer:coarse)]:h-11 ${
-                          cell.runs ? '' : 'border border-dashed border-[var(--color-border)]'
-                        } ${cell.raiseCeilingWouldHelp ? 'border-[var(--color-warning)]' : ''} ${
-                          isCurrent(cell)
-                            ? 'ring-2 ring-[var(--color-accent)] ring-offset-1 ring-offset-[var(--color-surface)]'
-                            : ''
-                        }`}
-                        style={{ background: fill(cell, measure, max) }}
-                      />
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+            ))}
+          </tbody>
+        </table>
       </div>
 
       {/* A ramp legend, since a continuous scale has no discrete keys to list.
