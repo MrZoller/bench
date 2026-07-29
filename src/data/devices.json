@@ -474,7 +474,7 @@
       "msrpUsd": 3999,
       "releasedAt": "2025-03-12",
       "source": "https://www.apple.com/mac-studio/specs/",
-      "note": "The allocation ceiling reserves 8 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives."
+      "note": "The allocation ceiling reserves 8 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives. **This row is the 80-core GPU, and it is stated because 96 GiB does not imply it \u2014 the ambiguous end of the M3 Ultra line.** Apple's base Mac Studio M3 Ultra pairs 96 GiB with a 60-core GPU and sells the larger bin as an upgrade at the same capacity, so unlike the 256 and 512 GiB rows, which require the larger part, capacity does not identify this one. At 54 TFLOPS fp16 this is the larger bin; the base machine is 60/80 of it, about 40.7, so reading this row for one overstates prefill by a third."
     },
     {
       "id": "mac-studio-m3-ultra-256",
@@ -492,7 +492,7 @@
       "msrpUsd": 5599,
       "releasedAt": "2025-03-12",
       "source": "https://www.apple.com/mac-studio/specs/",
-      "note": "The allocation ceiling reserves 16 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives."
+      "note": "The allocation ceiling reserves 16 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives. This is the 80-core GPU. 256 GiB requires it, so capacity identifies the bin here \u2014 stated anyway, because capacity-implies-the-bin is the reasoning that was wrong on the three rows where it does not."
     },
     {
       "id": "mac-studio-m3-ultra-512",
@@ -510,11 +510,11 @@
       "msrpUsd": 9499,
       "releasedAt": "2025-03-12",
       "source": "https://www.apple.com/mac-studio/specs/",
-      "note": "The allocation ceiling reserves 32 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives."
+      "note": "The allocation ceiling reserves 32 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives. This is the 80-core GPU, which 512 GiB requires \u2014 stated for the same reason as the 256 GiB row."
     },
     {
       "id": "mac-studio-m2-ultra-192",
-      "name": "Mac Studio M2 Ultra (192 GB)",
+      "name": "Mac Studio M2 Ultra (192 GB, 76-core GPU)",
       "vendor": "Apple",
       "class": "unified-soc",
       "status": "shipping",
@@ -527,11 +527,11 @@
       "tdpWatts": 295,
       "releasedAt": "2023-06-13",
       "source": "https://support.apple.com/en-us/111835",
-      "note": "Still one of the most common large-model Macs in use, and the machine an owner has to be able to see before deciding whether to replace it — 800 GB/s against the M3 Ultra's 819 is most of the answer. The allocation ceiling reserves 12 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives."
+      "note": "Still one of the most common large-model Macs in use, and the machine an owner has to be able to see before deciding whether to replace it — 800 GB/s against the M3 Ultra's 819 is most of the answer. The allocation ceiling reserves 12 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives. **The GPU bin is in the name because 192 GiB does not imply it:** M2 Ultra shipped as a 60-core and a 76-core GPU and Apple offered 192 GiB with both, so this row is the 76-core at 54 TFLOPS fp16 and a 60-core machine is 60/76 of it, about 42.7 \u2014 reading this row for one overstates prefill by 27%."
     },
     {
       "id": "macbook-pro-m4-max-128",
-      "name": "MacBook Pro M4 Max (128 GB)",
+      "name": "MacBook Pro M4 Max (128 GB, 40-core GPU)",
       "vendor": "Apple",
       "class": "unified-soc",
       "status": "shipping",
@@ -545,11 +545,11 @@
       "msrpUsd": 4699,
       "releasedAt": "2024-11-08",
       "source": "https://support.apple.com/en-us/121553",
-      "note": "The allocation ceiling reserves 8 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives."
+      "note": "The allocation ceiling reserves 8 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives. 128 GiB is only offered with the 40-core M4 Max, so capacity identifies the bin; the name states it anyway."
     },
     {
       "id": "mac-studio-m4-max-36",
-      "name": "Mac Studio M4 Max (36 GB)",
+      "name": "Mac Studio M4 Max (36 GB, 32-core GPU)",
       "vendor": "Apple",
       "class": "unified-soc",
       "status": "shipping",
@@ -598,7 +598,7 @@
       "msrpUsd": 1999,
       "releasedAt": "2024-11-08",
       "source": "https://support.apple.com/en-us/121555",
-      "note": "The allocation ceiling reserves 8 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives."
+      "note": "The allocation ceiling reserves 8 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives. This is the 20-core GPU: 64 GiB is only offered with the full M4 Pro, so capacity identifies the bin, and it is stated rather than left implied."
     },
     {
       "id": "mac-mini-m4-pro-24",
@@ -618,7 +618,7 @@
     },
     {
       "id": "macbook-air-m4-16",
-      "name": "MacBook Air M4 (16 GB)",
+      "name": "MacBook Air M4 (16 GB, 8-core GPU)",
       "vendor": "Apple",
       "class": "unified-soc",
       "status": "shipping",
@@ -665,7 +665,7 @@
       "tdpWatts": 270,
       "releasedAt": "2026-10-01",
       "source": "https://www.macrumors.com/2026/06/25/m5-ultra-mac-studio-2026/",
-      "note": "Unreleased. Specs are press-rumour grade and must stay labelled as such in the UI — included because it is the machine people are waiting on, not because the numbers are trustworthy. The allocation ceiling reserves 32 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives."
+      "note": "Unreleased. Specs are press-rumour grade and must stay labelled as such in the UI — included because it is the machine people are waiting on, not because the numbers are trustworthy. The allocation ceiling reserves 32 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives. The GPU bin here is an assumption rather than a spec: this row is rumour-grade, and 90 TFLOPS implies a 100-core GPU at M5's per-core rate. If the part ships in more than one bin, this row is the top one, like every other Ultra in this catalog."
     },
 
     {

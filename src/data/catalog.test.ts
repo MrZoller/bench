@@ -280,6 +280,56 @@ describe('the catalog covers the hardware the audience owns', () => {
     expect(studio.bandwidthBytesPerSec).toBe(410 * 1e9);
     expect(laptop.bandwidthBytesPerSec).toBe(546 * 1e9);
   });
+
+  /**
+   * **An Apple row's compute must be reproducible from a GPU core count the row itself states.**
+   *
+   * This is a convention test rather than a value test, and it exists because the same defect was
+   * filed three times in one review round: a row identified by memory capacity while carrying the
+   * compute of a GPU bin that capacity does not imply. The base MacBook Air at $999 has 8 GPU cores
+   * and carried the 10-core rate; the 64 GiB M1 Max was offered as 24- and 32-core and carried the
+   * 32-core rate; the 192 GiB M2 Ultra was offered as 60- and 76-core and carried the 76-core rate.
+   * Each was a 25-33% overstatement of prefill on a machine somebody actually owns, and each was
+   * invisible because no test connected the name to the number.
+   *
+   * Apple publishes no per-core figure, but within a generation it is constant — which is what makes
+   * this checkable. `devices.json`'s own `$comment-compute` already states the rule ("Apple: FP32 at
+   * 2x, from the per-GPU-core rate of that generation"); this asserts it.
+   *
+   * So every Apple row has to name its core count somewhere a reader will see it, and the arithmetic
+   * has to come out. Rows whose capacity genuinely pins the bin (128 GiB only ever shipped with the
+   * 40-core M4 Max) still state it, because "capacity implies it" is exactly the reasoning that was
+   * wrong three times.
+   */
+  it('derives every Apple row from a GPU core count the row states', () => {
+    // fp16 TFLOPS per GPU core, by generation. Constant within a generation; the M4 family runs
+    // 0.85 across Air, Pro and Max, which is the property that makes the check meaningful.
+    const perCore: Record<string, number> = { M1: 0.65, M2: 0.716, M3: 0.675, M4: 0.85, M5: 0.9 };
+    const apple = DEVICES.filter((d) => d.vendor === 'Apple');
+    expect(apple.length).toBeGreaterThan(8);
+
+    for (const device of apple) {
+      const stated = /(\d+)-core GPU/.exec(device.name) ?? /(\d+)-core GPU/.exec(device.note ?? '');
+      expect(
+        stated,
+        `${device.id} states no GPU core count, so nothing connects "${device.name}" to its ${device.flops.fp16} TFLOPS`
+      ).not.toBeNull();
+
+      const generation = /\bM(\d)\b/.exec(device.name)?.[0];
+      expect(generation, `${device.id} does not name an Apple generation`).toBeDefined();
+      const rate = perCore[generation!];
+      expect(rate, `no per-core rate recorded for ${generation}`).toBeDefined();
+
+      const cores = Number(stated![1]);
+      const expected = cores * rate;
+      // `toDevice` converts the row's TFLOPS to FLOPS; the per-core rates above are TFLOPS.
+      const actual = device.flops.fp16! / 1e12;
+      expect(
+        Math.abs(actual - expected) / expected,
+        `${device.id} states ${cores} GPU cores, which is ${expected.toFixed(1)} TFLOPS at ${generation}'s ${rate}/core, but carries ${actual}`
+      ).toBeLessThan(0.06);
+    }
+  });
 });
 
 describe('generated model catalog', () => {
