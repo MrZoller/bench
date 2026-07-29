@@ -403,6 +403,34 @@ reading the test that guards them.
   row is short). The general form is the thing to keep: a length measured from text belongs in the
   same units as the text. (#42, #44.)
 
+- **The Envelope's axis titles are stacked rather than rotated, and that is a constraint rather
+  than a preference.** Both axes were bare number strips: the gutter ran 1…128, the strip under the
+  plot ran 2K…128K, and the only thing separating "128 users" from "128K tokens" was a `K` in the
+  smallest and faintest type on the page — while the hidden table, the caption and the canvas
+  `aria-label` all named both quantities. The picture was the one representation that did not say,
+  and its y axis runs bottom-up, which was stated only in a source comment, so a reader assuming
+  top-to-bottom read the default field as "128 users at 2K is the comfortable cell" when it is 1
+  user at 2K. **A rotated y title buys a label with plot columns**, which is the one thing this
+  surface cannot pay: `MIN_COLUMN_REM` floors every column and the plot already scrolls inside its
+  own box at 320px, where it measures 364px of content in a 230px viewport. Stacked above the
+  gutter it costs a line of vertical space instead, and the x title sits _outside_ the scroller so
+  it stays centred on what the reader can see rather than on the scrolled content. Both are
+  `aria-hidden`, like the tick strips, because the canvas `aria-label` is the textual equivalent and
+  a visible title in the accessible tree has a screen reader hear each axis named twice.
+  `e2e/envelope-axes.spec.ts` holds the geometry at 320px — the title above the canvas, the plot's
+  width accounted for by the tick gutter and the row gap alone — and it is red with the titles
+  deleted, checked. (#81.)
+
+- **One name per setting, and `USAGE_LABELS` is where it lives.** The same #81 fix found the Usage
+  sliders saying "Context per sequence" and "Concurrent users" while the Envelope's heading said
+  "context against concurrent users", its table caption said "context length" and its row-header
+  column said "Users" — two settings under four spellings, in one panel, with the field's own axes
+  naming neither. Same failure `kvLabel` exists to prevent, one level up, and the same shape the
+  "expect a subset of a class" rule predicts: the issue named the two missing titles, and three more
+  hand-written copies were live. Prose deliberately does not read from the constant — "Currently at
+  32K context and 1 user" is a sentence, not a label, and forcing a control's name into it produces
+  worse English than the drift it would prevent. (#81.)
+
 - **Simulating text zoom by setting the root font size is not text zoom, and a test built on it
   reports layouts nobody can reach.** Widening the reflow sweep to the `sm` and `lg` boundaries —
   640 and 1024 — produced six red tests and three plausible-looking layout bugs, all artifacts.

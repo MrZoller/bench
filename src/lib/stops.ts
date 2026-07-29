@@ -21,6 +21,31 @@ export const PROMPT_STOPS = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 1
 export const DEVICE_COUNT_STOPS = [1, 2, 4, 8] as const;
 
 /**
+ * What each usage setting is called, wherever it is named.
+ *
+ * The Usage sliders own these words, and the Envelope draws the same two settings as its axes — so
+ * its axis titles, its table's column header and its subhead read from here rather than restating
+ * them. They had already drifted three ways for one setting: the slider said "Concurrent users",
+ * the table header said "Users", and the heading said "concurrent users", with the field's y axis
+ * naming it nowhere at all (#81).
+ *
+ * Same reasoning as `kvLabel` below, one level up: two surfaces naming one setting differently is
+ * the failure this repo keeps hitting, and it is cheaper to remove than to remember. Keyed by the
+ * `Config` field each one sets, so a label and the value it names cannot come apart.
+ *
+ * Prose is not a label and does not read from here. "Currently at 32K context and 1 user" is a
+ * sentence about a cell; forcing a control's name into it would produce "Currently at 32K Context
+ * per sequence", which is worse English and not the drift this fixes.
+ */
+export const USAGE_LABELS = {
+  contextTokens: 'Context per sequence',
+  concurrency: 'Concurrent users',
+  promptTokens: 'Prompt length',
+  kvPrecision: 'KV precision',
+  deviceCount: 'Device count',
+} as const;
+
+/**
  * The cache precisions a control can offer, with the name to use when a runtime has none of
  * its own.
  */

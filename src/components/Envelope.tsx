@@ -8,7 +8,7 @@ import {
 import { getDevice, getModel } from '@/data/catalog';
 import { getQuant } from '@/data/quants';
 import { getRuntime } from '@/data/runtimes';
-import { CONCURRENCY_STOPS, contextStopsFor, withStored } from '@/lib/stops';
+import { CONCURRENCY_STOPS, USAGE_LABELS, contextStopsFor, withStored } from '@/lib/stops';
 import { colors, marks, withAlpha } from '@/design/tokens';
 import {
   CAPACITY_TIGHT,
@@ -106,6 +106,20 @@ const MIN_COLUMN_REM = 3.25;
  * trade against the viewport, not against the reader's own setting, and the two were conflated.
  */
 const AXIS_LABEL = 'text-[0.625rem]';
+
+/**
+ * An axis *title's* size and ink — deliberately not the tick labels' above.
+ *
+ * Both axes are powers of two in overlapping ranges, so before these titles existed the entire
+ * distinction between "128 users" and "128K tokens" was a `K` rendered in the smallest, faintest
+ * type on the surface. Putting the titles at that size and colour too would leave the whole meaning
+ * of the picture in the least legible ink available (#81); `text-xs` at `text-muted` is one step up
+ * on both, and still recessive against the legend and the heading beside it.
+ *
+ * In `rem`, for the reason recorded on `AXIS_LABEL`: this is text, and text that ignores the
+ * browser's size setting fails 1.4.4 the moment a reader changes it.
+ */
+const AXIS_TITLE = 'text-xs text-[var(--color-text-muted)]';
 
 export function Envelope({ config }: { config: Config }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -244,8 +258,11 @@ export function Envelope({ config }: { config: Config }) {
       <header className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <h2 id={headingId} className="text-sm font-semibold tracking-wide">
           How much room is left
+          {/* The pair, in the words the controls and the axis titles use. This said "context
+              against concurrent users" while the sliders said "Context per sequence" and the table
+              below said "Users" — three names for two settings, in one panel. */}
           <span className="ml-2 font-normal text-[var(--color-text-faint)]">
-            context against concurrent users
+            {USAGE_LABELS.contextTokens} against {USAGE_LABELS.concurrency}
           </span>
         </h2>
         <PanelCount count={counts.comfortable ?? 0} total={total}>
@@ -253,53 +270,92 @@ export function Envelope({ config }: { config: Config }) {
         </PanelCount>
       </header>
 
-      <div className="mt-4 flex gap-2">
+      <div className="mt-4">
         {/*
-          One track per row, so each label sits at its cell's centre. `justify-between` puts the
-          first and last at the extremes instead — which pushed "1" below the grid entirely and
-          left every other label straddling a boundary.
-        */}
-        <ol
-          aria-hidden="true"
-          className={`tabular grid h-48 ${AXIS_LABEL} text-[var(--color-text-faint)]`}
-          style={{ gridTemplateRows: `repeat(${grid.concurrencies.length}, 1fr)` }}
-        >
-          {[...grid.concurrencies].reverse().map((n) => (
-            <li key={n} className="flex items-center justify-end pr-1">
-              {n}
-            </li>
-          ))}
-        </ol>
+          The y title, stacked above the gutter rather than rotated beside it.
 
-        {/*
-          The plot and its axis scroll together as one unit rather than being squeezed.
+          Rotating it would be the conventional choice and is wrong here specifically: this is the
+          one surface on the page with no width to spare — `MIN_COLUMN_REM` sets a per-column floor
+          and the plot already scrolls sideways inside its own box at 320px — so a rotated title
+          buys a label with plot columns. Stacked, it costs one line of vertical space, which this
+          panel has.
 
-          Truncating the labels instead would undo the disambiguation they exist for — "131,072"
-          and "131,073" clipped to the same width are indistinguishable again, which is the bug
-          `uniqueLabels` was written to fix. An equal-width grid on a phone gives each column
-          about 25px, and an exact count needs roughly 50, so the columns get a floor and the
-          container scrolls when they do not fit. The canvas shares the floor so the cells stay
-          aligned with their headers.
+          The arrow is the point of it, not decoration. Rows are drawn bottom-up (see the paint
+          effect below), which is correct for an axis and the opposite of every other list on this
+          page: a reader who assumes top-to-bottom reads the default field as "128 users at 2K is
+          the comfortable one" when it is 1 user at 2K — close to the opposite claim. That
+          direction was stated only in a source comment until now (#81).
+
+          `aria-hidden`, like the tick labels either side of it, because the canvas `aria-label` is
+          this picture's textual equivalent and already names both quantities. Visible titles that
+          joined the accessible tree would have a screen reader hear the axes named twice.
         */}
-        <div className="min-w-0 flex-1 overflow-x-auto">
-          <div style={{ minWidth: `${grid.contexts.length * MIN_COLUMN_REM}rem` }}>
-            <canvas
-              ref={canvasRef}
-              role="img"
-              aria-label={describe(grid, counts, total, currentCell, contextLabels)}
-              className="h-48 w-full rounded"
-            />
-            <ol
-              aria-hidden="true"
-              className={`tabular mt-1 grid ${AXIS_LABEL} text-[var(--color-text-faint)]`}
-              style={{ gridTemplateColumns: `repeat(${grid.contexts.length}, 1fr)` }}
-            >
-              {grid.contexts.map((c, i) => (
-                <li key={c} className="text-center">
-                  {contextLabels[i]}
-                </li>
-              ))}
-            </ol>
+        <p aria-hidden="true" className={`${AXIS_TITLE} leading-tight`}>
+          {USAGE_LABELS.concurrency} ↑
+        </p>
+
+        <div className="mt-1 flex gap-2">
+          {/*
+            One track per row, so each label sits at its cell's centre. `justify-between` puts the
+            first and last at the extremes instead — which pushed "1" below the grid entirely and
+            left every other label straddling a boundary.
+          */}
+          <ol
+            aria-hidden="true"
+            className={`tabular grid h-48 ${AXIS_LABEL} text-[var(--color-text-faint)]`}
+            style={{ gridTemplateRows: `repeat(${grid.concurrencies.length}, 1fr)` }}
+          >
+            {[...grid.concurrencies].reverse().map((n) => (
+              <li key={n} className="flex items-center justify-end pr-1">
+                {n}
+              </li>
+            ))}
+          </ol>
+
+          <div className="min-w-0 flex-1">
+            {/*
+              The plot and its axis scroll together as one unit rather than being squeezed.
+
+              Truncating the labels instead would undo the disambiguation they exist for —
+              "131,072" and "131,073" clipped to the same width are indistinguishable again, which
+              is the bug `uniqueLabels` was written to fix. An equal-width grid on a phone gives
+              each column about 25px, and an exact count needs roughly 50, so the columns get a
+              floor and the container scrolls when they do not fit. The canvas shares the floor so
+              the cells stay aligned with their headers.
+            */}
+            <div className="overflow-x-auto">
+              <div style={{ minWidth: `${grid.contexts.length * MIN_COLUMN_REM}rem` }}>
+                <canvas
+                  ref={canvasRef}
+                  role="img"
+                  aria-label={describe(grid, counts, total, currentCell, contextLabels)}
+                  className="h-48 w-full rounded"
+                />
+                <ol
+                  aria-hidden="true"
+                  className={`tabular mt-1 grid ${AXIS_LABEL} text-[var(--color-text-faint)]`}
+                  style={{ gridTemplateColumns: `repeat(${grid.contexts.length}, 1fr)` }}
+                >
+                  {grid.contexts.map((c, i) => (
+                    <li key={c} className="text-center">
+                      {contextLabels[i]}
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            </div>
+
+            {/*
+              The x title, centred on the plot and *outside* its scroll container.
+
+              Inside, it would be centred on the scrolled content instead — which at 320px is
+              wider than the panel, so the title would sit half off-screen and its box would
+              extend past the panel edge. Outside, it stays centred on what the reader can see and
+              the scroller keeps clipping only the thing that is meant to scroll.
+            */}
+            <p aria-hidden="true" className={`mt-1 text-center ${AXIS_TITLE}`}>
+              {USAGE_LABELS.contextTokens}
+            </p>
           </div>
         </div>
       </div>
@@ -362,13 +418,17 @@ export function Envelope({ config }: { config: Config }) {
       {showTable && (
         <div className="mt-3 overflow-x-auto">
           <table className="w-full text-left text-sm">
+            {/* Both names read from the shared constant, like the axis titles on the picture. The
+                caption said "context length" and the column said "Users" — the same two settings
+                the sliders name, under two more spellings, on the surface that is the picture's
+                textual equivalent. */}
             <caption className="sr-only">
-              Feasibility by context length and concurrent users
+              Feasibility by {USAGE_LABELS.contextTokens} and {USAGE_LABELS.concurrency}
             </caption>
             <thead>
               <tr className="text-[var(--color-text-faint)]">
                 <th scope="col" className="py-1 pr-3 font-normal">
-                  Users
+                  {USAGE_LABELS.concurrency}
                 </th>
                 {grid.contexts.map((c, i) => (
                   <th key={c} scope="col" className="py-1 pr-3 text-right font-normal">

@@ -24,6 +24,7 @@ import {
   DEVICE_COUNT_STOPS,
   KV_PRECISIONS,
   PROMPT_STOPS,
+  USAGE_LABELS,
   contextStopsFor,
   kvLabel,
   withStored,
@@ -350,38 +351,42 @@ export function Bench() {
       <Envelope config={config} />
       <Matrix config={config} />
 
-      {/* Usage: the half of the question that is about you, not the hardware. */}
+      {/* Usage: the half of the question that is about you, not the hardware.
+
+          The labels come from `USAGE_LABELS` rather than being written here, because the Envelope
+          draws two of these settings as its axes and titles them with the same words. These are
+          still the controls that own the wording; they just no longer own the only copy of it. */}
       <section aria-label="Usage" className="panel grid gap-5 p-[min(1.25rem,5vw)] sm:grid-cols-2">
         <StopSlider
-          label="Context per sequence"
+          label={USAGE_LABELS.contextTokens}
           stops={contextStops}
           value={nearestStop(contextStops, config.contextTokens)}
           onChange={(v) => set('contextTokens', v)}
           format={tokens}
         />
         <StopSlider
-          label="Concurrent users"
+          label={USAGE_LABELS.concurrency}
           stops={concurrencyStops}
           value={nearestStop(concurrencyStops, config.concurrency)}
           onChange={(v) => set('concurrency', v)}
           format={(v) => String(v)}
         />
         <StopSlider
-          label="Prompt length"
+          label={USAGE_LABELS.promptTokens}
           stops={promptStops}
           value={nearestStop(promptStops, config.promptTokens)}
           onChange={(v) => set('promptTokens', v)}
           format={tokens}
         />
         <Segmented
-          label="KV precision"
+          label={USAGE_LABELS.kvPrecision}
           value={config.kvPrecision}
           onChange={(v) => set('kvPrecision', v)}
           options={kvOptions}
         />
         {shardable ? (
           <StopSlider
-            label="Device count"
+            label={USAGE_LABELS.deviceCount}
             stops={deviceCountStops}
             value={nearestStop(deviceCountStops, config.deviceCount)}
             onChange={(v) => set('deviceCount', v)}
