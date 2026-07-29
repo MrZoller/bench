@@ -581,14 +581,58 @@ reading the test that guards them.
   vocabulary is closed now (`full_attention`, `attention`, `sliding_attention`) and anything else
   throws.
 
-  **The family presents under four spellings and the issue named two**, so the guard covers all of
-  them: `full_attention_interval` plus `linear_*` with no per-layer array at all (Qwen3-Next),
-  `layer_types` (Granite 4), `hybrid_override_pattern` (Nemotron-H), and `attn_type_list`
-  (MiniMax-M1). The last is the one that has to _admit_ something — M2's list is all `1`, so M2
+  **The family presents under at least eight spellings, the issue named two, and the first draft of
+  the guard enumerated four and believed that was all of them.** Do not trust a count here. What the
+  guard matches, and why it is shaped that way:
+
+  | Spelling                                                         | Model                      | Matched by             |
+  | ---------------------------------------------------------------- | -------------------------- | ---------------------- |
+  | `full_attention_interval` + `linear_*`, no per-layer array       | Qwen3-Next-80B             | exact key + `^linear_` |
+  | `layer_types: ["mamba", ...]` + `mamba_d_*`                      | Granite 4.0-h-small        | vocabulary + `^mamba_` |
+  | `hybrid_override_pattern` + `mamba_state_dim` / `mamba_head_dim` | Nemotron-H, Nemotron-Nano  | exact key + `^mamba_`  |
+  | `attn_type_list` (per-layer `1`/`0`)                             | MiniMax-M1                 | per-entry test         |
+  | nested `linear_attn_config.full_attn_layers`                     | Kimi-Linear-48B            | `^linear_`             |
+  | `full_attn_idxs` + `conv_L_cache`, no per-layer array            | LFM2-1.2B, LFM2-350M       | exact keys             |
+  | `layer_types: ["conv", ...]`                                     | LFM2-2.6B, LFM2-8B-A1B     | vocabulary             |
+  | `mb_per_layer`                                                   | Phi-4-mini-flash-reasoning | exact key              |
+
+  **The lesson is that an enumerated list of exact key names is a list of the configs its author
+  happened to open.** The first draft listed thirteen and was already incomplete against configs
+  fetched the same afternoon: Granite declares `mamba_chunk_size` / `mamba_conv_bias` /
+  `mamba_proj_bias` beside the six that were on it, Nemotron-Nano spells the same block
+  `mamba_state_dim` / `mamba_head_dim` / `mamba_num_heads` and shares **no** exact name with
+  Granite's spelling, and Kimi-Linear puts its whole Kimi-Delta block inside one nested
+  `linear_attn_config` object where a flat lookup sees nothing at all — so Kimi derived as clean
+  27-layer MLA, 30.375 KiB/token against a true 7.875, 3.86x, on a model whose headline claim is a
+  75%-smaller KV cache. So the guard matches **key prefixes** (`^linear_`, `^mamba_`) plus the
+  handful of names that carry no generalisable prefix, and the prefixes are verified against all 17
+  seeds: none matches, so this rejects nothing already in the product.
+
+  `attn_type_list` is the one entry that has to _admit_ something — M2's list is all `1`, so M2
   really is full attention throughout and a guard keyed on the key's presence would have rejected
   the model that turned out not to be a hybrid. `layer_types` length is `!==` rather than `<` for the
   same reason the entries are: a longer array and `num_hidden_layers` disagree about the stack, and
-  slicing chose one silently.
+  slicing chose one silently. And the split-count clause fires only when the config states a
+  count _and_ the count is a genuine split: `full_attention_interval: 1` is legal and means every
+  layer attends, which otherwise produced "48 of 48 layers attend and cache; the other 0 hold a
+  recurrent state" — one sentence contradicting itself, the failure this file's own rule about
+  predicates and their prose exists to prevent.
+
+  **Chunked attention is a fourth window convention and needed its own guard, not a vocabulary
+  entry.** Leaving `chunked_attention` out of `LAYER_TYPES` does not refuse Llama 4: Scout and
+  Maverick ship no `layer_types` at all, so the vocabulary never runs and all 48 layers read as full
+  attention — 192.0 KiB/token, 24.0 GiB at 128K, against 7.125 for the real 12-global /
+  36-chunked-at-8192 split. 3.4x. **A closed vocabulary only fires for configs that use the key it is
+  a vocabulary for.** `attention_chunk_size` is now its own refusal. Note what is deliberately _not_
+  the signal: `cache_implementation: "hybrid"` is on `unsloth/gemma-3-12b-it` and `-27b-it`, two
+  shipped seeds whose windows derive correctly from `sliding_window_pattern`, so guarding on it would
+  have refused two rows that are already right — a fixture in the test file carries the key for
+  exactly that reason. And unlike the linear stacks, Llama 4's split _is_ derivable (`no_rope_layers`
+  is 48 entries of 1/0, one global layer every fourth); what is not derivable is how many tokens a
+  chunked layer's cache holds, because the mask is block-diagonal rather than trailing and residency
+  comes from the runtime's chunked-cache implementation. That is what [#77](https://github.com/MrZoller/bench/issues/77)
+  needs to settle before Scout can be seeded — the refusal is what makes that visible instead of
+  shipping a 3.4x row.
 
   **Refused rather than derived, deliberately, and this is the decision to reopen with new
   information.** Pricing a hybrid properly means a third `AttentionCore` kind carrying the per-layer
@@ -617,12 +661,28 @@ reading the test that guards them.
   here: Qwen3-Next, Granite 4 and V3.2-Exp each refuse with their own reason, and MiniMax-M2 is
   admitted at 228.7B.
 
+  **What is still not covered, so the next session does not have to re-derive it.** The refusals are
+  the floor, not the fix: no model in the table above can be _added_ until the third `AttentionCore`
+  kind exists. Llama 4 needs a chunked-attention window term. `attn_type_list`'s non-`1` values are
+  refused without being read, so a future list using `2` for something benign would cost a false
+  refusal. Nothing here reads `ssm_cfg`, the raw `state-spaces/mamba` spelling, because no live
+  config checked carried it — if one appears it will refuse only if it also carries a `mamba_*` key.
+  The list of spellings is open by construction; treat any claim that it is complete, including this
+  one, as unverified until re-probed against live `config.json` files.
+
   **And the reason all of this was untested is mechanical**: `build-catalog.ts` called `main()` at
   module scope, so importing it started seventeen rounds of network fetches and no test could reach a
   single derivation. It carries `catalog-diff.ts`'s guard now, and `scripts/build-catalog.test.ts`
   pins both the refusals and the five shapes the shipped catalog is actually built from — the second
   half mattering as much as the first, since a tightened vocabulary is exactly the kind of change
   that quietly rejects the models already in the product.
+
+  One thing the tests get wrong easily: a refusal test whose pattern is loose enough to match
+  `require()`'s "could not determine \<field\> from config.json" passes whether or not the guard
+  exists. The headline Qwen3-Next test shipped with `/could not|declares|refus/i` and would have
+  stayed green with `refuseLinearStack` deleted. Match the guard's own wording, and read the
+  before-figures out of what `deriveAttention` returns for the same fields with the hybrid keys
+  removed — arithmetic on literals beside a refusal is documentation, not a test.
 
 - **`activeParams` excludes the input embedding unconditionally, and that is the _published_
   convention, not the physical one.** It is what reconciles every derived figure with its

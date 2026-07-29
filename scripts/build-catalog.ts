@@ -203,44 +203,105 @@ type AttentionCore =
   | { kind: 'mla'; kvLoraRank: number; qkRopeHeadDim: number };
 
 /**
- * Config keys that say the layer stack is not attention all the way down.
+ * Config key *prefixes* that name a non-attention block's own dimensions.
  *
- * Each names a block whose state is **constant in sequence length** — a linear-attention or
- * state-space recurrence, not a cache that grows with context. There are only two families in this
- * script's vocabulary, GQA and MLA, and both charge every layer a growing cache; a stack that
- * mixes attention with these reads as a clean GQA hit and is billed for a cache most of its layers
- * never allocate. Qwen3-Next is 12 attention layers of 48 (4.0x over: 96.0 KiB/token derived
- * against 24.0 actual, which is 12.0 GiB against 3.0 at 128K context), Granite 4.0-h-small is 4 of
- * 40 (10x).
+ * A prefix rather than a list of exact names, because an enumerated list is a list of the configs
+ * its author happened to open. Thirteen exact names read off four configs already missed three
+ * shipping models: Granite declares `mamba_chunk_size`, `mamba_conv_bias` and `mamba_proj_bias`
+ * beside the six that got listed, Nemotron-Nano spells the same block `mamba_state_dim` /
+ * `mamba_head_dim` / `mamba_num_heads` and shares *no* exact name with Granite's spelling, and
+ * Kimi-Linear puts its entire linear-attention block inside a single nested `linear_attn_config`
+ * object, so a flat name lookup saw nothing at all and the model derived as 27-layer MLA at 3.86x
+ * over. The suffixes are per-architecture and move; the prefix is the part that holds. A block
+ * configured under `linear_*` or `mamba_*` is a recurrence whose state is **constant in sequence
+ * length**, whatever comes after the underscore.
  *
- * Listed by config key rather than by architecture, because `architectures` is a transformers
- * class name that moves and these keys are what the block itself is configured from:
+ * Verified against all 17 seeds: none carries a key matching either prefix, so this rejects nothing
+ * already in the product.
+ */
+const LINEAR_STACK_PREFIXES = [/^linear_/, /^mamba_/];
+
+/**
+ * The same statement, in the spellings whose key names carry no prefix worth generalising.
+ *
+ * There are only two attention families in this script's vocabulary, GQA and MLA, and both charge
+ * every layer a growing cache; a stack that mixes attention with a recurrence reads as a clean hit
+ * and is billed for a cache most of its layers never allocate. Qwen3-Next is 12 attention layers of
+ * 48 (4.0x over: 96.0 KiB/token derived against 24.0 actual, 12.0 GiB against 3.0 at 128K context),
+ * Granite 4.0-h-small 4 of 40 (10x), Kimi-Linear 7 of 27 (3.86x), LFM2-1.2B 6 of 16 (2.67x).
+ *
+ * Listed by config key rather than by architecture, because `architectures` is a transformers class
+ * name that moves and these keys are what the block itself is configured from:
  *
  *   - `full_attention_interval` — Qwen3-Next: one attention layer every N, gated DeltaNet between.
- *   - `linear_*` — the DeltaNet block's own shape. Present without any per-layer array at all,
- *     which is why this axis is guarded separately from `layer_types`.
- *   - `mamba_*` — a Mamba-2 block (Granite 4, Nemotron-H, Bamba). Some exports declare it
- *     *alongside* `layer_types` and some *instead of* it, so again: both axes.
- *   - `hybrid_override_pattern` — Nemotron-H's per-layer `M`/`*`/`-` string, a third spelling.
+ *   - `full_attn_idxs` — LFM2: the attending layers by index, short convolutions on the rest.
+ *     Present in the 1.2B and 350M exports, which carry no `layer_types` at all, while the 2.6B and
+ *     8B-A1B exports of the *same architecture* spell it `layer_types: ["conv", ...]`. One export
+ *     refusing and another silently mis-pricing is why both axes are guarded rather than one.
+ *   - `conv_L_cache` — LFM2 again: the short-conv state length, which is a state and not a cache.
+ *   - `hybrid_override_pattern` — Nemotron-H's per-layer `M`/`*`/`-` string.
+ *   - `mb_per_layer` — Phi-4-mini-flash-reasoning (SambaY): Mamba blocks interleaved by index, in a
+ *     32-layer stack that otherwise derives as clean GQA with `sliding_window: 512` throughout. The
+ *     exact split is in the modelling code rather than the config, which is a reason to refuse.
  *
  * A key here that a future config uses to mean something else costs one loud refusal and a one-line
  * fix, which is the direction this file has chosen to fail in everywhere else too.
  */
 const LINEAR_STACK_KEYS = [
   'full_attention_interval',
-  'linear_num_key_heads',
-  'linear_num_value_heads',
-  'linear_key_head_dim',
-  'linear_value_head_dim',
-  'linear_conv_kernel_dim',
-  'mamba_d_state',
-  'mamba_d_conv',
-  'mamba_d_head',
-  'mamba_n_heads',
-  'mamba_n_groups',
-  'mamba_expand',
+  'full_attn_idxs',
+  'conv_L_cache',
   'hybrid_override_pattern',
+  'mb_per_layer',
 ];
+
+/**
+ * Every key in this config that says the stack is not attention all the way down, sorted.
+ *
+ * Sorted rather than in config order so the refusal reads the same whoever exported the JSON —
+ * `Object.keys` follows insertion order, and the message is something tests and humans both quote.
+ */
+function linearStackKeys(config: HfConfig): string[] {
+  return Object.keys(config)
+    .filter((key) => config[key] !== undefined && config[key] !== null)
+    .filter(
+      (key) => LINEAR_STACK_KEYS.includes(key) || LINEAR_STACK_PREFIXES.some((p) => p.test(key))
+    )
+    .sort();
+}
+
+/**
+ * How many layers actually attend, where the config states it outright.
+ *
+ * Half the value of refusing is that the next person does not have to re-derive the split, so where
+ * it is in `config.json` the refusal counts the layers rather than merely naming a key — the
+ * difference between "this looks unusual" and "36 of these 48 layers were about to be charged for a
+ * cache they do not have". Three spellings state it; the rest only imply a hybrid, and an implied
+ * one gets a refusal without a count rather than a count that was guessed.
+ */
+function statedAttendingLayers(
+  config: HfConfig,
+  layers: number
+): { count: number; from: string } | undefined {
+  const interval = num(config, 'full_attention_interval');
+  if (interval !== undefined && interval > 0) {
+    return { count: Math.floor(layers / interval), from: 'full_attention_interval' };
+  }
+
+  const idxs = config.full_attn_idxs;
+  if (Array.isArray(idxs)) return { count: idxs.length, from: 'full_attn_idxs' };
+
+  // Kimi-Linear: the same array, one level down inside the block's own config object.
+  const linearAttn = config.linear_attn_config;
+  if (linearAttn !== null && typeof linearAttn === 'object') {
+    const full = (linearAttn as HfConfig).full_attn_layers;
+    if (Array.isArray(full)) {
+      return { count: full.length, from: 'linear_attn_config.full_attn_layers' };
+    }
+  }
+
+  return undefined;
+}
 
 /**
  * Refuses a model whose layers do not all cache keys and values.
@@ -250,35 +311,36 @@ const LINEAR_STACK_KEYS = [
  * needs a third `AttentionCore` kind carrying the per-layer split *and* the constant state term,
  * and only the first half is in `config.json` — the state's shape is specific to the block
  * (DeltaNet's `num_v_heads * head_k_dim * head_v_dim` plus its conv window; Mamba-2's
- * `n_heads * d_head * d_state` plus its own) and its width is set by the runtime rather than by
- * `torch_dtype`. Deriving the split and inventing the term would put a made-up number inside the
- * fix for a made-up number.
+ * `n_heads * d_head * d_state` plus its own; Kimi-Delta's `num_heads * head_dim` plus a
+ * `short_conv_kernel_size` window) and its width is set by the runtime rather than by `torch_dtype`.
+ * Deriving the split and inventing the term would put a made-up number inside the fix for a made-up
+ * number.
  *
  * So the error carries the evidence instead: how many layers cache, how many do not, and which key
  * said so. A catalog with a gap and a loud reason is worth more than one with a confident 4x error.
  */
 function refuseLinearStack(id: string, config: HfConfig, layers: number): void {
-  const declared = LINEAR_STACK_KEYS.filter(
-    (key) => config[key] !== undefined && config[key] !== null
-  );
+  const declared = linearStackKeys(config);
 
   if (declared.length > 0) {
-    // Qwen3-Next states the split outright, so where it does, the refusal counts the layers rather
-    // than merely naming a key — the difference between "this looks unusual" and "36 of these 48
-    // layers were about to be charged for a cache they do not have".
-    const interval = num(config, 'full_attention_interval');
-    const attending = interval !== undefined && interval > 0 ? Math.floor(layers / interval) : 0;
-    const split = attending
-      ? ` ${attending} of ${layers} layers attend and cache; the other ${layers - attending} hold a ` +
-        'recurrent state that does not grow with context.'
-      : '';
+    // Counted only when the config states it *and* the count is a genuine split. An interval of 1 is
+    // legal and means every layer attends, which would otherwise produce "48 of 48 layers attend
+    // and cache; the other 0 hold a recurrent state" — a sentence whose two clauses disagree, which
+    // is the failure this file's own rule about predicates and their prose exists to prevent.
+    const stated = statedAttendingLayers(config, layers);
+    const split =
+      stated !== undefined && stated.count > 0 && stated.count < layers
+        ? ` ${stated.from} states the split: ${stated.count} of ${layers} layers attend and cache; ` +
+          `the other ${layers - stated.count} hold a recurrent state that does not grow with context.`
+        : '';
 
     throw new DerivationError(
-      `${id}: declares ${declared.join(', ')}, so some of its ${layers} layers are linear or ` +
-        `state-space rather than attention.${split} The GQA branch would charge every layer a ` +
-        'full KV cache — 4.0x over for a 12-of-48 split, 10x for 4-of-40. Refusing rather than ' +
-        'deriving: this needs a third attention family carrying the per-layer split and the ' +
-        "block's constant state term, and the state term is not in config.json."
+      `${id}: declares ${declared.join(', ')} — a block whose state is constant in sequence ` +
+        `length, so this script cannot assume all ${layers} layers cache keys and values.${split} ` +
+        'The GQA and MLA branches charge every layer a growing cache: 4.0x over for Qwen3-Next ' +
+        "at 12 of 48, 10x for Granite 4.0-h-small at 4 of 40, 3.86x for Kimi-Linear's 7 of 27. " +
+        'Refusing rather than deriving: this needs a third attention family carrying the per-layer ' +
+        "split and the block's constant state term, and the state term is not in config.json."
     );
   }
 
@@ -399,6 +461,11 @@ export function deriveAttention(
  *
  * `full_attention` and `sliding_attention` are transformers' own names; `attention` is what the
  * hybrid exports call the attention layers of a stack that has others.
+ *
+ * `chunked_attention` is deliberately absent, so a config that names it refuses — but note that is
+ * not how Llama 4 is caught. Scout and Maverick ship no `layer_types` at all; their guard is
+ * `attention_chunk_size` in {@link deriveLayerWindows}. A vocabulary only fires for configs that
+ * use the key it is a vocabulary for.
  */
 const LAYER_TYPES: Record<string, 'full' | 'sliding'> = {
   full_attention: 'full',
@@ -409,7 +476,8 @@ const LAYER_TYPES: Record<string, 'full' | 'sliding'> = {
 /**
  * Per-layer attention window, or undefined when every layer attends over the full context.
  *
- * Three conventions in the wild, in order of precedence:
+ * Four conventions in the wild, in order of precedence:
+ *   - `attention_chunk_size` — Llama 4's chunked attention, which is refused rather than priced
  *   - `layer_types` — an explicit per-layer array (gpt-oss, recent transformers exports)
  *   - `sliding_window_pattern` — Gemma 3's "every Nth layer is full attention"
  *   - a bare `sliding_window` — applies to every layer (Mistral-style), unless switched off
@@ -421,6 +489,40 @@ export function deriveLayerWindows(
 ): (number | null)[] | undefined {
   const window = num(config, 'sliding_window');
   const layerTypes = config.layer_types;
+
+  /**
+   * Chunked (block-local) attention, which is a fourth window convention and the one this script
+   * has no term for at all.
+   *
+   * Llama 4 states it as `attention_chunk_size` and nothing else: Scout's `text_config` carries no
+   * `layer_types`, so every guard below misses and all 48 layers read as full attention — 192.0
+   * KiB/token, 24.0 GiB at 128K, against 7.125 GiB for its real 12-global / 36-chunked-at-8192
+   * stack.
+   * 3.4x, in the direction that tells someone to buy another GPU. Maverick is the same shape.
+   *
+   * Refused rather than derived, and the reason is narrower than for the linear stacks: the split
+   * *is* derivable — `no_rope_layers` is 48 entries of 1/0, one global layer every fourth — but how
+   * many tokens a chunked layer's cache holds is not. Chunked attention is not a sliding window
+   * re-spelled: the mask is block-diagonal rather than trailing, and residency is set by the
+   * runtime's chunked-cache implementation rather than by this key. Reusing `sliding_window`'s term
+   * for it would be a guess wearing a derivation's clothes.
+   *
+   * Note what is deliberately *not* the signal: `cache_implementation: "hybrid"` sits on
+   * unsloth/gemma-3-12b-it and -27b-it, two shipped seeds whose windows derive correctly from
+   * `sliding_window_pattern`. Guarding on it would have refused two rows that are already right.
+   */
+  const chunk = num(config, 'attention_chunk_size');
+  if (chunk !== undefined) {
+    throw new DerivationError(
+      `${id}: declares attention_chunk_size ${chunk} — chunked attention on some layers and full ` +
+        `attention on others, with no layer_types to say which. Reading all ${layers} layers as ` +
+        'full attention overstates KV by the whole ratio of the split: Llama 4 Scout derives ' +
+        '192.0 KiB/token, 24.0 GiB at 128K context, against 7.125 GiB for its real 12-global / ' +
+        '36-chunked-at-8192 stack. The split is in no_rope_layers, but how much a chunked layer ' +
+        'keeps is not in config.json, and it is not a sliding window of attention_chunk_size — ' +
+        'the mask is block-diagonal, not trailing. Give it a term of its own.'
+    );
+  }
 
   if (Array.isArray(layerTypes)) {
     // All three of these silently read as full attention downstream — an absent array entry, an
