@@ -563,6 +563,67 @@ reading the test that guards them.
 - **Multi-Token Prediction modules inflate reported totals** (DeepSeek V3/R1 by ~13B, GLM-4.5-Air
   by ~4B) and inference never loads them. Detected via `num_nextn_predict_layers` and _refused_,
   not estimated; the seed list carries the published figure with a written reason.
+- **There is a third attention family in the wild, and the generator refuses it rather than
+  flattening it into GQA** ([#76](https://github.com/MrZoller/bench/issues/76)). `deriveAttention`
+  knew two, and any model whose layer stack mixes attention with linear or state-space layers fell
+  through to the GQA branch and was catalogued as if _every_ layer cached keys and values.
+  Qwen3-Next-80B is 12 attention layers of 48, so it derived at 96.0 KiB/token against a true 24.0 —
+  12.0 GiB against 3.0 at 128K, the README's own failure mode pointed the other way.
+  granite-4.0-h-small is 4 of 40, which is 10x.
+
+  **Two guards looked like they would catch it and did not**, which is the part worth keeping.
+  Qwen3-Next carries `num_attention_heads`, `num_key_value_heads` and `head_dim` exactly where GQA
+  expects them, so the branch reads as a clean hit with no signal that 36 layers were just charged
+  for a cache they never allocate. And `deriveLayerWindows` _did_ refuse a `layer_types` array it
+  could not trust — but its filter was `t.includes('sliding')`, so Granite's all-`mamba` array
+  matched nothing, `sliding.length === 0` returned `undefined`, and every layer read as full
+  attention. **An unrecognised layer type is the same defect as a missing one, one axis over**; the
+  vocabulary is closed now (`full_attention`, `attention`, `sliding_attention`) and anything else
+  throws.
+
+  **The family presents under four spellings and the issue named two**, so the guard covers all of
+  them: `full_attention_interval` plus `linear_*` with no per-layer array at all (Qwen3-Next),
+  `layer_types` (Granite 4), `hybrid_override_pattern` (Nemotron-H), and `attn_type_list`
+  (MiniMax-M1). The last is the one that has to _admit_ something — M2's list is all `1`, so M2
+  really is full attention throughout and a guard keyed on the key's presence would have rejected
+  the model that turned out not to be a hybrid. `layer_types` length is `!==` rather than `<` for the
+  same reason the entries are: a longer array and `num_hidden_layers` disagree about the stack, and
+  slicing chose one silently.
+
+  **Refused rather than derived, deliberately, and this is the decision to reopen with new
+  information.** Pricing a hybrid properly means a third `AttentionCore` kind carrying the per-layer
+  split _and_ the block's constant state term, which `kv.ts` would dispatch on the way it already
+  dispatches MLA. Only the first half is in `config.json`: the state's shape is specific to the block
+  (DeltaNet's `num_v_heads * head_k_dim * head_v_dim` plus its conv window, Mamba-2's
+  `n_heads * d_head * d_state` plus its own) and its width is set by the runtime rather than by
+  `torch_dtype` — llama.cpp keeps recurrent state in fp32. Adding the field and filling it with a
+  plausible figure would put an invented number inside the fix for an invented number, and a field is
+  an invitation: that is exactly how `measuredBandwidthGBs` came to exist. So the error carries the
+  evidence instead — which layers cache, which do not, and the key that said so — and adding one of
+  these models is a real piece of work rather than a seed-list edit.
+
+  **DeepSeek V3.2-Exp is refused on the same doctrine and a different quantity.** Its capacity
+  derives correctly through the existing MLA path; what is wrong is that the lightning indexer keeps
+  an `index_n_heads * index_head_dim` cache nothing here counts, and its main attention reads at most
+  `index_topk` selected positions rather than everything before it. Right about the latent and
+  silently short by the indexer is not a smaller version of deriving both.
+
+  **The refusal also has to be _reached_, and it was not.** `deriveStackShape` ran first, and
+  Qwen3-Next ships an MTP module under an `mtp.` prefix — so seeded, it was refused for 1,553
+  unclassified tensors instead: a true statement about a different problem, pointing whoever read it
+  at `LANGUAGE_PREFIXES` rather than at the layer split. Both derivations read `config.json` alone
+  and now run before anything that touches the network again, which also saves a dozen range
+  requests on a model that was never going to be admitted. Verified by seeding all four models named
+  here: Qwen3-Next, Granite 4 and V3.2-Exp each refuse with their own reason, and MiniMax-M2 is
+  admitted at 228.7B.
+
+  **And the reason all of this was untested is mechanical**: `build-catalog.ts` called `main()` at
+  module scope, so importing it started seventeen rounds of network fetches and no test could reach a
+  single derivation. It carries `catalog-diff.ts`'s guard now, and `scripts/build-catalog.test.ts`
+  pins both the refusals and the five shapes the shipped catalog is actually built from — the second
+  half mattering as much as the first, since a tightened vocabulary is exactly the kind of change
+  that quietly rejects the models already in the product.
+
 - **`activeParams` excludes the input embedding unconditionally, and that is the _published_
   convention, not the physical one.** It is what reconciles every derived figure with its
   vendor's, and it is the wrong basis for decode. The engine reads `activeDenseParams`:
