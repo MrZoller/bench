@@ -10,7 +10,7 @@ import { Workloads } from './Workloads';
 import { Envelope } from './Envelope';
 import { DETAIL_ANCHOR_ID, Matrix } from './Matrix';
 import { Segmented, Select, StopSlider } from './Controls';
-import { compact, gibLabel, params, percent, sentences, tokens } from '@/lib/format';
+import { compact, params, percent, sentences, tokens } from '@/lib/format';
 import {
   canShard,
   maxAllocatablePerDevice,
@@ -28,8 +28,10 @@ import {
   SETTING_NOTES,
   contextStopsFor,
   deviceCountNote,
+  deviceOptionLabel,
   devicePickerNote,
   kvLabel,
+  runtimeOptionLabel,
   withStored,
 } from '@/lib/stops';
 
@@ -193,8 +195,18 @@ export function Bench() {
   );
 
   /**
-   * Status warning, then the tunable ceiling, then — behind a disclosure — whatever the curator
-   * wrote. All three used to be one string joined on a bare space, which is two separate problems
+   * The label a reader scans, then the status warning, then the tunable ceiling, then — behind a
+   * disclosure — whatever the curator wrote.
+   *
+   * **The pre-release marker is in the label, because that is the string the browser renders for a
+   * row nobody has selected yet** (#69). Everything below this paragraph is about the note, and the
+   * note is only ever the selected option's: the rumoured M5 Ultra's "specs may change" existed, was
+   * correct, and was unreachable until after the machine had been chosen — one line above the 512 GB
+   * M3 Ultra, which is real hardware with measured bandwidth, in a list that presented the two as
+   * equals. `deviceOptionLabel` composes both halves so the marker and the sentence cannot come to
+   * name different rows.
+   *
+   * The last three used to be one string joined on a bare space, which is two separate problems
    * in one line of code (#68).
    *
    * **The punctuation.** Neither generated clause ended in a full stop, so nine rows read
@@ -223,7 +235,7 @@ export function Bench() {
         const { claim, detail } = devicePickerNote(d, maxAllocatablePerDevice(d));
         return {
           value: d.id,
-          label: `${d.name} — ${gibLabel(d.capacityBytes)}`,
+          label: deviceOptionLabel(d),
           note: claim,
           detail,
         };
@@ -255,32 +267,47 @@ export function Bench() {
    * two copies of one claim come to disagree. MLX would also be the wrong place to say it — it
    * declares `layer` because the field is required, and no Apple machine in the catalog has an
    * interconnect, so it never divides anything.
+   *
+   * **And the refusal is also on the label**, which is the Hardware picker's fix applied to the
+   * picker that shares its component (#69). A note is the *selected* option's, so on a Mac Studio
+   * this list offered llama.cpp, vLLM and MLX as three equals and "Does not run on Mac Studio M3
+   * Ultra (256 GB)." arrived only once vLLM had been chosen and every tile on the page had turned to
+   * "Unsupported" — a fact needed in order to choose, delivered as a consequence of choosing.
+   * `runtimeOptionLabel` carries the short form into the list; the sentence here still names the
+   * machine, because that is what a screen-reader user hears on the control itself.
+   *
+   * `drives` is computed once and read by both, rather than `runtimeDrives` being called twice for
+   * one option. Two copies of one predicate deciding a label and a description is how a control comes
+   * to be marked and then explain the opposite.
    */
   const runtimeOptions = useMemo(
     () =>
-      RUNTIMES.map((r) => ({
-        value: r.id,
-        label: r.label,
-        note: !runtimeDrives(r, device)
-          ? `Does not run on ${device.name}.`
-          : sentences(
-              /* "every weight" was wrong in a configuration two clicks away. BF16 is a real format
-                 here — MLX coerces to it — and there is nothing to dequantize when the checkpoint is
-                 already FP16-or-wider, so the claim was false for the one selection where it is
-                 easiest to check. `nativeLowPrecision` describes what the runtime does with a
-                 *quantized* checkpoint, which is what the sentence now says. Left as a capability
-                 rather than derived from `config.quant`: this is an option list, and each note
-                 describes the runtime a reader has not selected yet. */
-              r.nativeLowPrecision
-                ? 'Sends low-precision weights straight to the tensor cores.'
-                : 'Dequantizes a quantized checkpoint to FP16 before the matmul, so a card’s low-precision peak is out of reach.',
-              // Truthiness, not `!== undefined`: a runtime that preallocates nothing has nothing to
-              // say here, and "Reserves 0% of the device up front" is a sentence about no reservation.
-              r.preallocFraction
-                ? `Reserves ${Math.round(r.preallocFraction * 100)}% of the device up front.`
-                : undefined
-            ),
-      })),
+      RUNTIMES.map((r) => {
+        const drives = runtimeDrives(r, device);
+        return {
+          value: r.id,
+          label: runtimeOptionLabel(r, drives),
+          note: !drives
+            ? `Does not run on ${device.name}.`
+            : sentences(
+                /* "every weight" was wrong in a configuration two clicks away. BF16 is a real format
+                   here — MLX coerces to it — and there is nothing to dequantize when the checkpoint is
+                   already FP16-or-wider, so the claim was false for the one selection where it is
+                   easiest to check. `nativeLowPrecision` describes what the runtime does with a
+                   *quantized* checkpoint, which is what the sentence now says. Left as a capability
+                   rather than derived from `config.quant`: this is an option list, and each note
+                   describes the runtime a reader has not selected yet. */
+                r.nativeLowPrecision
+                  ? 'Sends low-precision weights straight to the tensor cores.'
+                  : 'Dequantizes a quantized checkpoint to FP16 before the matmul, so a card’s low-precision peak is out of reach.',
+                // Truthiness, not `!== undefined`: a runtime that preallocates nothing has nothing to
+                // say here, and "Reserves 0% of the device up front" is a sentence about no reservation.
+                r.preallocFraction
+                  ? `Reserves ${Math.round(r.preallocFraction * 100)}% of the device up front.`
+                  : undefined
+              ),
+        };
+      }),
     [device]
   );
 

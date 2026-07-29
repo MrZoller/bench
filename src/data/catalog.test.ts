@@ -17,7 +17,7 @@ import { evaluate } from '@/engine';
 import { LLAMA_CPP, GPT_OSS_120B, DEEPSEEK_V3, QWEN3_32B } from '@/engine/fixtures';
 import { GIB } from '@/engine/types';
 import { maxAllocatablePerDevice, raisingCeilingWouldHelp } from '@/engine/placement';
-import { devicePickerNote } from '@/lib/stops';
+import { deviceOptionLabel, devicePickerNote } from '@/lib/stops';
 
 describe('device catalog', () => {
   it('covers all three hardware classes', () => {
@@ -1078,5 +1078,91 @@ describe('the Hardware picker states a claim, not the catalog', () => {
         `${device.id}: its note is a paragraph of its own and does not end a sentence`
       ).toMatch(/[.!?…][»”’"')\]]?$/);
     }
+  });
+
+  /**
+   * And the half of it a reader reaches *before* choosing, which the note structurally cannot be
+   * (#69).
+   *
+   * `Select` renders every option's label and only the selected option's note, so "Rumoured — specs
+   * may change." was a true sentence about a machine nobody could yet have chosen to be told about.
+   * The two strings are composed from one `PRE_RELEASE_WORDS` table for exactly this reason, and what
+   * is swept here is that they name the same rows: a marker on a shipping row is a false alarm, and a
+   * shipping-looking label on a rumoured one is #69 back again.
+   *
+   * Driven off `status` rather than off a list of ids, because the row that matters is the row added
+   * next. Nothing in the catalog is `announced` today — `toDevice` accepts it, `PRE_RELEASE_WORDS`
+   * has a word for it, and the first such row joins this sweep rather than slipping through it.
+   */
+  describe('the pre-release marker in the option a reader is scanning', () => {
+    /** The words the app is allowed to use for a status that is not `shipping`, as a reader sees them. */
+    const MARKER = /\s·\s(rumoured|announced)$/;
+
+    const preRelease = DEVICES.filter((d) => d.status !== 'shipping');
+
+    it('has a pre-release row to mark, or this sweep proves nothing', () => {
+      // The M5 Ultra today. `docs/ROADMAP.md` records it as press-rumour grade and says it must stay
+      // labelled while it is in the catalog; if it ever ships or leaves, the sweep below goes vacuous
+      // rather than wrong, and that is worth being told about. Not pinned to the id — a row added
+      // with a non-shipping status should join this, not fail it.
+      expect(
+        preRelease.map((d) => d.id),
+        'no row is rumoured or announced'
+      ).not.toEqual([]);
+    });
+
+    it.each(DEVICES.map((d) => [d.id, d] as const))(
+      '%s carries a marker exactly when its specs are not final',
+      (id, device) => {
+        const label = deviceOptionLabel(device);
+        const { claim } = devicePickerNote(device, maxAllocatablePerDevice(device));
+
+        // The label is still the label. A marker is an addition to what a row is chosen on, and
+        // `MARKER` anchors to the end of the string, so both figures stay in front of it.
+        expect(label, `${id} lost its name`).toContain(device.name);
+        expect(label, `${id} lost its capacity`).toMatch(/\d+(\.\d)? GiB/);
+
+        if (device.status === 'shipping') {
+          expect(label, `${id} ships, so a caveat here is a false alarm`).not.toMatch(MARKER);
+          expect(claim ?? '', `${id} ships and its note warns about specs`).not.toMatch(
+            /specs may change/
+          );
+          return;
+        }
+
+        expect(label, `${id} is ${device.status} and reads as shipping hardware`).toMatch(MARKER);
+        // And the note still carries the sentence, in the register prose is written in. The marker is
+        // a tag on a row being scanned; this is the clause for the row that was chosen, and the fix
+        // for #69 is not to move it.
+        expect(claim ?? '', `${id} is ${device.status} and its note says nothing about it`).toMatch(
+          /^(Rumoured|Announced) — specs may change\./
+        );
+        // The same word, so the two surfaces cannot come to disagree about what the status is called.
+        expect(claim!.toLowerCase()).toContain(MARKER.exec(label)![1]);
+      }
+    );
+
+    /**
+     * The other pre-release status, which no row in the catalog can reach.
+     *
+     * `announced` is in `DeviceStatus`, `toDevice` accepts it and `PRE_RELEASE_WORDS` has a word for
+     * it — and every committed row is either shipping or rumoured, so the branch would otherwise ship
+     * untested. Same reasoning as `toDevice`'s own guards being exercised from a synthetic row: proving
+     * a status is labelled means building one that is.
+     *
+     * The synthetic row is a real device with its status changed, so the label around the marker is a
+     * label the catalog actually produces.
+     */
+    it('labels an announced row too, not only the rumoured one that exists', () => {
+      const announced = { ...getDevice('mac-studio-m3-ultra-512'), status: 'announced' as const };
+
+      expect(deviceOptionLabel(announced)).toMatch(/ · announced$/);
+      expect(deviceOptionLabel(announced)).toContain('Mac Studio M3 Ultra (512 GB) — 512 GiB');
+      // And not the other word, which is the failure a ternary over `status` would have produced.
+      expect(deviceOptionLabel(announced)).not.toMatch(/rumoured/);
+      expect(devicePickerNote(announced, maxAllocatablePerDevice(announced)).claim).toMatch(
+        /^Announced — specs may change\. /
+      );
+    });
   });
 });

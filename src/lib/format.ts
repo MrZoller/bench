@@ -178,3 +178,36 @@ export function sentences(...fragments: (string | false | null | undefined)[]): 
     )
     .join(' ');
 }
+
+/**
+ * An `<option>`'s own text, plus any caveat a reader needs *before* the choice rather than after it.
+ *
+ * The sibling of `sentences` above, for the other half of what a picker says — and it exists because
+ * a `Select` renders only the **selected** option's note. A warning that lives there is unreachable
+ * until the choice it was meant to inform has already been made: the rumoured Mac Studio's
+ * "Rumoured — specs may change." sat one line under the control and appeared only once someone had
+ * picked the machine, so in the open list it was indistinguishable from real hardware with real
+ * measured bandwidth (#69). An `<option>` renders no children, so its text is the only place a
+ * marker can go.
+ *
+ * ` · ` rather than a comma, a bracket or a dash, because the labels this is appended to have spent
+ * all three: "Mac Studio M5 Ultra (512 GB) — 512 GiB" is a parenthetical, an em dash and a unit
+ * already, and a fourth kind of separator is what keeps the marker from reading as part of the spec.
+ *
+ * Variadic and falsy-tolerant like `sentences`, for the same two reasons: a call site composes
+ * conditions instead of nesting ternaries, and a row that earns a second marker does not need a
+ * second joiner written somewhere else.
+ *
+ * **Markers are short and lower case, and that is a rule about where they are.** They are not
+ * sentences — `sentences` is for the note, which is prose. This is a tag inside a line of tabular
+ * label text, and a full stop in the middle of one reads as the end of the option.
+ */
+export function optionLabel(
+  label: string,
+  ...markers: (string | false | null | undefined)[]
+): string {
+  const present = markers
+    .filter((m): m is string => typeof m === 'string' && m.trim() !== '')
+    .map((m) => m.trim());
+  return [label, ...present].join(' · ');
+}
