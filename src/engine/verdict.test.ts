@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { judgeWorkloads, WORKLOADS, WORKLOAD_BARS, type VerdictInputs } from './verdict';
+import {
+  judgeWorkloads,
+  WORKLOADS,
+  WORKLOAD_BARS,
+  type Fitness,
+  type VerdictInputs,
+} from './verdict';
 import { evaluate } from './index';
 import type { Placement } from './placement';
 import {
@@ -88,13 +94,28 @@ interface VerdictRig {
   promptTokens?: number;
 }
 
+/**
+ * The three grades as an order — and an ungraded row is not in it.
+ *
+ * Every "A never outranks B" assertion below is a question about two *graded* rows. `unmeasured` is
+ * the absence of a grade rather than a fourth rung (#75), so it has no rank, and a lookup table with
+ * a number for it would have silently sorted an ungraded row above or below a real failure. Four
+ * copies of `{ good: 2, tight: 1, fail: 0 }` are one function now, and it throws rather than
+ * returning `undefined` — an `undefined` on either side of `toBeLessThanOrEqual` passes.
+ */
+const RANK: Record<Exclude<Fitness, 'unmeasured'>, number> = { good: 2, tight: 1, fail: 0 };
+const rankOf = (fitness: Fitness) => {
+  if (fitness === 'unmeasured') throw new Error('an ungraded verdict has no rank to compare');
+  return RANK[fitness];
+};
+
 describe('workload verdicts', () => {
   it('grades every archetype, every time', () => {
     const verdicts = judge(LLAMA_31_8B, 'q4_k_m', { device: RTX_5090 });
     expect(verdicts.size).toBe(WORKLOADS.length);
     for (const verdict of verdicts.values()) {
       expect(verdict.reason).not.toBe('');
-      expect(['good', 'tight', 'fail']).toContain(verdict.fitness);
+      expect(['good', 'tight', 'fail', 'unmeasured']).toContain(verdict.fitness);
     }
   });
 
@@ -119,13 +140,11 @@ describe('workload verdicts', () => {
    * coding agent, which does everything chat does over a far bigger one.
    */
   it('grades each archetype at its own prompt length, not the slider', () => {
-    const rank = { good: 2, tight: 1, fail: 0 };
-
     // A Spark prefills slowly. Whatever the slider says, an agent can never outrank chat.
     for (const promptTokens of [512, 8192, 65536]) {
       const verdicts = judge(GPT_OSS_20B, 'mxfp4', { device: DGX_SPARK, promptTokens });
-      expect(rank[verdicts.get('agent')!.fitness]).toBeLessThanOrEqual(
-        rank[verdicts.get('chat')!.fitness]
+      expect(rankOf(verdicts.get('agent')!.fitness)).toBeLessThanOrEqual(
+        rankOf(verdicts.get('chat')!.fitness)
       );
     }
   });
@@ -168,11 +187,10 @@ describe('workload verdicts', () => {
   ])(
     'never grades completion above chat on %s, at a concurrency both fit',
     (_label, model, quant, device) => {
-      const rank = { good: 2, tight: 1, fail: 0 };
       const verdicts = judge(model, quant, { device });
 
-      const completion = rank[verdicts.get('completion')!.fitness];
-      const chat = rank[verdicts.get('chat')!.fitness];
+      const completion = rankOf(verdicts.get('completion')!.fitness);
+      const chat = rankOf(verdicts.get('chat')!.fitness);
       expect(completion).toBeLessThanOrEqual(chat);
     }
   );
@@ -226,9 +244,8 @@ describe('workload verdicts', () => {
     const alone = judge(LLAMA_31_8B, 'q4_k_m', { device: RTX_5090, concurrency: 1 });
     const crowded = judge(LLAMA_31_8B, 'q4_k_m', { device: RTX_5090, concurrency: 32 });
 
-    const rank = { good: 2, tight: 1, fail: 0 };
-    expect(rank[crowded.get('long-context')!.fitness]).toBeLessThanOrEqual(
-      rank[alone.get('long-context')!.fitness]
+    expect(rankOf(crowded.get('long-context')!.fitness)).toBeLessThanOrEqual(
+      rankOf(alone.get('long-context')!.fitness)
     );
   });
 
@@ -236,6 +253,105 @@ describe('workload verdicts', () => {
     const verdicts = judge(LLAMA_31_8B, 'q4_k_m', { device: RTX_5090, concurrency: 1 });
     expect(verdicts.get('serving')?.reason).toMatch(/concurrency above 1/i);
   });
+});
+
+/**
+ * A workload that was not evaluated is not a workload that failed (#75).
+ *
+ * Serving is the one archetype whose defining parameter comes from the slider: every other one
+ * declares the prompt it really sends and is graded at its own scenario, but concurrency *is* the
+ * content of "multi-user", and at one user the question has not been asked. It was answered `fail`
+ * anyway — the same state, and in the UI the same `--color-critical`, as "31s to read a 32K document
+ * before answering", which is a measured, attributable, hardware-fixable refusal.
+ */
+describe('an archetype the scenario never exercises is not graded', () => {
+  it('leaves multi-user serving ungraded at one user, on a machine that would serve several', () => {
+    // An 8B at Q4_K_M on a 5090 serves four users comfortably — see the `concurrency: 4` case
+    // below, which is the same rig with the slider moved. Nothing about the machine changed
+    // between them, so `fail` at one user was reporting the reader's slider position as a hardware
+    // limit.
+    const verdicts = judge(LLAMA_31_8B, 'q4_k_m', { device: RTX_5090, concurrency: 1 });
+    const serving = verdicts.get('serving')!;
+
+    expect(serving.fitness).toBe('unmeasured');
+    expect(serving.fitness).not.toBe('fail');
+    // Still says what to do about it, and now says what it is first.
+    expect(serving.reason).toMatch(/^Not measured at 1 user\b/);
+    expect(serving.reason).toMatch(/concurrency above 1/i);
+  });
+
+  it('grades it the moment the scenario has several users in it', () => {
+    // The precondition for the case above: this is not a row that is ungraded for ever, and the
+    // fourth state is not a way of never answering the question.
+    const serving = judge(LLAMA_31_8B, 'q4_k_m', { device: RTX_5090, concurrency: 4 }).get(
+      'serving'
+    )!;
+
+    expect(serving.fitness).not.toBe('unmeasured');
+    expect(serving.fitness).toBe('good');
+  });
+
+  it('is the only archetype that can go ungraded', () => {
+    // Every other row is graded at its own declared prompt, so the slider cannot leave one of them
+    // unanswered. A second ungraded archetype means an archetype stopped declaring its scenario.
+    for (const concurrency of [1, 2, 8, 128]) {
+      const verdicts = judge(LLAMA_31_8B, 'q4_k_m', { device: RTX_5090, concurrency });
+      const ungraded = [...verdicts.values()]
+        .filter((v) => v.fitness === 'unmeasured')
+        .map((v) => v.workload.id);
+
+      expect(ungraded).toEqual(concurrency === 1 ? ['serving'] : []);
+    }
+  });
+
+  /**
+   * The ungraded state must not swallow an answer the scenario already gives.
+   *
+   * A rig with nowhere to put one 2K turn has nowhere to put two of them, so serving is refused at
+   * any concurrency and that refusal is measured — which is why `servingNotTried` is guarded by the
+   * fit and why the shortfall branch is first. Reversing the two would report "not measured" for a
+   * machine that cannot serve one user, at every concurrency the UI can produce.
+   */
+  it('still fails serving at one user when its own turn has nowhere to live', () => {
+    const verdicts = new Map(
+      judgeWorkloads({
+        selectedPlacement: RESIDENT,
+        usage: { contextTokens: 512, concurrency: 1, promptTokens: 512, kvPrecision: 'fp16' },
+        maxContextTokens: 600,
+        runnableContextTokens: 600, // Short of the 2.5K one served turn needs.
+        evaluateAt: () => ({ placement: RESIDENT, ...STUB_SPEED }),
+      }).map((v) => [v.workload.id, v])
+    );
+    const serving = verdicts.get('serving')!;
+
+    expect(serving.fitness).toBe('fail');
+    expect(serving.reason).toMatch(/needs 2\.5K with room to answer in/);
+    // "a turn each for 1 users" — the one shortfall sentence reachable at a single user, and the
+    // only place in the file that had to agree with itself about the plural.
+    expect(serving.reason).toMatch(/for 1 user\b/);
+  });
+
+  /**
+   * And the collapse the panel does when nothing runs has to keep working, because it is what stops
+   * seven copies of one sentence reading as seven separate problems. It fires only when every row
+   * carries the same reason, so a row that is ungraded — with a reason all its own — must not appear
+   * on that path at any concurrency.
+   */
+  it.each([1, 4])(
+    'grades every row identically when nothing runs, at %s user(s)',
+    (concurrency) => {
+      const verdicts = judge(GPT_OSS_20B, 'mxfp4', {
+        device: RTX_5090,
+        runtime: MLX, // Apple-only, on an NVIDIA card.
+        concurrency,
+      });
+
+      for (const verdict of verdicts.values()) {
+        expect(verdict.fitness).toBe('fail');
+      }
+      expect(new Set([...verdicts.values()].map((v) => v.reason)).size).toBe(1);
+    }
+  );
 });
 
 /**
@@ -562,8 +678,7 @@ describe('a verdict counts the whole request, not half of it', () => {
     const many = judge(DEEPSEEK_V3, 'q8_0', { device: EPYC_9654, concurrency: 32 }).get('batch')!;
 
     // A prompt-bound job does not improve its grade by adding workers.
-    const rank = { good: 2, tight: 1, fail: 0 };
-    expect(rank[many.fitness]).toBeLessThanOrEqual(rank[one.fitness]);
+    expect(rankOf(many.fitness)).toBeLessThanOrEqual(rankOf(one.fitness));
   });
 
   it('will not recommend long-context analysis a machine can hold but not perform', () => {

@@ -19,7 +19,25 @@ import type { Placement } from './placement';
  * deciding whether to spend money.
  */
 
-export type Fitness = 'good' | 'tight' | 'fail';
+/**
+ * Three grades and one non-grade.
+ *
+ * `good`, `tight` and `fail` are judgements — this setup does the thing well, marginally, or not at
+ * all — and they are the vocabulary every surface renders with a reserved status colour. `unmeasured`
+ * is the *absence* of a judgement: the configuration on screen does not exercise the archetype, so
+ * nothing was measured and nothing is being claimed either way.
+ *
+ * It exists because `fail` was doing both jobs, and the strongest negative in a vocabulary cannot
+ * mean two things (#75). Multi-user serving at one concurrent user read `○ No` in critical red — the
+ * same token as "Will not run" — on a Spark that would serve several users perfectly well, purely
+ * because nobody had touched the slider. The row above it, `RAG / document Q&A — No — 31s to read a
+ * 32K document`, is a real failure: measured, attributable, and fixable by changing hardware. The two
+ * rendered identically.
+ *
+ * The consequence a consumer has to decide deliberately: an ungraded row belongs in *neither* side
+ * of a "N of M workloads" count, because it is not evidence in either direction. See `Workloads.tsx`.
+ */
+export type Fitness = 'good' | 'tight' | 'fail' | 'unmeasured';
 
 /**
  * Room a workload needs for its answer, on top of its prompt.
@@ -299,6 +317,11 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
   // Nothing else is meaningful if it cannot load. Said once, rather than seven times. Every
   // archetype evaluates at a context no smaller than the selected one, so nothing that fails
   // here could succeed at its own scenario.
+  //
+  // `fail` for all seven, including serving at one user: a model that does not load has been
+  // measured against every archetype, and this is the one path that gives all seven the same
+  // sentence — which is what lets the panel say it once above the list instead of seven times. An
+  // ungraded row here would break that collapse and claim the question is still open when it is not.
   if (selectedPlacement.unsupported || selectedPlacement.impossible) {
     const reason =
       selectedPlacement.unsupported ?? 'The model does not fit and cannot spill to host RAM.';
@@ -449,6 +472,26 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
    * estimate is not free, and the reason to keep this lazy is unchanged.
    */
   const servingTtft = () => ttftOf('serving');
+
+  /**
+   * The one archetype whose defining parameter comes from the slider rather than from itself — and
+   * the scenario where that parameter says the question was never asked.
+   *
+   * Every other archetype declares the prompt it really sends, so it is graded at its own scenario
+   * whatever the sliders say. Concurrency is not declarable that way: it is the whole content of
+   * "multi-user", and one user is a scenario in which multi-user serving simply has not been tried.
+   * Graded, it read `○ No` in critical red with a sentence telling the reader to move a slider —
+   * the strongest negative in the vocabulary standing in for "you have not configured this yet",
+   * beside rows where it means "this machine cannot do it" (#75).
+   *
+   * The `fits` conjunct is what keeps the ungraded state from swallowing a real answer, and it is the
+   * same boundary the sentence below leads with: a rig that cannot hold one 2K turn cannot hold two
+   * of them either, so that failure is measured at any concurrency and stays `fail`. One expression,
+   * read by the tier and by its reason, because this file's history is a list of the times a
+   * condition and the sentence explaining it were written down twice.
+   */
+  const servingNotTried = fits('serving') && usage.concurrency < BARS.serving.tight.users;
+
   const ragPrefill = at('rag').prefill;
   const ragFits = fits('rag');
 
@@ -808,6 +851,10 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
       // seconds of queue is what a served user is actually buying. Ten seconds is the edge of
       // comfortable, thirty is the edge of tolerable, and minutes is a broken deployment however
       // fast it decodes once it starts.
+      //
+      // And at one user none of that is measured, which is a different statement from failing it.
+      // See `servingNotTried`.
+      unmeasured: servingNotTried,
       pass:
         fits('serving') &&
         usage.concurrency >= BARS.serving.good.users &&
@@ -821,9 +868,21 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
         servingTtft() <= BARS.serving.tight.ttft,
       why: () =>
         !fits('serving')
-          ? shortfall('serving', `a turn each for ${usage.concurrency} users`)
-          : usage.concurrency < BARS.serving.tight.users
-            ? `Set concurrency above ${BARS.serving.tight.users - 1} to see whether this holds several users.`
+          ? // `user`/`users` rather than a bare plural, because this is the one shortfall sentence
+            // reachable at a single user: it is precisely the branch that runs *instead* of the
+            // ungraded one, since `servingNotTried` requires the fit. It read "a turn each for
+            // 1 users".
+            shortfall(
+              'serving',
+              `a turn each for ${usage.concurrency} ${usage.concurrency === 1 ? 'user' : 'users'}`
+            )
+          : servingNotTried
+            ? // States the absence before the instruction. The row's status word already says "Not
+              // measured"; a reason that opened on "Set concurrency…" was the only sentence in this
+              // file that named no measurement at all, which is exactly right for a row that has
+              // none — but it has to say so, because read on its own it is indistinguishable from
+              // advice attached to a failure.
+              `Not measured at ${usage.concurrency} ${usage.concurrency === 1 ? 'user' : 'users'} — set concurrency above ${BARS.serving.tight.users - 1} to see whether this holds several.`
             : rateOf('serving') < BARS.serving.tight.rate
               ? `${fmt(rateOf('serving'))} tok/s each once ${usage.concurrency} users share the device.`
               : servingTtft() > BARS.serving.tight.ttft
@@ -858,11 +917,35 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
 
 function judge(
   id: string,
-  { pass, tight, why }: { pass: boolean; tight: boolean; why: () => string }
+  {
+    pass,
+    tight,
+    unmeasured,
+    why,
+  }: {
+    pass: boolean;
+    tight: boolean;
+    /**
+     * The scenario does not exercise this archetype, so it is not graded at all. Optional, and
+     * declared by exactly one tier — see `serving`.
+     */
+    unmeasured?: boolean;
+    why: () => string;
+  }
 ): WorkloadVerdict {
   return {
     workload: workload(id),
-    fitness: pass ? 'good' : tight ? 'tight' : 'fail',
+    /**
+     * Ungraded wins over graded, and the order is the claim rather than a convenience: a scenario
+     * that was never tried cannot be a pass. For the one tier that declares it the two are disjoint
+     * by construction — serving is unmeasured below two users and cannot reach `tight` below two —
+     * so this only decides what happens if a later tier makes them overlap.
+     *
+     * What a tier must *not* do is declare `unmeasured` for a scenario that already answers the
+     * question. Serving guards its flag with `fits('serving')` for that reason: a rig with nowhere
+     * to put one 2K turn has nowhere to put four of them, and that failure is measured.
+     */
+    fitness: unmeasured ? 'unmeasured' : pass ? 'good' : tight ? 'tight' : 'fail',
     reason: why(),
   };
 }

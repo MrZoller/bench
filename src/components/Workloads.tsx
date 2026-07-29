@@ -24,6 +24,24 @@ const FITNESS: Record<Fitness, { icon: string; word: string; color: string }> = 
   good: { icon: '●', word: 'Yes', color: 'var(--color-good)' },
   tight: { icon: '◐', word: 'Tight', color: 'var(--color-warning)' },
   fail: { icon: '○', word: 'No', color: 'var(--color-critical)' },
+  /**
+   * Not a fourth grade — the absence of one, and styled to say so (#75).
+   *
+   * The three above are a status scale with reserved colour tokens: full, half, empty, and `fail`
+   * shares `--color-critical` with Telemetry's "Will not run". This state is not on that scale, so it
+   * takes an ink token rather than a status hue. A neutral row wearing the strongest negative in the
+   * vocabulary made that colour mean two different things — "this machine cannot do it" and "you have
+   * not configured this yet" — and the second one is a prompt to move a slider, not a verdict.
+   *
+   * `--color-text-faint` is the recessive ink, 5.10:1 on the panel surface, which clears the 4.5:1 a
+   * 12px status word needs; the status tokens are reserved for states that are actually graded.
+   *
+   * The glyph leaves the circle family on purpose. `○` is the *bottom* of that ordered set, and a row
+   * that was never measured does not sit at the bottom of an ordering it is not in — a dash reads as
+   * "no reading", the same convention Telemetry's `value: '—'` already uses for a figure it cannot
+   * report. And it is `aria-hidden` below, like the other three: the word beside it is the grading.
+   */
+  unmeasured: { icon: '–', word: 'Not measured', color: 'var(--color-text-faint)' },
 };
 
 export function Workloads({ evaluation, config }: { evaluation: Evaluation; config: Config }) {
@@ -71,12 +89,33 @@ export function Workloads({ evaluation, config }: { evaluation: Evaluation; conf
     [evaluation, config]
   );
 
-  const usable = verdicts.filter((v) => v.fitness !== 'fail').length;
+  /**
+   * The headline counts what was graded — both sides of the fraction.
+   *
+   * `usable` was `fitness !== 'fail'` over all seven rows, so an *ungraded* row was subtracted
+   * exactly as a failing one was: at the default concurrency of 1 this panel read "5 of 7 workloads"
+   * on a Spark that would serve several users perfectly well, because nobody had touched the slider
+   * (#75). And that is the first number most visitors read here, at the setting they arrive on.
+   *
+   * A row that was not measured is not evidence in either direction, so it leaves the numerator and
+   * the denominator together — "5 of 6", with the seventh row still on screen saying what it is
+   * waiting for. Dropping it from the numerator alone would report the same understatement; keeping
+   * it in both would count it as a pass, which is the opposite lie.
+   */
+  const graded = verdicts.filter((v) => v.fitness !== 'unmeasured');
+  const usable = graded.filter((v) => v.fitness !== 'fail').length;
 
   /**
    * When nothing can run, every row carries the same sentence — so it is said once, above the
    * list, and the rows keep only their status. Seven identical explanations read as seven
    * separate problems.
+   *
+   * `every` over *all* the verdicts rather than over `graded`, now that a row can be ungraded, and
+   * the difference is load-bearing: this collapse blanks each row's own reason, so folding an
+   * ungraded row into it would delete the one sentence saying what that row is waiting for. Only
+   * `judgeWorkloads`' top-level refusal gives seven rows one sentence, and it grades all seven
+   * `fail` — so an `unmeasured` row in the list is itself proof the rows are not all saying the same
+   * thing, and it blocks the collapse rather than being swallowed by it.
    */
   const sharedReason =
     verdicts.every((v) => v.fitness === 'fail') && new Set(verdicts.map((v) => v.reason)).size === 1
@@ -89,7 +128,7 @@ export function Workloads({ evaluation, config }: { evaluation: Evaluation; conf
         <h2 id={headingId} className="text-sm font-semibold tracking-wide">
           What you could do with it
         </h2>
-        <PanelCount count={usable} total={verdicts.length}>
+        <PanelCount count={usable} total={graded.length}>
           workloads
         </PanelCount>
       </header>

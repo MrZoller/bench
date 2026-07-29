@@ -145,6 +145,38 @@ for (const [name, size] of [
     });
 
     /**
+     * The status track is a *fixed* 9rem, and every status word has to fit inside it (#75).
+     *
+     * The three original words were "Yes", "Tight" and "No"; the ungraded state added "Not measured",
+     * which is roughly three times the widest of them. A fixed track does not grow for its content,
+     * and the cell is `whitespace-nowrap` — so a word too long for 9rem does not wrap and does not
+     * push the label column across, it simply paints over the label beside it. Every alignment
+     * assertion in this file keeps passing while the two columns overlap, because the *boxes* are
+     * still where they should be.
+     *
+     * jsdom cannot answer it — no layout engine, so the glyph width is 0 there and the comparison is
+     * a tautology — which is what puts a text-fits check in this directory rather than in Vitest. The
+     * precondition is asserted first: the default scenario is one concurrent user, so the seventh row
+     * really is the long word, and without that this measures three short ones against 144px.
+     */
+    test('every status word fits inside the fixed status column', async ({ page }) => {
+      const measured = await rows(page);
+
+      expect(
+        measured.some((row) => row.cells[0].text.includes('Not measured')),
+        'no row is ungraded at the default scenario, so the longest status word is not on screen'
+      ).toBe(true);
+
+      for (const row of measured) {
+        const status = row.cells[0];
+        expect(
+          status.textWidth,
+          `the status word "${status.text}" is ${Math.round(status.textWidth)}px in a ${Math.round(status.width)}px column, so it paints over the label`
+        ).toBeLessThanOrEqual(status.width);
+      }
+    });
+
+    /**
      * And that the columns align because they are columns, not because the row collapsed into one.
      *
      * A single stacked column satisfies every equality above — all three cells would start at the
