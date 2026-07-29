@@ -407,8 +407,21 @@ describe('every mark drawn over another is named in a legend', () => {
 
     const key = within(envelope()).getByText('You are here').closest('li');
     expect(key).not.toBeNull();
-    // In the legend itself, beside the state keys, rather than as a caption of its own somewhere.
-    expect(key?.parentElement).toBe(within(envelope()).getByText('Comfortable').closest('ul'));
+    /*
+     * In the legend itself, beside the other keys, rather than as a caption of its own somewhere.
+     * Anchored on the ramp's key rather than on a state's since #65: the field is coloured by a
+     * magnitude now, so the ramp is what the neighbouring *keys* key, and "Comfortable" is a line of
+     * prose in the same list rather than a swatch.
+     *
+     * On the ramp key's own clause rather than on either end label, because the ends are per-measure
+     * ("less room", "slower", "quicker to start") and this test is about where a key sits, not about
+     * which measure is in force.
+     */
+    expect(key?.parentElement).toBe(
+      within(envelope())
+        .getByText(/graded against the others on this grid/)
+        .closest('ul')
+    );
   });
 
   /**
@@ -3540,9 +3553,17 @@ describe('the controls that drive every figure explain what they are', () => {
     const group = screen.getByRole('group', { name: /colour the grid by/i });
     expect(description(group)).toMatch(/headroom left/i);
 
-    // It tracks the selection, which is what makes it this group's description rather than a static
-    // caption: each measure means something different by a bright cell.
-    await user.click(screen.getByRole('button', { name: 'How fast' }));
+    /**
+     * It tracks the selection, which is what makes it this group's description rather than a static
+     * caption: each measure means something different by a bright cell.
+     *
+     * Scoped to the group since #65 gave the Envelope a measure control of its own, reading the same
+     * `MEASURES`. A page-wide `getByRole('button', { name: 'How fast' })` then finds two and throws —
+     * and the failure is a real one about the query rather than about either control, because "the
+     * grid" in this test's name is the Matrix and the Envelope's switch answers for a different
+     * picture. Both surfaces having the toggle is the point of sharing the vocabulary.
+     */
+    await user.click(within(group).getByRole('button', { name: 'How fast' }));
     expect(description(group)).toMatch(/tokens per second/i);
   });
 });

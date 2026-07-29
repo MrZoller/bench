@@ -10,8 +10,8 @@ import { DEVICES, MODELS, getDevice, getModel } from '@/data/catalog';
 import { getQuant } from '@/data/quants';
 import { getRuntime, kvSubstitutionFor, runtimeDrives, substitutionFor } from '@/data/runtimes';
 import { FALLBACK_QUANT_ID, quantApplies } from '@/lib/quantChoice';
-import { sequential } from '@/design/tokens';
-import { kvLabel } from '@/lib/stops';
+import { magnitudeFill, magnitudeRamp } from '@/design/tokens';
+import { MEASURES, kvLabel } from '@/lib/stops';
 import { PanelCount } from './PanelCount';
 import { params, percent, rate, seconds, tokens } from '@/lib/format';
 import { useConfig, type Config } from '@/store/config';
@@ -25,21 +25,6 @@ import { useConfig, type Config } from '@/store/config';
  * hardware looks good, which is the capacity/bandwidth/compute triangle made concrete rather
  * than asserted in prose.
  */
-
-const MEASURES: readonly { value: MatrixMeasure; label: string; hint: string }[] = [
-  { value: 'fit', label: 'Does it fit', hint: 'Headroom left after weights, cache and overhead.' },
-  { value: 'decode', label: 'How fast', hint: 'Tokens per second for one user.' },
-  { value: 'ttft', label: 'How responsive', hint: 'Time until the first token appears.' },
-];
-
-/**
- * The sequential ramp, reversed.
- *
- * `sequential` runs light to dark for a light surface. On this chassis the darkest step is the
- * one that recedes into the panel, so higher values have to be *brighter* — otherwise the best
- * cells are the ones you cannot see.
- */
-const RAMP = [...sequential].reverse();
 
 /**
  * What a row is evaluated at when the selected format does not apply to it, in preference order.
@@ -812,7 +797,7 @@ export function Matrix({ config }: { config: Config }) {
         <span className="flex min-w-[min(12rem,100%)] flex-1 items-center gap-2">
           <span>worse</span>
           <span aria-hidden="true" className="flex h-3 flex-1 overflow-hidden rounded-sm">
-            {RAMP.map((step) => (
+            {magnitudeRamp.map((step) => (
               <span key={step} className="flex-1" style={{ background: step }} />
             ))}
           </span>
@@ -985,16 +970,12 @@ function fill(cell: MatrixCell, measure: MatrixMeasure, max: number): string {
   if (value === undefined || max <= 0) return 'transparent';
 
   /**
-   * Log-scaled, because these ranges span orders of magnitude: decode runs from ~2 tok/s on a
-   * CPU host to ~300 on a B200, and a linear ramp spends every step but the last on the top
-   * device while the whole rest of the grid sits in one indistinguishable dark band. The
-   * comparison people need is "is this twice as fast", not "what fraction of the best is it".
+   * Floored at zero rather than at the grid's own worst cell, which is the right domain *here* and
+   * the wrong one on the Envelope — see `magnitudeFill`. This grid spans a desktop CPU to a B200,
+   * so its bottom really is near nothing, and a cell's step therefore says how it compares to the
+   * best available rather than only to its neighbours in the same range.
    */
-  const index = Math.min(
-    RAMP.length - 1,
-    Math.floor((Math.log1p(value) / Math.log1p(max)) * RAMP.length)
-  );
-  return RAMP[index];
+  return magnitudeFill(value, { min: 0, max });
 }
 
 /**
