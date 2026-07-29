@@ -8,6 +8,12 @@ name: Catalog refresh
 # its own comment about: a wrong architecture figure silently costs someone a GPU. A model
 # whose KV heads changed overnight is exactly the case a human should look at, and it is
 # indistinguishable — to this job — from a Hugging Face outage returning plausible nonsense.
+#
+# What it cannot do is notice a model that was never seeded: it re-derives the rows it is given, so
+# the *figures* stay current while the *list* ages, which is exactly what happened (#77 — a year
+# behind the field with every number in it seven days old). So the regeneration step now ends by
+# printing seed candidates: what the hub is downloading that the seed list neither carries nor has
+# written down a reason for. That is a report for a human, not a gate — it never fails the run.
 on:
   schedule:
     # Monday 06:17 UTC. Off the hour deliberately: GitHub queues scheduled jobs hardest at
@@ -144,6 +150,12 @@ jobs:
           look plausible but whether the *source* moved for a reason. A changed `layers` or
           `attention` means the publisher edited the architecture; a changed `totalParams` against
           an unchanged revision means something is wrong upstream.
+
+          The **Regenerate from Hugging Face** step ends with a list of seed candidates: models the
+          hub is downloading that the seed list neither carries nor has a written reason for in
+          `NOT_SEEDED`. Nothing about re-deriving figures can detect an absence, so that list is the
+          only thing standing between this job running weekly and the catalog quietly ageing anyway.
+          Each line is either a new seed or a line saying why not.
 
           `npm run lint`, `npm run format:check`, `npm test` and `npm run build` all passed against
           this catalog inside the refresh job. They ran there rather than here because a push made

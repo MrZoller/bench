@@ -2411,42 +2411,21 @@ describe('a figure derived from a stand-in format says so', () => {
   });
 
   /**
-   * The all-blocked grid, which is the state gating the legend on `runs` hid it in.
+   * The all-blocked grid — the state that gating the legend on `runs` hid it in — is pinned in
+   * `src/components/Matrix.test.tsx` rather than here.
    *
-   * At the longest context and the most users, every Apple cell under MLX fails placement, so a
-   * scan for a *running* substituted cell finds nothing — while the grid goes on publishing a
-   * verdict for every cell and, on some of them, "past the default allocation, which this machine
-   * lets you raise". Every one of those rests on Q4_K_M's 4.85 bpw standing in for MLX's ~4.5,
-   * and since the stand-in is the heavier of the two, a borderline "past the default" is the
-   * verdict most likely to flip. The mark is least dispensable exactly where it was dropped.
+   * It was an App-level test driving the controls to the longest context and the most users, where
+   * every Apple cell under MLX failed placement. Its precondition was asserted rather than assumed,
+   * with a comment saying that a catalog change leaving one cell running would make it vacuous, and
+   * #77 is that change: `unsloth/gemma-3-4b-it` keeps a 1024-token window on 29 of its 34 layers, so
+   * it fits 128 users at 131K on the 512 GiB Mac Studio with room to spare. One running cell is
+   * enough for a `runs`-gated legend to render too, and no setting blocks it — context, concurrency
+   * and KV precision are already at their heaviest stops.
+   *
+   * So the scenario moved to where it can be *built*: one 671B row, mocked in, and no dependence on
+   * what the catalog happens to contain. The test above still covers the app-level wiring of the
+   * same marker.
    */
-  it('marks the Matrix when every cell was scored at a stand-in and none of them fit', async () => {
-    const user = userEvent.setup();
-    render(<App />);
-
-    const matrix = () => screen.getByRole('region', { name: /every model on every machine/i });
-    const legend = () => within(matrix()).queryByText(/stand-in format .* cannot load/i);
-
-    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
-    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
-    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
-
-    const context = screen.getByLabelText('Context per sequence') as HTMLInputElement;
-    fireEvent.change(context, { target: { value: String(Number(context.max)) } });
-    const users = screen.getByLabelText('Concurrent users') as HTMLInputElement;
-    fireEvent.change(users, { target: { value: String(Number(users.max)) } });
-
-    // Nothing on the grid runs — the precondition, asserted rather than assumed, since a catalog
-    // change that leaves one cell running would make the rest of this test vacuous.
-    expect(
-      within(matrix()).getByText(
-        (_, el) =>
-          el?.tagName === 'CAPTION' && /\b0 of \d+ combinations run/.test(el.textContent ?? '')
-      )
-    ).toBeInTheDocument();
-
-    expect(legend()).toBeInTheDocument();
-  });
 });
 
 /**

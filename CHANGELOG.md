@@ -15,6 +15,28 @@ bug, and on the one accessibility axis with no spec behind it.
 
 ### Added
 
+- **The model catalog covers the field again: 17 rows to 35, and a mechanism so it stays that way**
+  ([#77](https://github.com/MrZoller/bench/issues/77)). `SEEDS` was hand-reviewed once, when the
+  catalog was built, and never again — so the weekly refresh kept every _figure_ seven days old while
+  the _list_ fell a year behind, and its newest entry was GLM-4.5-Air. Added: the top of the range
+  (Kimi K2 at 1.03T, the first 1T-class row), the 480B class a 512 GB Mac is bought for (Qwen3 Coder
+  480B-A35B), MLA at sizes people own hardware for (GLM 4.7 Flash at 30B-A3B, Mistral Small 4 119B,
+  where the family was previously 671B models only), six publishers with no row at all (Microsoft,
+  IBM, Cohere, ByteDance, MiniMax, Moonshot), the current head of six families whose stale sibling was
+  the only one a user could pick (Llama 3.3 70B, Qwen3 4B/30B-A3B/235B-A22B 2507, DeepSeek V3.1, GLM
+  4.7), and four rows under 4.5B where the small end had exactly one. And because no amount of
+  re-deriving figures can notice a model that was never listed, every refresh now ends by asking the
+  hub what the field is downloading and printing whatever the seed list neither carries nor has
+  written down a reason for.
+- **`NOT_SEEDED`: why the most-downloaded model in the world is not in the catalog**
+  ([#77](https://github.com/MrZoller/bench/issues/77)). Nine families are refused rather than
+  catalogued wrong, and until now that decision lived in a session transcript. It is data now — repo
+  id to reason, checked against the live `config.json` — which is both the written record and what
+  keeps the weekly candidate report from naming the same nine every Monday. The headline is that
+  hybrid linear attention is no longer an exotic corner: the entire current Qwen generation is 8 to 16
+  attending layers out of 32 to 64, so the most-downloaded current models on the hub cannot be priced
+  until the third `AttentionCore` kind from #76 exists.
+
 - **The hardware catalog covers the machines the audience owns: 25 rows to 43**
   ([#78](https://github.com/MrZoller/bench/issues/78)). The accuracy work had been thorough and the
   coverage had not. The cheapest catalogued GPU was the RTX 5080 at $999, AMD appeared only as
@@ -30,6 +52,32 @@ bug, and on the one accessibility axis with no spec behind it.
   headline figure each worked example starts from.
 
 ### Fixed
+
+- **Three architectures the generator would have catalogued at 2x, 13x and a constant**
+  ([#77](https://github.com/MrZoller/bench/issues/77)). Each reads as an ordinary config by every
+  guard #76 added, and each is a current, high-traffic model. Gemma 4 declares `attention_k_eq_v` —
+  keys and values are one tensor, so the `2 *` in the GQA term is exactly twice what the stack holds —
+  and gives its global layers a second KV shape (4 heads x 512 against the windowed layers' 16 x 256),
+  while the E-series shares the cache of 18 of its 42 layers. NVIDIA's Nemotron Super states its
+  layers one at a time in `block_configs`, 31 of 80 with no attention at all, _and_
+  `num_key_value_heads: null` because the grouping is per block — together 2560 KiB/token against 196,
+  which is 320 GiB of imaginary cache at 128K. And DeepSeek V4 carries the same sparse-attention
+  indexer V3.2-Exp is refused for, on a config with no `kv_lora_rank`, so it took the GQA branch where
+  that guard was never asked — deriving a 128-token trailing window on every layer of a
+  million-token-context model, a cache that does not grow at all. All three are refused with the
+  evidence; the indexer guard now runs in front of both branches rather than inside one.
+- **A safetensors index stored in LFS read as three lines of pointer text**
+  ([#77](https://github.com/MrZoller/bench/issues/77)). `fetchTensorMap` used `/raw/`, which answers
+  200 with `version https://git-lfs.github.com/spec/v1` for anything large — and a trillion-parameter
+  model's index is large: Kimi K2's is 12 MB of 105,000 tensors. `JSON.parse` then failed on the
+  letter `v`, indistinguishably from a corrupt repo, for precisely the models whose size is the whole
+  question. It reads through `/resolve/` now, as the shard reads always did.
+- **A dense model with zeroed MoE keys derived a NaN active-parameter count**
+  ([#77](https://github.com/MrZoller/bench/issues/77)). `granite-4.0-micro` states
+  `num_local_experts: 0` and `num_experts_per_tok: 0`, which satisfies the partial-config guard and
+  then computes `(0 / 0) * 0`. `JSON.stringify` writes that into the committed catalog as `null`, and
+  the loader checks `activeDenseParams` rather than `activeParams`, so it would have shipped. Zero
+  experts is not an ambiguity — it is a dense model saying so.
 
 - **A device id named a product that does not exist**
   ([#78](https://github.com/MrZoller/bench/issues/78)). `rtx-a6000-ada` fused the Ampere RTX A6000

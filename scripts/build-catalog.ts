@@ -34,7 +34,7 @@ const OUT = resolve(HERE, '../src/data/models.generated.json');
 // The seed list
 // ---------------------------------------------------------------------------
 
-interface Seed {
+export interface Seed {
   /** Hugging Face repo id. */
   id: string;
   /** Display name, since repo ids are inconsistent about capitalisation and suffixes. */
@@ -62,16 +62,52 @@ interface Seed {
 
 /**
  * Curated rather than "top N by downloads": the download charts are dominated by tiny models,
- * embedding models and one-off GGUF re-uploads. This list is the set of models people
- * actually weigh hardware against, hand-reviewed once and refreshed as the field moves.
+ * embedding models and one-off GGUF re-uploads.
+ *
+ * **What earns a row.** Either the model answers a hardware question no other row answers — a size
+ * class, an attention family, an active-parameter ratio — or it is the current head of a family the
+ * catalog already carries, because a user who finds the older sibling and not the newer one
+ * reasonably concludes the older one is current. A model that is shape-identical to a row already
+ * here earns nothing: Devstral Small 2 is 24B dense at 40 layers of 5120, which is Mistral Small's
+ * row with a different name on it, and the answer to "will it run" is the same pixel.
+ *
+ * **What the weekly refresh does and does not do.** `.github/workflows/catalog-refresh.yml` keeps
+ * every figure on every row current, and cannot notice a model that was never listed — which is how
+ * this list came to be a year behind the field while every number in it was seven days old. So the
+ * generator now ends every run by asking Hugging Face what the field is downloading and printing
+ * whatever is neither seeded nor written down in {@link NOT_SEEDED}. Absence is the failure mode
+ * that no amount of refreshing figures reaches; the report is what makes it visible weekly instead
+ * of whenever someone happens to look.
+ *
+ * Last re-probed against the live API on 2026-07-29, which is also when {@link NOT_SEEDED} was
+ * written: twelve families were checked and nine of them refuse.
  */
-const SEEDS: Seed[] = [
+export const SEEDS: Seed[] = [
   // --- Dense, small enough to run anywhere ---
+  // The bottom of the range is most of the audience: an 8 GB card is the machine a "will it run"
+  // question usually comes from, and for a long time Qwen3-4B was the only row it could select.
+  {
+    id: 'unsloth/Llama-3.2-3B-Instruct',
+    name: 'Llama 3.2 3B Instruct',
+    org: 'Meta',
+    popularityId: 'meta-llama/Llama-3.2-3B-Instruct',
+  },
+  { id: 'mistralai/Ministral-3-3B-Instruct-2512', name: 'Ministral 3 3B', org: 'Mistral' },
   { id: 'Qwen/Qwen3-4B', name: 'Qwen3 4B', org: 'Alibaba' },
+  { id: 'Qwen/Qwen3-4B-Instruct-2507', name: 'Qwen3 4B Instruct 2507', org: 'Alibaba' },
   { id: 'Qwen/Qwen3-8B', name: 'Qwen3 8B', org: 'Alibaba' },
   { id: 'Qwen/Qwen3-14B', name: 'Qwen3 14B', org: 'Alibaba' },
   { id: 'Qwen/Qwen3-32B', name: 'Qwen3 32B', org: 'Alibaba' },
+  { id: 'microsoft/phi-4', name: 'Phi-4', org: 'Microsoft' },
+  { id: 'ibm-granite/granite-4.1-8b', name: 'Granite 4.1 8B', org: 'IBM' },
+  { id: 'ByteDance-Seed/Seed-OSS-36B-Instruct', name: 'Seed-OSS 36B', org: 'ByteDance' },
   // Gemma is gated on google/*, so these point at open mirrors of the same weights.
+  {
+    id: 'unsloth/gemma-3-4b-it',
+    name: 'Gemma 3 4B',
+    org: 'Google',
+    popularityId: 'google/gemma-3-4b-it',
+  },
   {
     id: 'unsloth/gemma-3-12b-it',
     name: 'Gemma 3 12B',
@@ -87,6 +123,8 @@ const SEEDS: Seed[] = [
   { id: 'mistralai/Mistral-Small-24B-Instruct-2501', name: 'Mistral Small 24B', org: 'Mistral' },
 
   // --- Llama: gated on meta-llama, so mirrors keep the catalog buildable without a token ---
+  // 3.3 is the newest Llama this script can price: Llama 4's chunked attention is refused in
+  // `deriveLayerWindows`, and nothing has shipped from Meta since.
   {
     id: 'NousResearch/Meta-Llama-3.1-8B-Instruct',
     name: 'Llama 3.1 8B Instruct',
@@ -99,15 +137,47 @@ const SEEDS: Seed[] = [
     org: 'Meta',
     popularityId: 'meta-llama/Llama-3.1-70B-Instruct',
   },
+  {
+    id: 'unsloth/Llama-3.3-70B-Instruct',
+    name: 'Llama 3.3 70B Instruct',
+    org: 'Meta',
+    popularityId: 'meta-llama/Llama-3.3-70B-Instruct',
+  },
 
   // --- MoE: the interesting cases for unified-memory hardware ---
   { id: 'openai/gpt-oss-20b', name: 'gpt-oss 20B', org: 'OpenAI' },
   { id: 'openai/gpt-oss-120b', name: 'gpt-oss 120B', org: 'OpenAI' },
   { id: 'Qwen/Qwen3-30B-A3B', name: 'Qwen3 30B-A3B', org: 'Alibaba' },
+  { id: 'Qwen/Qwen3-30B-A3B-Instruct-2507', name: 'Qwen3 30B-A3B Instruct 2507', org: 'Alibaba' },
   { id: 'Qwen/Qwen3-235B-A22B', name: 'Qwen3 235B-A22B', org: 'Alibaba' },
+  {
+    id: 'Qwen/Qwen3-235B-A22B-Instruct-2507',
+    name: 'Qwen3 235B-A22B Instruct 2507',
+    org: 'Alibaba',
+  },
+  // The largest open coding model, and the row people price a 512 GB Mac against. Nothing else in
+  // the catalog sits between 235B and 671B.
+  { id: 'Qwen/Qwen3-Coder-480B-A35B-Instruct', name: 'Qwen3 Coder 480B-A35B', org: 'Alibaba' },
   { id: 'mistralai/Mixtral-8x7B-Instruct-v0.1', name: 'Mixtral 8x7B', org: 'Mistral' },
+  { id: 'MiniMaxAI/MiniMax-M2.7', name: 'MiniMax M2.7', org: 'MiniMax' },
+  { id: 'CohereLabs/command-a-plus-05-2026-bf16', name: 'Command A+ (05-2026)', org: 'Cohere' },
 
   // --- MLA: the family the naive KV formula gets most wrong ---
+  // Now at four scales rather than one, which is the point of the family: the 30B and 119B rows put
+  // the compressed-latent cache on hardware someone owns, where the 671B and 1T ones only argue
+  // about it. GLM 4.7 Flash at 30B-A3B caches 4.5 KiB/token against Qwen3-30B-A3B's 24.0.
+  {
+    id: 'zai-org/GLM-4.7-Flash',
+    name: 'GLM 4.7 Flash',
+    org: 'Z.ai',
+    overrides: {
+      totalParams: 30e9,
+      reason:
+        "HF's safetensors index reports 31.2B including the MTP module, which inference does " +
+        'not load. The model card states 30B-A3B.',
+    },
+  },
+  { id: 'mistralai/Mistral-Small-4-119B-2603', name: 'Mistral Small 4 119B', org: 'Mistral' },
   {
     id: 'deepseek-ai/DeepSeek-V3',
     name: 'DeepSeek V3',
@@ -130,6 +200,23 @@ const SEEDS: Seed[] = [
     },
   },
   {
+    id: 'deepseek-ai/DeepSeek-V3.1',
+    name: 'DeepSeek V3.1',
+    org: 'DeepSeek',
+    overrides: {
+      totalParams: 671e9,
+      reason:
+        'Same MTP module as DeepSeek V3, and the same published 671B / 37B active. V3.2 and V4 ' +
+        'are refused for their sparse-attention indexer, so this is the newest DeepSeek this ' +
+        'script can price.',
+    },
+  },
+  // The top of the open-weight range. K2 is also where the gap between MLA and the naive formula is
+  // largest: 61 layers of 576-wide latent against 61 layers of 64 KV heads.
+  { id: 'moonshotai/Kimi-K2-Instruct', name: 'Kimi K2 Instruct', org: 'Moonshot AI' },
+
+  // --- Glm4Moe: the 355B flagship class, and the Air variant people actually run ---
+  {
     id: 'zai-org/GLM-4.5-Air',
     name: 'GLM 4.5 Air',
     org: 'Z.ai',
@@ -140,7 +227,115 @@ const SEEDS: Seed[] = [
         'figure is 106B, which also reproduces the stated 12B active exactly.',
     },
   },
+  {
+    id: 'zai-org/GLM-4.7',
+    name: 'GLM 4.7',
+    org: 'Z.ai',
+    overrides: {
+      totalParams: 355e9,
+      reason:
+        "HF's safetensors index reports 358.3B including the MTP module. Z.ai's own model table " +
+        'states 355B-A32B for 4.5, 4.6 and 4.7 alike, which are one architecture at three ' +
+        'checkpoints. GLM 5.x is refused for its sparse-attention indexer.',
+    },
+  },
 ];
+
+/**
+ * Models deliberately absent, and the reason each one is.
+ *
+ * This exists because "why isn't X in the catalog?" has an answer for every X worth asking about,
+ * and until now that answer lived in a session transcript. Two jobs:
+ *
+ *   - It is the written record. Every entry was checked against the live `config.json` on the date
+ *     in the {@link SEEDS} comment, and most of them refuse in a guard below — so a reader who
+ *     wonders why the most-downloaded model in the world is missing gets the reason rather than an
+ *     apparent oversight.
+ *   - It suppresses the candidate report. Without it, {@link reportSeedCandidates} would name the
+ *     same nine refused families every week, which is exactly how a weekly report stops being read.
+ *
+ * A repo listed here is a *decision*, not a permanent exclusion: the entries that say "refused"
+ * become seedable the day the engine grows the term they need, and the report is what will say so —
+ * nothing here is checked for still being true.
+ */
+export const NOT_SEEDED: Readonly<Record<string, string>> = {
+  // Hybrid linear attention: refused in `refuseLinearStack`. This is now the *mainstream* of the
+  // field rather than an exotic corner — the entire current Qwen generation, at every size.
+  'Qwen/Qwen3.6-27B': 'hybrid: 16 of 64 layers attend (full_attention_interval 4)',
+  'Qwen/Qwen3.6-35B-A3B': 'hybrid: 10 of 40 layers attend',
+  'Qwen/Qwen3.5-9B': 'hybrid: 8 of 32 layers attend',
+  'Qwen/Qwen3.5-4B': 'hybrid: 8 of 32 layers attend',
+  'Qwen/Qwen3.5-2B': 'hybrid linear attention, same stack as Qwen3.5-9B',
+  'Qwen/Qwen3.5-0.8B': 'hybrid linear attention, same stack as Qwen3.5-9B',
+  'Qwen/Qwen3.5-122B-A10B': 'hybrid: 12 of 48 layers attend',
+  'Qwen/Qwen3.5-397B-A17B': 'hybrid: 15 of 60 layers attend',
+  'Qwen/Qwen3-Next-80B-A3B-Instruct': 'hybrid: 12 of 48 layers attend',
+  'moonshotai/Kimi-K3': 'hybrid: linear_attn_config, Kimi-Delta on most layers',
+  'moonshotai/Kimi-Linear-48B-A3B-Instruct': 'hybrid: 7 of 27 layers attend',
+  'ibm-granite/granite-4.0-h-small': 'hybrid: 4 of 40 layers attend, 36 Mamba-2',
+  'Qwen/Qwen3-Coder-Next': 'hybrid: Qwen3Next linear attention, 12 of 48 layers attend',
+  'LiquidAI/LFM2.5-1.2B-Instruct': 'hybrid: 6 of 16 layers attend, 10 short-convolution',
+  // NVIDIA has no seedable row at all, which is worth stating rather than leaving as a gap: every
+  // current Nemotron is either Mamba-2 hybrid or a per-block NAS export, and the two guards that
+  // refuse them are different guards.
+  'nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16': 'hybrid: Mamba-2 (NemotronH)',
+  'nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16': 'hybrid: Mamba-2 (NemotronH)',
+  'nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16': 'hybrid: Mamba-2 (NemotronH)',
+  'nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4': 'hybrid: Mamba-2 per hybrid_override_pattern',
+  'nvidia/NVIDIA-Nemotron-Labs-3-Puzzle-75B-A9B-BF16': 'per-block NAS architecture (block_configs)',
+  'nvidia/Llama-3_3-Nemotron-Super-49B-v1_5':
+    'per-block NAS architecture: 31 of 80 blocks have no attention at all, and the KV grouping ' +
+    'is per block (13x KV read as uniform MHA)',
+  // Sparse attention: a second cache and a bounded read, refused in `deriveAttention`.
+  'deepseek-ai/DeepSeek-V4-Pro': 'sparse-attention indexer (index_topk 1024)',
+  'deepseek-ai/DeepSeek-V4-Flash': 'sparse-attention indexer (index_topk 512)',
+  'deepseek-ai/DeepSeek-V3.2': 'sparse-attention indexer',
+  'deepseek-ai/DeepSeek-V3.2-Exp': 'sparse-attention indexer',
+  'zai-org/GLM-5.2': 'sparse-attention indexer (GlmMoeDsa)',
+  'zai-org/GLM-5.1': 'sparse-attention indexer (GlmMoeDsa)',
+  'zai-org/GLM-5': 'sparse-attention indexer (GlmMoeDsa)',
+  'MiniMaxAI/MiniMax-M3': 'sparse_attention_config, and a per-layer moe_layer_freq array',
+  // A cache this script has no term for, one key at a time.
+  'google/gemma-4-31B-it': 'attention_k_eq_v, and global layers with their own KV shape',
+  'google/gemma-4-26B-A4B-it': 'attention_k_eq_v, global KV shape, and top_k_experts',
+  'google/gemma-4-12B-it': 'attention_k_eq_v, and global layers with their own KV shape',
+  'google/gemma-4-E4B-it': 'num_kv_shared_layers 18 of 42, so 18 layers cache nothing of their own',
+  'meta-llama/Llama-4-Scout-17B-16E-Instruct': 'chunked attention (attention_chunk_size 8192)',
+  'meta-llama/Llama-4-Maverick-17B-128E-Instruct': 'chunked attention',
+  // Native int4 exports whose safetensors total counts the group scales as parameters — one BF16
+  // scale per 32 weights, which is +31.7B on a 1T model. Seeded through their FP8 sibling instead,
+  // which is the same architecture with a derivable count.
+  'moonshotai/Kimi-K2.6':
+    'int4 export: safetensors total counts group scales (see Kimi-K2-Instruct)',
+  'moonshotai/Kimi-K2.5': 'int4 export: safetensors total counts group scales',
+  'moonshotai/Kimi-K2-Thinking': 'int4 export: safetensors total counts group scales',
+  // Shape-identical to a row already in the catalog, so it answers no new question.
+  'mistralai/Devstral-Small-2-24B-Instruct-2512': "24B dense at 40x5120 — Mistral Small 24B's row",
+  'mistralai/Mistral-Small-3.2-24B-Instruct-2506': 'superseded by Mistral Small 4; same shape',
+  'zai-org/GLM-4.5': "one checkpoint of GLM 4.7's architecture",
+  'zai-org/GLM-4.6': "one checkpoint of GLM 4.7's architecture",
+  'MiniMaxAI/MiniMax-M2': "one checkpoint of MiniMax M2.7's architecture",
+  'MiniMaxAI/MiniMax-M2.5': "one checkpoint of MiniMax M2.7's architecture",
+  'moonshotai/Kimi-K2-Instruct-0905': "one checkpoint of Kimi K2's architecture",
+  'deepseek-ai/DeepSeek-V3-0324': "one checkpoint of DeepSeek V3's architecture",
+  'deepseek-ai/DeepSeek-R1-0528-Qwen3-8B': 'a Qwen3-8B distill: 36 x 4096, which is Qwen3 8B',
+  'Qwen/Qwen3-Coder-30B-A3B-Instruct': 'same shape as Qwen3-30B-A3B: 48 x 2048, 128 experts of 768',
+  'HuggingFaceTB/SmolLM3-3B': '3B dense, the tier Llama 3.2 3B and Ministral 3 3B already answer',
+  /**
+   * The sub-2B tier, which is absent on purpose and not by oversight — Qwen3-0.6B is the
+   * most-downloaded text-generation repo on the hub and would still be a row whose every cell says
+   * the same thing. At 2 GB of BF16 weights it fits, comfortably, on every device this catalog
+   * lists including the 8 GiB ones, so the placement question the product exists to answer has no
+   * content. The interesting small models are the 3-4B ones, where an 8 GiB card at long context
+   * starts to matter, and there are five of those.
+   */
+  'Qwen/Qwen3-0.6B': 'sub-2B: fits comfortably on every catalogued device, so every cell agrees',
+  'Qwen/Qwen3-1.7B': 'sub-2B: fits comfortably on every catalogued device',
+  'google/gemma-3-1b-it': 'sub-2B: fits comfortably on every catalogued device',
+  'google/gemma-3-270m': 'sub-2B: fits comfortably on every catalogued device',
+  'google/gemma-3-270m-it': 'sub-2B: fits comfortably on every catalogued device',
+  'openbmb/MiniCPM5-1B': 'sub-2B: fits comfortably on every catalogued device',
+};
 
 // ---------------------------------------------------------------------------
 // Shapes we read from Hugging Face
@@ -372,6 +567,170 @@ function refuseLinearStack(id: string, config: HfConfig, layers: number): void {
 }
 
 /**
+ * Refuses a stack whose layers are described one at a time in `block_configs`, rather than by the
+ * top-level fields every other branch here reads.
+ *
+ * A neural-architecture-search export — NVIDIA's Puzzle pipeline, `DeciLMForCausalLM` and
+ * `NemotronHPuzzleForCausalLM` — states a *per block* attention and FFN, and the top-level
+ * `num_attention_heads` / `num_key_value_heads` describe the widest block rather than the stack. Two
+ * things go wrong together, which is why the arithmetic is so far off:
+ *
+ *   - **Blocks with no attention at all.** Llama-3_3-Nemotron-Super-49B-v1_5 marks 31 of its 80
+ *     blocks `attention.no_op: true`. Those layers cache nothing; the GQA branch charges all 80.
+ *   - **`num_key_value_heads: null`.** The grouping is per block (`n_heads_in_group: 8`), so the
+ *     top-level key is *explicitly* null — and `?? heads` then reads it as full multi-head
+ *     attention, 64 KV heads where the attending blocks have 8.
+ *
+ * Together: 80 × 2 × 64 × 128 × 2 = 2560 KiB/token derived against 49 × 2 × 8 × 128 × 2 = 196, a
+ * factor of 13.06. At 128K context that is 320.0 GiB of cache against 24.5 — the direction that
+ * tells someone to buy another eight GPUs.
+ *
+ * Keyed on `block_configs` itself rather than on anything inside it, deliberately: the two live
+ * spellings disagree about the contents (`{attention: {no_op}, ffn: {ffn_mult}}` for Nemotron Super,
+ * `{block_type: "mamba" | "moe" | ...}` for Nemotron-Labs-3-Puzzle) and share only the key. A guard
+ * written against one shape would have admitted the other. What they have in common is the claim
+ * this script cannot represent: the layers are not all alike.
+ */
+function refusePerBlockStack(id: string, config: HfConfig, layers: number): void {
+  const blocks = config.block_configs;
+  if (!Array.isArray(blocks)) return;
+
+  /**
+   * Counted where the block says so, for the same reason the linear-stack refusal counts: the next
+   * person should not have to re-derive the split. Both spellings are read, and a block that states
+   * neither is left out of the count rather than assumed to attend — an undercount here understates
+   * the error, which is the safe direction for a sentence in an error message.
+   */
+  const noAttention = blocks.filter((block) => {
+    if (block === null || typeof block !== 'object') return false;
+    const entry = block as Record<string, unknown>;
+    const attention = entry.attention as Record<string, unknown> | undefined;
+    if (attention && typeof attention === 'object') return attention.no_op === true;
+    return typeof entry.block_type === 'string' && entry.block_type !== 'attention';
+  }).length;
+
+  const split =
+    noAttention > 0 && noAttention < blocks.length
+      ? ` ${blocks.length - noAttention} of ${blocks.length} blocks carry attention; the other ` +
+        `${noAttention} declare none, so they cache nothing that grows with context.`
+      : '';
+
+  throw new DerivationError(
+    `${id}: declares block_configs for ${blocks.length} blocks against num_hidden_layers ` +
+      `${layers} — a per-block architecture whose layers are not alike, so the top-level fields ` +
+      `do not describe the stack.${split} ` +
+      'Llama-3_3-Nemotron-Super-49B-v1_5 is 31 of 80 blocks without attention *and* states ' +
+      'num_key_value_heads: null because the grouping is per block, which together read as ' +
+      '80 uniform MHA layers: 2560 KiB/token against 196, 13.1x, 320.0 GiB against 24.5 at 128K. ' +
+      "Refusing rather than deriving: this needs a per-layer attention shape, not a stack's."
+  );
+}
+
+/**
+ * Sparse attention — a second cache, and a bound on what the first one reads.
+ *
+ * Hoisted out of the MLA branch, which is where it started and where it could only ever catch half
+ * of what it names. DeepSeek V3.2-Exp declares `kv_lora_rank` beside its indexer, so the guard fired;
+ * V4 does not declare `kv_lora_rank` at all — 1 KV head at `head_dim: 512` and a bare
+ * `qk_rope_head_dim` — so it lands in the *GQA* branch, where the indexer keys were never read. The
+ * row that produced was wrong twice over: no indexer cache, and `sliding_window: 128` applied to
+ * every layer as though V4's DSA window were a Mistral-style trailing window, which prices a
+ * million-token context at 43 layers × 128 tokens.
+ *
+ * A guard that names a quantity has to run wherever that quantity can appear. Whether the main
+ * attention is latent or grouped is a different question from whether there is a second cache
+ * beside it.
+ *
+ * Two spellings, and neither implies the other: the flat `index_*` keys (DeepSeek, GLM's
+ * `GlmMoeDsa`) and a nested `sparse_attention_config` object (MiniMax M3, whose block is configured
+ * entirely inside it — the same shape that hid Kimi-Linear's linear block from a flat lookup).
+ */
+function refuseSparseAttention(id: string, config: HfConfig): void {
+  const flat = ['index_n_heads', 'index_head_dim', 'index_topk'].filter(
+    (key) => num(config, key) !== undefined
+  );
+  const nested =
+    config.sparse_attention_config !== null && typeof config.sparse_attention_config === 'object'
+      ? ['sparse_attention_config']
+      : [];
+  const declared = [...flat, ...nested];
+  if (declared.length === 0) return;
+
+  throw new DerivationError(
+    `${id}: declares ${declared.join(', ')} — a sparse-attention indexer, which keeps a cache of ` +
+      'its own and bounds what the main attention reads. Neither is modelled, so this row would ' +
+      'understate KV and overstate time-to-first-token together.'
+  );
+}
+
+/**
+ * Refuses a stack where what a layer caches is not `2 × kvHeads × headDim`, whatever the top-level
+ * KV fields say.
+ *
+ * The whole GQA branch rests on one unstated assumption: every attending layer keeps a key tensor
+ * and a value tensor, of the same shape, sized by the same two numbers. Gemma 4 breaks that
+ * assumption three separate ways, and every one of them reads as an ordinary sliding-window GQA
+ * config — `layer_types` in the closed vocabulary, `sliding_window` stated, nothing a guard above
+ * matches. It is the most-downloaded current family in the catalog's own charts, so this is the
+ * refusal with the largest audience:
+ *
+ *   - **`attention_k_eq_v: true`** (31B, 12B, 26B-A4B) — keys and values are one tensor, so the
+ *     cache is half of what the `2 ×` charges. A clean 2x overstatement on every layer.
+ *   - **`num_global_key_value_heads` / `global_head_dim`** — the full-attention layers have their
+ *     own KV shape. On the 31B that is 4 heads × 512 against the local 16 × 256: the same product
+ *     by luck, and 1 × 512 against 8 × 256 on the 12B, which is not. One `kvHeads`/`headDim` pair
+ *     cannot describe both, and `AttentionCore` holds exactly one.
+ *   - **`num_kv_shared_layers`** — E4B shares the cache of 18 of its 42 layers with an earlier
+ *     layer, so 24 layers' worth of cache is charged as 42. 1.75x.
+ *
+ * Each is a term this script could carry and does not, which is the same doctrine as the linear
+ * stacks: refuse with the evidence rather than ship a confident factor of two. Note what is
+ * deliberately not the signal — `head_dim` differing from `hidden_size / num_attention_heads` is
+ * ordinary and true of half the catalog, and `sliding_window` beside `layer_types` is Gemma 3, which
+ * derives correctly and stays.
+ */
+function refuseNonUniformCache(id: string, config: HfConfig, layers: number): void {
+  if (config.attention_k_eq_v === true) {
+    throw new DerivationError(
+      `${id}: declares attention_k_eq_v — keys and values are one tensor, so a layer caches ` +
+        'half of what this script charges it for. The GQA term is 2 * kvHeads * headDim per ' +
+        'layer, which is exactly 2x over for every layer of this stack.'
+    );
+  }
+
+  const shared = num(config, 'num_kv_shared_layers');
+  if (shared !== undefined && shared > 0) {
+    // The ratio only exists while some layer still keeps a cache. A config sharing all of them — or
+    // more than it has — is malformed, and printing `Infinityx over` beside it would be a sentence
+    // contradicting the count in front of it.
+    const keeping = layers - shared;
+    throw new DerivationError(
+      `${id}: declares num_kv_shared_layers ${shared} of ${layers} — those layers reuse an ` +
+        `earlier layer's cache rather than keeping one, so the stack holds ${Math.max(0, keeping)} ` +
+        `layers' worth of KV and this script would charge ${layers}. ` +
+        (keeping > 0
+          ? `${(layers / keeping).toFixed(2)}x over.`
+          : 'Refusing before working out what that even means.')
+    );
+  }
+
+  // Read as a pair: either key alone is enough to say the global layers have their own shape, and
+  // whether the products happen to match is not the point — `AttentionCore` carries one shape, and
+  // a stack with two is outside what it can say. `null` is how Gemma 4's E-series states "absent".
+  const globalHeads = num(config, 'num_global_key_value_heads');
+  const globalDim = num(config, 'global_head_dim');
+  if (globalHeads !== undefined || globalDim !== undefined) {
+    const local = `${num(config, 'num_key_value_heads')} x ${num(config, 'head_dim')}`;
+    throw new DerivationError(
+      `${id}: declares ${globalHeads !== undefined ? 'num_global_key_value_heads' : 'global_head_dim'}` +
+        ` — the full-attention layers cache ${globalHeads ?? '?'} x ${globalDim ?? '?'} where the ` +
+        `windowed ones cache ${local}. This script derives one KV shape for the whole stack, so ` +
+        "one of the two layer types would be priced with the other one's cache."
+    );
+  }
+}
+
+/**
  * Multi-head latent attention caches one compressed latent per token per layer; grouped-query
  * caches keys and values per KV head. Detected by the presence of `kv_lora_rank`, which is
  * what DeepSeek's config uses and no GQA model defines.
@@ -387,6 +746,11 @@ function refuseLinearStack(id: string, config: HfConfig, layers: number): void {
  * query space than its residual stream, and most current ones do: GLM-4.5-Air is 3x its hidden
  * size, Qwen3's MoEs 2x, while Gemma 3 27B and Mistral Small are *narrower*. Using hidden size
  * mis-scaled long-prompt TTFT in both directions.
+ *
+ * The four refusals run first and in front of *both* branches, which is the shape the sparse-indexer
+ * guard had to be moved into: a claim about what a layer caches has to be checked wherever that
+ * layer can appear, and asking it inside the MLA branch meant DeepSeek V4 — the same indexer, no
+ * `kv_lora_rank` — walked past it into the GQA one.
  */
 export function deriveAttention(
   id: string,
@@ -394,6 +758,9 @@ export function deriveAttention(
   layers: number
 ): { core: AttentionCore; projectionWidth: number } {
   refuseLinearStack(id, config, layers);
+  refusePerBlockStack(id, config, layers);
+  refuseSparseAttention(id, config);
+  refuseNonUniformCache(id, config, layers);
 
   const heads = require(num(config, 'num_attention_heads'), id, 'num_attention_heads');
   const kvLoraRank = num(config, 'kv_lora_rank');
@@ -402,27 +769,6 @@ export function deriveAttention(
     const qkRopeHeadDim = require(num(config, 'qk_rope_head_dim'), id, 'qk_rope_head_dim');
     const qkNopeHeadDim = require(num(config, 'qk_nope_head_dim'), id, 'qk_nope_head_dim');
     const vHeadDim = require(num(config, 'v_head_dim'), id, 'v_head_dim');
-
-    /**
-     * A sparse-attention indexer is a second cache and a different prefill shape, and this branch
-     * has a term for neither. DeepSeek V3.2-Exp keeps `index_n_heads * index_head_dim` per token on
-     * top of the latent, and its main attention reads at most `index_topk` selected positions
-     * rather than everything before it — so the row would be right about the latent, silently short
-     * by the indexer's own cache, and quadratic about a prefill the model does not compute.
-     *
-     * Deriving both is its own piece of work, on the same axis as the linear stacks above but a
-     * different quantity. Charging one of them and not the other is not.
-     */
-    const indexer = ['index_n_heads', 'index_head_dim', 'index_topk'].filter(
-      (key) => num(config, key) !== undefined
-    );
-    if (indexer.length > 0) {
-      throw new DerivationError(
-        `${id}: declares ${indexer.join(', ')} — an MLA sparse-attention indexer, which keeps a ` +
-          'cache of its own and bounds what the main attention reads. Neither is modelled, so ' +
-          'this row would understate KV and overstate time-to-first-token together.'
-      );
-    }
 
     return {
       core: { kind: 'mla', kvLoraRank, qkRopeHeadDim },
@@ -437,10 +783,29 @@ export function deriveAttention(
   // Most configs state head_dim; older ones imply it from hidden_size / num_attention_heads.
   const headDim = require(num(config, 'head_dim') ?? hidden / heads, id, 'head_dim');
 
+  /**
+   * An *absent* `num_key_value_heads` means full multi-head attention — one KV head per query head,
+   * which is what Llama 2-era configs leave unstated. A key that is present and `null` means
+   * something else entirely: the config is declining to answer, because the answer is per layer.
+   *
+   * The two were the same expression until `?? heads` turned Nemotron Super's explicit null into 64
+   * KV heads on a model whose attending blocks have 8 — an 8x overstatement stacked on top of the
+   * per-block one, from a config that says out loud that it is not going to tell you. Distinguished
+   * here as well as guarded in {@link refusePerBlockStack}, because the null is the more general
+   * statement of the two: the next export to make it may not carry `block_configs` at all.
+   */
+  if (Object.hasOwn(config, 'num_key_value_heads') && config.num_key_value_heads === null) {
+    throw new DerivationError(
+      `${id}: states num_key_value_heads: null rather than omitting it, which is a config saying ` +
+        'the grouping is not a property of the stack. Reading that as full multi-head attention ' +
+        `charges ${heads} KV heads per layer where a grouped layer has a fraction of that — 8x for ` +
+        'Nemotron Super, whose attending blocks state n_heads_in_group: 8. Refusing to pick one.'
+    );
+  }
+
   return {
     core: {
       kind: 'gqa',
-      // Absent num_key_value_heads means full multi-head attention: one KV head per query head.
       kvHeads: num(config, 'num_key_value_heads') ?? heads,
       headDim,
     },
@@ -662,12 +1027,25 @@ interface MoeDerivation {
  * language model uses. Partial MoE fields throw rather than defaulting, because a model that
  * declares experts but not how many are routed is one this script does not actually understand.
  */
-function deriveMoe(id: string, config: HfConfig, layers: number): MoeDerivation | null {
+export function deriveMoe(id: string, config: HfConfig, layers: number): MoeDerivation | null {
   const total = firstNum(config, 'num_local_experts', 'n_routed_experts', 'num_experts');
   const perToken = firstNum(config, 'num_experts_per_tok', 'experts_per_token');
 
   if (total === undefined && perToken === undefined) return null;
-  if (total === undefined || perToken === undefined) {
+
+  /**
+   * A dense model whose config carries the MoE keys zeroed, which is how a shared config class
+   * states "this variant has no experts": `ibm-granite/granite-4.0-micro` declares
+   * `num_local_experts: 0` and `num_experts_per_tok: 0` on a 40-layer stack that is dense
+   * throughout. Both keys are present, so the partial guard above is satisfied, and the arithmetic
+   * downstream is `(0 / 0) * 0` — **NaN**, which `JSON.stringify` writes to the catalog as `null`
+   * and `toModel` does not check. A loud refusal would be acceptable here and a silent `null`
+   * active-parameter count is not, but neither is necessary: zero experts is not an ambiguity, it
+   * is a dense model saying so.
+   */
+  if (total === 0 && perToken === 0) return null;
+
+  if (total === undefined || perToken === undefined || total === 0 || perToken === 0) {
     throw new DerivationError(
       `${id}: partial MoE config — expert total ${total}, per-token ${perToken}. ` +
         'Refusing to guess the other.'
@@ -834,9 +1212,20 @@ async function fetchSafetensorsHeader(
   return header as Record<string, { dtype?: string; shape?: number[] }>;
 }
 
-/** Tensor names in a repo, and which shard each lives in. */
+/**
+ * Tensor names in a repo, and which shard each lives in.
+ *
+ * Fetched through `/resolve/` rather than `/raw/`, which is the difference between reading the index
+ * and reading a three-line pointer to it. Git LFS stores anything large, and a trillion-parameter
+ * model's index is large: `moonshotai/Kimi-K2-Instruct` lists 105,000 tensors in 12 MB, so `/raw/`
+ * answers 200 with `version https://git-lfs.github.com/spec/v1` and `JSON.parse` fails on the letter
+ * `v`. The failure was indistinguishable from a corrupt repo and it applied to precisely the models
+ * this catalog most wants — the ones big enough that where they fit is the whole question.
+ *
+ * `/resolve/` serves the content either way, which is why the shard reads below have always used it.
+ */
 async function fetchTensorMap(id: string, revision: string): Promise<Record<string, string>> {
-  const url = `https://huggingface.co/${id}/raw/${revision}/model.safetensors.index.json`;
+  const url = `https://huggingface.co/${id}/resolve/${revision}/model.safetensors.index.json`;
   const response = await fetch(url, { headers });
 
   if (response.ok) {
@@ -865,6 +1254,19 @@ interface StackShape {
   tiedEmbeddings: boolean;
   /** Parameters in non-text towers, excluded from the per-token count but kept in the total. */
   nonLanguageParams: number;
+  /**
+   * Parameters in an output head that a tied model ships anyway, which the repository stores and
+   * inference does not hold.
+   *
+   * `ibm-granite/granite-4.1-8b` is the live case: `tie_word_embeddings: true` beside a
+   * `lm_head.weight` of [100352, 4096] identical in shape to `model.embed_tokens.weight`.
+   * `from_pretrained` lists `lm_head.weight` in `_tied_weights_keys` and overwrites it with the
+   * embedding at load, and llama.cpp's converter drops it for the same reason — so the resident model
+   * holds one table where the safetensors index counts two, and taking the index at face value
+   * overstates the model by 0.41B of 8.79B. Subtracted from the total, not from the per-token count:
+   * decode reads that one table every step, which is what being tied means.
+   */
+  duplicatedOutputParams: number;
 }
 
 /** Names an untied output projection is stored under, across architectures. */
@@ -901,7 +1303,6 @@ async function deriveStackShape(
    * exists to fix.
    */
   const outputHead = names.find((name) => OUTPUT_HEAD_SUFFIXES.some((s) => name.endsWith(s)));
-  const tiedEmbeddings = outputHead === undefined;
 
   /**
    * `tie_word_embeddings` is not trustworthy enough to derive from — it is absent on both Gemma
@@ -909,17 +1310,50 @@ async function deriveStackShape(
    * this list of names is incomplete for that architecture. Better to stop than to guess which
    * side is right.
    */
-  if (declaredTied === false && tiedEmbeddings) {
+  if (declaredTied === false && outputHead === undefined) {
     throw new DerivationError(
       `${id}: config says the embeddings are untied, but no output projection matched ` +
         `${OUTPUT_HEAD_SUFFIXES.join(', ')}. Add this architecture's output tensor name.`
     );
   }
 
+  /**
+   * The mirror disagreement, which was unguarded and is not a tie: `tie_word_embeddings: true`
+   * *beside* an output head means the head is a duplicate the loader discards, not that the tensor
+   * list is incomplete.
+   *
+   * Note this does not reinstate `tie_word_embeddings` as the source of truth — absence of the key
+   * still says nothing, which is the Gemma 3 case the field's comment records. What a stated `true`
+   * settles is the one question the tensor list cannot answer on its own: whether a head that *is*
+   * there is loaded. `granite-4.1-8b` ships both tables at [100352, 4096]; transformers lists
+   * `lm_head.weight` in `_tied_weights_keys` and overwrites it at load, so the resident model holds
+   * 8.38B parameters against the index's 8.79B. Reading the head as an untied projection got that
+   * row wrong twice: 4.7% too heavy, and its embedding subtracted from a per-token count that reads
+   * it in full every step.
+   */
+  const tiedEmbeddings = outputHead === undefined || declaredTied === true;
+  let duplicatedOutputParams = 0;
+  if (outputHead !== undefined && declaredTied === true) {
+    // Measured from the shard rather than assumed to be vocab x hidden: the whole point of the
+    // subtraction is that it is a real tensor with a real size, and a tie only holds between tables
+    // of one shape — so if this ever disagrees with the embedding, the assumption above is wrong and
+    // the figure should not have been invented.
+    const header = await fetchSafetensorsHeader(id, revision, weightMap[outputHead]);
+    duplicatedOutputParams = (header[outputHead]?.shape ?? []).reduce((a, b) => a * b, 1);
+    if (!Number.isFinite(duplicatedOutputParams) || duplicatedOutputParams <= 0) {
+      throw new DerivationError(
+        `${id}: config ties the embeddings and ${outputHead} is present, but its shape is ` +
+          'unreadable — so whether the total counts one table or two cannot be settled.'
+      );
+    }
+  }
+
   const otherShards = [
     ...new Set(names.filter((n) => classifyTensor(n) === 'other').map((n) => weightMap[n])),
   ];
-  if (otherShards.length === 0) return { tiedEmbeddings, nonLanguageParams: 0 };
+  if (otherShards.length === 0) {
+    return { tiedEmbeddings, nonLanguageParams: 0, duplicatedOutputParams };
+  }
 
   let nonLanguageParams = 0;
   for (const shard of otherShards) {
@@ -936,7 +1370,7 @@ async function deriveStackShape(
     }
   }
 
-  return { tiedEmbeddings, nonLanguageParams };
+  return { tiedEmbeddings, nonLanguageParams, duplicatedOutputParams };
 }
 
 async function buildModel(seed: Seed) {
@@ -1014,7 +1448,37 @@ async function buildModel(seed: Seed) {
     );
   }
 
-  const totalParams = seed.overrides?.totalParams ?? deriveTotalParams(seed.id, api, expertParams);
+  /**
+   * The tensor layout, settled before the parameter count rather than after it.
+   *
+   * It used to run below, which was fine while it only answered "is this tied?" — a question nothing
+   * upstream depends on. It now also answers "does the index count the output table twice?", and that
+   * *is* the parameter count. Everything above this line still reads `config.json` alone, so the
+   * property the ordering exists for holds: a model this script cannot price refuses from the config
+   * that says so, without spending a dozen range requests first.
+   *
+   * Two corrections come out of it, and both were wrong in the direction of a slower machine:
+   *
+   *   - **Tied embeddings.** When a model reuses the embedding table as its output projection, that
+   *     table is a full vocab matmul on every step. Subtracting it is right for untied models like
+   *     gpt-oss and wrong for tied ones like Gemma 3 and Qwen3-4B.
+   *   - **Non-text towers.** Gemma 3's vision encoder occupies memory but does not run for a text
+   *     token, so it belongs in `totalParams` and not in the per-token count.
+   */
+  const stack = await deriveStackShape(
+    seed.id,
+    revision,
+    typeof config.tie_word_embeddings === 'boolean' ? config.tie_word_embeddings : undefined
+  );
+
+  /**
+   * An override is the *published* figure, so it already describes the model as loaded — the
+   * duplicate-table subtraction applies only to a count derived from the index. Applying both would
+   * take 0.41B off a number a vendor stated.
+   */
+  const totalParams =
+    seed.overrides?.totalParams ??
+    deriveTotalParams(seed.id, api, expertParams) - stack.duplicatedOutputParams;
 
   if (expertParams >= totalParams) {
     throw new DerivationError(
@@ -1045,23 +1509,12 @@ async function buildModel(seed: Seed) {
     : totalParams;
 
   /**
-   * `activeParams` above is the *published* convention, and it is not what a decode step reads.
-   * Two corrections separate them, and both were wrong in the direction of a slower machine:
-   *
-   *   - **Tied embeddings.** When a model reuses the embedding table as its output projection,
-   *     that table is a full vocab matmul on every step. Subtracting it is right for untied
-   *     models like gpt-oss and wrong for tied ones like Gemma 3 and Qwen3-4B.
-   *   - **Non-text towers.** Gemma 3's vision encoder occupies memory but does not run for a
-   *     text token, so it belongs in `totalParams` and not in the per-token count.
+   * `activeParams` above is the *published* convention, and it is not what a decode step reads — the
+   * two corrections in {@link deriveStackShape}'s comment are what separate them.
    *
    * Kept as its own field rather than folded into `activeParams`, because the published figure
    * is what the catalog tests check against vendors and what users recognise on a model card.
    */
-  const stack = await deriveStackShape(
-    seed.id,
-    revision,
-    typeof config.tie_word_embeddings === 'boolean' ? config.tie_word_embeddings : undefined
-  );
   const activeDenseParams = Math.max(
     0,
     denseParams - stack.nonLanguageParams - (stack.tiedEmbeddings ? 0 : embeddingParams)
@@ -1134,6 +1587,176 @@ async function buildModel(seed: Seed) {
 }
 
 // ---------------------------------------------------------------------------
+// What the field is downloading that this list does not carry
+// ---------------------------------------------------------------------------
+
+/** One row of Hugging Face's model listing, in the fields the report reads. */
+export interface LiveModel {
+  id: string;
+  downloads?: number;
+  createdAt?: string;
+}
+
+/**
+ * Repo-id shapes that are a *derivative* of a model rather than a model.
+ *
+ * The download charts are mostly these: a quantized re-export, a GGUF conversion, a speculative
+ * decoding draft, an ONNX or MLX conversion. Every one of them is the same architecture as something
+ * already listed or refused, so reporting them would bury the two or three rows that matter under
+ * forty that do not — which is the failure mode of every automated report that gets ignored.
+ *
+ * Matched on the id rather than on tags, because tags are applied by uploaders and these suffixes are
+ * a naming convention publishers follow consistently. A model that slips through costs one line in a
+ * weekly report; a filter on the wrong axis costs the whole report's credibility.
+ */
+const DERIVATIVE_PATTERNS = [
+  /gguf/i,
+  /awq/i,
+  /gptq/i,
+  /\bfp8\b|-fp8/i,
+  /nvfp4|mxfp4|mxfp8/i,
+  /-int[48]\b/i,
+  /w[48]a(16|8|4)/i,
+  /\b(4|8)bit\b|-(4|8)bit/i,
+  /-onnx/i,
+  /-mlx/i,
+  /-bnb-/i,
+  /eagle/i,
+  /dspark|dflash/i,
+  /-base$/i,
+  /-original$/i,
+  /-unquantized/i,
+  /-qat-/i,
+  /tiny-random/i,
+  /abliterated/i,
+];
+
+/**
+ * Orgs that mostly re-publish other people's weights.
+ *
+ * The catalog *uses* several of these as mirrors for gated repos, which is exactly why they cannot
+ * appear in the report: `unsloth/gemma-3-4b-it` is already a row, under Google's traffic, and naming
+ * it as a candidate would ask a reader to add what is already there.
+ */
+const MIRROR_ORGS = new Set([
+  'unsloth',
+  'NousResearch',
+  'RedHatAI',
+  'bartowski',
+  'TheBloke',
+  'mradermacher',
+  'lmstudio-community',
+  'ModelCloud',
+  'cognitivecomputations',
+  'trl-internal-testing',
+  'peft-internal-testing',
+  'hmellor',
+]);
+
+/**
+ * Models the field is downloading that this seed list neither carries nor has written down a reason
+ * for, most-downloaded first.
+ *
+ * The gap the weekly refresh structurally cannot see. It re-derives every figure on every row, so a
+ * publisher editing `config.json` is caught within a week — and a model that was never seeded is
+ * invisible to it forever, which is how {@link SEEDS} came to be a year behind while every number in
+ * it was seven days old. Absence needs its own check, and this is it.
+ *
+ * Pure, and separated from the fetch for the same reason `compare` in `catalog-diff.ts` is: what it
+ * decides is which names land in front of a human every Monday, and both wrong answers are
+ * expensive. Too many and the report is noise nobody reads; too few and it quietly stops working.
+ *
+ * `minDownloads` is a floor rather than a top-N so that a quiet week reports nothing at all instead
+ * of scraping the barrel for something to say. `since` drops the models whose downloads are a decade
+ * of accumulated tutorials — gpt2 and opt-125m outrank most of the current field and are not
+ * candidates for a hardware calculator.
+ */
+export function unseededCandidates(options: {
+  live: readonly LiveModel[];
+  seeded: ReadonlySet<string>;
+  notSeeded: ReadonlySet<string>;
+  minDownloads: number;
+  since: Date;
+}): LiveModel[] {
+  const { live, seeded, notSeeded, minDownloads, since } = options;
+
+  return live
+    .filter((model) => (model.downloads ?? 0) >= minDownloads)
+    .filter((model) => !seeded.has(model.id) && !notSeeded.has(model.id))
+    .filter((model) => !MIRROR_ORGS.has(model.id.split('/')[0]))
+    .filter((model) => !DERIVATIVE_PATTERNS.some((pattern) => pattern.test(model.id)))
+    .filter((model) => {
+      // A missing date is reported rather than dropped: the point of the report is the thing nobody
+      // has looked at, and silence about a row because its metadata was thin is the wrong default.
+      if (!model.createdAt) return true;
+      const created = Date.parse(model.createdAt);
+      return !Number.isFinite(created) || created >= since.getTime();
+    })
+    .sort((a, b) => (b.downloads ?? 0) - (a.downloads ?? 0));
+}
+
+/** Every repo id the catalog already speaks for, mirrors and canonical repos alike. */
+export function seededIds(seeds: readonly Seed[] = SEEDS): Set<string> {
+  return new Set(
+    seeds.flatMap((seed) => [seed.id, ...(seed.popularityId ? [seed.popularityId] : [])])
+  );
+}
+
+/**
+ * Prints the candidates at the end of a run, so the weekly job's log carries them.
+ *
+ * Wrapped in its own error handling and deliberately after the write: this is a report, and a
+ * listing endpoint having a bad minute must not be able to fail a refresh that has already
+ * successfully derived every row.
+ */
+async function reportSeedCandidates(): Promise<void> {
+  const MIN_DOWNLOADS = 250_000;
+  const MONTHS = 18;
+  const since = new Date();
+  since.setMonth(since.getMonth() - MONTHS);
+
+  let live: LiveModel[];
+  try {
+    live = await fetchJson<LiveModel[]>(
+      'https://huggingface.co/api/models?pipeline_tag=text-generation&sort=downloads' +
+        '&direction=-1&limit=200&expand[]=downloads&expand[]=createdAt',
+      'seed candidates'
+    );
+  } catch (error) {
+    console.warn(
+      `\nCould not list candidate models: ${error instanceof Error ? error.message : error}`
+    );
+    return;
+  }
+
+  const candidates = unseededCandidates({
+    live,
+    seeded: seededIds(),
+    notSeeded: new Set(Object.keys(NOT_SEEDED)),
+    minDownloads: MIN_DOWNLOADS,
+    since,
+  });
+
+  console.log(
+    `\nSeed candidates — released in the last ${MONTHS} months, over ` +
+      `${(MIN_DOWNLOADS / 1000).toFixed(0)}K downloads, neither seeded nor listed in NOT_SEEDED:`
+  );
+  if (candidates.length === 0) {
+    console.log('  (none — the seed list covers what the field is downloading)');
+    return;
+  }
+  for (const model of candidates.slice(0, 25)) {
+    console.log(
+      `  ${String(model.downloads ?? 0).padStart(10)}  ${(model.createdAt ?? '').slice(0, 10)}  ${model.id}`
+    );
+  }
+  console.log(
+    `\n  ${candidates.length} candidate(s). Each one is either a seed or a line in NOT_SEEDED ` +
+      'saying why not — the list ages silently otherwise.'
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -1188,6 +1811,7 @@ async function main() {
 
   if (dryRun) {
     console.log('\n--dry-run: nothing written.');
+    await reportSeedCandidates();
     return;
   }
 
@@ -1209,6 +1833,7 @@ async function main() {
     ) + '\n'
   );
   console.log(`\nWrote ${OUT}`);
+  await reportSeedCandidates();
 }
 
 /**

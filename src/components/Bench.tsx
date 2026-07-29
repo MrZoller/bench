@@ -178,7 +178,7 @@ export function Bench() {
           label: `${m.name} — ${params(m.totalParams)}${
             m.expertParams > 0 ? ` (${params(m.activeParams)} active)` : ''
           }`,
-          // The override note takes precedence: three models carry a hand-entered totalParams,
+          // The override note takes precedence: six models carry a hand-entered totalParams,
           // and every figure on screen derives from it. That provenance outranks a download count.
           note:
             m.overrideNote ??

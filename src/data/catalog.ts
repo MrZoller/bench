@@ -225,7 +225,7 @@ export function canonicalDeviceId(id: string): string {
  *
  * Mirrors {@link CatalogDevice}: the seed list requires a reason whenever a figure is typed by
  * a human rather than derived, and that reason has to be reachable from the UI or the
- * requirement is decorative. Three catalogued models carry an overridden `totalParams`.
+ * requirement is decorative. Six catalogued models carry an overridden `totalParams`.
  */
 export interface CatalogModel extends ModelSpec {
   overrideNote?: string;

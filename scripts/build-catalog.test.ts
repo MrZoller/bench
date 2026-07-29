@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { deriveAttention, deriveLayerWindows } from './build-catalog';
+import {
+  NOT_SEEDED,
+  SEEDS,
+  deriveAttention,
+  deriveLayerWindows,
+  deriveMoe,
+  seededIds,
+  unseededCandidates,
+} from './build-catalog';
 
 /**
  * What the generator decides about a model's attention stack, and what it refuses to decide.
@@ -281,6 +289,181 @@ const LLAMA_4_SCOUT_TEXT = {
   no_rope_layers: Array.from({ length: 48 }, (_, i) => ((i + 1) % 4 === 0 ? 0 : 1)),
 };
 
+/**
+ * https://huggingface.co/unsloth/gemma-3-4b-it/raw/main/config.json (`text_config`)
+ *
+ * The small end of the catalog, and the row that has to keep deriving once the Gemma *4* guards
+ * exist: same family, same `sliding_window_pattern`, and none of the three cache keys that refuse
+ * Gemma 4. Its 4 KV heads at 256 with a 1024-token window on 29 of 34 layers is also why the
+ * all-blocked Matrix scenario is no longer reachable — see `src/components/Matrix.test.tsx`.
+ */
+const GEMMA_3_4B = {
+  num_hidden_layers: 34,
+  num_attention_heads: 8,
+  num_key_value_heads: 4,
+  head_dim: 256,
+  hidden_size: 2560,
+  sliding_window: 1024,
+  sliding_window_pattern: 6,
+};
+
+/**
+ * https://huggingface.co/ibm-granite/granite-4.1-8b/raw/main/config.json
+ *
+ * IBM's current generation, and the plainest possible shape: `GraniteForCausalLM` with no window
+ * keys, no `head_dim` and — unlike every Granite 4.0-h export — no `mamba_*` block. Seeded, and the
+ * reason IBM is represented at all.
+ */
+const GRANITE_4_1_8B = {
+  num_hidden_layers: 40,
+  num_attention_heads: 32,
+  num_key_value_heads: 8,
+  hidden_size: 4096,
+};
+
+/**
+ * https://huggingface.co/CohereLabs/command-a-plus-05-2026-bf16/raw/main/config.json (`text_config`)
+ *
+ * `Cohere2MoeForCausalLM`, and a third `layer_types` phase: full attention every fourth layer where
+ * gpt-oss alternates and Gemma 3 states a pattern of 6. Seeded, so this is a regression test for the
+ * vocabulary as much as a shape.
+ */
+const COMMAND_A_PLUS = {
+  num_hidden_layers: 32,
+  num_attention_heads: 128,
+  num_key_value_heads: 8,
+  head_dim: 128,
+  hidden_size: 4096,
+  sliding_window: 4096,
+  layer_types: Array.from({ length: 32 }, (_, i) =>
+    (i + 1) % 4 === 0 ? 'full_attention' : 'sliding_attention'
+  ),
+};
+
+/**
+ * https://huggingface.co/mistralai/Mistral-Small-4-119B-2603/raw/main/config.json (`text_config`)
+ *
+ * MLA that is not DeepSeek's MLA: `kv_lora_rank` 256 rather than 512, and a query space narrower
+ * than its value space. Seeded, and the check that the sparse-indexer guard hoisted out of the MLA
+ * branch still lets ordinary MLA through.
+ */
+const MISTRAL_SMALL_4 = {
+  num_hidden_layers: 36,
+  num_attention_heads: 32,
+  num_key_value_heads: 32,
+  head_dim: 128,
+  hidden_size: 4096,
+  kv_lora_rank: 256,
+  qk_rope_head_dim: 64,
+  qk_nope_head_dim: 64,
+  v_head_dim: 128,
+  sliding_window: null,
+};
+
+// ---------------------------------------------------------------------------
+// The fourth, fifth and sixth ways a stack can fail to be uniform
+// ---------------------------------------------------------------------------
+
+/**
+ * https://huggingface.co/nvidia/Llama-3_3-Nemotron-Super-49B-v1_5/raw/main/config.json
+ *
+ * A per-block NAS export (`DeciLMForCausalLM`), which the issue that added it to the seed list
+ * listed as an ordinary addition. It is not: `block_configs` describes each of the 80 blocks
+ * separately, 31 of them with no attention at all, and `num_key_value_heads` is *explicitly null*
+ * because the grouping is stated per block as `n_heads_in_group: 8`.
+ *
+ * The pattern below is the real one, read out of the config: `1` where the block attends.
+ */
+const NEMOTRON_SUPER_ATTENDS = [
+  1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+];
+
+const NEMOTRON_SUPER = {
+  num_hidden_layers: 80,
+  num_attention_heads: 64,
+  num_key_value_heads: null,
+  hidden_size: 8192,
+  intermediate_size: null,
+  block_configs: NEMOTRON_SUPER_ATTENDS.map((attends) => ({
+    attention: attends
+      ? { n_heads_in_group: 8, no_op: false, replace_with_linear: false }
+      : { n_heads_in_group: null, no_op: true, replace_with_linear: false },
+    ffn: { ffn_mult: 2.625, no_op: false, replace_with_linear: false },
+  })),
+};
+
+/**
+ * https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/raw/main/config.json
+ *
+ * The same sparse-attention indexer V3.2-Exp is refused for, on a config that does *not* take the
+ * MLA branch: no `kv_lora_rank` at all, one KV head at `head_dim: 512`, and a bare
+ * `qk_rope_head_dim`. So the guard that named this exact quantity never ran.
+ */
+const DEEPSEEK_V4_FLASH = {
+  num_hidden_layers: 43,
+  num_attention_heads: 64,
+  num_key_value_heads: 1,
+  head_dim: 512,
+  hidden_size: 4096,
+  qk_rope_head_dim: 64,
+  index_n_heads: 64,
+  index_head_dim: 128,
+  index_topk: 512,
+  sliding_window: 128,
+  n_routed_experts: 256,
+  num_experts_per_tok: 6,
+  moe_intermediate_size: 2048,
+};
+
+/**
+ * https://huggingface.co/google/gemma-4-31B-it/raw/main/config.json (`text_config`)
+ *
+ * The most-downloaded current model in the field, and an *ordinary* sliding-window GQA config by
+ * every test above: `layer_types` entirely inside the closed vocabulary, `sliding_window` stated,
+ * no hybrid key, no indexer, no `block_configs`. Three keys say the cache is not what the GQA branch
+ * charges — `attention_k_eq_v`, and a second KV shape for the global layers.
+ */
+const GEMMA_4_31B = {
+  num_hidden_layers: 60,
+  num_attention_heads: 32,
+  num_key_value_heads: 16,
+  head_dim: 256,
+  global_head_dim: 512,
+  num_global_key_value_heads: 4,
+  num_kv_shared_layers: 0,
+  attention_k_eq_v: true,
+  hidden_size: 5376,
+  sliding_window: 1024,
+  layer_types: Array.from({ length: 60 }, (_, i) =>
+    (i + 1) % 6 === 0 ? 'full_attention' : 'sliding_attention'
+  ),
+};
+
+/**
+ * https://huggingface.co/google/gemma-4-E4B-it/raw/main/config.json (`text_config`)
+ *
+ * The other half of the same family: `attention_k_eq_v` is *false* here, and instead 18 of the 42
+ * layers share an earlier layer's cache. Both axes ship in one generation, which is why neither key
+ * is sufficient on its own.
+ */
+const GEMMA_4_E4B = {
+  num_hidden_layers: 42,
+  num_attention_heads: 8,
+  num_key_value_heads: 2,
+  head_dim: 256,
+  global_head_dim: 512,
+  num_global_key_value_heads: null,
+  num_kv_shared_layers: 18,
+  attention_k_eq_v: false,
+  hidden_size: 2560,
+  sliding_window: 512,
+  layer_types: Array.from({ length: 42 }, (_, i) =>
+    (i + 1) % 6 === 0 ? 'full_attention' : 'sliding_attention'
+  ),
+};
+
 describe('the attention shapes the shipped catalog is built from', () => {
   /**
    * First, because the vocabulary swap below is the kind of tightening that can quietly reject the
@@ -331,6 +514,285 @@ describe('the attention shapes the shipped catalog is built from', () => {
       kvLoraRank: 512,
       qkRopeHeadDim: 64,
     });
+  });
+
+  /**
+   * The rows #77 added, checked against the guards #77 added.
+   *
+   * Half of a coverage change is not rejecting what it just admitted: three of the four guards below
+   * are new, and a guard keyed one notch too wide takes the seed list with it. Gemma 3 is the sharp
+   * one — same publisher, same window convention, one generation apart from a family that is refused.
+   */
+  it('reads Gemma 3 4B the way it reads its bigger siblings, Gemma 4 guards and all', () => {
+    expect(deriveLayerWindows('unsloth/gemma-3-4b-it', GEMMA_3_4B, 34)).toEqual(
+      Array.from({ length: 34 }, (_, i) => ((i + 1) % 6 === 0 ? null : 1024))
+    );
+    expect(deriveAttention('unsloth/gemma-3-4b-it', GEMMA_3_4B, 34)).toEqual({
+      core: { kind: 'gqa', kvHeads: 4, headDim: 256 },
+      projectionWidth: 8 * 256,
+    });
+  });
+
+  it('reads Granite 4.1 as the plain GQA stack it is, head dim implied', () => {
+    // The Granite name is on both sides of the linear-stack refusal: 4.0-h-small is 4 attending
+    // layers of 40, and 4.1-8b is 40 of 40 with no `mamba_*` key anywhere in its config.
+    expect(deriveLayerWindows('ibm-granite/granite-4.1-8b', GRANITE_4_1_8B, 40)).toBeUndefined();
+    expect(deriveAttention('ibm-granite/granite-4.1-8b', GRANITE_4_1_8B, 40)).toEqual({
+      core: { kind: 'gqa', kvHeads: 8, headDim: 128 },
+      projectionWidth: 32 * 128,
+    });
+  });
+
+  it('reads Command A+ as full attention every fourth layer', () => {
+    expect(
+      deriveLayerWindows('CohereLabs/command-a-plus-05-2026-bf16', COMMAND_A_PLUS, 32)
+    ).toEqual(Array.from({ length: 32 }, (_, i) => ((i + 1) % 4 === 0 ? null : 4096)));
+    expect(
+      deriveAttention('CohereLabs/command-a-plus-05-2026-bf16', COMMAND_A_PLUS, 32).core
+    ).toEqual({ kind: 'gqa', kvHeads: 8, headDim: 128 });
+  });
+
+  it('reads MLA that is not DeepSeek-shaped, and averages its two widths', () => {
+    const attention = deriveAttention('mistralai/Mistral-Small-4-119B-2603', MISTRAL_SMALL_4, 36);
+    expect(attention.core).toEqual({ kind: 'mla', kvLoraRank: 256, qkRopeHeadDim: 64 });
+    // Query space 32 x (64 + 64) against value space 32 x 128 — equal here, which is the case that
+    // proves the average is being taken over the right two quantities rather than over hidden size.
+    expect(attention.projectionWidth).toBe(4096);
+    expect(attention.projectionWidth / MISTRAL_SMALL_4.hidden_size).toBe(1);
+  });
+});
+
+/**
+ * A per-block architecture, which is the fourth way a stack turns out not to be uniform — and the
+ * one an issue asking for wider coverage named as an ordinary seed.
+ *
+ * NVIDIA's Puzzle pipeline searches over per-layer variants and writes the result to
+ * `block_configs`, so the top-level fields describe a block rather than the stack. Two errors
+ * compound: blocks with no attention are charged a cache, and `num_key_value_heads: null` — a config
+ * declining to answer, because the answer is per block — reads as full multi-head attention.
+ */
+describe('per-block NAS stacks are refused, not read off the top-level fields', () => {
+  it('refuses the 13.1x it would otherwise hand the engine for Nemotron Super', () => {
+    // What the row would have carried, read out of the GQA branch rather than written down: the same
+    // config with `block_configs` and the null KV heads taken out, which is a clean hit with nothing
+    // in it that looks wrong.
+    const asPlainGqa = {
+      num_hidden_layers: NEMOTRON_SUPER.num_hidden_layers,
+      num_attention_heads: NEMOTRON_SUPER.num_attention_heads,
+      hidden_size: NEMOTRON_SUPER.hidden_size,
+    };
+    const core = gqaOf(
+      deriveAttention('nvidia/Llama-3_3-Nemotron-Super-49B-v1_5', asPlainGqa, 80).core
+    );
+    // No `num_key_value_heads` at all means one KV head per query head, and no `head_dim` means
+    // hidden / heads. Both come from product code, so this arithmetic cannot outlive the derivation.
+    expect(core).toEqual({ kind: 'gqa', kvHeads: 64, headDim: 128 });
+
+    const flattened = gqaKvBytesPerToken(80, core.kvHeads, core.headDim);
+    // What the 49 attending blocks actually cache, at the grouping their own entries state.
+    const actual = gqaKvBytesPerToken(
+      NEMOTRON_SUPER_ATTENDS.filter((a) => a === 1).length,
+      core.kvHeads / 8,
+      core.headDim
+    );
+    expect(flattened / KIB).toBe(2560);
+    expect(actual / KIB).toBe(196);
+    expect(flattened / actual).toBeCloseTo(13.06, 2);
+    // 320 GiB of imaginary cache at 128K context, on a machine that needs 24.5.
+    expect((flattened * 131072) / GIB).toBe(320);
+    expect((actual * 131072) / GIB).toBeCloseTo(24.5, 1);
+
+    expect(() =>
+      deriveAttention('nvidia/Llama-3_3-Nemotron-Super-49B-v1_5', NEMOTRON_SUPER, 80)
+    ).toThrowError(/declares block_configs for 80 blocks against num_hidden_layers 80/);
+  });
+
+  it('counts the blocks that attend, so the refusal is evidence rather than a shrug', () => {
+    expect(() =>
+      deriveAttention('nvidia/Llama-3_3-Nemotron-Super-49B-v1_5', NEMOTRON_SUPER, 80)
+    ).toThrowError(/49 of 80 blocks carry attention; the other 31 declare none/);
+  });
+
+  it('reads the other spelling of the same claim, which shares only the key', () => {
+    // Nemotron-Labs-3-Puzzle states `{block_type: "mamba" | "moe" | "attention"}` — no `attention`
+    // object, no `no_op`, nothing a guard written against the export above would match. In the real
+    // config the linear-stack guard fires first on its `mamba_*` keys; this is the same shape without
+    // them, which is what the next NAS export with no recurrence in it will look like.
+    const puzzle = {
+      num_attention_heads: 32,
+      num_key_value_heads: 2,
+      head_dim: 128,
+      hidden_size: 4096,
+      block_configs: Array.from({ length: 88 }, (_, i) =>
+        i % 4 === 0 ? { block_type: 'attention' } : { block_type: 'moe' }
+      ),
+    };
+    expect(() =>
+      deriveAttention('nvidia/NVIDIA-Nemotron-Labs-3-Puzzle-75B-A9B-BF16', puzzle, 88)
+    ).toThrowError(/22 of 88 blocks carry attention; the other 66 declare none/);
+  });
+
+  it('refuses an explicit null KV head count on its own, wherever it appears', () => {
+    // The more general half of the same defect, and the reason it is guarded twice: `?? heads` cannot
+    // tell "unstated, so full multi-head" from "stated as null, because it is per layer", and only
+    // the first is a fact about the model. The next export to decline the question may carry no
+    // `block_configs` for the guard above to catch.
+    const nullKvHeads = { num_attention_heads: 64, num_key_value_heads: null, hidden_size: 8192 };
+    expect(() => deriveAttention('hypothetical/null-kv-heads', nullKvHeads, 80)).toThrowError(
+      /states num_key_value_heads: null rather than omitting it/
+    );
+
+    // And an *absent* one still means full multi-head attention, which is what Llama 2-era configs
+    // leave unsaid — the distinction would be worthless if it rejected both.
+    expect(
+      deriveAttention('hypothetical/no-kv-heads', { num_attention_heads: 8, hidden_size: 1024 }, 4)
+        .core
+    ).toEqual({ kind: 'gqa', kvHeads: 8, headDim: 128 });
+  });
+});
+
+/**
+ * The sparse-attention refusal, moved out of the MLA branch — and DeepSeek V4, the model that walked
+ * past it while it was in there.
+ */
+describe('a sparse-attention indexer is refused whichever branch the model would take', () => {
+  it('refuses DeepSeek V4, whose config never reaches the MLA branch', () => {
+    // The row it would have carried. Both figures come out of product code: one KV head at 512 is a
+    // latent in everything but name, and `sliding_window: 128` with no `layer_types` is read as a
+    // trailing 128-token window on every layer — which prices a million-token context at 11 MB of
+    // cache, constant in sequence length, on the model whose headline is that context.
+    const asPlainGqa = {
+      num_hidden_layers: DEEPSEEK_V4_FLASH.num_hidden_layers,
+      num_attention_heads: DEEPSEEK_V4_FLASH.num_attention_heads,
+      num_key_value_heads: DEEPSEEK_V4_FLASH.num_key_value_heads,
+      head_dim: DEEPSEEK_V4_FLASH.head_dim,
+      hidden_size: DEEPSEEK_V4_FLASH.hidden_size,
+      sliding_window: DEEPSEEK_V4_FLASH.sliding_window,
+    };
+    const core = gqaOf(deriveAttention('deepseek-ai/DeepSeek-V4-Flash', asPlainGqa, 43).core);
+    expect(core).toEqual({ kind: 'gqa', kvHeads: 1, headDim: 512 });
+    expect(deriveLayerWindows('deepseek-ai/DeepSeek-V4-Flash', asPlainGqa, 43)).toEqual(
+      Array.from({ length: 43 }, () => 128)
+    );
+
+    const perToken = gqaKvBytesPerToken(43, core.kvHeads, core.headDim);
+    expect(perToken / KIB).toBe(86);
+    // Every layer windowed at 128 tokens: the whole cache, at any context length.
+    expect((perToken * 128) / (1024 * 1024)).toBeCloseTo(10.75, 2);
+
+    expect(() =>
+      deriveAttention('deepseek-ai/DeepSeek-V4-Flash', DEEPSEEK_V4_FLASH, 43)
+    ).toThrowError(/index_n_heads, index_head_dim, index_topk/);
+  });
+
+  it('still refuses the MLA-shaped one, so the move did not trade one branch for the other', () => {
+    const v32 = { ...DEEPSEEK_V3, index_n_heads: 64, index_head_dim: 128, index_topk: 2048 };
+    expect(() => deriveAttention('deepseek-ai/DeepSeek-V3.2-Exp', v32, 61)).toThrowError(
+      /index_n_heads, index_head_dim, index_topk/
+    );
+  });
+
+  it('reads the nested spelling too, which no flat key lookup sees', () => {
+    // MiniMax M3 puts its whole sparse-attention block inside `sparse_attention_config` — the same
+    // shape that hid Kimi-Linear's linear block from a flat lookup, one quantity over.
+    const m3 = {
+      num_attention_heads: 64,
+      num_key_value_heads: 4,
+      head_dim: 128,
+      hidden_size: 6144,
+      sparse_attention_config: { top_k: 2048 },
+    };
+    expect(() => deriveAttention('MiniMaxAI/MiniMax-M3', m3, 60)).toThrowError(
+      /declares sparse_attention_config/
+    );
+  });
+});
+
+/**
+ * Gemma 4 — a stack where `2 * kvHeads * headDim` is the wrong term three different ways, on a config
+ * that passes every other guard in this file.
+ *
+ * This is the refusal with the largest audience in the catalog's own charts, and the one that most
+ * looks like an ordinary row: the 31B, the 26B-A4B MoE and the 12B all state `layer_types` inside the
+ * closed vocabulary with a `sliding_window` beside it, exactly as Gemma 3 does.
+ */
+describe('a cache that is not two tensors of one shape per layer', () => {
+  it('refuses the 2x that shared keys and values would have cost the 31B', () => {
+    const asPlainGqa = {
+      num_hidden_layers: GEMMA_4_31B.num_hidden_layers,
+      num_attention_heads: GEMMA_4_31B.num_attention_heads,
+      num_key_value_heads: GEMMA_4_31B.num_key_value_heads,
+      head_dim: GEMMA_4_31B.head_dim,
+      hidden_size: GEMMA_4_31B.hidden_size,
+      sliding_window: GEMMA_4_31B.sliding_window,
+      layer_types: GEMMA_4_31B.layer_types,
+    };
+    const core = gqaOf(deriveAttention('google/gemma-4-31B-it', asPlainGqa, 60).core);
+    expect(core).toEqual({ kind: 'gqa', kvHeads: 16, headDim: 256 });
+
+    // The `2 *` is keys and values. `attention_k_eq_v` says there is one tensor, so every layer of
+    // this stack is charged exactly twice what it holds.
+    const charged = gqaKvBytesPerToken(60, core.kvHeads, core.headDim);
+    const shared = charged / 2;
+    expect(charged / KIB).toBe(960);
+    expect(shared / KIB).toBe(480);
+
+    expect(() => deriveAttention('google/gemma-4-31B-it', GEMMA_4_31B, 60)).toThrowError(
+      /declares attention_k_eq_v/
+    );
+    expect(() => deriveAttention('google/gemma-4-31B-it', GEMMA_4_31B, 60)).toThrowError(
+      /exactly 2x over for every layer of this stack/
+    );
+  });
+
+  it('refuses the second KV shape the global layers carry', () => {
+    // With `attention_k_eq_v` taken out, the 31B still cannot be priced: its 10 full-attention layers
+    // cache 4 heads x 512 where its 50 windowed ones cache 16 x 256, and `AttentionCore` holds one
+    // shape. The products agree here by luck — the 12B's are 1 x 512 against 8 x 256, which do not —
+    // so the guard is on the keys being stated, not on the arithmetic coming out uneven.
+    const withoutKEqV = { ...GEMMA_4_31B, attention_k_eq_v: false };
+    expect(() => deriveAttention('google/gemma-4-31B-it', withoutKEqV, 60)).toThrowError(
+      /declares num_global_key_value_heads — the full-attention layers cache 4 x 512 where the windowed ones cache 16 x 256/
+    );
+  });
+
+  it('refuses the 1.75x on E4B, whose layers share a cache instead of keeping one', () => {
+    // The same family, the other axis: `attention_k_eq_v` is false here and 18 of 42 layers reuse an
+    // earlier layer's cache, so 24 layers' worth is charged as 42.
+    expect(() => deriveAttention('google/gemma-4-E4B-it', GEMMA_4_E4B, 42)).toThrowError(
+      /declares num_kv_shared_layers 18 of 42/
+    );
+    expect(() => deriveAttention('google/gemma-4-E4B-it', GEMMA_4_E4B, 42)).toThrowError(
+      /1\.75x over/
+    );
+  });
+
+  it('does not print a ratio for a config that shares every layer', () => {
+    // A malformed config, and the shape of failure this file keeps producing: a predicate and its
+    // sentence are one claim, so `42 / 0` must not be printed as `Infinityx over` beside a count
+    // saying no layer keeps a cache.
+    const allShared = { ...GEMMA_4_E4B, num_kv_shared_layers: 42 };
+    expect(() => deriveAttention('hypothetical/all-shared', allShared, 42)).toThrowError(
+      /num_kv_shared_layers 42 of 42/
+    );
+    expect(() => deriveAttention('hypothetical/all-shared', allShared, 42)).not.toThrowError(
+      /Infinity/
+    );
+  });
+
+  it('leaves a stack alone when it states none of the three', () => {
+    // The guard has to be satisfied by silence, or it takes the whole catalog with it: `head_dim`
+    // differing from hidden / heads is ordinary and true of half these fixtures, and a
+    // `sliding_window` beside `layer_types` is Gemma 3, gpt-oss and Command A+.
+    expect(() => deriveAttention('openai/gpt-oss-20b', GPT_OSS_20B, 24)).not.toThrow();
+    expect(() => deriveAttention('unsloth/gemma-3-12b-it', GEMMA_3_12B, 48)).not.toThrow();
+    expect(() =>
+      deriveAttention('CohereLabs/command-a-plus-05-2026-bf16', COMMAND_A_PLUS, 32)
+    ).not.toThrow();
+    // A zero is not a claim: Gemma 4's own 31B states `num_kv_shared_layers: 0`, and refusing on the
+    // key's presence would have refused for a value that says nothing is shared.
+    const noSharing = { ...GRANITE_4_1_8B, num_kv_shared_layers: 0 };
+    expect(() => deriveAttention('hypothetical/no-sharing', noSharing, 40)).not.toThrow();
   });
 });
 
@@ -683,5 +1145,238 @@ describe('MLA with a sparse-attention indexer', () => {
 
   it('leaves plain MLA alone, so the guard is about the indexer and not about MLA', () => {
     expect(deriveAttention('deepseek-ai/DeepSeek-V3', DEEPSEEK_V3, 61).core.kind).toBe('mla');
+  });
+});
+
+/**
+ * The expert count, and the one value of it that produced a number rather than a refusal.
+ *
+ * `deriveMoe` throws on a partial config and returns null for a dense one, which covers every shape
+ * except the one a *shared* config class produces: a dense variant that states the MoE keys and zeroes
+ * them. Both keys are present, so the partial guard is satisfied, and `(perToken / total) * expertParams`
+ * is `(0 / 0) * 0` — NaN, which `JSON.stringify` writes into the committed catalog as `null` and
+ * `toModel` does not check, since it validates `activeDenseParams` and the projection width.
+ */
+describe('the expert count', () => {
+  /**
+   * https://huggingface.co/ibm-granite/granite-4.0-micro/raw/main/config.json
+   *
+   * Trimmed to the keys `deriveMoe` reads. The full config also carries the `mamba_*` block of the
+   * hybrid variants it shares a config class with — all 40 of its `layer_types` are `attention`, but
+   * `deriveAttention` refuses it a step earlier on those keys, so this fixture is about the arithmetic
+   * rather than about that row being seedable.
+   */
+  const GRANITE_4_MICRO = {
+    num_hidden_layers: 40,
+    hidden_size: 2560,
+    intermediate_size: 8192,
+    num_local_experts: 0,
+    num_experts_per_tok: 0,
+  };
+
+  it('reads zeroed expert keys as the dense model they describe', () => {
+    expect(deriveMoe('ibm-granite/granite-4.0-micro', GRANITE_4_MICRO, 40)).toBeNull();
+  });
+
+  it('would have emitted a NaN active count for it', () => {
+    // The consequence, computed the way `buildModel` computes it, from a shape that says what the old
+    // branch returned. Not arithmetic on literals: the point is that this expression is what the row
+    // is built from, and that `0 / 0` reaches it.
+    const asPartialMoe = { expertParams: 0, experts: { total: 0, perToken: 0 } };
+    const activeParams =
+      3.4e9 +
+      (asPartialMoe.experts.perToken / asPartialMoe.experts.total) * asPartialMoe.expertParams;
+    expect(Number.isNaN(activeParams)).toBe(true);
+    expect(JSON.parse(JSON.stringify({ activeParams }))).toEqual({ activeParams: null });
+  });
+
+  it('still refuses a config that zeroes one key and not the other', () => {
+    // Zero experts routed per token out of 128 is not a dense model, and 128 available with none
+    // routed is not one either. Only both-zero is a statement; either alone is a contradiction.
+    expect(() =>
+      deriveMoe('hypothetical/none-routed', { ...GRANITE_4_MICRO, num_local_experts: 128 }, 40)
+    ).toThrowError(/partial MoE config/);
+    expect(() =>
+      deriveMoe('hypothetical/none-available', { ...GRANITE_4_MICRO, num_experts_per_tok: 8 }, 40)
+    ).toThrowError(/partial MoE config/);
+  });
+
+  it('still derives an ordinary MoE, and still refuses a half-stated one', () => {
+    const qwen3Moe = {
+      num_hidden_layers: 48,
+      hidden_size: 2048,
+      moe_intermediate_size: 768,
+      num_experts: 128,
+      num_experts_per_tok: 8,
+      decoder_sparse_step: 1,
+    };
+    expect(deriveMoe('Qwen/Qwen3-30B-A3B', qwen3Moe, 48)).toEqual({
+      expertParams: 48 * 128 * 3 * 2048 * 768,
+      experts: { total: 128, perToken: 8 },
+    });
+
+    const halfStated = { ...qwen3Moe, num_experts_per_tok: undefined };
+    expect(() => deriveMoe('hypothetical/half-stated', halfStated, 48)).toThrowError(
+      /partial MoE config/
+    );
+  });
+});
+
+/**
+ * The seed list as data, and the report that exists because nothing else notices absence.
+ *
+ * `.github/workflows/catalog-refresh.yml` re-derives every figure on every row weekly, so a publisher
+ * editing a `config.json` is caught within days. A model that was never listed is invisible to it —
+ * which is how this list came to be a year behind the field with every number in it seven days old.
+ */
+describe('the seed list knows what it is not carrying', () => {
+  it('never lists a repo as both seeded and deliberately absent', () => {
+    // The two halves of one decision, and a repo in both is a contradiction that would also make the
+    // candidate report lie in the quiet direction: suppressed as "written down", present as a row.
+    const seeded = seededIds();
+    for (const id of Object.keys(NOT_SEEDED)) {
+      expect(seeded.has(id), `${id} is both seeded and in NOT_SEEDED`).toBe(false);
+    }
+  });
+
+  it('states a reason for every absence, since the list is the written record', () => {
+    for (const [id, reason] of Object.entries(NOT_SEEDED)) {
+      expect(reason.length, `${id} has no reason`).toBeGreaterThan(10);
+    }
+  });
+
+  it('seeds each repo once, and names each row once', () => {
+    // A repeated id is silent in the product and nearly silent in the artifact: `MODELS` keeps both
+    // rows, so the picker lists the model twice while `getModel` resolves it to whichever came last.
+    expect(new Set(SEEDS.map((s) => s.id)).size).toBe(SEEDS.length);
+    expect(new Set(SEEDS.map((s) => s.name)).size).toBe(SEEDS.length);
+  });
+
+  it('counts a mirror and the repo it borrows traffic from as the same model', () => {
+    // Gemma and Llama are seeded through open mirrors, and the listing reports the *canonical* repo's
+    // traffic — so a report keyed on seed ids alone would name `google/gemma-3-4b-it` every week as
+    // something to add, while `unsloth/gemma-3-4b-it` is already a row under exactly that figure.
+    const mirrored = SEEDS.filter((s) => s.popularityId);
+    expect(mirrored.length).toBeGreaterThan(3);
+    for (const seed of mirrored) {
+      expect(seededIds().has(seed.popularityId!)).toBe(true);
+    }
+  });
+
+  /**
+   * The report's own filters, on rows taken from the live listing this runs against.
+   *
+   * Both wrong answers cost something specific. Naming forty derivative re-uploads trains people to
+   * skip the report, which is the same as not having one; suppressing a real model means the list ages
+   * silently, which is the defect this whole mechanism is for.
+   */
+  describe('the candidate report', () => {
+    const since = new Date('2025-06-01T00:00:00Z');
+    const options = {
+      seeded: seededIds(),
+      notSeeded: new Set(Object.keys(NOT_SEEDED)),
+      minDownloads: 250_000,
+      since,
+    };
+
+    it('names a model the field is downloading that nothing has decided about', () => {
+      const live = [
+        { id: 'someorg/Brand-New-42B-Instruct', downloads: 900_000, createdAt: '2026-07-01' },
+      ];
+      expect(unseededCandidates({ ...options, live }).map((m) => m.id)).toEqual([
+        'someorg/Brand-New-42B-Instruct',
+      ]);
+    });
+
+    it('says nothing about a row that is already seeded, mirror or canonical', () => {
+      const live = [
+        { id: 'Qwen/Qwen3-Coder-480B-A35B-Instruct', downloads: 900_000, createdAt: '2026-01-01' },
+        { id: 'google/gemma-3-4b-it', downloads: 2_060_000, createdAt: '2025-07-01' },
+        { id: 'unsloth/gemma-3-4b-it', downloads: 120_000, createdAt: '2025-07-01' },
+      ];
+      expect(unseededCandidates({ ...options, live })).toEqual([]);
+    });
+
+    it('says nothing about a refusal that has been written down', () => {
+      // The nine refused families are the bulk of the current field's traffic. Reporting them weekly
+      // would be a report whose every line is already answered in `NOT_SEEDED`.
+      const live = [
+        { id: 'Qwen/Qwen3.6-27B', downloads: 6_200_000, createdAt: '2026-04-21' },
+        { id: 'google/gemma-4-31B-it', downloads: 12_400_000, createdAt: '2026-03-11' },
+        { id: 'deepseek-ai/DeepSeek-V4-Flash', downloads: 3_100_000, createdAt: '2026-04-22' },
+      ];
+      expect(unseededCandidates({ ...options, live })).toEqual([]);
+    });
+
+    it('drops the derivative re-uploads that dominate the charts', () => {
+      // Every one of these is an id from the live listing, and every one of them is the same
+      // architecture as something already seeded or already refused.
+      const live = [
+        {
+          id: 'unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF',
+          downloads: 1_680_000,
+          createdAt: '2026-01-01',
+        },
+        { id: 'Qwen/Qwen3-32B-AWQ', downloads: 2_000_000, createdAt: '2026-01-01' },
+        { id: 'nvidia/GLM-5.2-NVFP4', downloads: 1_600_000, createdAt: '2026-06-22' },
+        { id: 'Qwen/Qwen3-Coder-Next-FP8', downloads: 2_500_000, createdAt: '2026-02-01' },
+        { id: 'google/gemma-4-31B-it-qat-w4a16-ct', downloads: 2_100_000, createdAt: '2026-06-04' },
+        { id: 'Qwen/Qwen3.5-35B-A3B-Base', downloads: 800_000, createdAt: '2026-02-24' },
+        {
+          id: 'hmellor/tiny-random-LlamaForCausalLM',
+          downloads: 5_500_000,
+          createdAt: '2025-08-01',
+        },
+        {
+          id: 'mistralai/Mistral-Medium-3.5-128B-EAGLE',
+          downloads: 400_000,
+          createdAt: '2026-04-27',
+        },
+        { id: 'nvidia/Kimi-K2.7-Code-DFlash', downloads: 500_000, createdAt: '2026-07-08' },
+        {
+          id: 'Bahushruth/Qwen3.6-35B-A3B-abliterated-v4',
+          downloads: 630_000,
+          createdAt: '2026-06-11',
+        },
+      ];
+      expect(unseededCandidates({ ...options, live })).toEqual([]);
+    });
+
+    it('drops the decade of accumulated tutorial traffic', () => {
+      // gpt2 and opt-125m outrank most of the current field and are not candidates for a hardware
+      // calculator. The floor is a date rather than a size, because size needs a second fetch.
+      const live = [
+        { id: 'openai-community/gpt2', downloads: 13_900_000, createdAt: '2022-03-02' },
+        { id: 'facebook/opt-125m', downloads: 17_100_000, createdAt: '2022-05-11' },
+      ];
+      expect(unseededCandidates({ ...options, live })).toEqual([]);
+    });
+
+    it('reports a row whose metadata is thin rather than swallowing it', () => {
+      // The report exists for the thing nobody has looked at, so silence about a repo because its
+      // `createdAt` was missing is the wrong default.
+      const live = [{ id: 'someorg/Undated-30B', downloads: 800_000 }];
+      expect(unseededCandidates({ ...options, live }).map((m) => m.id)).toEqual([
+        'someorg/Undated-30B',
+      ]);
+    });
+
+    it('stays quiet in a quiet week instead of scraping the barrel', () => {
+      // A floor rather than a top-N: nothing to report is a legitimate answer, and a report that
+      // always has five lines is one nobody can distinguish from a report that has news.
+      const live = [{ id: 'someorg/Obscure-7B', downloads: 1_200, createdAt: '2026-07-01' }];
+      expect(unseededCandidates({ ...options, live })).toEqual([]);
+    });
+
+    it('ranks by downloads, since the first line is the one that gets read', () => {
+      const live = [
+        { id: 'someorg/Quiet-9B', downloads: 300_000, createdAt: '2026-07-01' },
+        { id: 'someorg/Loud-70B', downloads: 4_000_000, createdAt: '2026-07-01' },
+      ];
+      expect(unseededCandidates({ ...options, live }).map((m) => m.id)).toEqual([
+        'someorg/Loud-70B',
+        'someorg/Quiet-9B',
+      ]);
+    });
   });
 });
