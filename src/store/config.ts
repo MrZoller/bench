@@ -51,9 +51,11 @@ function coerce(config: Config): Config {
 
   const modelId = known(config.modelId, getModel, DEFAULT_CONFIG.modelId);
   /**
-   * A model cannot be asked for more context than it was trained for. Every catalogued model
-   * tops out between 32K and 164K while the slider offers stops up to 1M, so without this a
-   * 40K Qwen would report fit, memory and speed for a 1M window it cannot process.
+   * A model cannot be asked for more context than it was trained for. Catalogued models top out
+   * anywhere from 16K (Phi-4) to 1M (Mistral Small 4 119B) while the slider offers the same
+   * stops for all of them, so without this a 40K Qwen would report fit, memory and speed for a 1M
+   * window it cannot process. The spread is the point rather than the endpoints: the clamp is what
+   * keeps one slider honest across a range that now covers a factor of 64.
    */
   const runtime = getRuntime(known(config.runtimeId, getRuntime, DEFAULT_CONFIG.runtimeId));
   const resolvedQuant = known(config.quantId, getQuant, DEFAULT_CONFIG.quantId);

@@ -72,6 +72,33 @@ bug, and on the one accessibility axis with no spec behind it.
   model's index is large: Kimi K2's is 12 MB of 105,000 tensors. `JSON.parse` then failed on the
   letter `v`, indistinguishably from a corrupt repo, for precisely the models whose size is the whole
   question. It reads through `/resolve/` now, as the shard reads always did.
+- **A published parameter count used as an exact one, which put 13.7% into a row's decode basis**
+  ([#77](https://github.com/MrZoller/bench/issues/77)). A `totalParams` override substitutes a
+  vendor's figure for a derived one, and `denseParams` is then that figure minus an _exact_ analytic
+  expert count — so on GLM 4.7 the routed experts are 335.964B of 355B and the entire residual is
+  19B, meaning whatever the published total rounds away lands there at 18.6x. Z.ai's 355B is
+  2.2B above the sum of the architecture's own tensors, so the row shipped 35.1B active against a
+  stated 32B (+9.6%) and a per-token basis 13.7% heavy — with "355B-A32B" quoted in the note the
+  product renders directly beneath the label carrying the derived figure. The seed now carries the
+  measured 352.8B, with the MTP module's decomposition written out term by term, and a seed that
+  states a published total may also state the published active count: the generator checks it on
+  every refresh against the same 8% band the catalog tests use, rather than leaving the
+  reconciliation asserted in prose that was true when someone typed it.
+- **A tied model's duplicate output table was subtracted as one parameter when the header did not
+  carry it** ([#77](https://github.com/MrZoller/bench/issues/77)). The subtraction read
+  `(shape ?? []).reduce((a, b) => a * b, 1)`, and an empty reduce over multiplication is **1** — so
+  for a tensor the shard header names differently from the index, the `<= 0` guard beneath it could
+  not fire and `granite-4.1-8b` would have shipped 4.9% heavy while still claiming to be tied, which
+  is exactly the row the subtraction exists to correct. The count is now checked against the
+  embedding table it claims to duplicate, and an unreadable shape refuses.
+- **Four more keys where a stated `null` was read as an absent one**
+  ([#77](https://github.com/MrZoller/bench/issues/77)). `num_key_value_heads: null` was refused, and
+  the line immediately above it conflated the two exactly the same way for `head_dim` — as did
+  `deriveMoe` for `first_k_dense_replace`, `moe_layer_freq` and `decoder_sparse_step`. Each of those
+  has a fallback that answers substantively rather than failing: a head dimension implied from the
+  hidden size, DeepSeek's expert-layer phase against Qwen's, every layer carrying experts. The line
+  that matters is which keys are _not_ guarded: for `sliding_window` or `num_kv_shared_layers`, absent
+  and `null` are the same statement, and refusing those would reject rows that are already right.
 - **A dense model with zeroed MoE keys derived a NaN active-parameter count**
   ([#77](https://github.com/MrZoller/bench/issues/77)). `granite-4.0-micro` states
   `num_local_experts: 0` and `num_experts_per_tok: 0`, which satisfies the partial-config guard and

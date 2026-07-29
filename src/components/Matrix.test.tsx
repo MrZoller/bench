@@ -18,15 +18,24 @@ import { DEFAULT_CONFIG, useConfig } from '@/store/config';
  * vacuous, since a `runs`-gated legend would render from that one cell too. There is no setting that
  * blocks it: context, concurrency and KV precision are all at their heaviest stop already.
  *
- * So the scenario is built here instead of found. Mocking the catalog down to one 671B model is not
- * a smaller version of the old test — it is the same claim with its precondition pinned, and it
+ * So the scenario is built here instead of found. Mocking the catalog down to one enormous model is
+ * not a smaller version of the old test — it is the same claim with its precondition pinned, and it
  * cannot be quietly falsified by the next model somebody seeds.
+ *
+ * **Which device the precondition turns on is not the obvious one, and that is worth stating.** The
+ * grid scores every shipping column, so the binding constraint is not an Apple machine — it is the
+ * largest CPU+RAM row in `devices.json`, and at 1450 GiB allocatable `epyc-9755` and `xeon-6980p` are
+ * the only rows in range of a scenario like this at all. `DeepSeek-V3.1` was the first choice here and
+ * held the assertion by 1.9%: 378.9 GiB of Q4_K_M weights plus 61 MLA layers x 576 x 2 B x 131072 x
+ * 128 = 1098.0 GiB of cache, 1476.9 against 1450. Raising either CPU row's ceiling by 27 GiB, or
+ * shaving q4_k_m's 4.85 bpw, would have failed this test on a line with nothing to do with #32's
+ * legend polarity. Kimi K2 is the same shape at 1T — identical MLA cache, 579.6 GiB of weights,
+ * 1677.6 GiB against the same 1450 — so the margin is 15.7% and it comes from the *weights*, which
+ * no context or concurrency stop moves.
  */
 vi.mock('@/data/catalog', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/data/catalog')>();
-  // One row, and a real one: whatever else moves in the catalog, a 671B MoE at 131K over 128 users
-  // does not fit on any Apple machine that exists.
-  const only = actual.MODELS.filter((m) => m.id === 'deepseek-ai/DeepSeek-V3.1');
+  const only = actual.MODELS.filter((m) => m.id === 'moonshotai/Kimi-K2-Instruct');
   return { ...actual, MODELS: only };
 });
 
@@ -40,7 +49,7 @@ afterEach(() => {
 it('marks the Matrix when every cell was scored at a stand-in and none of them fit', () => {
   const config = {
     ...DEFAULT_CONFIG,
-    modelId: 'deepseek-ai/DeepSeek-V3.1',
+    modelId: 'moonshotai/Kimi-K2-Instruct',
     deviceId: 'mac-studio-m3-ultra-512',
     runtimeId: 'mlx',
     quantId: 'q4_k_m',

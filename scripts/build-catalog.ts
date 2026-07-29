@@ -47,6 +47,25 @@ export interface Seed {
    */
   overrides?: {
     totalParams?: number;
+    /**
+     * The vendor's published active-parameter count. **Checked, never applied.**
+     *
+     * A `totalParams` override is a published figure standing in for a derived one, and every
+     * per-token figure on the row is then computed by subtracting an *exact* analytic expert count
+     * from it. The residual is small — 19B of 355B for GLM 4.7, 17B of 671B for DeepSeek V3 — so
+     * whatever the published total rounds away lands entirely in it, amplified by `total / dense`:
+     * 18.6x and 39.3x respectively. That is not a hypothetical. GLM 4.7's published 355B sits 2.2B
+     * above the sum of its own architecture and shipped a per-token basis 13.7% heavy.
+     *
+     * The notes on these rows used to assert the reconciliation in prose — "which also reproduces
+     * the stated 12B active exactly" — which is a claim checked once by whoever typed it and never
+     * again. Stating the figure makes the generator check it on every refresh, and the band is the
+     * same 8% `src/data/catalog.test.ts` holds every other MoE row to.
+     *
+     * Omitted where the vendor publishes no figure to check against. A name is not a figure:
+     * GLM 4.7 Flash is *called* 30B-A3B and its architecture puts 3.6B on the per-token path.
+     */
+    publishedActiveParams?: number;
     reason: string;
   };
   /**
@@ -172,9 +191,15 @@ export const SEEDS: Seed[] = [
     org: 'Z.ai',
     overrides: {
       totalParams: 30e9,
+      // No `publishedActiveParams`: "A3B" is the model's name, not a measurement Z.ai states, and
+      // the arithmetic below is what the row would be checked against.
       reason:
         "HF's safetensors index reports 31.2B including the MTP module, which inference does " +
-        'not load. The model card states 30B-A3B.',
+        "not load; the card's 30B is the loaded figure and sits 0.2% above the sum of the " +
+        'architecture itself. The "A3B" in the name is a round number rather than a stated ' +
+        'count: 4 of 64 experts is 1.74B per token, and the part every token pays for anyway — ' +
+        '47 layers of MLA, the shared expert, the output table — is another 1.90B, so this row ' +
+        'derives 3.6B active.',
     },
   },
   { id: 'mistralai/Mistral-Small-4-119B-2603', name: 'Mistral Small 4 119B', org: 'Mistral' },
@@ -184,6 +209,7 @@ export const SEEDS: Seed[] = [
     org: 'DeepSeek',
     overrides: {
       totalParams: 671e9,
+      publishedActiveParams: 37e9,
       reason:
         "HF's safetensors index reports 684.5B, which includes the Multi-Token Prediction " +
         'module. MTP ships in the repo but is not loaded for ordinary inference, so counting ' +
@@ -196,6 +222,7 @@ export const SEEDS: Seed[] = [
     org: 'DeepSeek',
     overrides: {
       totalParams: 671e9,
+      publishedActiveParams: 37e9,
       reason: 'Same MTP module as DeepSeek V3; 671B is the published figure.',
     },
   },
@@ -205,6 +232,7 @@ export const SEEDS: Seed[] = [
     org: 'DeepSeek',
     overrides: {
       totalParams: 671e9,
+      publishedActiveParams: 37e9,
       reason:
         'Same MTP module as DeepSeek V3, and the same published 671B / 37B active. V3.2 and V4 ' +
         'are refused for their sparse-attention indexer, so this is the newest DeepSeek this ' +
@@ -222,6 +250,7 @@ export const SEEDS: Seed[] = [
     org: 'Z.ai',
     overrides: {
       totalParams: 106e9,
+      publishedActiveParams: 12e9,
       reason:
         "HF's safetensors index reports 110.5B including the MTP module. The published " +
         'figure is 106B, which also reproduces the stated 12B active exactly.',
@@ -232,11 +261,34 @@ export const SEEDS: Seed[] = [
     name: 'GLM 4.7',
     org: 'Z.ai',
     overrides: {
-      totalParams: 355e9,
+      /**
+       * The measured non-MTP total, not the published 355B, and this is the one override in the
+       * list that departs from a vendor's figure — so the arithmetic is here rather than asserted.
+       *
+       * The index reports 358.338B. Its MTP module is one `Glm4Moe` block plus its own copies of
+       * the vocabulary tables, every term of which is in `config.json`: 160 experts x 3 x 5120 x
+       * 1536 = 3.775B routed, a shared expert of 23.6M, one attention block of 136.3M (96 q heads
+       * x 128 against 8 kv heads, with biases), an `eh_proj` at [5120, 10240] = 52.4M, and an
+       * embedding and head of 151552 x 5120 = 775.9M each. 5.540B, leaving 352.798B — which is
+       * also what summing the 92-layer stack term by term gives, to within 10 KiB of norms.
+       *
+       * Z.ai's 355B is 2.2B above that, which is 0.6% of the total and would be immaterial if the
+       * total were where it stopped. It is not: `denseParams` is `totalParams - expertParams`, and
+       * the routed experts are 335.964B of it, so the whole 2.2B lands in a 16.8B residual and
+       * every per-token figure on the row inherits it. 19.036B dense against 16.834B, 13.1%; the
+       * decode basis 13.7% heavy; 35.1B active against a stated 32B. Rounding a total is cheap and
+       * rounding its residual is not.
+       */
+      totalParams: 352.8e9,
+      publishedActiveParams: 32e9,
       reason:
-        "HF's safetensors index reports 358.3B including the MTP module. Z.ai's own model table " +
-        'states 355B-A32B for 4.5, 4.6 and 4.7 alike, which are one architecture at three ' +
-        'checkpoints. GLM 5.x is refused for its sparse-attention indexer.',
+        "HF's safetensors index reports 358.3B including a 5.5B MTP module that inference does " +
+        "not load. Z.ai's own model table states 355B-A32B for 4.5, 4.6 and 4.7 alike, which are " +
+        'one architecture at three checkpoints — but 355B is 2.2B above the sum of that ' +
+        "architecture's own tensors, and since the routed experts are subtracted from the total " +
+        'exactly, all 2.2B would land in the 16.8B that is left. 352.8B is the measured figure ' +
+        'and reproduces the stated 32B active to 2.8%. GLM 5.x is refused for its ' +
+        'sparse-attention indexer.',
     },
   },
 ];
@@ -312,6 +364,23 @@ export const NOT_SEEDED: Readonly<Record<string, string>> = {
   // Shape-identical to a row already in the catalog, so it answers no new question.
   'mistralai/Devstral-Small-2-24B-Instruct-2512': "24B dense at 40x5120 — Mistral Small 24B's row",
   'mistralai/Mistral-Small-3.2-24B-Instruct-2506': 'superseded by Mistral Small 4; same shape',
+  /**
+   * The three repos [#77](https://github.com/MrZoller/bench/issues/77) named by id and this list did
+   * not answer, which is a different failure from the ones above: each was checked, each was
+   * declined, and none of them was written down — so the entry a reader would look for was missing
+   * for the same reason the seed list went a year stale. All three are also invisible to
+   * {@link reportSeedCandidates}: Nemo predates its 18-month window and the other two are under its
+   * 250K download floor, so the weekly report was never going to raise them either. Those filters
+   * are a floor on what the report *surfaces*, not a bound on what this table has to explain.
+   */
+  'mistralai/Mistral-Nemo-Instruct-2407':
+    '12B dense at 40x5120 — the 12-14B tier Gemma 3 12B and Qwen3 14B already answer, and a ' +
+    'July 2024 model rather than the head of its family (Ministral 3 3B and Mistral Small 4 are). ' +
+    "The gap it fills is in Mistral's lineup, not in the hardware question.",
+  'mistralai/Devstral-Small-2507':
+    "24B dense at 40x5120, which is Mistral Small 24B's row; superseded by Devstral Small 2",
+  'CohereLabs/c4ai-command-a-03-2025':
+    'superseded by Command A+ (05-2026), which is seeded; 111B dense against its 219B MoE',
   'zai-org/GLM-4.5': "one checkpoint of GLM 4.7's architecture",
   'zai-org/GLM-4.6': "one checkpoint of GLM 4.7's architecture",
   'MiniMaxAI/MiniMax-M2': "one checkpoint of MiniMax M2.7's architecture",
@@ -389,6 +458,52 @@ function require(value: number | undefined, id: string, what: string): number {
   return value;
 }
 
+/**
+ * Refuses a key that is **present and unreadable** where this script has a fallback for it being
+ * absent.
+ *
+ * `num()` maps anything that is not a number to `undefined`, so `x: null` and no `x` at all are one
+ * value by the time any derivation sees them. That is right for most keys and wrong for a specific
+ * few, and the line between them is what this guard is:
+ *
+ *   - **Absence means "this feature is not here."** `sliding_window`, `num_kv_shared_layers`,
+ *     `index_topk`, `num_global_key_value_heads` — a config with no key and a config with an explicit
+ *     `null` are making the same statement, and writing the `null` is common: `sliding_window: null`
+ *     is on Qwen3 and Command A+, `rope_scaling: null` on GLM 4.7. Reading null as absent is correct
+ *     there, and a guard would refuse rows that are already right.
+ *   - **Absence means something substantive, and there is a fallback to match.** An absent
+ *     `num_key_value_heads` means full multi-head attention; an absent `head_dim` means
+ *     `hidden_size / num_attention_heads`; an absent `first_k_dense_replace` selects Qwen's MoE
+ *     layer phase over DeepSeek's. Here a stated `null` is a config *declining* to answer — usually
+ *     because the answer is per layer — and applying the fallback answers on its behalf.
+ *
+ * `num_key_value_heads: null` is the live case (`Llama-3_3-Nemotron-Super-49B-v1_5`, an 8x
+ * overstatement) and it has its own refusal below, with its own arithmetic. This is the same
+ * statement for the rest of that second group, because the same publisher writes
+ * `intermediate_size: null` on the same config and the next export to decline a question will not
+ * necessarily decline that one.
+ *
+ * Verified against all 35 seeds: none carries any of these keys as a non-number, so this rejects
+ * nothing already in the product.
+ */
+function refuseUnreadableFallback(
+  id: string,
+  config: HfConfig,
+  key: string,
+  absenceMeans: string
+): void {
+  if (!Object.hasOwn(config, key)) return;
+  const value = config[key];
+  if (typeof value === 'number' && Number.isFinite(value)) return;
+
+  throw new DerivationError(
+    `${id}: states ${key}: ${JSON.stringify(value)} rather than omitting it. An absent ${key} ` +
+      `means ${absenceMeans}, and a stated one that is not a number is a config declining to ` +
+      'answer — so reading the two as the same thing applies that meaning to a model whose own ' +
+      'config says it does not hold. Refusing to pick one.'
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Architecture derivation
 // ---------------------------------------------------------------------------
@@ -411,8 +526,10 @@ type AttentionCore =
  * configured under `linear_*` or `mamba_*` is a recurrence whose state is **constant in sequence
  * length**, whatever comes after the underscore.
  *
- * Verified against all 17 seeds: none carries a key matching either prefix, so this rejects nothing
- * already in the product.
+ * Verified against all 35 seeds — re-probed when the list grew from 17, since a prefix is exactly the
+ * kind of guard that starts rejecting the product as the product moves: none of them carries a key
+ * matching either prefix, and a match would refuse rather than mis-price, so the committed catalog
+ * having 35 rows and no failures is the check rather than a claim about it.
  */
 const LINEAR_STACK_PREFIXES = [/^linear_/, /^mamba_/];
 
@@ -780,6 +897,10 @@ export function deriveAttention(
   }
 
   const hidden = require(num(config, 'hidden_size'), id, 'hidden_size');
+  // The GQA branch's other fallback, guarded for the same reason as `num_key_value_heads` below and
+  // in front of the line that takes it rather than after — a refusal that runs second reads the
+  // derived value as evidence, and here the derived value is the thing that must not be computed.
+  refuseUnreadableFallback(id, config, 'head_dim', 'hidden_size / num_attention_heads');
   // Most configs state head_dim; older ones imply it from hidden_size / num_attention_heads.
   const headDim = require(num(config, 'head_dim') ?? hidden / heads, id, 'head_dim');
 
@@ -1015,7 +1136,7 @@ function deriveTotalParams(id: string, api: HfApiModel, expertParams: number): n
   return unpacked + expertParams;
 }
 
-interface MoeDerivation {
+export interface MoeDerivation {
   expertParams: number;
   experts: { total: number; perToken: number };
 }
@@ -1069,7 +1190,27 @@ export function deriveMoe(id: string, config: HfConfig, layers: number): MoeDeri
    *   Qwen:     `(i + 1) % decoder_sparse_step == 0`
    *
    * Both then exclude anything listed in `mlp_only_layers`.
+   *
+   * All four keys are read through a fallback, and all four fallbacks are substantive rather than
+   * "feature absent" — which is why they are guarded first. An absent `first_k_dense_replace`
+   * chooses Qwen's phase over DeepSeek's, and `?? 1` on either step counts *every* layer as MoE, so
+   * a stated non-number would not fail: it would return a confident expert count off by however many
+   * layers the config was declining to describe. MiniMax M3 states a per-layer `moe_layer_freq`
+   * array — it refuses a step earlier for its sparse indexer, but the next model to do it may not.
    */
+  refuseUnreadableFallback(id, config, 'first_k_dense_replace', "Qwen's MoE layer phase");
+  refuseUnreadableFallback(id, config, 'moe_layer_freq', 'every layer from the first MoE one');
+  refuseUnreadableFallback(id, config, 'decoder_sparse_step', 'every layer');
+  if (Object.hasOwn(config, 'mlp_only_layers') && config.mlp_only_layers !== null) {
+    if (!Array.isArray(config.mlp_only_layers)) {
+      throw new DerivationError(
+        `${id}: states mlp_only_layers: ${JSON.stringify(config.mlp_only_layers)}, which is not a ` +
+          'list of layer indices. Read as an empty one it silently charges experts to the layers ' +
+          'the config was excluding.'
+      );
+    }
+  }
+
   const mlpOnly = new Set(
     Array.isArray(config.mlp_only_layers) ? (config.mlp_only_layers as number[]) : []
   );
@@ -1093,6 +1234,54 @@ export function deriveMoe(id: string, config: HfConfig, layers: number): MoeDeri
     expertParams: moeLayers * total * 3 * hidden * moeIntermediate,
     experts: { total, perToken },
   };
+}
+
+/**
+ * The headline active-parameter count, in the convention vendors publish.
+ *
+ * A function rather than an expression inside `buildModel` so a test can reach it, and that is not
+ * incidental: the arithmetic is `(perToken / total) * expertParams`, and the one shape that produces
+ * a *number* rather than a refusal from {@link deriveMoe} — a dense model whose shared config class
+ * zeroes the MoE keys — makes it `(0 / 0) * 0`, **NaN**, which `JSON.stringify` writes into the
+ * committed catalog as `null` and `toModel` does not check. A test that retypes that expression as
+ * literals proves nothing about the shipped path; one that calls this proves the consequence is
+ * reachable from a value `deriveMoe` could return.
+ *
+ * `totalParams` for a dense model, not `activeDense`: a dense model's active count *is* its total,
+ * which is what every vendor states. Subtracting the embedding here emitted Qwen3-32B as 31.98B
+ * active against 32.76B total with no routed experts anywhere.
+ */
+export function publishedActiveParams(
+  totalParams: number,
+  activeDense: number,
+  moe: MoeDerivation | null
+): number {
+  if (!moe) return totalParams;
+  return activeDense + (moe.experts.perToken / moe.experts.total) * moe.expertParams;
+}
+
+/**
+ * How far a derived active count may sit from the vendor's published one before the row is refused.
+ *
+ * 8%, which is the band `src/data/catalog.test.ts` holds every other MoE row to — tight enough that
+ * adding the input embedding back in (the correction this pipeline exists to apply) fails every one
+ * of the models that test names. Every row that carries a published figure lands inside 3%.
+ */
+const PUBLISHED_ACTIVE_TOLERANCE = 0.08;
+
+export function reconcileActiveParams(id: string, derived: number, published: number): void {
+  const drift = Math.abs(derived - published) / published;
+  if (drift <= PUBLISHED_ACTIVE_TOLERANCE) return;
+
+  throw new DerivationError(
+    `${id}: derives ${(derived / 1e9).toFixed(2)}B active against the published ` +
+      `${(published / 1e9).toFixed(2)}B — ${(drift * 100).toFixed(1)}% out, past the ` +
+      `${(PUBLISHED_ACTIVE_TOLERANCE * 100).toFixed(0)}% this catalog holds every other MoE row ` +
+      'to. The row would render both figures in the same control: the derived one in the model ' +
+      "label, the published one in the note beside it. Since the seed's totalParams is a constant " +
+      'and the routed experts are subtracted from it exactly, the usual cause is that constant — ' +
+      'whatever it rounds away lands in the dense residual, at total/dense times its size.'
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1277,10 +1466,66 @@ const OUTPUT_HEAD_SUFFIXES = [
   'embed_out.weight',
 ];
 
+/**
+ * How many parameters a tied model's duplicate output table holds, read from the shard header.
+ *
+ * Pure and exported for the reason the arithmetic is here at all: the figure is subtracted from a
+ * published parameter count, and the failure mode is not a crash but a row that is 4.9% heavy while
+ * still claiming to be tied.
+ *
+ * Two things a `reduce` over a possibly-absent shape gets wrong, and the second is why this is a
+ * function rather than an expression. `(shape ?? []).reduce((a, b) => a * b, 1)` is **1** for a
+ * tensor the header does not carry — a real divergence, since the index and the shard header are
+ * written by different tools and need not agree on a name — so a `<= 0` guard cannot fire, and
+ * `granite-4.1-8b` would ship 8.79B against a resident 8.38B with `tiedEmbeddings: true` beside it:
+ * exactly the row the subtraction exists to correct, silently uncorrected. The identity element of
+ * multiplication is the one value that makes "no data" indistinguishable from a plausible answer.
+ *
+ * And the element count is compared against the embedding table, because a tie is a claim that the
+ * two tables *are* one: `[100352, 4096]` against a `[100352, 4096]` embedding. Compared as a product
+ * rather than as a shape so a transposed export does not read as a disagreement. Note what this
+ * cannot see, since the comment it replaces implied otherwise: a head of identical shape that is
+ * genuinely independent — a fine-tune that untied the head without editing `config.json` — is
+ * indistinguishable from a duplicate by measurement alone, and the config's own `true` is the only
+ * evidence either way. That case is wrong in both directions and no shape check reaches it.
+ */
+export function duplicatedOutputParams(
+  id: string,
+  outputHead: string,
+  header: Record<string, { dtype?: string; shape?: number[] }>,
+  embeddingParams: number
+): number {
+  const shape = header[outputHead]?.shape;
+  if (!Array.isArray(shape) || shape.length === 0) {
+    throw new DerivationError(
+      `${id}: config ties the embeddings and ${outputHead} is in the index, but the shard header ` +
+        `gives it ${JSON.stringify(shape)} — so whether the total counts one table or two cannot ` +
+        'be settled. An unreadable shape is not a zero-sized tensor.'
+    );
+  }
+
+  const params = shape.reduce((a, b) => a * b, 1);
+  if (!Number.isFinite(params) || params <= 0) {
+    throw new DerivationError(
+      `${id}: ${outputHead} has shape ${JSON.stringify(shape)}, which is not a parameter count.`
+    );
+  }
+  if (params !== embeddingParams) {
+    throw new DerivationError(
+      `${id}: config ties the embeddings, but ${outputHead} holds ${params} parameters against ` +
+        `the embedding table's ${embeddingParams}. A tie is a claim that the two are one tensor, ` +
+        'so a head of a different size is an untied projection whatever the config says. Refusing ' +
+        'to subtract it.'
+    );
+  }
+  return params;
+}
+
 async function deriveStackShape(
   id: string,
   revision: string,
-  declaredTied: boolean | undefined
+  declaredTied: boolean | undefined,
+  embeddingParams: number
 ): Promise<StackShape> {
   const weightMap = await fetchTensorMap(id, revision);
   const names = Object.keys(weightMap);
@@ -1332,27 +1577,20 @@ async function deriveStackShape(
    * it in full every step.
    */
   const tiedEmbeddings = outputHead === undefined || declaredTied === true;
-  let duplicatedOutputParams = 0;
+  let duplicated = 0;
   if (outputHead !== undefined && declaredTied === true) {
     // Measured from the shard rather than assumed to be vocab x hidden: the whole point of the
-    // subtraction is that it is a real tensor with a real size, and a tie only holds between tables
-    // of one shape — so if this ever disagrees with the embedding, the assumption above is wrong and
-    // the figure should not have been invented.
+    // subtraction is that it is a real tensor with a real size. `duplicatedOutputParams` checks it
+    // against the embedding table and refuses the shapes that cannot settle the question.
     const header = await fetchSafetensorsHeader(id, revision, weightMap[outputHead]);
-    duplicatedOutputParams = (header[outputHead]?.shape ?? []).reduce((a, b) => a * b, 1);
-    if (!Number.isFinite(duplicatedOutputParams) || duplicatedOutputParams <= 0) {
-      throw new DerivationError(
-        `${id}: config ties the embeddings and ${outputHead} is present, but its shape is ` +
-          'unreadable — so whether the total counts one table or two cannot be settled.'
-      );
-    }
+    duplicated = duplicatedOutputParams(id, outputHead, header, embeddingParams);
   }
 
   const otherShards = [
     ...new Set(names.filter((n) => classifyTensor(n) === 'other').map((n) => weightMap[n])),
   ];
   if (otherShards.length === 0) {
-    return { tiedEmbeddings, nonLanguageParams: 0, duplicatedOutputParams };
+    return { tiedEmbeddings, nonLanguageParams: 0, duplicatedOutputParams: duplicated };
   }
 
   let nonLanguageParams = 0;
@@ -1366,11 +1604,22 @@ async function deriveStackShape(
             'count is not a parameter count. Add an override rather than subtracting it.'
         );
       }
-      nonLanguageParams += (tensor.shape ?? []).reduce((a, b) => a * b, 1);
+      // The same `?? []` as the output head above, and it cannot go wrong the same way — the name
+      // comes from this header rather than from the index, so the tensor is always there. An absent
+      // `shape` on a tensor that *is* there is still a header this script cannot read, and summing
+      // it as one parameter would understate a vision tower by however many it holds. An empty shape
+      // is left alone: safetensors spells a scalar that way, and a scalar really is one element.
+      if (tensor.shape === undefined) {
+        throw new DerivationError(
+          `${id}: non-language tensor ${name} carries no shape, so its parameter count is ` +
+            'unreadable. Refusing to charge it as one.'
+        );
+      }
+      nonLanguageParams += tensor.shape.reduce((a, b) => a * b, 1);
     }
   }
 
-  return { tiedEmbeddings, nonLanguageParams, duplicatedOutputParams };
+  return { tiedEmbeddings, nonLanguageParams, duplicatedOutputParams: duplicated };
 }
 
 async function buildModel(seed: Seed) {
@@ -1412,6 +1661,9 @@ async function buildModel(seed: Seed) {
   const layers = require(num(config, 'num_hidden_layers'), seed.id, 'num_hidden_layers');
   const hiddenSize = require(num(config, 'hidden_size'), seed.id, 'hidden_size');
   const vocabSize = require(num(config, 'vocab_size'), seed.id, 'vocab_size');
+  // Read here rather than beside the count it corrects, because `deriveStackShape` needs it to check
+  // a tied model's duplicate head against the table it is supposed to be a duplicate of.
+  const embeddingParams = vocabSize * hiddenSize;
 
   /**
    * The attention stack is settled here, before anything that touches the network again, and the
@@ -1468,7 +1720,8 @@ async function buildModel(seed: Seed) {
   const stack = await deriveStackShape(
     seed.id,
     revision,
-    typeof config.tie_word_embeddings === 'boolean' ? config.tie_word_embeddings : undefined
+    typeof config.tie_word_embeddings === 'boolean' ? config.tie_word_embeddings : undefined,
+    embeddingParams
   );
 
   /**
@@ -1494,19 +1747,19 @@ async function buildModel(seed: Seed) {
    * 5.75B and the stated 5.1B for gpt-oss-120b, and between 12.6B and 12B for GLM-4.5-Air.
    */
   const denseParams = totalParams - expertParams;
-  const embeddingParams = vocabSize * hiddenSize;
   const activeDense = Math.max(0, denseParams - embeddingParams);
+  const activeParams = publishedActiveParams(totalParams, activeDense, moe);
+
   /**
-   * The *published* convention, and it only subtracts the embedding for MoE models.
+   * And checked against the vendor's own figure, where the seed states one.
    *
-   * A dense model's active count is its total — that is what every vendor states and what
-   * `ModelSpec` promises. Subtracting the embedding here emitted Qwen3-32B as 31.98B active
-   * against 32.76B total with no routed experts anywhere, which is a fabricated headline. The
-   * physical decode basis is `activeDenseParams` below and needs no help from this field.
+   * Only override rows carry one, because only they need it: a row whose total is derived reconciles
+   * or fails visibly, while a row whose total is a published constant hides the whole of that
+   * constant's rounding in the dense residual. See {@link Seed.overrides.publishedActiveParams}.
    */
-  const activeParams = moe
-    ? activeDense + (moe.experts.perToken / moe.experts.total) * expertParams
-    : totalParams;
+  if (seed.overrides?.publishedActiveParams !== undefined) {
+    reconcileActiveParams(seed.id, activeParams, seed.overrides.publishedActiveParams);
+  }
 
   /**
    * `activeParams` above is the *published* convention, and it is not what a decode step reads — the
@@ -1708,6 +1961,14 @@ export function seededIds(seeds: readonly Seed[] = SEEDS): Set<string> {
  * Wrapped in its own error handling and deliberately after the write: this is a report, and a
  * listing endpoint having a bad minute must not be able to fail a refresh that has already
  * successfully derived every row.
+ *
+ * **The two thresholds below are a floor on what this surfaces, not a bound on what
+ * {@link NOT_SEEDED} has to explain.** A repo can be worth an entry and permanently invisible here:
+ * `Mistral-Nemo-Instruct-2407` has 438K downloads and predates the 18-month window, and
+ * `Devstral-Small-2507` and `c4ai-command-a-03-2025` are under the download floor — all three were
+ * named by id in #77, and all three were absent from this table until a reviewer looked for them.
+ * The report catches the *field moving*; a question somebody has already asked has to be written
+ * down when it is answered.
  */
 async function reportSeedCandidates(): Promise<void> {
   const MIN_DOWNLOADS = 250_000;
@@ -1792,8 +2053,8 @@ async function main() {
    * The artifact is committed, so a partial run does not merely produce a smaller catalog — it
    * deletes models from the product, and the loader reads only `models` and never surfaces
    * `failures`. A tolerance threshold made that outcome reachable from a transient Hugging Face
-   * error: five of seventeen seeds could 503 and the run would still exit 0 having dropped 29%
-   * of the catalog.
+   * error: on the tolerance it carried, ten of thirty-five seeds could 503 and the run would still
+   * exit 0 having dropped 29% of the catalog.
    *
    * `--allow-partial` keeps the original escape hatch, because a single permanently-gated repo
    * should not block every future refresh. It just has to be asked for.
@@ -1839,7 +2100,7 @@ async function main() {
 /**
  * Guarded so the derivations above can be imported by a test without the script running itself —
  * the same guard `catalog-diff.ts` carries, and for a sharper reason here: importing this module
- * unguarded starts seventeen rounds of network fetches.
+ * unguarded starts one round of network fetches per seed, which is now thirty-five of them.
  *
  * They went untested for exactly that long. `deriveAttention` flattening a hybrid stack into GQA
  * and `deriveLayerWindows` refusing only along the sliding axis were both reachable from a

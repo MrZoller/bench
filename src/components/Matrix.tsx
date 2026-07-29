@@ -98,7 +98,7 @@ export function Matrix({ config }: { config: Config }) {
   const devices = useMemo(() => DEVICES.filter((d) => d.status === 'shipping'), []);
 
   /**
-   * The columns this runtime cannot drive at all — one fact about the scenario, not 17 findings.
+   * The columns this runtime cannot drive at all — one fact about the scenario, not one per row.
    *
    * Select vLLM and every Mac, every Strix Halo and every CPU host empties out completely — 10 of
    * the 24 shipping columns as the catalog stands at this commit — and every cell in them used to be
@@ -113,11 +113,11 @@ export function Matrix({ config }: { config: Config }) {
    * them, on the surface people read as a shortlist (#72).
    *
    * **From `runtimeDrives`, not from "every cell in this column is empty".** At #72's own URL the
-   * two happen to agree — the columns with no runnable cell there are exactly these 10, since the
-   * DGX Spark still runs 11 of its 17 rows — and that coincidence is precisely what makes deriving
-   * the mark from emptiness look safe. It is one slider from wrong. Take that same vLLM grid to 32
-   * concurrent users and the RTX 3090, 4090 and 5080 columns empty out as well, all 17 cells apiece
-   * refused on counted bytes, and vLLM drives all three perfectly well. Striking those headings
+   * two happen to agree — the columns with no runnable cell there are exactly these 10, while the
+   * DGX Spark still runs a good share of its rows — and that coincidence is precisely what makes
+   * deriving the mark from emptiness look safe. It is one slider from wrong. Take that same vLLM
+   * grid to 32 concurrent users and the RTX 3090, 4090 and 5080 columns empty out as well, every
+   * cell in them refused on counted bytes, and vLLM drives all three fine. Striking those headings
    * would be exactly the misattribution being fixed, only pointed the other way. Model-independent
    * by construction, which is why it is a set of device ids rather than a scan of the grid: "at any
    * size" is the claim, and it is true of the column before any row is scored.
@@ -759,7 +759,7 @@ export function Matrix({ config }: { config: Config }) {
                       // it read as a finding about the machine. `evaluated` is the question the
                       // border actually answers: was this judged on its numbers. A cell refused on a
                       // categorical ground was not, so it gets no ink at all, and the struck column
-                      // heading above says why once instead of 17 times. That also makes the
+                      // heading above says why once instead of once per row. That also makes the
                       // "will not run" key below true of exactly the cells that wear it.
                       //
                       // The cursor is the pointer's half of the `aria-disabled` above — the one

@@ -5,6 +5,9 @@ import {
   deriveAttention,
   deriveLayerWindows,
   deriveMoe,
+  duplicatedOutputParams,
+  publishedActiveParams,
+  reconcileActiveParams,
   seededIds,
   unseededCandidates,
 } from './build-catalog';
@@ -13,7 +16,7 @@ import {
  * What the generator decides about a model's attention stack, and what it refuses to decide.
  *
  * Untested until now for a mechanical reason worth recording: `build-catalog.ts` called `main()` at
- * module scope, so importing it started seventeen rounds of network fetches and no test could reach
+ * module scope, so importing it started a round of network fetches per seed and no test could reach
  * the pure derivations at all. Both defects below were three lines from a unit test the whole time.
  *
  * Every config fragment here is the real thing, trimmed to the keys these two functions read and
@@ -109,9 +112,8 @@ const QWEN3_32B = {
 /**
  * https://huggingface.co/NousResearch/Meta-Llama-3.1-8B-Instruct/raw/main/config.json
  *
- * The plainest shape in the catalog and the majority of it: no window keys of any kind, and no
- * `head_dim` either, so the dimension is implied from `hidden_size / num_attention_heads`. Nine of
- * the seventeen seeds look like this.
+ * The plainest shape in the catalog and the largest single group in it: no window keys of any kind,
+ * and no `head_dim` either, so the dimension is implied from `hidden_size / num_attention_heads`.
  */
 const LLAMA_31_8B = {
   num_hidden_layers: 32,
@@ -1179,15 +1181,22 @@ describe('the expert count', () => {
   });
 
   it('would have emitted a NaN active count for it', () => {
-    // The consequence, computed the way `buildModel` computes it, from a shape that says what the old
-    // branch returned. Not arithmetic on literals: the point is that this expression is what the row
-    // is built from, and that `0 / 0` reaches it.
+    /**
+     * The consequence, through the function `buildModel` actually calls — which it was not, in the
+     * first version of this test: it retyped `(0 / 0) * 0` as literals in the test body and passed
+     * with both halves of the fix reverted, under a comment claiming the opposite. `deriveMoe` cannot
+     * return this shape any more, so the shape is built here and handed to the shipped arithmetic.
+     * That is the seam: the refusal is pinned by the test above, and this pins what the refusal
+     * prevents.
+     */
     const asPartialMoe = { expertParams: 0, experts: { total: 0, perToken: 0 } };
-    const activeParams =
-      3.4e9 +
-      (asPartialMoe.experts.perToken / asPartialMoe.experts.total) * asPartialMoe.expertParams;
+    const activeParams = publishedActiveParams(3.4e9, 3.4e9, asPartialMoe);
     expect(Number.isNaN(activeParams)).toBe(true);
     expect(JSON.parse(JSON.stringify({ activeParams }))).toEqual({ activeParams: null });
+
+    // And the same function on the shape `deriveMoe` returns now is the dense model's own total,
+    // which is the field's published convention rather than a smaller number that reads like one.
+    expect(publishedActiveParams(3.4e9, 3.1e9, null)).toBe(3.4e9);
   });
 
   it('still refuses a config that zeroes one key and not the other', () => {
@@ -1250,6 +1259,52 @@ describe('the seed list knows what it is not carrying', () => {
     // rows, so the picker lists the model twice while `getModel` resolves it to whichever came last.
     expect(new Set(SEEDS.map((s) => s.id)).size).toBe(SEEDS.length);
     expect(new Set(SEEDS.map((s) => s.name)).size).toBe(SEEDS.length);
+  });
+
+  /**
+   * Every repo #77 named by id, which is the coverage half of the invariant above.
+   *
+   * The two tests before this one assert that the halves do not *overlap*; nothing asserted that
+   * anything was in either, and three ids from the issue were in neither. All three are also
+   * unreachable by the candidate report — `Mistral-Nemo-Instruct-2407` is a July 2024 repo, so the
+   * 18-month `since` filter drops it forever, and the other two are under the 250K download floor —
+   * so "the report will raise it" was not true of them and a reader asking "why is there no Mistral
+   * between 3.85B and 24B?" got no answer from anywhere.
+   *
+   * Listed as literals on purpose: an issue is not data, and the point is that a decision recorded
+   * once stays recorded when the list moves under it.
+   */
+  it('answers every repo the issue named, as a seed or as a refusal', () => {
+    const named = [
+      'meta-llama/Llama-3.3-70B-Instruct',
+      'Qwen/Qwen3-30B-A3B-Instruct-2507',
+      'Qwen/Qwen3-235B-A22B-Instruct-2507',
+      'deepseek-ai/DeepSeek-V3.1',
+      'zai-org/GLM-4.5',
+      'zai-org/GLM-4.6',
+      'Qwen/Qwen3-Coder-480B-A35B-Instruct',
+      'moonshotai/Kimi-K2-Instruct',
+      'moonshotai/Kimi-K2-Thinking',
+      'meta-llama/Llama-4-Scout-17B-16E-Instruct',
+      'meta-llama/Llama-4-Maverick-17B-128E-Instruct',
+      'MiniMaxAI/MiniMax-M2',
+      'microsoft/phi-4',
+      'nvidia/Llama-3_3-Nemotron-Super-49B-v1_5',
+      'CohereLabs/c4ai-command-a-03-2025',
+      'ByteDance-Seed/Seed-OSS-36B-Instruct',
+      'ibm-granite/granite-4.0-h-small',
+      'google/gemma-3-4b-it',
+      'meta-llama/Llama-3.2-3B-Instruct',
+      'mistralai/Mistral-Nemo-Instruct-2407',
+      'mistralai/Devstral-Small-2507',
+    ];
+    const seeded = seededIds();
+    for (const id of named) {
+      expect(
+        seeded.has(id) || Object.hasOwn(NOT_SEEDED, id),
+        `#77 named ${id} and the seed list neither carries it nor says why not`
+      ).toBe(true);
+    }
   });
 
   it('counts a mirror and the repo it borrows traffic from as the same model', () => {
@@ -1378,5 +1433,258 @@ describe('the seed list knows what it is not carrying', () => {
         'someorg/Quiet-9B',
       ]);
     });
+  });
+});
+
+/**
+ * The vendor's own figure as a check rather than as prose.
+ *
+ * A `totalParams` override replaces a derived total with a published constant, and every per-token
+ * figure on the row is then that constant minus an *exact* analytic expert count. The residual is a
+ * small fraction of the total — a nineteenth for GLM 4.7, a thirty-ninth for DeepSeek V3 — so
+ * whatever the constant rounds away lands there in full: 2.2B of rounding on a 16.8B residual, which
+ * is 13.7% on the decode basis and 35.1B active against a published 32B. GLM 4.7 shipped that way,
+ * with "355B-A32B" quoted in the note the product renders directly beneath the label carrying the
+ * derived figure.
+ *
+ * The reconciliation used to live in those notes — "which also reproduces the stated 12B active
+ * exactly" — which is a claim someone checked once by hand. Stating the figure makes every refresh
+ * check it.
+ */
+describe('a published active count is checked, not asserted in prose', () => {
+  const GLM_47_EXPERTS = { expertParams: 335_963_750_400, experts: { total: 160, perToken: 8 } };
+  const GLM_47_EMBEDDING = 151552 * 5120;
+
+  it('refuses the figure GLM 4.7 shipped, off its published one by more than the band', () => {
+    // The row as it was: a 355e9 published total, 335.964B of routed experts derived from
+    // config.json, so 19.036B dense and 18.260B once the embedding comes off, plus 8/160 of the
+    // experts. Both figures out of the shipped arithmetic rather than retyped.
+    const active = publishedActiveParams(
+      355e9,
+      355e9 - GLM_47_EXPERTS.expertParams - GLM_47_EMBEDDING,
+      GLM_47_EXPERTS
+    );
+    expect(active / 1e9).toBeCloseTo(35.06, 2);
+    expect(Math.abs(active - 32e9) / 32e9).toBeCloseTo(0.096, 3);
+
+    expect(() => reconcileActiveParams('zai-org/GLM-4.7', active, 32e9)).toThrowError(
+      /derives 35.06B active against the published 32.00B — 9.6% out/
+    );
+  });
+
+  it('admits the same row on the measured total, which is what the 2.2B was doing', () => {
+    // 352.8B: the index's 358.338B less a 5.5B MTP module whose every term is in config.json. The
+    // routed experts are identical — the derivation did not change, the constant it subtracts from
+    // did — and the residual is 16.8B rather than 19.0B.
+    const active = publishedActiveParams(
+      352.8e9,
+      352.8e9 - GLM_47_EXPERTS.expertParams - GLM_47_EMBEDDING,
+      GLM_47_EXPERTS
+    );
+    expect(active / 1e9).toBeCloseTo(32.86, 2);
+    expect(Math.abs(active - 32e9) / 32e9).toBeLessThan(0.03);
+    expect(() => reconcileActiveParams('zai-org/GLM-4.7', active, 32e9)).not.toThrow();
+  });
+
+  it('admits the rows whose notes already claimed to reconcile, so the band is not a rubber stamp', () => {
+    // Both figures are the shipped ones: DeepSeek V3 at 36.599B against a published 37B, GLM-4.5-Air
+    // at 11.951B against 12B. If the band admitted these only by being loose it would admit GLM 4.7's
+    // 35.06B too, and the test above would not fail.
+    expect(() =>
+      reconcileActiveParams('deepseek-ai/DeepSeek-V3', 36_598_886_400, 37e9)
+    ).not.toThrow();
+    expect(() => reconcileActiveParams('zai-org/GLM-4.5-Air', 11_951_121_408, 12e9)).not.toThrow();
+  });
+
+  it('fires in both directions, since a residual can absorb rounding either way', () => {
+    expect(() => reconcileActiveParams('hypothetical/light', 27e9, 32e9)).toThrowError(/15.6% out/);
+    expect(() => reconcileActiveParams('hypothetical/heavy', 37e9, 32e9)).toThrowError(/15.6% out/);
+  });
+
+  it('is stated for every row whose total is a constant, bar the one with nothing to check', () => {
+    // The field only means something where a residual is exposed to a published figure's rounding, so
+    // it belongs on override rows and only on them. GLM 4.7 Flash is the one override without it,
+    // because "A3B" is the model's name rather than a count Z.ai states — and the seed says so where
+    // a reader will look, rather than leaving the row's 3.6B looking like an unexplained 21%.
+    for (const seed of SEEDS) {
+      if (seed.overrides?.publishedActiveParams === undefined) continue;
+      expect(
+        seed.overrides.totalParams,
+        `${seed.id} checks an active count it cannot drift from`
+      ).toBeGreaterThan(0);
+    }
+    const unchecked = SEEDS.filter(
+      (s) =>
+        s.overrides?.totalParams !== undefined && s.overrides.publishedActiveParams === undefined
+    );
+    expect(unchecked.map((s) => s.id)).toEqual(['zai-org/GLM-4.7-Flash']);
+    expect(unchecked[0].overrides!.reason).toMatch(/round number rather than a stated count/);
+  });
+});
+
+/**
+ * The duplicate output table a tied model ships anyway, and the two ways reading its shape goes
+ * wrong.
+ *
+ * `granite-4.1-8b` states `tie_word_embeddings: true` beside an `lm_head.weight` of [100352, 4096]
+ * that the loader overwrites with the embedding, so the index counts 8.79B where the resident model
+ * holds 8.38B. The subtraction that corrects it is a measurement, which means it has a measurement's
+ * failure mode: the value it reads may not be there.
+ */
+describe('the duplicated output table', () => {
+  const GRANITE_HEAD = { 'lm_head.weight': { dtype: 'BF16', shape: [100352, 4096] } };
+  const EMBEDDING = 100352 * 4096;
+
+  it('measures the table rather than assuming vocab x hidden', () => {
+    expect(
+      duplicatedOutputParams(
+        'ibm-granite/granite-4.1-8b',
+        'lm_head.weight',
+        GRANITE_HEAD,
+        EMBEDDING
+      )
+    ).toBe(411_041_792);
+  });
+
+  it('refuses a head the shard header does not carry, which reduce() reports as one parameter', () => {
+    /**
+     * `(header[outputHead]?.shape ?? []).reduce((a, b) => a * b, 1)` is **1** for a name the header
+     * does not have — the index and the header are written by different tools and need not agree on
+     * one — so `Number.isFinite(1)` is true, `1 <= 0` is false, and the refusal that follows it never
+     * fires. The row then ships the index's own total with a single parameter shaved off while still
+     * claiming to be tied: 4.9% heavy, which is precisely the row the subtraction exists to correct.
+     */
+    const asOne = ([] as number[]).reduce((a, b) => a * b, 1);
+    expect(asOne).toBe(1);
+    expect(Number.isFinite(asOne) && asOne > 0).toBe(true);
+    expect((8_791_592_960 - asOne) / (8_791_592_960 - EMBEDDING) - 1).toBeCloseTo(0.049, 3);
+
+    expect(() =>
+      duplicatedOutputParams('ibm-granite/granite-4.1-8b', 'lm_head.weight', {}, EMBEDDING)
+    ).toThrowError(/the shard header gives it undefined/);
+    // An empty shape is the same hole one step over — safetensors spells a scalar that way, and a
+    // scalar is not an output table.
+    expect(() =>
+      duplicatedOutputParams(
+        'ibm-granite/granite-4.1-8b',
+        'lm_head.weight',
+        { 'lm_head.weight': { shape: [] } },
+        EMBEDDING
+      )
+    ).toThrowError(/An unreadable shape is not a zero-sized tensor/);
+  });
+
+  it('refuses a head that is not the size of the table it is supposed to duplicate', () => {
+    // What the comment on this block claimed and nothing did: a tie is a claim that the two tables
+    // *are* one tensor, so a head of another size is an untied projection whatever the config says,
+    // and subtracting it would take parameters off a total that holds them.
+    expect(() =>
+      duplicatedOutputParams(
+        'hypothetical/pruned-head',
+        'lm_head.weight',
+        { 'lm_head.weight': { shape: [32000, 4096] } },
+        EMBEDDING
+      )
+    ).toThrowError(/holds 131072000 parameters against the embedding table's 411041792/);
+  });
+
+  it('reads a transposed export as agreement, since the claim is about size', () => {
+    // Element count rather than shape equality: an export storing the head as [hidden, vocab] makes
+    // the same statement, and refusing it would be a false refusal on a row that is right.
+    expect(
+      duplicatedOutputParams(
+        'hypothetical/transposed',
+        'lm_head.weight',
+        { 'lm_head.weight': { shape: [4096, 100352] } },
+        EMBEDDING
+      )
+    ).toBe(411_041_792);
+  });
+});
+
+/**
+ * A key that is present and unreadable, where absence has a fallback — the general form of the
+ * `num_key_value_heads: null` refusal.
+ *
+ * `num()` maps every non-number to `undefined`, so `x: null` and no `x` at all are one value to every
+ * derivation below it. That is correct for keys whose absence means "this feature is not here", and
+ * every seed in the list writes at least one of those as `null`. It is wrong for keys whose absence
+ * means something substantive, because there the fallback answers a question the config has just
+ * declined to answer — and the publisher who writes `num_key_value_heads: null` writes
+ * `intermediate_size: null` on the same config, so this is a spelling in use rather than a
+ * hypothetical.
+ */
+describe('a stated non-number is not the same statement as an absent key', () => {
+  it('refuses head_dim: null instead of deriving hidden_size / heads in its place', () => {
+    // The sibling of the KV-head guard, in front of the fallback rather than after it. 8192 / 64 =
+    // 128 is a perfectly good number, and a per-block export stating null is not describing a stack
+    // with one head dimension.
+    const nulled = {
+      num_attention_heads: 64,
+      num_key_value_heads: 8,
+      head_dim: null,
+      hidden_size: 8192,
+    };
+    expect(() => deriveAttention('hypothetical/null-head-dim', nulled, 80)).toThrowError(
+      /states head_dim: null rather than omitting it/
+    );
+
+    // And an absent one still derives, which is the whole Llama family and the largest group of seeds.
+    const absent = { ...nulled };
+    delete (absent as Record<string, unknown>).head_dim;
+    expect(deriveAttention('hypothetical/no-head-dim', absent, 80).core).toEqual({
+      kind: 'gqa',
+      kvHeads: 8,
+      headDim: 128,
+    });
+  });
+
+  it('leaves alone the keys whose absence means the feature is absent', () => {
+    // The line this guard must not cross. `sliding_window: null` is on Qwen3 and Command A+, both
+    // shipped rows, and `rope_scaling: null` is on nearly every config in the list — reading those as
+    // absent is right, and a guard that refused them would reject the product.
+    expect(
+      deriveAttention('Qwen/Qwen3-32B', { ...QWEN3_32B, rope_scaling: null }, 64).core
+    ).toEqual({ kind: 'gqa', kvHeads: 8, headDim: 128 });
+    expect(deriveLayerWindows('Qwen/Qwen3-32B', QWEN3_32B, 64)).toBeUndefined();
+    // Same for the two Gemma 4 cache keys: a null there is a model saying it shares no cache, not one
+    // declining to say how much it shares.
+    expect(
+      deriveAttention(
+        'hypothetical/no-shared-kv',
+        { ...QWEN3_32B, num_kv_shared_layers: null, num_global_key_value_heads: null },
+        64
+      ).core
+    ).toEqual({ kind: 'gqa', kvHeads: 8, headDim: 128 });
+  });
+
+  it('refuses the MoE phase keys, where the fallback quietly counts every layer', () => {
+    // An absent `first_k_dense_replace` picks Qwen's phase over DeepSeek's, and `?? 1` on either step
+    // counts every layer as an expert layer. None of the three fails loudly: each returns a confident
+    // count off by however many layers the config was declining to describe.
+    const glm = {
+      num_hidden_layers: 92,
+      hidden_size: 5120,
+      moe_intermediate_size: 1536,
+      n_routed_experts: 160,
+      num_experts_per_tok: 8,
+      first_k_dense_replace: 3,
+    };
+    expect(deriveMoe('zai-org/GLM-4.7', glm, 92)!.expertParams).toBe(89 * 160 * 3 * 5120 * 1536);
+
+    expect(() =>
+      deriveMoe('hypothetical/null-first-dense', { ...glm, first_k_dense_replace: null }, 92)
+    ).toThrowError(/states first_k_dense_replace: null rather than omitting it/);
+    // MiniMax M3's per-layer array, which refuses a step earlier today for its sparse indexer — the
+    // next model to state one may carry no indexer at all.
+    expect(() =>
+      deriveMoe('MiniMaxAI/MiniMax-M3', { ...glm, moe_layer_freq: [0, 1, 1] }, 92)
+    ).toThrowError(/states moe_layer_freq: \[0,1,1\] rather than omitting it/);
+    expect(() =>
+      deriveMoe('hypothetical/null-sparse-step', { ...glm, decoder_sparse_step: null }, 92)
+    ).toThrowError(/states decoder_sparse_step: null rather than omitting it/);
+    expect(() =>
+      deriveMoe('hypothetical/string-mlp-only', { ...glm, mlp_only_layers: '0,1' }, 92)
+    ).toThrowError(/which is not a list of layer indices/);
   });
 });

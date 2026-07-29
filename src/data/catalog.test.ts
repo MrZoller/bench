@@ -492,12 +492,22 @@ describe('generated model catalog', () => {
    * The derivation has to reproduce what vendors publish, or it is not deriving — it is
    * inventing. These are the figures the model cards state; each exercises a different part of
    * the pipeline (MXFP4 packed counts, MTP exclusion, MLA, plain gated MoE).
+   *
+   * GLM 4.7 is here because it was the one row that stopped reconciling and nothing failed: it
+   * shipped 35.06B active against Z.ai's stated 32B — 9.6% out, on a row whose own note quotes
+   * "355B-A32B" into the control that renders the derived figure. The cause was its published total
+   * standing in for a measured one: 355B is 2.2B above the sum of the architecture's own tensors, and
+   * `denseParams` is `totalParams - expertParams` with the experts exact, so the whole 2.2B landed in
+   * a 16.8B residual and the decode basis with it. The seed now carries the measured 352.8B and the
+   * generator checks the active count against the published one on every refresh
+   * (`reconcileActiveParams`); this is the same claim at the other end of the pipeline.
    */
   it.each([
     ['openai/gpt-oss-120b', 117, 5.1],
     ['openai/gpt-oss-20b', 21, 3.6],
     ['deepseek-ai/DeepSeek-V3', 671, 37],
     ['zai-org/GLM-4.5-Air', 106, 12],
+    ['zai-org/GLM-4.7', 355, 32],
     ['Qwen/Qwen3-235B-A22B', 235, 22],
     ['Qwen/Qwen3-30B-A3B', 30, 3],
   ])('%s matches its published parameter counts', (id, totalB, activeB) => {
@@ -650,7 +660,7 @@ describe('generated model catalog', () => {
 
   it('has most of the catalog projecting to something other than its hidden size', () => {
     const differing = MODELS.filter((m) => m.attention.projectionWidth !== m.hiddenSize);
-    // 12 of 17 today. If this ever drops to zero the field has silently become hiddenSize again.
+    // 25 of 35 today. If this ever drops to zero the field has silently become hiddenSize again.
     expect(differing.length).toBeGreaterThan(8);
     // Both directions are represented, so the correction cannot be a one-way fudge.
     expect(differing.some((m) => m.attention.projectionWidth > m.hiddenSize)).toBe(true);

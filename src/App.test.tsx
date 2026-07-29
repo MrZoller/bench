@@ -1262,10 +1262,10 @@ describe('the Matrix tells a runtime refusal from a memory one', () => {
      * anywhere else may carry it.
      *
      * Marking a column that merely came up empty would be the same misattribution pointed the other
-     * way. At #72's own URL the two sets happen to coincide — the DGX Spark still runs 11 of its 17
-     * rows there, so the only empty columns are the undrivable ones — which is exactly why deriving
-     * from emptiness looks safe. Take that grid to 32 concurrent users and the RTX 3090, 4090 and
-     * 5080 columns empty out too, on counted bytes, under a runtime that drives all three.
+     * way. At #72's own URL the two sets happen to coincide — the DGX Spark still runs a good share
+     * of its rows there, so the only empty columns are the undrivable ones — which is exactly why
+     * deriving from emptiness looks safe. Take that grid to 32 concurrent users and the RTX 3090,
+     * 4090 and 5080 columns empty out too, on counted bytes, under a runtime that drives all three.
      */
     for (const column of struck) {
       for (const cell of column.cells) {
