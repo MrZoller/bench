@@ -377,6 +377,39 @@ export function Envelope({ config }: { config: Config }) {
         They never co-occur: an unsupported runtime closes the whole grid.
       */}
       <ul className="mt-4 grid gap-x-5 gap-y-2 sm:grid-cols-2">
+        {/*
+          The ring, which had no key at all — the same defect the budget bar's ceiling rule had one
+          panel over (#73). Every entry below keys a *fill*; the ring is an overlay drawn on top of
+          one, and it was named only inside the canvas `aria-label`, so a screen-reader user was told
+          what it was and a sighted reader met a double ring on the grid with nothing on the page
+          saying so. The legend is the dependable identity channel precisely because a mark that
+          crosses a fill may be hard to make out.
+
+          Keyed as a ring rather than a dot, and from the same `marks.lineWidth` the canvas strokes:
+          a key only works if it is the mark. First in the list for the same reason `describe` puts
+          it first — it is the reader's own position, and the states below are the field it sits in.
+
+          Only while it is drawn, exactly as the state keys are listed only while the grid contains
+          them. The ring needs the selected context and concurrency to both be on the axes, which is
+          what `currentCell` reports: the axes are built to contain them, so in practice it is always
+          there, and keying it unconditionally would be a claim this component does not check.
+        */}
+        {currentCell && (
+          <li className="flex items-baseline gap-2 text-sm">
+            <span
+              aria-hidden="true"
+              className="mt-1 inline-block h-3 w-3 shrink-0 rounded-full border-solid border-[var(--color-text)]"
+              style={{ borderWidth: marks.lineWidth }}
+            />
+            <span>
+              <span className="text-[var(--color-text)]">You are here</span>{' '}
+              <span className="text-xs text-[var(--color-text-muted)]">
+                The context and concurrency the Bench above is set to. The table marks the same
+                cell.
+              </span>
+            </span>
+          </li>
+        )}
         {(Object.keys(STATE_STYLE) as CellState[])
           .filter((state) => counts[state])
           .map((state) => {

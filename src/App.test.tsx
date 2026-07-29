@@ -10,7 +10,7 @@ import { SETTING_LABELS } from '@/lib/stops';
 import { DETAIL_ANCHOR_ID } from '@/components/Matrix';
 import { judgeWorkloads } from '@/engine/verdict';
 import { kvSubstitutionFor } from '@/data/runtimes';
-import { colors } from '@/design/tokens';
+import { colors, marks } from '@/design/tokens';
 
 /**
  * Wrapped rather than replaced, so every other test in this file still exercises the real verdict
@@ -234,6 +234,199 @@ describe('the Bench does not overclaim', () => {
   it('says when the catalog was generated', () => {
     render(<App />);
     expect(screen.getByText(/Model catalog generated/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * The budget bar past the point its own shape stops arguing (#73).
+ *
+ * The panel's claim is that it says how far over you are *structurally*, with an overflow region
+ * beyond the ceiling rule, "because it turned red does not tell you by how much". That holds while
+ * the overshoot is small and inverts past about 3x: `scale` follows the stack, so the budget becomes
+ * the sliver, the segments fill the bar, and 448 GiB against a 31 GiB ceiling draws as "nearly
+ * full". The multiple is the figure the picture stopped conveying, and it was stated nowhere.
+ *
+ * Split deliberately. Whether the rule stays *legible* where it lands is geometry — jsdom reports
+ * every width here as 0 — and lives in `e2e/budget-overshoot.spec.ts`. The clause and the legend key
+ * are DOM, so they belong here, where they run in a second.
+ */
+describe('the budget bar states an overshoot its shape cannot show', () => {
+  /** The overflow line, addressed by the part of it that does not move. */
+  const overflow = () => screen.getByText(/Over the ceiling by/);
+  const budget = () => screen.getByRole('region', { name: /memory budget/i });
+
+  /**
+   * The issue's own URL, reached through the controls: DeepSeek V3 at Q4_K_M on one 5090 at 128K
+   * and 8 users. 448 GiB used against a 31 GiB ceiling — 14.5x, with the rule 6.9% from the left.
+   */
+  const fourteenTimesOver = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
+    act(() => {
+      useConfig.getState().set('contextTokens', 131072);
+      useConfig.getState().set('concurrency', 8);
+    });
+  };
+
+  it('says how many times over the ceiling the stack is', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await fourteenTimesOver(user);
+
+    // Both figures, because they are different quantities and the absolute one was never the
+    // problem: 417 GiB is the overflow, 14x is the stack. The second is the one the bar lost.
+    expect(overflow()).toHaveTextContent(/Over the ceiling by 417 GiB/);
+    expect(overflow()).toHaveTextContent(/The stack is 14x the ceiling/);
+  });
+
+  /**
+   * And does not, where the shape still carries it. At 1.1x the ceiling rule sits 91% along, the
+   * gap is plainly visible, and "over by 2.2 GiB" and "1.1x the ceiling" are one fact said twice —
+   * a clause on every overflow is a clause people stop reading, including at 14x.
+   */
+  it('does not restate a small overshoot as a multiple', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Gemma 3 12B over three 4090s at 128K and 8 users: 25.2 GiB against a 23 GiB ceiling.
+    await user.selectOptions(screen.getByLabelText('Model'), 'unsloth/gemma-3-12b-it');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-4090');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'llama.cpp');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
+    act(() => {
+      useConfig.getState().set('contextTokens', 131072);
+      useConfig.getState().set('concurrency', 8);
+      useConfig.getState().set('deviceCount', 3);
+    });
+
+    expect(overflow()).toHaveTextContent(/Over the ceiling by/);
+    expect(overflow()).not.toHaveTextContent(/The stack is/);
+    expect(overflow()).not.toHaveTextContent(/x the ceiling/);
+  });
+
+  /**
+   * The legend is the dependable identity channel — which is exactly why the mark that is hardest
+   * to see is the one that must be in it. Every fill had a key and the rule did not, so a reader
+   * met a dashed red line inside a blue fill with nothing on the page naming it.
+   */
+  it('keys the ceiling rule in the legend, and only while the rule is drawn', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // The opening scenario fits, so no rule is drawn and there is nothing to key.
+    expect(within(budget()).queryByText('Ceiling')).not.toBeInTheDocument();
+
+    await fourteenTimesOver(user);
+    const key = within(budget()).getByText('Ceiling').closest('li');
+    expect(key).not.toBeNull();
+    // The ceiling's own figure, for the same reason every other row carries its bytes.
+    expect(key).toHaveTextContent('31 GiB');
+  });
+
+  /**
+   * The table says it the same way, because the table is the channel with no shape at all.
+   *
+   * It exists "for anyone who cannot use the bar", and the reader who cannot watch the bar invert
+   * was the one still handed "1222%" for a component twelve times the size of the whole budget —
+   * the exact form `multiple` was added to replace, in the one place there is nothing else to read.
+   *
+   * The KV row is the control, and it is why this is a per-row rule rather than a column-wide one:
+   * 2.2x is still inside the neighbourhood of 1 where a percentage is the better form, and the 0.7
+   * GiB overhead row would print as "0x" if the whole column switched.
+   */
+  it('states a large share as a multiple in the table, not as a four-digit percentage', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await fourteenTimesOver(user);
+
+    await user.click(within(budget()).getByRole('button', { name: /figures as a table/i }));
+    const table = within(budget()).getByRole('table', { name: /Memory budget breakdown/i });
+    const row = (name: string) => within(table).getByRole('rowheader', { name }).closest('tr');
+
+    expect(row('Weights')).toHaveTextContent('12x');
+    expect(row('Weights')).not.toHaveTextContent('1222%');
+    expect(row('KV cache')).toHaveTextContent('221%');
+  });
+
+  /**
+   * One line weight, not two — the placement invariant, checked where it can be checked cheaply.
+   *
+   * The halo is `lineWidth + 2·gap` wide and centres the rule inside itself, so the ink lands on the
+   * true ceiling position only while the two widths are the same number. Written as `border-l-2`
+   * beside a halo sized from `marks.lineWidth`, a token bumped to 3 would distribute 2.5px per side
+   * and move the rule half a pixel off the ceiling — the sentence and the line would stop being two
+   * readings of one expression, and the e2e position check's 3px tolerance would not notice.
+   *
+   * Geometry is e2e's job and this asserts none: jsdom lays nothing out, and it cannot see a Tailwind
+   * class either. What it can see is that the token reaches the element at all, which is the whole
+   * repair — reinstating the literal empties this style and fails here.
+   */
+  it('draws the ceiling rule from the same line-weight token its halo is sized from', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await fourteenTimesOver(user);
+
+    const bar = within(budget()).getByRole('img', { name: /allocatable used/i });
+    // Two children: the segment row, then the rule in its halo.
+    const halo = bar.children[bar.children.length - 1] as HTMLElement;
+    const line = halo.children[0] as HTMLElement;
+
+    expect(line.style.borderLeftWidth).toBe(`${marks.lineWidth}px`);
+    expect(halo.style.width).toBe(`${marks.lineWidth + marks.gap * 2}px`);
+    // And the halo starts one gap early, which is what leaves the centred ink on the ceiling.
+    expect(halo.style.left).toContain(`- ${marks.gap}px`);
+  });
+});
+
+/**
+ * A mark drawn on top of another mark is named where a reader can find it (#73's class).
+ *
+ * The budget bar's ceiling rule was the case the issue named, and the audit of the rest found the
+ * same shape twice more: three overlay marks, all of them keyed only in an `aria-label` or in a hue,
+ * none of them in a legend. A legend is the channel that does not depend on the mark being legible,
+ * which is exactly the property an overlay cannot promise — it is drawn on whatever is beneath it.
+ *
+ * Whether each mark is *distinguishable* where it lands is geometry and pixels, and lives in
+ * `e2e/budget-overshoot.spec.ts`. That it is identified at all is DOM, so it is here.
+ */
+describe('every mark drawn over another is named in a legend', () => {
+  const envelope = () => screen.getByRole('region', { name: /how much room is left/i });
+  const matrix = () => screen.getByRole('region', { name: /every model on every machine/i });
+
+  /**
+   * The Envelope's ring. Its `aria-label` already said "Currently at 32K context and 1 user", so a
+   * screen-reader user was told what the ring was and a sighted reader was not — the one inversion
+   * of the usual gap, and no less a gap for it.
+   */
+  it('keys the ring that marks your scenario on the feasibility grid', () => {
+    render(<App />);
+
+    const key = within(envelope()).getByText('You are here').closest('li');
+    expect(key).not.toBeNull();
+    // In the legend itself, beside the state keys, rather than as a caption of its own somewhere.
+    expect(key?.parentElement).toBe(within(envelope()).getByText('Comfortable').closest('ul'));
+  });
+
+  /**
+   * The Matrix's selection ring, keyed only when the grid actually holds the marked cell — which is
+   * the pairing that matters, since `isCurrent` is false for every cell on a linked rig. A key to a
+   * mark that appears nowhere is the failure this file's neighbour comment names.
+   */
+  it('keys the marked cell in the comparison grid, and only while a cell is marked', () => {
+    render(<App />);
+
+    expect(matrix().querySelectorAll('[aria-current="true"]')).toHaveLength(1);
+    expect(within(matrix()).getByText(/the cell the Bench above is set to/)).toBeInTheDocument();
+
+    // Every cell here is scored at one device, so a two-card rig marks nothing.
+    act(() => {
+      useConfig.getState().set('deviceCount', 2);
+    });
+    expect(matrix().querySelectorAll('[aria-current="true"]')).toHaveLength(0);
+    expect(
+      within(matrix()).queryByText(/the cell the Bench above is set to/)
+    ).not.toBeInTheDocument();
   });
 });
 

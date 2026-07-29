@@ -95,6 +95,22 @@ export function percent(fraction: number): string {
   return `${Math.round(fraction * 100)}%`;
 }
 
+/**
+ * A ratio said as a multiple: 14x, 3.1x.
+ *
+ * `percent` is the wrong form once a ratio leaves the neighbourhood of 1. "1446% of the ceiling"
+ * is the same arithmetic as "14x the ceiling" and nobody reads the first as fourteen times — which
+ * matters where the multiple is carrying a magnitude a picture has stopped conveying.
+ *
+ * Precision falls away as the number grows, the same rule `gib` and `rate` already follow: at 14x
+ * the tenth is noise, and near 3x it is the difference between a bar that still shows the gap it is
+ * measuring and one that does not.
+ */
+export function multiple(ratio: number): string {
+  if (!Number.isFinite(ratio)) return '—';
+  return `${ratio >= 10 ? Math.round(ratio) : trim(ratio.toFixed(1))}x`;
+}
+
 /** Download counts for the model picker: 1.2M, 890K. */
 export function compact(count: number): string {
   if (!Number.isFinite(count)) return '—';

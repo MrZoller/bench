@@ -675,6 +675,25 @@ export function Matrix({ config }: { config: Config }) {
           />
           will not run
         </span>
+        {/* The selection ring, which had no key — the third mark in this app drawn on top of a fill
+            with nothing on the page naming it (#73; the budget bar's ceiling rule and the Envelope's
+            ring were the other two). `aria-current` names it for a screen reader and the accent hue
+            says "live" to anyone who already knows the palette, which is not a channel a legend gets
+            to rely on. It is not only a click acknowledgement either: the ring appears when the
+            *controls* above put the Bench on a cell, so a reader can meet it without having touched
+            the grid.
+
+            Shown only when the grid contains it, the same rule as its neighbours — `isCurrent` is
+            false for every cell on a linked rig, since these are all scored at one device. */}
+        {cells.flat().some(isCurrent) && (
+          <span className="flex items-center gap-1.5">
+            <span
+              aria-hidden="true"
+              className="inline-block h-3 w-3 rounded-sm bg-[var(--color-grid)] ring-2 ring-[var(--color-accent)] ring-offset-1 ring-offset-[var(--color-surface)]"
+            />
+            the cell the Bench above is set to
+          </span>
+        )}
         {/* A state the grid is really in gets a line, and only when it is in it.
             No glyph, unlike its two neighbours. Theirs key a swatch that literally matches a cell
             border, so a reader scans the grid and finds it; this is about where the numbers came
