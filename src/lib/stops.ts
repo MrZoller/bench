@@ -1,4 +1,10 @@
-import type { KvPrecision, RuntimeSpec } from '@/engine/types';
+import type { Measure } from '@/engine/measure';
+import type { DeviceSpec, DeviceStatus, KvPrecision, RuntimeSpec } from '@/engine/types';
+// The curator's `note` is not an engine field — the engine has no use for it — so the picker's
+// prose is typed against the catalog's row. Type-only, so it erases and this module still pulls in
+// no data at runtime.
+import type { CatalogDevice } from '@/data/catalog';
+import { gibLabel, optionLabel, sentences } from './format';
 // The scenario *shape*, not the store: `scenario.ts` deliberately depends on nothing but engine
 // types so that everything needing the shape can have it without a cycle. Type-only, so it erases.
 import type { Config } from '@/store/scenario';
@@ -60,6 +66,119 @@ export const SETTING_LABELS = {
   kvPrecision: 'KV precision',
   deviceCount: 'Device count',
 } as const satisfies Record<keyof Config, string>;
+
+/**
+ * What each measure is called, wherever a grid offers to colour itself by one.
+ *
+ * Both grids offer the same three — the Matrix over model × device, the Envelope over context ×
+ * concurrent users since #65 — and they are the same three questions, so they are named once.
+ * `KV_PRECISIONS` above is here for exactly the same reason: the options a control offers are
+ * vocabulary, and a second hand-written copy is how two surfaces come to call one thing two things.
+ *
+ * `hint` is derived from `paints` rather than written beside it, because the two are the same
+ * sentence in two registers: the toggle's caption states it as a heading would, and the picture's
+ * `aria-label` needs it as a clause ("Coloured by tokens per second for one user"). Written twice,
+ * a reworded caption leaves the screen-reader description describing the old colouring.
+ *
+ * **`ends` names what the two extremes of a ramp *are*, and deliberately not whether they are good.**
+ * A ramp whose domain is the grid's own span cannot label its dark end "worse": on gpt-oss-20b at
+ * llama.cpp/MXFP4 against an EPYC 9755 every one of the Envelope's 56 cells runs, the `fit` domain is
+ * headroom 0.726 to 0.991, and the darkest step — the one `tokens.ts` calls "the one that recedes
+ * into the panel" — lands on the 128K x 128-user corner, which still has 72.6% of a 1,450 GiB ceiling
+ * free. "Worse" there is a claim about the machine; "less room" is a claim about the ramp, which is
+ * all a rank-relative scale is entitled to say. Comparatives rather than superlatives for the same
+ * reason.
+ *
+ * Per measure rather than one generic pair, because one of the three is inverted. `measureOf`
+ * returns `1 / ttftSeconds` so that larger is better throughout, which makes a generic "least → most"
+ * label read backwards against the caption beside it ("time until the first token appears"): a reader
+ * would take the dark end for the *quick* one. The direction has to be spelled in the measure's own
+ * units.
+ *
+ * The Matrix's ramp still says worse/better, and that is not drift: its domain is floored at zero
+ * over a grid spanning a desktop CPU to a B200, so a dark cell there really is near the bottom of
+ * what any hardware on the page achieves and a verdict word is a claim it can make. See the `fill`
+ * comment in `Matrix.tsx` and `magnitudeFill` in `tokens.ts` for the two domains and why they differ.
+ *
+ * **The entries keep their literal types, so exhaustiveness can be checked below.**
+ *
+ * `satisfies` rather than a type annotation, and that distinction is the whole point (found in
+ * review). Annotating the array `readonly { value: Measure; … }[]` widens each `value` to `Measure`,
+ * so `(typeof MEASURES)[number]['value']` *is* `Measure` however few arms are listed — the check the
+ * docblock on `measureVocabulary` claimed to be relying on could not fail. `satisfies` validates the
+ * same shape while leaving `'fit' | 'decode' | 'ttft'` intact for `UncoveredMeasure` to subtract.
+ */
+const MEASURE_ENTRIES = [
+  {
+    value: 'fit',
+    label: 'Does it fit',
+    paints: 'headroom left after weights, cache and overhead',
+    ends: ['less room', 'more room'],
+  },
+  {
+    value: 'decode',
+    label: 'How fast',
+    paints: 'tokens per second for one user',
+    ends: ['slower', 'faster'],
+  },
+  {
+    value: 'ttft',
+    label: 'How responsive',
+    paints: 'time until the first token appears',
+    ends: ['slower to start', 'quicker to start'],
+  },
+] as const satisfies readonly {
+  value: Measure;
+  label: string;
+  paints: string;
+  ends: readonly [string, string];
+}[];
+
+/**
+ * Any `Measure` with no entry above — and the assertion that there is none.
+ *
+ * `AssertNever` fails to compile when its argument is inhabited, so adding an arm to `Measure` in the
+ * engine breaks *here*, naming the measure that has no control. Without it the omission was silent in
+ * both directions a reader would check: these grids would render one fewer button, and
+ * `measureVocabulary` would fall back to the fit vocabulary for the new arm — labelling a decode ramp
+ * "less room / more room" rather than failing.
+ *
+ * This is the claim `SETTING_LABELS` makes with `satisfies Record<keyof Config, string>` one screen
+ * up. It cannot be made that way here, because the order of these entries is the order of the control
+ * and a `Record` does not carry one.
+ */
+type AssertNever<T extends never> = T;
+type UncoveredMeasure = Exclude<Measure, (typeof MEASURE_ENTRIES)[number]['value']>;
+export type _EveryMeasureHasAnEntry = AssertNever<UncoveredMeasure>;
+
+export const MEASURES: readonly {
+  value: Measure;
+  label: string;
+  paints: string;
+  hint: string;
+  ends: readonly [string, string];
+}[] = MEASURE_ENTRIES.map((m) => ({
+  ...m,
+  hint: `${m.paints[0].toUpperCase()}${m.paints.slice(1)}.`,
+}));
+
+/**
+ * Everything a surface says about the measure in force, in one lookup.
+ *
+ * The Envelope names the same colouring in four places — the caption under the toggle, the ramp key's
+ * two ends, its trailing clause and the canvas `aria-label` — and a per-place `MEASURES.find(...)?.x`
+ * makes each of them independently optional for a value that cannot be missing. Total by
+ * construction: `Measure` is a closed union and `_EveryMeasureHasAnEntry` above fails to compile if
+ * an arm has no entry, so the fallback is unreachable. Unreachable rather than asserted, because a
+ * non-null assertion would go on surviving if that check were ever loosened.
+ *
+ * This docblock previously credited "the annotation on `MEASURES`" with that guarantee, which it
+ * never had: annotating the array widened every `value` to `Measure`, so the coverage test was
+ * comparing `Measure` against itself and could not fail. The check is real now; the sentence was not.
+ */
+export function measureVocabulary(measure: Measure): (typeof MEASURES)[number] {
+  return MEASURES.find((m) => m.value === measure) ?? MEASURES[0];
+}
 
 /**
  * What each setting *means*, in one sentence, for the controls that have to say it themselves.
@@ -136,8 +255,9 @@ export const SETTING_NOTES = {
  */
 /**
  * `drives` is a parameter rather than a `runtimeDrives(runtime, device)` call inside, because this
- * module depends on nothing but engine *types* — see the import block — and the caller already has
- * the answer for the warning it prints on the Runtime control.
+ * module takes nothing from the engine but its *types* — see the import block, where every engine
+ * and catalog import is type-only — and the caller already has the answer for the warning it prints
+ * on the Runtime control. `devicePickerNote` below takes its ceiling for the same reason.
  *
  * It exists because `canShard` asks only about the hardware. A DGX Spark has an interconnect, so the
  * slider renders under MLX, which cannot drive that machine at all — and this note then described a
@@ -154,6 +274,151 @@ export function deviceCountNote(runtime: RuntimeSpec, drives: boolean): string {
   return runtime.parallelism === 'layer'
     ? `${opening} ${runtime.label} runs whole layers on each device in turn, so this buys capacity, not speed — one device’s bandwidth is the ceiling however many you add.`
     : `${opening} ${runtime.label} shards every layer across every device, so this adds bandwidth as well as memory, minus what the interconnect costs.`;
+}
+
+/**
+ * `Record<Exclude<DeviceStatus, 'shipping'>, string>` rather than a ternary, and that is the whole
+ * reason it is a table: a fourth status added to the engine's union fails to compile *here*, naming
+ * the status that has no word for it. A ternary keeps compiling and quietly calls it "announced" —
+ * the same claim `DEVICE_STATUSES` makes about the loader in `catalog.ts`, at the other end of the
+ * same field.
+ *
+ * The catalog spells the field `rumored` and the app says "rumoured": the data follows its schema,
+ * the UI follows its own register, and this is the one place the two are reconciled.
+ */
+const PRE_RELEASE_WORDS: Record<Exclude<DeviceStatus, 'shipping'>, string> = {
+  rumored: 'rumoured',
+  announced: 'announced',
+};
+
+/**
+ * What a status other than `shipping` is called where a reader sees it, or `undefined` for hardware
+ * that exists.
+ *
+ * One resolution, read by both halves of what the Hardware picker says — the marker in the
+ * `<option>` and the warning in the note — so the two cannot come to disagree about which rows are
+ * pre-release. It was one expression in each of two places before, and only one of them ran at the
+ * point of choice (#69).
+ */
+function preReleaseWord(status: DeviceStatus): string | undefined {
+  return status === 'shipping' ? undefined : PRE_RELEASE_WORDS[status];
+}
+
+/**
+ * What the Hardware picker calls a machine in the open list, which is the only place a reader
+ * compares two of them.
+ *
+ * The pre-release marker is here rather than in the note because of where the browser renders each:
+ * `Select` draws every option's *label* and only the selected option's *note*, so the caveat that
+ * decides whether a row is hardware at all was reachable only after the row had been chosen. In the
+ * list "Mac Studio M5 Ultra (512 GB) — 512 GiB" sat one line above the 512 GB M3 Ultra — a real
+ * machine with measured bandwidth — presented as its equal (#69). CLAUDE.md states the rule as a
+ * requirement rather than a preference: pre-release specs must stay visibly labelled in the UI, and
+ * a label that waits for the selection is not visible where the comparison happens.
+ *
+ * **Not an `<optgroup>`, which the issue floats as the stronger version.** A group is contiguous, so
+ * grouping the non-shipping rows imposes an order on the picker — and the order of the hardware list
+ * is a separate question with an issue of its own (#79). A marker holds for any list order and for
+ * any number of pre-release rows, including the zero of them this catalog may have after the M5
+ * ships; a group of one row is a heading with nothing to group.
+ *
+ * The note keeps the fuller sentence. This is a tag on a row you are scanning; that is a clause for
+ * the row you chose, and `devicePickerNote` below is where it is composed.
+ */
+export function deviceOptionLabel(device: DeviceSpec): string {
+  return optionLabel(
+    `${device.name} — ${gibLabel(device.capacityBytes)}`,
+    preReleaseWord(device.status)
+  );
+}
+
+/**
+ * The same rule one control over, for the fact that decides whether any figure on the page means
+ * anything.
+ *
+ * `runtimeOptions` has said "Does not run on <machine>." since the Runtime picker existed, in the
+ * note — so on a Mac Studio the open list offered llama.cpp, vLLM and MLX as three equals, and the
+ * refusal arrived only after vLLM had been picked and every tile on the page had been replaced by
+ * "Unsupported". That is the pre-release defect exactly: a caveat a reader needs in order to choose,
+ * living in the one string a `<select>` will not show them until they have. Swept rather than waited
+ * for, because these two pickers share a component and therefore share the failure.
+ *
+ * **"on this hardware", not "here", and the difference is the whole point of moving the fact.** An
+ * option's own text is *all* that is announced for a row nobody has selected — a screen-reader user
+ * arrowing this listbox hears "vLLM · …" and no surrounding context — so a marker whose referent
+ * lives outside itself has reintroduced, one word smaller, the dependency it was written to remove:
+ * "here" resolves to nothing, and the string that names the machine is still the selected option's
+ * note. "this hardware" points at the control one row up, which is labelled Hardware (found in
+ * review). Not the machine's name, which is the note's job: this is a tag on a row being scanned, and
+ * `Does not run on Mac Studio M3 Ultra (256 GB).` inside three of them is a paragraph in a picker.
+ *
+ * `drives` is a parameter for the reason `deviceCountNote` above takes one: this module reads engine
+ * types and no engine values, and the caller already has the answer.
+ *
+ * Marked rather than `disabled`. An unsupported pairing is a legitimate thing to select here — the
+ * page's answer to it is a full explanation of the refusal, which is more use than a row that cannot
+ * be clicked and says nothing about why.
+ */
+export function runtimeOptionLabel(runtime: RuntimeSpec, drives: boolean): string {
+  return optionLabel(runtime.label, !drives && 'does not run on this hardware');
+}
+
+/**
+ * What the Hardware picker says about the selected machine, split into the two different kinds of
+ * text that used to be one string.
+ *
+ * **`claim` is picker copy**: the short, derived facts a reader needs *while choosing* — that these
+ * specs are not final, and that the allocation ceiling is a default rather than a wall. Both are
+ * generated here, both are one clause, and both end in a full stop of their own so that nothing
+ * downstream has to guess where they finish.
+ *
+ * **`detail` is reference prose**: `devices.json`'s `note`, which is provenance for a reader who
+ * has already chosen — which GPU bin the figures describe, why a bandwidth rating is not the
+ * measured figure, that a 3090 pair is modelled at PCIe rates. It is 40 to 180 words of it, with
+ * backticked sysctl names and a derivation, and it was being concatenated onto the claim and handed
+ * to the control as its `aria-describedby` (#68). So a screen-reader user heard the whole
+ * derivation before they could choose anything, and a sighted reader got five lines of 12px prose
+ * under a `<select>` in a two-column grid — which pushed the row beneath it down and left a void
+ * under Model. `Select` puts this behind a disclosure and keeps it out of the description.
+ *
+ * This is the trimming `quantOptions` in `Bench.tsx` already describes and the device note never
+ * got: "a short claim, not the whole derivation — the panel below carries that, and printing the
+ * same forty words twice on one screen taught people to skip both."
+ *
+ * **The curated note is still on screen**, which is the constraint this cannot trade away: it was
+ * dropped entirely once before, taking with it the 3090's warning that the estimates assume PCIe
+ * and do not model its optional NVLink bridge — precisely the caveat an owner of a bridged pair
+ * needs. A disclosure is one click, not a deletion.
+ *
+ * `ceilingBytes` is a parameter rather than a `maxAllocatablePerDevice(device)` call inside, for the
+ * same reason `deviceCountNote` takes `drives`: this module reads engine *types* and no engine
+ * values, and the caller already holds the figure. Passing it also keeps the "you could raise this"
+ * arithmetic in the one place that owns it — the Bench and the Envelope each had their own copy of
+ * that once, which is how one of them came to be wrong.
+ */
+export function devicePickerNote(
+  device: CatalogDevice,
+  ceilingBytes: number
+): { claim?: string; detail?: string } {
+  const preRelease = preReleaseWord(device.status);
+  return {
+    claim: sentences(
+      // Pre-release specs must stay visibly labelled, not silently mixed in with shipping ones. The
+      // marker in the option label is the half of that a reader sees while choosing; this is the
+      // sentence, which says what being pre-release costs them. Sentence case from the shared word
+      // rather than a second ternary over `status`: the two surfaces have to name the same rows, and
+      // `PRE_RELEASE_WORDS` is where they agree.
+      preRelease && `${preRelease[0].toUpperCase()}${preRelease.slice(1)} — specs may change.`,
+      // The tunable ceiling matters for the same reason in reverse: it is a default, and treating
+      // it as a hardware limit turns a raiseable setting into a flat "will not run".
+      device.allocatableTunable === true &&
+        ceilingBytes > device.allocatableBytes &&
+        `${gibLabel(device.allocatableBytes)} allocatable by default, raiseable to ${gibLabel(
+          ceilingBytes
+        )}.`
+    ),
+    detail: device.note,
+  };
 }
 
 /**

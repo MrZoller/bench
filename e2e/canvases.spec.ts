@@ -20,10 +20,15 @@ import { expect, test } from '@playwright/test';
  * What a canvas is currently showing, reduced to something comparable.
  *
  * A colour *count* is not enough on its own to tell two fields apart: the Envelope fills every cell
- * from a five-colour palette, so the count is dominated by cell-edge anti-aliasing and moves by one
- * or two between wholly different scenarios. The first version of the repaint test below turned on
- * exactly that difference of one, which would have become a five-second poll timeout reporting
- * `expected true, received false` the moment a catalogue change made two counts collide.
+ * from a small fixed set — the seven steps of `magnitudeRamp` plus the flat `serious` and `critical`
+ * status hues, of which the default scenario paints five — so the count is dominated by cell-edge
+ * anti-aliasing and moves by one or two between wholly different scenarios. (It was a three-state
+ * palette when this was written and "five-colour" was the figure; #65 put the field on the ramp, and
+ * the reasoning survived the change while the number did not. A tolerance sized from a stale figure
+ * is exactly the mis-measurement this helper exists to prevent.) The first version of the repaint
+ * test below turned on exactly that difference of one, which would have become a five-second poll
+ * timeout reporting `expected true, received false` the moment a catalogue change made two counts
+ * collide.
  *
  * So this also returns a `digest` — an order-sensitive hash over the sampled bytes — which changes
  * if any sampled pixel changes. The counts stay because they are what a *human* reads out of a
@@ -137,6 +142,48 @@ test('the Envelope repaints when the scenario changes', async ({ page }) => {
         return 'repainted';
       },
       { message: 'the canvas never repainted into a painted state after the model changed' }
+    )
+    .toBe('repainted');
+});
+
+/**
+ * And that the measure toggle repaints it (#65).
+ *
+ * The grading itself is asserted in `src/components/Envelope.test.tsx`, which reads the draw loop's
+ * own `fillStyle` calls back through a stubbed 2D context. What that cannot see is the bitmap: the
+ * effect sizes the canvas from `getBoundingClientRect` before it draws anything, and jsdom reports
+ * that as 0×0 — so a repaint that clears the canvas and puts nothing legible back is
+ * indistinguishable there from a correct one. This is the same claim, and the same three failure
+ * names, that the model-change test above makes for the other trigger.
+ *
+ * Scoped to the Envelope's own region, since the Matrix carries the same three buttons.
+ */
+test('the Envelope repaints when the measure changes', async ({ page }) => {
+  await page.goto('/');
+  const field = page.getByRole('region', { name: /how much room/i });
+  const canvas = field.locator('canvas');
+  await expect(canvas).toBeVisible();
+
+  const before = await painted(canvas);
+  expect(before, 'the canvas could not be read back').not.toHaveProperty('error');
+  if ('error' in before) return; // unreachable past that assertion; narrows the union for TS
+  expect(before.opaque, 'the canvas was blank before the measure changed').toBeGreaterThan(0);
+
+  // Decode rather than latency: it varies along both axes at the default scenario, so the two
+  // pictures differ over the whole field rather than in one corner.
+  await field.getByRole('button', { name: 'How fast' }).click();
+
+  await expect
+    .poll(
+      async () => {
+        const after = await painted(canvas);
+        if ('error' in after) return 'unreadable';
+        if (after.digest === before.digest) return 'unchanged';
+        if (after.opaque === 0) return 'cleared';
+        if (after.colours <= 1) return 'flat';
+        return 'repainted';
+      },
+      { message: 'the field never repainted after the measure changed' }
     )
     .toBe('repainted');
 });

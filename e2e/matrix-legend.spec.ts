@@ -40,8 +40,8 @@ const LAPTOP = { width: 1024, height: 768 };
  *
  *   - "will not run" — unconditional
  *   - "a struck column heading — MLX (Apple) does not support this hardware, at any size" — MLX runs
- *     on Apple silicon and nothing else, so all but five columns are struck (19 of 24 as the catalog
- *     stands at this commit) (#72)
+ *     on Apple silicon and nothing else, so all but the Apple columns are struck (32 of the 42
+ *     shipping devices as the catalog stands at this commit) (#72)
  *   - "some rows scored at a stand-in format MLX (Apple) cannot load" — MLX's only native format is
  *     BF16, so every Apple row is scored at a stand-in
  *   - "past the default allocation, which this machine lets you raise" — DeepSeek V3 at Q5_K_M is
@@ -65,6 +65,16 @@ const matrix = (page: import('@playwright/test').Page) =>
  */
 const legend = (page: import('@playwright/test').Page) =>
   matrix(page).locator(':scope > div').last();
+
+/**
+ * The ramp group: the first item in the legend row, holding the two endpoint labels and the gradient
+ * between them.
+ *
+ * Its children are asserted in order below — label, ramp, label — which is also what confirms this
+ * found the group rather than a key that happens to sit first.
+ */
+const rampGroup = (page: import('@playwright/test').Page) =>
+  legend(page).locator(':scope > span').first();
 
 test.beforeEach(async ({ page }) => {
   await page.setViewportSize(NARROW);
@@ -111,6 +121,65 @@ test('the overflow does not reach the document', async ({ page }) => {
   }));
 
   expect(doc.scrollWidth, 'the page scrolls sideways').toBeLessThanOrEqual(doc.clientWidth + 1);
+});
+
+/**
+ * The endpoints, at the width the legend has already overflowed at once.
+ *
+ * `worse [gradient] better` gave the ramp a direction and no scale, so a mid-blue was unanchored —
+ * under "How fast" it could be 20 tok/s or 200 (#71). Naming both ends is one line of text and about
+ * 190px of it, added to the row whose min-content width took the document to 336/320 in #34. Adding
+ * text to this row is exactly the change that reopens that, which is why it is measured here rather
+ * than assumed: the containment tests above now cover the figures too, and this one asserts they are
+ * really there, so those cannot pass by describing a legend that never grew.
+ */
+async function assertEndpointsInsidePanel(page: import('@playwright/test').Page) {
+  const parts = rampGroup(page).locator(':scope > span');
+
+  // Label, gradient, label — in order, which also proves the group locator found the ramp.
+  await expect(parts).toHaveCount(3);
+  await expect(parts.nth(0)).toHaveText(/^worse .*\d/);
+  await expect(parts.nth(2)).toHaveText(/\d.* better$/);
+
+  for (const index of [0, 2]) {
+    const box = await parts.nth(index).evaluate((el) => ({
+      left: el.getBoundingClientRect().left,
+      right: el.getBoundingClientRect().right,
+      width: el.getBoundingClientRect().width,
+      panelLeft: el.closest('section')!.getBoundingClientRect().left,
+      panelRight: el.closest('section')!.getBoundingClientRect().right,
+    }));
+
+    expect(box.width, 'an endpoint label is not laid out').toBeGreaterThan(0);
+    // Both edges: the figure inside each label is `whitespace-nowrap`, so an overrun leaves the panel
+    // rather than breaking mid-number, and the left edge is the one no reader can pan to.
+    expect(box.left, 'an endpoint label escapes the panel').toBeGreaterThanOrEqual(
+      box.panelLeft - 1
+    );
+    expect(box.right, 'an endpoint label escapes the panel').toBeLessThanOrEqual(
+      box.panelRight + 1
+    );
+  }
+}
+
+test('the ramp is labelled with what it spans, inside the panel', async ({ page }) => {
+  await assertEndpointsInsidePanel(page);
+});
+
+/**
+ * And again at the measure whose labels are the longest, which no other run reaches.
+ *
+ * `measure` is component state rather than a URL key, so every spec in this suite lays out the `fit`
+ * labels — "worse 0% free", "100% free better" — and the widest the app can print is a decode pair:
+ * 17 characters at "1011 tok/s better", measured across three runtimes, every catalogued format,
+ * 4K/32K/128K of context and 1/8/128 users. Asserting containment at `fit` and calling the row safe
+ * is measuring the short case. Reached by clicking, because that is the only way in.
+ */
+test('the widest labels the grid can print stay inside it too', async ({ page }) => {
+  await matrix(page).getByRole('button', { name: 'How fast' }).click();
+  await expect(rampGroup(page).locator(':scope > span').first()).toHaveText(/tok\/s/);
+
+  await assertEndpointsInsidePanel(page);
 });
 
 /**

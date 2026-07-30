@@ -13,7 +13,7 @@ import { Workloads } from './Workloads';
 import { Envelope } from './Envelope';
 import { DETAIL_ANCHOR_ID, Matrix } from './Matrix';
 import { Segmented, Select, StopSlider } from './Controls';
-import { compact, gibLabel, params, percent, tokens } from '@/lib/format';
+import { compact, params, percent, sentences, tokens } from '@/lib/format';
 import {
   canShard,
   maxAllocatablePerDevice,
@@ -31,7 +31,10 @@ import {
   SETTING_NOTES,
   contextStopsFor,
   deviceCountNote,
+  deviceOptionLabel,
+  devicePickerNote,
   kvLabel,
+  runtimeOptionLabel,
   withStored,
 } from '@/lib/stops';
 
@@ -42,6 +45,13 @@ import {
  * is pure arithmetic over a handful of numbers, so every control recomputes the whole scenario
  * on change; there is no submit step, because the point is to feel where the cliff is rather
  * than to query for it.
+ *
+ * **Every input first, then the figures they drive, then the two grids.** Setup and Usage are the
+ * page's nine controls and they lead it; everything after them is output. That order is load-bearing
+ * rather than tidy: "watch the budget fill" is only true while the slider and the bar are in one
+ * viewport, and DOM order is reading order, so it is also what a screen-reader user meets first. The
+ * Usage panel's own comment records what it cost when those five controls were last on the page
+ * (#66), and `App.test.tsx` pins the order so a panel added later cannot slip in between.
  */
 
 export function Bench() {
@@ -99,13 +109,13 @@ export function Bench() {
         // same forty words twice on one screen taught people to skip both. `Select` renders only
         // the *selected* option's note, so this was never what informs a choice between formats
         // anyway; what it does is tag the control that caused the panel.
-        note:
-          [
-            substitutionFor(runtime, q.id) && `Stand-in for a format ${runtime.label} cannot load.`,
-            q.qualityNote,
-          ]
-            .filter(Boolean)
-            .join(' ') || undefined,
+        // Composed with `sentences` rather than a bare join for the reason `deviceOptions` below
+        // records: both fragments happen to end in a full stop today, and "happens to" is what the
+        // device note also had until a curated one did not (#68). `quants.ts` is hand-written too.
+        note: sentences(
+          substitutionFor(runtime, q.id) && `Stand-in for a format ${runtime.label} cannot load.`,
+          q.qualityNote
+        ),
       })),
     [model, device, runtime]
   );
@@ -194,44 +204,59 @@ export function Bench() {
     []
   );
 
+  /**
+   * The label a reader scans, then the status warning, then the tunable ceiling, then — behind a
+   * disclosure — whatever the curator wrote.
+   *
+   * **The pre-release marker is in the label, because that is the string the browser renders for a
+   * row nobody has selected yet** (#69). Everything below this paragraph is about the note, and the
+   * note is only ever the selected option's: the rumoured M5 Ultra's "specs may change" existed, was
+   * correct, and was unreachable until after the machine had been chosen — one line above the 512 GB
+   * M3 Ultra, which is real hardware with measured bandwidth, in a list that presented the two as
+   * equals. `deviceOptionLabel` composes both halves so the marker and the sentence cannot come to
+   * name different rows.
+   *
+   * The last three used to be one string joined on a bare space, which is two separate problems
+   * in one line of code (#68).
+   *
+   * **The punctuation.** Neither generated clause ended in a full stop, so nine rows read
+   * "raiseable to 240 GiB The allocation ceiling reserves 16 GiB for macOS…" — and on the M5 Ultra,
+   * the only three-fragment row, the sentence that ran on was the rumour warning fused to a
+   * capacity figure. `devicePickerNote` terminates each clause and composes them with `sentences`,
+   * so a curated note that forgets its own full stop cannot reintroduce it.
+   *
+   * **The length, and where it was announced.** The curated note is 40 to 180 words of catalog
+   * provenance, and it was the control's `aria-describedby` — so a screen-reader user heard the
+   * whole derivation, backticked sysctl names and all, before they could choose anything. It is
+   * still on screen and still reachable; it is one click away instead of unavoidable.
+   *
+   * Combined rather than ranked, which is the one thing about the original that was right: the
+   * Ryzen AI Max+ is tunable *and* carries a note — that its 256 GB/s is AMD's rating, real
+   * workloads land near 213, and the engine charges that gap through its calibration constants
+   * rather than the catalog. Ranking these dropped the provenance.
+   */
   const deviceOptions = useMemo(
     () =>
-      DEVICES.map((d) => ({
-        value: d.id,
-        label: `${d.name} — ${gibLabel(d.capacityBytes)}`,
-        // Pre-release specs must stay visibly labelled, not silently mixed in with shipping ones.
-        // The tunable note matters for the same reason in reverse: the ceiling is a default, and
-        // treating it as a hardware limit turns a raiseable setting into a flat "will not run".
-        // Status warning first, then the tunable ceiling, then whatever the curator wrote. The
-        // last of those was being dropped entirely — including the 3090's note that estimates
-        // assume PCIe and do not model its optional NVLink bridge, which is precisely the
-        // caveat an owner of a bridged pair needs.
-        // Combined rather than ranked: the Ryzen AI Max+ is both tunable *and* carries a note —
-        // that its 256 GB/s is AMD's rating, real workloads land near 213, and the engine charges
-        // that gap through its calibration constants rather than the catalog. Ranking these
-        // dropped the provenance.
-        note:
-          [
-            d.status !== 'shipping'
-              ? `${d.status === 'rumored' ? 'Rumoured' : 'Announced'} — specs may change`
-              : undefined,
-            d.allocatableTunable && maxAllocatablePerDevice(d) > d.allocatableBytes
-              ? `${gibLabel(d.allocatableBytes)} allocatable by default, raiseable to ${gibLabel(
-                  maxAllocatablePerDevice(d)
-                )}`
-              : undefined,
-            d.note,
-          ]
-            .filter(Boolean)
-            .join(' ') || undefined,
-      })),
+      DEVICES.map((d) => {
+        // Mapped field by field rather than spread: the helper's two keys say what each string *is*
+        // — a claim you choose by, and reference prose about what you chose — and `Select`'s are
+        // named for where they go. A spread would have compiled and silently left `note` unset,
+        // because an excess property arriving through one is not an error.
+        const { claim, detail } = devicePickerNote(d, maxAllocatablePerDevice(d));
+        return {
+          value: d.id,
+          label: deviceOptionLabel(d),
+          note: claim,
+          detail,
+        };
+      }),
     []
   );
 
   /**
    * The runtimes, each with something to say about itself at every scenario.
    *
-   * The note is the control's accessible description, so a "does not run here" warning has to live
+   * The note is the control's accessible description, so a "Does not run on …" warning has to live
    * in it — a screen-reader user tabbing the picker hears nothing otherwise. That is also why the
    * first clause below is unconditional. `Select` renders only the *selected* option's note, and
    * the two conditions this used to hold — unsupported hardware, and a runtime that preallocates —
@@ -252,32 +277,47 @@ export function Bench() {
    * two copies of one claim come to disagree. MLX would also be the wrong place to say it — it
    * declares `layer` because the field is required, and no Apple machine in the catalog has an
    * interconnect, so it never divides anything.
+   *
+   * **And the refusal is also on the label**, which is the Hardware picker's fix applied to the
+   * picker that shares its component (#69). A note is the *selected* option's, so on a Mac Studio
+   * this list offered llama.cpp, vLLM and MLX as three equals and "Does not run on Mac Studio M3
+   * Ultra (256 GB)." arrived only once vLLM had been chosen and every tile on the page had turned to
+   * "Unsupported" — a fact needed in order to choose, delivered as a consequence of choosing.
+   * `runtimeOptionLabel` carries the short form into the list; the sentence here still names the
+   * machine, because that is what a screen-reader user hears on the control itself.
+   *
+   * `drives` is computed once and read by both, rather than `runtimeDrives` being called twice for
+   * one option. Two copies of one predicate deciding a label and a description is how a control comes
+   * to be marked and then explain the opposite.
    */
   const runtimeOptions = useMemo(
     () =>
-      RUNTIMES.map((r) => ({
-        value: r.id,
-        label: r.label,
-        note: !runtimeDrives(r, device)
-          ? `Does not run on ${device.name}.`
-          : [
-              /* "every weight" was wrong in a configuration two clicks away. BF16 is a real format
-                 here — MLX coerces to it — and there is nothing to dequantize when the checkpoint is
-                 already FP16-or-wider, so the claim was false for the one selection where it is
-                 easiest to check. `nativeLowPrecision` describes what the runtime does with a
-                 *quantized* checkpoint, which is what the sentence now says. Left as a capability
-                 rather than derived from `config.quant`: this is an option list, and each note
-                 describes the runtime a reader has not selected yet. */
-              r.nativeLowPrecision
-                ? 'Sends low-precision weights straight to the tensor cores.'
-                : 'Dequantizes a quantized checkpoint to FP16 before the matmul, so a card’s low-precision peak is out of reach.',
-              r.preallocFraction
-                ? `Reserves ${Math.round(r.preallocFraction * 100)}% of the device up front.`
-                : undefined,
-            ]
-              .filter(Boolean)
-              .join(' '),
-      })),
+      RUNTIMES.map((r) => {
+        const drives = runtimeDrives(r, device);
+        return {
+          value: r.id,
+          label: runtimeOptionLabel(r, drives),
+          note: !drives
+            ? `Does not run on ${device.name}.`
+            : sentences(
+                /* "every weight" was wrong in a configuration two clicks away. BF16 is a real format
+                   here — MLX coerces to it — and there is nothing to dequantize when the checkpoint is
+                   already FP16-or-wider, so the claim was false for the one selection where it is
+                   easiest to check. `nativeLowPrecision` describes what the runtime does with a
+                   *quantized* checkpoint, which is what the sentence now says. Left as a capability
+                   rather than derived from `config.quant`: this is an option list, and each note
+                   describes the runtime a reader has not selected yet. */
+                r.nativeLowPrecision
+                  ? 'Sends low-precision weights straight to the tensor cores.'
+                  : 'Dequantizes a quantized checkpoint to FP16 before the matmul, so a card’s low-precision peak is out of reach.',
+                // Truthiness, not `!== undefined`: a runtime that preallocates nothing has nothing to
+                // say here, and "Reserves 0% of the device up front" is a sentence about no reservation.
+                r.preallocFraction
+                  ? `Reserves ${Math.round(r.preallocFraction * 100)}% of the device up front.`
+                  : undefined
+              ),
+        };
+      }),
     [device]
   );
 
@@ -338,68 +378,37 @@ export function Bench() {
         />
       </section>
 
-      {/* The hero, the three answers it does not collapse into one, and what they add up to.
-          The bar and the tiles read `canOffload` from the same expression, so they cannot describe
-          one placement two different ways — which they did, over exactly this distinction.
-
-          The anchor is where a Matrix click scrolls back to: the detail it loads sits several
-          sections above the grid, so without one the viewport stayed on an unchanged Matrix and
-          the click looked like it had done nothing. */}
-      {/* `h-0 -mb-5` rather than `contents`: `display: contents` generates no principal box, and
-          scrollIntoView returns early for an element without one — so the anchor was silently a
-          no-op in every real browser while jsdom, which has no scrollIntoView at all, could never
-          show it. Zero height with the flex `gap-5` cancelled costs no layout. */}
-      <div id={DETAIL_ANCHOR_ID} aria-hidden="true" className="h-0 -mb-5" />
-
-      {/* Above every figure it applies to, rather than tucked under the picker that caused it.
-          The picker's note tells someone choosing a format; this tells someone *reading a number*,
-          which is a different person arriving at a different moment — usually from a shared link
-          that chose the format for them. Warning tone rather than critical: the arithmetic is sound
-          for the width it was given, and what is uncertain is whether the width is right. */}
-      {(substitution || kvSubstitution) && (
-        <div
-          role="note"
-          className="panel flex flex-col gap-2 border-[var(--color-warning)] p-[min(1rem,4vw)] text-sm leading-relaxed text-[var(--color-text-muted)]"
-        >
-          {substitution && (
-            <p>
-              <span aria-hidden="true" className="text-[var(--color-warning)]">
-                ◐{' '}
-              </span>
-              The memory and speed figures below are derived from a format {runtime.label} cannot
-              load. {substitution} They use {getQuant(config.quantId).label}’s{' '}
-              {getQuant(config.quantId).bpw} bpw, and the arithmetic is sound for that width;
-              whether it is the width {runtime.label} would really use is the approximation.
-            </p>
-          )}
-          {/* One panel, two paragraphs, rather than two panels: they are the same kind of caveat
-              about the same set of figures, and stacking two identical warning boxes reads as two
-              problems. Each keeps its own ◐ so neither is skimmed as a continuation of the other,
-              and either can appear without the other. */}
-          {kvSubstitution && (
-            <p>
-              <span aria-hidden="true" className="text-[var(--color-warning)]">
-                ◐{' '}
-              </span>
-              The cache is charged {kvLabel(runtime, config.kvPrecision)} at its nominal width.{' '}
-              {kvSubstitution} The cache is what pushes a long-context configuration over, so this
-              one errs towards reporting a fit.
-            </p>
-          )}
-        </div>
-      )}
-
-      <BudgetBar evaluation={evaluation} canOffload={device.class === 'discrete-gpu'} />
-      <Telemetry
-        evaluation={evaluation}
-        canOffload={device.class === 'discrete-gpu'}
-        tunableCeiling={raisingCeilingWouldHelp(device, evaluation.placement.usedBytesPerDevice)}
-      />
-      <Workloads evaluation={evaluation} config={config} />
-      <Envelope config={config} />
-      <Matrix config={config} />
-
       {/* Usage: the half of the question that is about you, not the hardware.
+
+          **Second on the page, directly under Setup, and that placement is the fix** (#66). These
+          five controls drove every figure that used to precede them — the memory bar, the three
+          verdict tiles, the workload strip, the Envelope, and a Matrix whose heading states the very
+          scenario they set ("32K context, 8K prompt, 1 user, FP16 KV"). At 1440x900 the context
+          slider sat 2,260px below the bar it fills when the issue measured it and 2,402px by the time
+          this landed, two and a half viewport heights either way; on an iPhone 14 the gap was 3,505px
+          and the two were never on screen together at any scroll position. A page whose premise is the
+          docstring above — "drag usage, watch the budget fill" — cannot put the drag and the fill in
+          different viewports, so every panel was an answer to a question the reader could not see
+          themselves asking. Both gaps are now inside one viewport: 388px at 1440x900, 683px at 390x844.
+
+          DOM order is reading order, so the same distance was the screen-reader cost: six panels of
+          output before the first input. #52 fixed the keyboard half — 422 Tab presses down to 15 —
+          and deliberately scoped the placement out, as a layout decision rather than a reachability
+          bug. This is that decision, made the other way.
+
+          **What it costs, measured rather than waved at.** The landing view no longer holds a figure.
+          At 1440x900 the two control panels run 281–901 and the memory bar's top is 978, so at scroll
+          0 there are 620px of input and nothing computed; before this the bar sat at 602 and the
+          verdict tiles at 785, both on screen. The trade is deliberate — a reader who arrives, drags,
+          and scrolls 100px sees the bar respond, where before they had to scroll past the whole
+          catalog to find the slider at all — but it is a trade, not a free win, and the thing that
+          would remove it is the sticky summary strip #66 named and scoped out. Merging the two panels
+          would not: that recovers the gap between them, not 620px of controls.
+
+          Kept as two panels rather than merged into one `sm:grid-cols-2` grid now that they are
+          adjacent. They are two landmarks with two names, and "what are you running" and "how are
+          you using it" are two questions; a reader hunting for the context slider is helped by a
+          region called Usage more than by nine controls under one heading.
 
           The labels come from `SETTING_LABELS` rather than being written here, because the Envelope
           draws two of these settings as its axes and titles them with the same words. The notes come
@@ -472,6 +481,73 @@ export function Bench() {
           </p>
         )}
       </section>
+
+      {/* The hero, the three answers it does not collapse into one, and what they add up to.
+          The bar and the tiles read `canOffload` from the same expression, so they cannot describe
+          one placement two different ways — which they did, over exactly this distinction.
+
+          The anchor is where a Matrix click scrolls back to: the detail it loads sits several
+          sections above the grid, so without one the viewport stayed on an unchanged Matrix and
+          the click looked like it had done nothing.
+
+          It stays *below* the Usage panel, which is a positional claim and not an accident. A Matrix
+          click changes the model and device — the detail is the budget bar and the tiles, not the
+          sliders — so aiming the anchor at the top of the controls would scroll two panels of input
+          into view and push the figures the click actually loaded back under the fold. #66 moved the
+          controls past it and left it where it was for exactly that reason. */}
+      {/* `h-0 -mb-5` rather than `contents`: `display: contents` generates no principal box, and
+          scrollIntoView returns early for an element without one — so the anchor was silently a
+          no-op in every real browser while jsdom, which has no scrollIntoView at all, could never
+          show it. Zero height with the flex `gap-5` cancelled costs no layout. */}
+      <div id={DETAIL_ANCHOR_ID} aria-hidden="true" className="h-0 -mb-5" />
+
+      {/* Above every figure it applies to, rather than tucked under the picker that caused it.
+          The picker's note tells someone choosing a format; this tells someone *reading a number*,
+          which is a different person arriving at a different moment — usually from a shared link
+          that chose the format for them. Warning tone rather than critical: the arithmetic is sound
+          for the width it was given, and what is uncertain is whether the width is right. */}
+      {(substitution || kvSubstitution) && (
+        <div
+          role="note"
+          className="panel flex flex-col gap-2 border-[var(--color-warning)] p-[min(1rem,4vw)] text-sm leading-relaxed text-[var(--color-text-muted)]"
+        >
+          {substitution && (
+            <p>
+              <span aria-hidden="true" className="text-[var(--color-warning)]">
+                ◐{' '}
+              </span>
+              The memory and speed figures below are derived from a format {runtime.label} cannot
+              load. {substitution} They use {getQuant(config.quantId).label}’s{' '}
+              {getQuant(config.quantId).bpw} bpw, and the arithmetic is sound for that width;
+              whether it is the width {runtime.label} would really use is the approximation.
+            </p>
+          )}
+          {/* One panel, two paragraphs, rather than two panels: they are the same kind of caveat
+              about the same set of figures, and stacking two identical warning boxes reads as two
+              problems. Each keeps its own ◐ so neither is skimmed as a continuation of the other,
+              and either can appear without the other. */}
+          {kvSubstitution && (
+            <p>
+              <span aria-hidden="true" className="text-[var(--color-warning)]">
+                ◐{' '}
+              </span>
+              The cache is charged {kvLabel(runtime, config.kvPrecision)} at its nominal width.{' '}
+              {kvSubstitution} The cache is what pushes a long-context configuration over, so this
+              one errs towards reporting a fit.
+            </p>
+          )}
+        </div>
+      )}
+
+      <BudgetBar evaluation={evaluation} canOffload={device.class === 'discrete-gpu'} />
+      <Telemetry
+        evaluation={evaluation}
+        canOffload={device.class === 'discrete-gpu'}
+        tunableCeiling={raisingCeilingWouldHelp(device, evaluation.placement.usedBytesPerDevice)}
+      />
+      <Workloads evaluation={evaluation} config={config} />
+      <Envelope config={config} />
+      <Matrix config={config} />
 
       {/*
        * The teaching moment. Total versus active parameters is the most misunderstood thing in

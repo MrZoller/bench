@@ -1,7 +1,7 @@
 import { useCallback, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import {
   computeMatrix,
-  measureMax,
+  measureRange,
   measureValue,
   type MatrixCell,
   type MatrixMeasure,
@@ -10,8 +10,8 @@ import { DEVICES, MODELS, getDevice, getModel } from '@/data/catalog';
 import { getQuant } from '@/data/quants';
 import { getRuntime, kvSubstitutionFor, runtimeDrives, substitutionFor } from '@/data/runtimes';
 import { FALLBACK_QUANT_ID, quantApplies } from '@/lib/quantChoice';
-import { sequential } from '@/design/tokens';
-import { kvLabel } from '@/lib/stops';
+import { magnitudeFill, magnitudeRamp } from '@/design/tokens';
+import { MEASURES, kvLabel } from '@/lib/stops';
 import { PanelCount } from './PanelCount';
 import { params, percent, rate, seconds, tokens } from '@/lib/format';
 import { useConfig, type Config } from '@/store/config';
@@ -25,21 +25,6 @@ import { useConfig, type Config } from '@/store/config';
  * hardware looks good, which is the capacity/bandwidth/compute triangle made concrete rather
  * than asserted in prose.
  */
-
-const MEASURES: readonly { value: MatrixMeasure; label: string; hint: string }[] = [
-  { value: 'fit', label: 'Does it fit', hint: 'Headroom left after weights, cache and overhead.' },
-  { value: 'decode', label: 'How fast', hint: 'Tokens per second for one user.' },
-  { value: 'ttft', label: 'How responsive', hint: 'Time until the first token appears.' },
-];
-
-/**
- * The sequential ramp, reversed.
- *
- * `sequential` runs light to dark for a light surface. On this chassis the darkest step is the
- * one that recedes into the panel, so higher values have to be *brighter* — otherwise the best
- * cells are the ones you cannot see.
- */
-const RAMP = [...sequential].reverse();
 
 /**
  * What a row is evaluated at when the selected format does not apply to it, in preference order.
@@ -65,6 +50,22 @@ const SUBSTITUTE_QUANT_IDS = ['q4_k_m', 'awq_4bit', 'int8', 'q8_0', FALLBACK_QUA
  * for a string the other component happens to use is the kind of coupling that breaks silently.
  */
 export const DETAIL_ANCHOR_ID = 'bench-detail';
+
+/**
+ * What the readout under the grid is pointed at.
+ *
+ * A position rather than a sentence, so the line is derived from the same state the grid is drawn
+ * from and cannot describe a cell the grid has stopped showing — argued where it is used.
+ *
+ * Three kinds because three things on this grid hid text behind a native tooltip, not one: a cell's
+ * figures, the device name a shortened column heading stands for, and the model name the row heading
+ * truncates at 9rem along with its parameter count. #71 names the cell; the two headings are the
+ * same defect with less arithmetic in it.
+ */
+type Readout =
+  | { kind: 'cell'; row: number; col: number }
+  | { kind: 'column'; deviceId: string }
+  | { kind: 'row'; modelId: string };
 
 export function Matrix({ config }: { config: Config }) {
   const headingId = useId();
@@ -100,8 +101,8 @@ export function Matrix({ config }: { config: Config }) {
   /**
    * The columns this runtime cannot drive at all — one fact about the scenario, not one per row.
    *
-   * Select vLLM and every Mac, every Strix Halo and every CPU host empties out completely — 10 of
-   * the 24 shipping columns as the catalog stands at this commit — and every cell in them used to be
+   * Select vLLM and every Mac, every Strix Halo and every CPU host empties out completely — 16 of
+   * the 42 shipping columns as the catalog stands at this commit — and every cell in them used to be
    * drawn exactly like a cell that *was* measured and did not fit: `transparent` behind a dashed
    * border, keyed "will not run". A uniformly empty column is the pattern that reads as a confident
    * result, so the picture said "this hardware cannot hold the model" where the truth is "this
@@ -203,8 +204,39 @@ export function Matrix({ config }: { config: Config }) {
     [models, devices, quantFor, runtime, config]
   );
 
-  const max = measureMax(cells, measure);
-  const runnable = cells.flat().filter((c) => c.runs).length;
+  /**
+   * What the ramp spans, which is both what it is scaled against and what the legend now names.
+   *
+   * One call rather than a maximum here and a pair of endpoints beside the legend: the ramp's top
+   * and the figure printed at its bright end are the same quantity, and this file's own history is
+   * mostly two derivations of one number disagreeing.
+   */
+  const range = useMemo(() => measureRange(cells, measure), [cells, measure]);
+  // `range.max` rather than `measureValue(range.high, measure)`, which is the same number and the
+  // hazard `MeasureRange` names in its own docstring: two derivations of one quantity are how a scale
+  // and its legend come to describe different grids. The zero is the empty grid, where `fill` wants
+  // no ceiling at all and paints every cell as a hole.
+  const max = range?.max ?? 0;
+
+  /**
+   * The grid-wide counts and flags the heading, the caption and the legend all read.
+   *
+   * One pass rather than five `cells.flat()` walks, and memoised on `cells` because that is what
+   * they are about. Since the readout re-renders this component on every pointer move across the
+   * grid, an unmemoised scan changed from "once per scenario" to "once per hover" the moment the
+   * line was added — 714 cells apiece as the catalog stands at this commit.
+   */
+  const summary = useMemo(() => {
+    const flat = cells.flat();
+    return {
+      total: flat.length,
+      runnable: flat.filter((c) => c.runs).length,
+      // Whether *anything* was priced. A caveat about arithmetic nobody performed is noise that
+      // teaches people to skip the caveat that matters.
+      anyEvaluated: flat.some((c) => c.evaluated),
+      anyRaiseable: flat.some((c) => c.raiseCeilingWouldHelp),
+    };
+  }, [cells]);
 
   /**
    * Whether a cell is the scenario the Bench is currently showing.
@@ -219,25 +251,37 @@ export function Matrix({ config }: { config: Config }) {
    * here: a mark and the thing it marks are one claim, and two hand-written copies of it are how
    * the ring and the screen-reader state come to disagree.
    */
-  const isCurrent = (cell: MatrixCell) =>
-    cell.modelId === config.modelId &&
-    cell.deviceId === config.deviceId &&
-    config.deviceCount === 1;
+  const isCurrent = useCallback(
+    (cell: MatrixCell) =>
+      cell.modelId === config.modelId &&
+      cell.deviceId === config.deviceId &&
+      config.deviceCount === 1,
+    [config.modelId, config.deviceId, config.deviceCount]
+  );
+
+  // Whether the grid contains the marked cell at all, which is what the legend keys — and the fifth
+  // of the per-render scans `summary` above exists to stop. Separate from it because this one is a
+  // question about the Bench's selection as well as about the grid.
+  const marksCurrent = useMemo(() => cells.flat().some(isCurrent), [cells, isCurrent]);
 
   /**
    * The grid is one tab stop, and the arrow keys move within it.
    *
-   * Every cell is a `<button>` with a full-sentence `aria-label`, so before this the grid was 408
-   * tab stops — and it sits *above* the Usage controls in DOM order, which meant 422 presses of
-   * Tab between the top of the page and the context slider that drives every figure on it. A
-   * screen-reader user heard 408 sentences on the way. That is the one accessibility affordance
-   * this repo had no spec behind, which is exactly why it survived: touch targets, reflow at 200%,
-   * coarse-pointer queries and palette contrast all have tokens and tests, and nothing was looking
-   * at focus order.
+   * Every cell is a `<button>` with a full-sentence `aria-label`, so before this the grid was one tab
+   * stop per cell — 408 of them at the catalog #52 was measured against, 714 as it stands now — and
+   * it sat *above* the Usage controls in DOM order, which meant 422 presses of Tab between the top
+   * of the page and the context slider that drives every figure on it. A screen-reader user heard
+   * every one of those sentences on the way. #66 has since moved those controls above this grid, and
+   * that does not make this pattern optional: this is the last panel with a tab stop in it, so
+   * without the roving index a reader who Tabs *into* the grid needs 714 presses to get out of the
+   * document — nothing downstream is being protected, the reader is. That is the one accessibility
+   * affordance this repo had no spec behind, which is exactly why it survived: touch targets, reflow
+   * at 200%, coarse-pointer queries and palette contrast all have tokens and tests, and nothing was
+   * looking at focus order.
    *
    * The ARIA grid pattern is what this is for: one element in the tab sequence, arrows to move
-   * between cells, Home/End for the ends of a row and Ctrl+Home/End for the ends of the grid.
-   * 408 stops becomes 1.
+   * between cells, Home/End for the ends of a row and Ctrl+Home/End for the ends of the grid. One
+   * stop per cell becomes one for the grid, whatever the catalog does next.
    *
    * A skip link was the cheaper alternative and is deliberately not here as well — past this fix
    * it would save a single keypress, and it never addressed the screen-reader traversal at all.
@@ -310,6 +354,110 @@ export function Matrix({ config }: { config: Config }) {
   );
 
   /**
+   * The reserved line under the grid, and the two pieces of state that fill it.
+   *
+   * Every figure this grid computes used to be reachable only through a native `title` — a mouse,
+   * about a second of dwell, one cell at a time, and gone the moment the pointer moves (#71). That
+   * leaves three readers with the colour and nothing else. A sighted keyboard user arrowing a row
+   * sees the ring move and no numbers, because the sentence is in the accessible name and they are
+   * not listening to it. Touch has no hover at all, so the only way to read a cell is to *commit* to
+   * it — `onClick` rewrites five store keys and scrolls several sections away. And anyone comparing
+   * two cells gets one tooltip at a time, on dwell, dismissed by the move to the second one.
+   *
+   * It costs the grid more than it would cost another chart, because `fill` log-scales onto seven
+   * steps deliberately — the ranges span orders of magnitude — so the colour is explicitly a rank
+   * and not a magnitude. Ranks without a readout answer "which is better" and never "by how much",
+   * which is the question a shortlist is for.
+   *
+   * `BudgetBar` already solved this shape: a reserved line that fills on `onMouseEnter` **and**
+   * `onFocus`. The focus half is what fixes the keyboard, and it is free once the hover half exists.
+   *
+   * **Below the grid, not above it.** A line that grows where it can move the cells is a hover trap:
+   * the square under the pointer shifts as the line fills, so the readout describes a cell the
+   * pointer has left. Under the grid, the only thing a filling line can push is the legend.
+   *
+   * **Two states, and whichever input moved last wins.** One `hovered` flag would blank the line on
+   * `mouseleave` while the focus ring is still sitting on a cell — a mark and its readout
+   * disagreeing, which is the failure `isCurrent` above exists to prevent in the other direction. So
+   * the keyboard's cell is what the line falls back to when the pointer leaves: the ring is still
+   * visible, so its sentence should still be there.
+   *
+   * **`hovered ?? focused` on its own is that same disagreement pointed the other way**, and this
+   * shipped with it. A pointer resting anywhere on the grid fires `mouseenter` and — because the
+   * mouse never moves — never fires `mouseleave`, so its cell outranked the keyboard *indefinitely*:
+   * a reader tabbing in and arrowing across a row moved the ring while the line went on printing a
+   * different model on a different machine, for every keystroke. Cells carry no `hover:` style, so
+   * the ring is the only mark on screen, and #71's first named reader — the sighted keyboard user —
+   * got a *wrong* figure where before they got none. A cell's `onFocus` therefore drops the
+   * pointer's claim, which makes the rule "the input that moved last", with hover free to take the
+   * line back on its next `mouseenter`. `BudgetBar`'s single-state hint cannot have this, because
+   * one state means last-event-wins by construction.
+   *
+   * The response to a hover is this line rather than a mark on the cell, deliberately. Anything
+   * drawn on a square inherits the two-tone contrast obligation the selection ring carries — the
+   * accent measures 1.06:1 on one step of this ramp — and a mark would still say nothing to the
+   * reader who cannot use a pointer.
+   */
+  const [hovered, setHovered] = useState<Readout | null>(null);
+  const [focused, setFocused] = useState<Readout | null>(null);
+
+  /**
+   * What a column heading says beyond its own shortened label.
+   *
+   * One derivation, two channels: the `th`'s `aria-label` when the runtime cannot drive the machine,
+   * and this line whenever a reader points at the heading. Two hand-written copies of a refusal is
+   * how the strike-through and the spoken column name come to describe different columns.
+   */
+  const columnReadout = (device: (typeof devices)[number]) =>
+    undrivable.has(device.id)
+      ? `${device.name} — ${runtime.label} does not support this hardware, at any size.`
+      : device.name;
+
+  /**
+   * And what a row heading says: the model name the 9rem column truncates, with the parameter count
+   * that only ever existed in its `title`.
+   */
+  const rowReadout = (model: (typeof models)[number]) =>
+    `${model.name} — ${params(model.totalParams)}`;
+
+  /**
+   * Each cell's sentence, computed once per grid and read by three things.
+   *
+   * The `title`, the `aria-label` and the readout are one string by construction rather than by three
+   * calls agreeing — which is this file's recurring lesson in the small. It is also the render cost
+   * that matters most here: two `tooltip()` calls per cell was 1,428 per render as the catalog stands
+   * at this commit, and the readout means a render now happens on every pointer move across the grid
+   * rather than only when the scenario changes.
+   */
+  const sentences = useMemo(
+    () =>
+      cells.map((row) => row.map((cell) => tooltip(cell, measure, quant.id, config.deviceCount))),
+    [cells, measure, quant.id, config.deviceCount]
+  );
+
+  /**
+   * The sentence itself, derived at render rather than stored when the pointer arrives.
+   *
+   * Storing the string would freeze it: the measure switch, the four Usage sliders and the runtime
+   * all move what a cell says, and a line still showing "310 tok/s per user" after the grid has been
+   * recoloured for TTFT is worse than an empty one. Storing *where* the reader is costs nothing and
+   * cannot go stale.
+   *
+   * A heading is held by id and a cell by its indices, which is each one's own address rather than
+   * two conventions: `cells` is indexed the way the roving tab stop and `cellRefs` already index it,
+   * and read defensively because the grid's size follows the catalog and the runtime filter — the
+   * same reason `activeRow` is clamped. A heading has no such pair, and an id spares this the
+   * assumption that `headerBand.columns` and `devices` are still in the same order.
+   */
+  const target = hovered ?? focused;
+  const readout = (() => {
+    if (!target) return '';
+    if (target.kind === 'column') return columnReadout(getDevice(target.deviceId));
+    if (target.kind === 'row') return rowReadout(getModel(target.modelId));
+    return sentences[target.row]?.[target.col] ?? '';
+  })();
+
+  /**
    * Whether any cell on this grid was scored at a format the runtime cannot actually load.
    *
    * Two routes reach it: the *selected* format may itself be a stand-in (every Apple-silicon row
@@ -344,8 +492,7 @@ export function Matrix({ config }: { config: Config }) {
    * performed is noise that teaches people to skip the warning that matters.
    */
   const kvSubstituted =
-    kvSubstitutionFor(runtime, config.kvPrecision) !== undefined &&
-    cells.flat().some((cell) => cell.evaluated);
+    kvSubstitutionFor(runtime, config.kvPrecision) !== undefined && summary.anyEvaluated;
 
   /**
    * The header: its labels, and the space the rotation needs for them in *both* axes.
@@ -419,9 +566,14 @@ export function Matrix({ config }: { config: Config }) {
       <header className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
         {/* The grid moves materially with context, concurrency, prompt and KV precision — the fit
             counts and the throughput colours all change — and the heading named only the format
-            and the runtime. The sliders that control it sit below this section, so a screenshot of
-            the Matrix carried no record of the request it answers, and two of them taken at
-            different settings are indistinguishable. Every input that moves a cell is stated. */}
+            and the runtime. So a screenshot of the Matrix carried no record of the request it
+            answers, and two of them taken at different settings are indistinguishable. Every input
+            that moves a cell is stated.
+
+            Still stated now that the sliders sit at the top of the page rather than below this
+            section (#66). Being able to scroll up to the controls is not the same as the panel
+            saying what it was computed at: this grid is 17 rows tall, a screenshot carries no
+            scrollback at all, and the heading is also the section's `aria-labelledby` target. */}
         <h2 id={headingId} className="text-sm font-semibold tracking-wide">
           Every model on every machine
           <span className="ml-2 font-normal text-[var(--color-text-faint)]">
@@ -437,7 +589,7 @@ export function Matrix({ config }: { config: Config }) {
             {config.deviceCount > 1 && ', one device per cell'}
           </span>
         </h2>
-        <PanelCount count={runnable} total={cells.flat().length}>
+        <PanelCount count={summary.runnable} total={summary.total}>
           combinations run
         </PanelCount>
         {/* Outside the h2, which is this section's `aria-labelledby` target — the accessible name
@@ -489,8 +641,8 @@ export function Matrix({ config }: { config: Config }) {
         <table role="grid" className="w-full border-separate border-spacing-0.5 text-left text-xs">
           <caption className="sr-only">
             Every catalogued model against every shipping device, coloured by{' '}
-            {MEASURES.find((m) => m.value === measure)?.label}. {runnable} of {cells.flat().length}{' '}
-            combinations run.
+            {MEASURES.find((m) => m.value === measure)?.label}. {summary.runnable} of{' '}
+            {summary.total} combinations run.
             {/* The same fact the struck headings and the legend carry, in the channel that has
                 neither. This caption is the grid's only summary for a reader who cannot see it, and
                 at #72's own URL it read "232 of 408 combinations run" with no further explanation —
@@ -551,11 +703,31 @@ export function Matrix({ config }: { config: Config }) {
                    * whole point is scanning — so a second tooltip would be the same mistake with a
                    * new subject. The strike-through is the channel a sighted reader gets, keyed in
                    * the legend below; this is the channel a screen reader gets.
+                   *
+                   * The same string the readout prints, from `columnReadout` rather than written out
+                   * again here, so the sentence a reader hears and the one they can read are one
+                   * claim about the column.
                    */
-                  aria-label={
-                    undrivable.has(device.id)
-                      ? `${device.name} — ${runtime.label} does not support this hardware, at any size.`
-                      : undefined
+                  aria-label={undrivable.has(device.id) ? columnReadout(device) : undefined}
+                  // The pointer's half of the same channel. The label below is shortened and its
+                  // full form lived only in a `title`, which is #71's defect with a device name in
+                  // it rather than a figure; the heading has no focus of its own to offer, so a
+                  // sighted keyboard reader gets the full name from any cell in the column instead.
+                  onMouseEnter={() => setHovered({ kind: 'column', deviceId: device.id })}
+                  onMouseLeave={() => setHovered(null)}
+                  /* The same reclaim the cells carry, for the same reason and by the same guard —
+                     see the cell's `onMouseMove`. A heading is a hover-only surface with no focus of
+                     its own, so a pointer resting in one and outranked by a keyboard step had *no*
+                     route back except leaving the heading: worse here than on a cell, where at least
+                     the reader can arrow to the thing they are pointing at. Fixing the cell alone
+                     left two live instances of one defect, which is the shape this repo keeps
+                     recording. */
+                  onMouseMove={() =>
+                    setHovered((claim) =>
+                      claim?.kind === 'column' && claim.deviceId === device.id
+                        ? claim
+                        : { kind: 'column', deviceId: device.id }
+                    )
                   }
                 >
                   {/*
@@ -601,7 +773,38 @@ export function Matrix({ config }: { config: Config }) {
                 <th
                   scope="row"
                   className="sticky left-0 max-w-[9rem] truncate bg-[var(--color-surface)] pr-2 font-normal text-[var(--color-text-muted)]"
-                  title={`${model.name} — ${params(model.totalParams)}`}
+                  // Truncated at 9rem, so the name of any model past that length — and the parameter
+                  // count of every one of them — was a mouse-only fact. Same string in all three
+                  // channels.
+                  title={rowReadout(model)}
+                  /**
+                   * The third channel, and the one the readout below cannot serve.
+                   *
+                   * The line under the grid is `aria-hidden` on purpose — it copies a cell's own
+                   * accessible name, so announcing it would say every cell twice — and these headings
+                   * are not focusable, so the *parameter count* was left with a pointer and nothing
+                   * else: a cell's sentence names the model but never its size. The same shape as the
+                   * column heading's own `aria-label` above, from the same one derivation, and it is
+                   * announced once per row change rather than once per cell, since a grid announces a
+                   * row header when the reader enters a new row.
+                   *
+                   * A sighted keyboard reader still has only the model *name*, which every cell in the
+                   * row states. Closing that properly means making row headers part of the arrow-key
+                   * grid — which is what the pattern says they are, and it moves the column indexing
+                   * `matrix-grid.spec.ts` and #52's roving stop are pinned to. Filed rather than
+                   * smuggled into this change.
+                   */
+                  aria-label={rowReadout(model)}
+                  onMouseEnter={() => setHovered({ kind: 'row', modelId: model.id })}
+                  onMouseLeave={() => setHovered(null)}
+                  /* See the column heading above: one class, three surfaces. */
+                  onMouseMove={() =>
+                    setHovered((claim) =>
+                      claim?.kind === 'row' && claim.modelId === model.id
+                        ? claim
+                        : { kind: 'row', modelId: model.id }
+                    )
+                  }
                 >
                   {model.name}
                 </th>
@@ -669,8 +872,62 @@ export function Matrix({ config }: { config: Config }) {
                           block: 'start',
                         });
                       }}
-                      title={tooltip(cell, measure, quant.id, config.deviceCount)}
-                      aria-label={tooltip(cell, measure, quant.id, config.deviceCount)}
+                      /**
+                       * Both halves of the readout, and the reason there are two.
+                       *
+                       * `onFocus` is the half that fixes the keyboard: the roving tab stop and the
+                       * arrow keys move focus, so this fires on every step across a row and the
+                       * sentence appears without a pointer, a dwell or a click. `onMouseEnter` is
+                       * what a mouse reader already expected from the `title`, minus the second of
+                       * delay and minus covering the neighbours they are comparing against.
+                       *
+                       * `onBlur` and `onMouseLeave` clear only their own channel, so the line falls
+                       * back rather than blanking; `onFocus` clears both, because a pointer that has
+                       * stopped moving never reports leaving. Both halves of that are what keep the
+                       * line agreeing with the visible ring — see the two states above.
+                       */
+                      onFocus={() => {
+                        setFocused({ kind: 'cell', row: r, col: c });
+                        // And the pointer's claim expires here, because a resting pointer fires no
+                        // `mouseleave` of its own — argued at the two states above. Without this the
+                        // line prints one cell while the ring is drawn on another, indefinitely.
+                        setHovered(null);
+                      }}
+                      onBlur={() => setFocused(null)}
+                      onMouseEnter={() => setHovered({ kind: 'cell', row: r, col: c })}
+                      onMouseLeave={() => setHovered(null)}
+                      /**
+                       * How the pointer gets its claim *back*, which `onMouseEnter` alone cannot do
+                       * (found in review).
+                       *
+                       * `onFocus` expires the hover claim, for the reason argued above. But a pointer
+                       * already resting inside this cell fires no further `mouseenter` — that event
+                       * needs a boundary crossing — so after focus moved elsewhere by keyboard, moving
+                       * the mouse within the cell it is already in reclaimed nothing and the line went
+                       * on printing the focused cell. Last-input-wins held in one direction only, and
+                       * the reader had to leave the cell and come back to fix it.
+                       *
+                       * The functional update is what makes this affordable: `mousemove` fires per
+                       * pixel, and returning the *same* object when the claim is already this cell
+                       * lets React bail out of the re-render rather than reconciling 700 cells on
+                       * every mouse move. Only the first move after a loss allocates.
+                       */
+                      onMouseMove={() =>
+                        setHovered((claim) =>
+                          claim?.kind === 'cell' && claim.row === r && claim.col === c
+                            ? claim
+                            : { kind: 'cell', row: r, col: c }
+                        )
+                      }
+                      /**
+                       * The native tooltip stays, now as an echo rather than the only route.
+                       *
+                       * It is the one channel that appears *at* the cell, and this grid is 17 rows
+                       * tall — a reader hovering the top of it on a laptop can have the readout below
+                       * the fold. What made it a defect was being alone, not being present.
+                       */
+                      title={sentences[r][c]}
+                      aria-label={sentences[r][c]}
                       aria-current={isCurrent(cell) ? 'true' : undefined}
                       /**
                        * A square with nothing drawn in it is not a control.
@@ -678,7 +935,7 @@ export function Matrix({ config }: { config: Config }) {
                        * Narrowing the dashed border to `evaluated` (argued in the class list below)
                        * leaves a closed column's cells with no ink whatsoever — `fill` already
                        * returns `transparent` for anything that does not run — so on today's
-                       * catalog vLLM produced 170 enabled 28px buttons a reader cannot see, each
+                       * catalog vLLM produced 272 enabled 28px buttons a reader cannot see, each
                        * one in the arrow-key sequence and each one silently adopting a scenario
                        * several sections above that the Bench can only blank.
                        *
@@ -725,9 +982,10 @@ export function Matrix({ config }: { config: Config }) {
                       // Moving it inside the cell moves it off the panel surface and onto the ramp,
                       // and the accent is not readable there: against the seven steps of
                       // `sequential` it measures 2.00, 1.48, 1.06, 1.38, 2.04, 3.07 and 4.52:1, so
-                      // an accent-only frame sits below the 3:1 non-text minimum on **304 of the
-                      // grid's 408 squares** — including the default selection, on `#3987e5` at
-                      // 1.38:1. On `#6da7ec` the two sit 0.022 apart in relative luminance (0.347
+                      // an accent-only frame sits below the 3:1 non-text minimum on **304 of the 408
+                      // squares the grid held when that was measured** — including the default
+                      // selection, on `#3987e5` at 1.38:1, and the grid is 714 squares now. On
+                      // `#6da7ec` the two sit 0.022 apart in relative luminance (0.347
                       // against 0.369) and measure 1.06:1 — a pure hue difference, which is #67's
                       // own failure mode restated as a resting state, and gone in greyscale or to a
                       // deuteranope. So the accent band carries a 1px `--color-surface`
@@ -765,7 +1023,7 @@ export function Matrix({ config }: { config: Config }) {
                       // The cursor is the pointer's half of the `aria-disabled` above — the one
                       // channel a mouse user gets before they click, on a square that has no
                       // boundary to look at.
-                      className={`h-7 w-full rounded-sm focus:ring-2 focus:ring-[var(--color-accent)] focus:outline-none [@media(pointer:coarse)]:h-11 ${
+                      className={`h-7 w-full scroll-mb-20 rounded-sm focus:ring-2 focus:ring-[var(--color-accent)] focus:outline-none sm:scroll-mb-10 lg:scroll-mb-5 [@media(pointer:coarse)]:h-11 ${
                         undrivable.has(cell.deviceId) ? 'cursor-not-allowed' : ''
                       } ${
                         !cell.runs && cell.evaluated
@@ -785,6 +1043,28 @@ export function Matrix({ config }: { config: Config }) {
           </tbody>
         </table>
       </div>
+
+      {/*
+          The readout. Reserved at one line so filling it moves nothing, the way `BudgetBar`'s hint
+          is — `min-h` on an empty paragraph, rather than a paragraph that appears.
+
+          The reservation is in `rem` and so is the line it reserves for: `min-h-[1.25rem]` is exactly
+          `text-sm`'s line height, so the two grow together when the root does. A height in pixels
+          under text that scales is the reservation that quietly stops being one, which is the header
+          band's #44 all over again in a smaller box.
+
+          `aria-hidden`, and this is the one place this file departs from that pattern. `BudgetBar`
+          marks its hint `aria-live="polite"` because the sentence exists nowhere else: its legend
+          items are named "Weights 14 GiB" and the explanation is not part of that name. Here the
+          sentence *is* the focused cell's accessible name, verbatim — so a live region carrying it
+          would say every cell twice, once as the name and once as the announcement, on every press
+          of an arrow key across a row — 42 columns as the catalog stands at this commit, so a walk
+          across one goes from 42 sentences to 84. The channel this adds is the visual one, which is
+          precisely the channel the three readers in #71 were missing; the spoken one was already
+          there, and is the reason the duplicate would be so expensive.
+
+          `tabular`, because the figures change under the sliders and a readout whose digits shift
+          width as it counts is the thing `index.css` reserves that class for. */}
 
       {/* A ramp legend, since a continuous scale has no discrete keys to list.
           `flex-wrap`, because several of the seven entries are whole sentences and the row does not
@@ -808,15 +1088,68 @@ export function Matrix({ config }: { config: Config }) {
             viewport cannot argue with: under browser text scaling the root grows while the
             viewport does not, and at 320px with a 24px root the floor alone took the document to
             343/320 — reintroducing the sideways scroll this whole block exists to remove, in the
-            one setting a reader most needs it not to. `min()` yields instead. */}
-        <span className="flex min-w-[min(12rem,100%)] flex-1 items-center gap-2">
-          <span>worse</span>
-          <span aria-hidden="true" className="flex h-3 flex-1 overflow-hidden rounded-sm">
-            {RAMP.map((step) => (
+            one setting a reader most needs it not to. `min()` yields instead.
+
+            **The endpoints are what make this a scale rather than an ordering** (#71). `worse` and
+            `better` alone say which way to read the ramp and nothing about what it spans, so a
+            mid-blue under "How fast" could be 20 tok/s or 200 — and since `fill` log-scales, the
+            colour is deliberately a rank, which leaves no other route to a magnitude. They are the
+            extremes of the values actually on the grid, not a per-step key: the ramp anchors its log
+            curve at zero, so the lowest cell need not paint the first step. The claim is the span.
+
+            The two throughput figures come off the cell at that end rather than out of the ramp value,
+            which is argued at `MeasureRange` — for TTFT they would otherwise be a floating-point round
+            trip, and printed the wrong way round if anyone sorted them by the number instead of by
+            rank. `fit`'s low figure is the ramp's own value and says so at `rampEnd`: every offloaded
+            cell scores exactly zero headroom, so the dark end of that ramp is a population rather than
+            a cell.
+
+            **Two figures in this row is why the floor moves from 12rem to 20rem, and why the ramp now
+            carries one of its own.** The ramp is still the only item here with a zero flex basis, so
+            it is still the only thing that collapses, and it now shares its line with about 190px of
+            text: "worse 0.4 tok/s" and "1449 tok/s better" at the widest the catalog reaches. 20rem
+            leaves it ~100px on that line instead of the 13.6px #34 measured, `min(…, 100%)` keeps
+            that from being a floor a 320px viewport cannot meet, and the ramp's own floor is what
+            makes it take a line rather than vanish where even 20rem is too tight — a zero-basis item
+            on a shared line takes only the space left over, which is the whole lesson of #34's second
+            half.
+
+            **The `nowrap` protects the figure and its unit, and nothing more — `PanelCount`'s rule
+            from #35, which is where that shape was settled.** The first version of this put the
+            direction word and the figure in one non-wrapping item, which makes each end's min-content
+            the whole label: 17 characters at the widest the scenario space reaches ("1011 tok/s
+            better", measured across three runtimes, every catalogued format, 4K/32K/128K of context
+            and 1/8/128 users). A 320px viewport leaves about 262px inside this panel — 12.8px of page
+            padding and 16px of panel padding a side — and 17 characters of the 24px monospace a 200%
+            reader gets is roughly 245px of it: true today, true by about a character, and on a
+            quantity that moves whenever a device is added. Protecting the figure alone takes the
+            floor to the longest *figure* instead ("1011 tok/s", 10 characters), and lets "worse" fall
+            to its own line in the one setting where the alternative is a label leaving the panel —
+            which is exactly the trade `PanelCount` makes for "12 of 425" and the noun after it.
+            Measured in `e2e/matrix-legend.spec.ts` at the decode measure, where the longest labels
+            are, and at 200% in `e2e/reflow.spec.ts` with the stress font on `--font-mono` as well,
+            since `.tabular` resolves that variable and the sweep only ever stressed `--font-sans`. */}
+        <span className="flex min-w-[min(20rem,100%)] flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+          {/* The word is prose and wraps; the figure is a figure and does not. */}
+          <span className="tabular">
+            worse{' '}
+            {range && <span className="whitespace-nowrap">{rampEnd(range.low, measure)}</span>}
+          </span>
+          <span
+            aria-hidden="true"
+            className="flex h-3 min-w-[min(6rem,100%)] flex-1 overflow-hidden rounded-sm"
+          >
+            {magnitudeRamp.map((step) => (
               <span key={step} className="flex-1" style={{ background: step }} />
             ))}
           </span>
-          <span>better</span>
+          {/* Nothing runs on this grid under some scenarios — every cell a hole, `fill` returning the
+              empty colour for all of them — and then there is no span to state. The words stay,
+              because they still say which way the ramp reads. */}
+          <span className="tabular">
+            {range && <span className="whitespace-nowrap">{rampEnd(range.high, measure)}</span>}{' '}
+            better
+          </span>
         </span>
         <span className="flex items-center gap-1.5">
           <span
@@ -859,7 +1192,7 @@ export function Matrix({ config }: { config: Config }) {
 
             Shown only when the grid contains it, the same rule as its neighbours — `isCurrent` is
             false for every cell on a linked rig, since these are all scored at one device. */}
-        {cells.flat().some(isCurrent) && (
+        {marksCurrent && (
           <span className="flex items-center gap-1.5">
             <span
               aria-hidden="true"
@@ -901,7 +1234,7 @@ export function Matrix({ config }: { config: Config }) {
             default and inside the 512 it can be tuned to — struck off the list over a checkbox,
             when the Envelope and Telemetry both kept the distinction. Shown only when the grid
             actually contains one, so the legend does not explain a state nobody is looking at. */}
-        {cells.flat().some((c) => c.raiseCeilingWouldHelp) && (
+        {summary.anyRaiseable && (
           <span className="flex items-center gap-1.5">
             <span
               aria-hidden="true"
@@ -911,6 +1244,70 @@ export function Matrix({ config }: { config: Config }) {
           </span>
         )}
       </div>
+      {/* **Last in the panel, and sticky, and those two together are the fix** (#71, both halves
+          found in review).
+
+          Sticky, because the paragraph used to sit after a 17-row table: a keyboard reader arrowing
+          across the first rows had the figures rendered below the fold, and the cell's native `title`
+          does not cover them — it needs a pointer and a dwell, so it serves the mouse reader and not
+          the one who had nothing before this. `bottom-0` on an element in flow keeps it on screen
+          without taking it out of the layout.
+
+          Last in the panel, which is necessary and — as review pointed out — **not sufficient, and my
+          first rationale for it was wrong.** "Nothing follows it to push" is true inside this panel
+          and false on the page: a paragraph whose height changes changes this section's height and
+          shoves whatever is downstream of it down. When #71 landed that was the Usage panel, which
+          `Bench.tsx` rendered immediately after `<Matrix>`; #66 moved those controls to the top of the
+          page, so today it is the MoE aside and the document's own height. Being last removes the
+          legend from the blast radius; it does not remove the page, and which panel happens to be
+          downstream is not something this reservation should depend on.
+
+          So the height is **reserved per breakpoint**, from measurement rather than taste. The
+          sentence is a full model-and-device line, and its widest rendering is 80px at 320, 60 at
+          390, 40 at 640 and 768, 20 at 1024 and up — four lines, three, two, two, one. The
+          reservation follows that: `5rem` below `sm`, `2.5rem` at `sm`, `1.25rem` at `lg`. It costs
+          60px of reserved blank space on a phone and buys a layout that does not move as the reader
+          arrows across a row.
+
+          A constant measured from today's device names is exactly the trap #44 records — #78
+          lengthened them in this same sweep — so it is not left to hold by luck: `matrix-readout`
+          sweeps every cell at 320 and 640 and fails if any sentence renders taller than the space
+          reserved for it. A longer name added later breaks that test rather than the layout.
+
+          `pointer-events-none`, because a pinned opaque bar over a grid of buttons otherwise
+          swallows clicks meant for the cells behind it, and this paragraph is `aria-hidden`
+          decoration with nothing to click. The cells carry `scroll-mb` to match the reservation, so
+          the browser's own focus scrolling leaves the bar's height clear instead of parking the
+          focused cell behind it.
+
+          No vertical padding: `min-h` is a border-box floor, so padding sits inside it while the
+          line is empty and adds to it once there is text — 4px of movement per sentence, which is
+          the thing this is all for. */}
+      {/* **Sticky to the bottom of the viewport while the grid is on screen** (found in review).
+
+          The comment on the cell's `title` above concedes that this grid is 17 rows tall and a reader
+          at the top of it can have the readout below the fold — and treats the native tooltip as the
+          channel that covers that case. It does not: `title` needs a pointer and a dwell, so a sighted
+          *keyboard* reader arrowing across the first rows had the figures rendered somewhere they
+          could not see, which is #71's defect surviving its own fix for the reader who had the least
+          before it.
+          `sticky` rather than `fixed`, and `bottom-0` on the element that is already in flow, so it
+          occupies its own space in the layout and reflows nothing: the paragraph sits where it always
+          did and merely stops scrolling out of view while the panel is. `min-h` already reserved the
+          line against text scaling, which is what keeps this from shifting the legend below it as the
+          sentence appears and disappears.
+          A surface of its own — `--color-surface` plus the panel's horizontal padding pulled back out
+          with negative margins — because a line of text pinned over a scrolling grid of coloured
+          squares is unreadable against half of them. No vertical padding with it: `min-h` is a
+          border-box floor, so padding is inside it while the line is empty and *adds* to it once
+          there is a line of text — 4px of legend movement every time a sentence appears, which is
+          precisely the reflow the reservation exists to prevent. The sibling test caught it. */}
+      <p
+        aria-hidden="true"
+        className="tabular pointer-events-none sticky bottom-0 -mx-[min(1.25rem,5vw)] mt-3 min-h-[5rem] bg-[var(--color-surface)] px-[min(1.25rem,5vw)] text-sm text-[var(--color-text)] sm:min-h-[2.5rem] lg:min-h-[1.25rem]"
+      >
+        {readout}
+      </p>
     </section>
   );
 }
@@ -985,16 +1382,50 @@ function fill(cell: MatrixCell, measure: MatrixMeasure, max: number): string {
   if (value === undefined || max <= 0) return 'transparent';
 
   /**
-   * Log-scaled, because these ranges span orders of magnitude: decode runs from ~2 tok/s on a
-   * CPU host to ~300 on a B200, and a linear ramp spends every step but the last on the top
-   * device while the whole rest of the grid sits in one indistinguishable dark band. The
-   * comparison people need is "is this twice as fast", not "what fraction of the best is it".
+   * Floored at zero rather than at the grid's own worst cell, which is the right domain *here* and
+   * the wrong one on the Envelope — see `magnitudeFill`. This grid spans a desktop CPU to a B200,
+   * so its bottom really is near nothing, and a cell's step therefore says how it compares to the
+   * best available rather than only to its neighbours in the same range.
    */
-  const index = Math.min(
-    RAMP.length - 1,
-    Math.floor((Math.log1p(value) / Math.log1p(max)) * RAMP.length)
-  );
-  return RAMP[index];
+  return magnitudeFill(value, { min: 0, max });
+}
+
+/**
+ * The figure at one end of the ramp, said as the quantity that end is made of.
+ *
+ * A cell rather than a number, because two of the three measures are not stored as what a reader
+ * wants to see. `measureValue` inverts TTFT so larger is better, so recovering seconds from the ramp
+ * value means `1 / (1 / t)` — a second derivation of a figure the cell already holds, and not
+ * reliably equal to `t`. Reading the field instead makes the legend's figure and that cell's own
+ * tooltip the same string, for `decode` and `ttft`, by construction.
+ *
+ * **`fit` is the exception, and what it prints is the ramp's value rather than any one cell's
+ * sentence.** There the ramp value *is* the quantity — headroom — so a second `1 - utilization`
+ * written here would be the duplicate this function exists to avoid. But `measureValue` also
+ * collapses *every* offloaded cell to zero by design, which makes the dark end of a fit ramp a
+ * population rather than a cell: a pair that fits with nothing to spare and a pair spilling 99% of
+ * its weights paint the same square, deliberately, because neither has headroom. So the label reads
+ * "0% free", which is the one statement true of all of them. The worst spiller's own figure — "runs
+ * only by spilling 99% of its weights to host RAM", which is what that cell's tooltip says — is true
+ * of exactly one square wearing that colour, and printing it under `worse` would misdescribe every
+ * other one. Worth knowing that the consequence is a legend figure no cell necessarily reports: on
+ * the default grid the low cell is Qwen3 32B on an RTX 5080 spilling 66%, and no cell anywhere prints
+ * "0% of the ceiling free". Which cell `measureRange` handed back is therefore immaterial here, and
+ * that is load-bearing — it is whichever tied cell came first in row-major order.
+ *
+ * Short by intent: the unit and no more. The measure switch's hint above says which quantity is on
+ * the grid, the two words beside these say which direction is better, and a legend that repeats
+ * "per user" at both ends is the row that overflows at 320px.
+ */
+function rampEnd(cell: MatrixCell, measure: MatrixMeasure): string {
+  switch (measure) {
+    case 'fit':
+      return `${percent(measureValue(cell, 'fit') ?? 0)} free`;
+    case 'decode':
+      return `${rate(cell.tokensPerSec)} tok/s`;
+    case 'ttft':
+      return seconds(cell.ttftSeconds);
+  }
 }
 
 /**
@@ -1017,7 +1448,19 @@ function tooltip(
   // Stated even for a blocked cell: "does not run" is a claim about a machine, and on a linked rig
   // it would otherwise read as a verdict on the rig the Bench is holding.
   const rig = selectedDeviceCount > 1 ? `${device}, one device` : device;
-  if (!cell.runs) return `${model} on ${rig}: ${cell.blockedBy ?? 'does not run'}.`;
+  if (!cell.runs) {
+    /**
+     * The full stop is added only where the reason has not brought one.
+     *
+     * `blockedBy` is two unlike things: the Matrix's own short verdicts ("Does not fit") and every
+     * categorical refusal `planPlacement` writes, each of which is already a sentence ending in a
+     * period. Appending one unconditionally produced "MLX (Apple) does not run on Desktop CPU (2-ch
+     * DDR5-6000).." — invisible enough in a native tooltip, and this sentence is now printed under
+     * the grid at `text-sm`.
+     */
+    const reason = cell.blockedBy ?? 'does not run';
+    return `${model} on ${rig}: ${reason}${reason.endsWith('.') ? '' : '.'}`;
+  }
 
   const detail =
     measure === 'fit'

@@ -17,6 +17,7 @@ import { evaluate } from '@/engine';
 import { LLAMA_CPP, GPT_OSS_120B, DEEPSEEK_V3, QWEN3_32B } from '@/engine/fixtures';
 import { GIB } from '@/engine/types';
 import { maxAllocatablePerDevice, raisingCeilingWouldHelp } from '@/engine/placement';
+import { deviceOptionLabel, devicePickerNote } from '@/lib/stops';
 
 describe('device catalog', () => {
   it('covers all three hardware classes', () => {
@@ -1117,5 +1118,216 @@ describe('a renamed device keeps the links that already name it', () => {
       expect(ids.has(to), `${from} aliases missing row ${to}`).toBe(true);
       expect(ids.has(from), `${from} is both an alias and a row`).toBe(false);
     }
+  });
+});
+
+/**
+ * What the Hardware picker says about a row, which is a claim about the *catalog* and not only
+ * about the component that renders it (#68).
+ *
+ * The note was `[statusWarning, ceilingClause, row.note].filter(Boolean).join(' ')`, and neither
+ * generated clause ended in punctuation. So the nine rows that compose more than one fragment read
+ * "192 GiB allocatable by default, raiseable to 240 GiB The allocation ceiling reserves 16 GiB for
+ * macOS…", and on the M5 Ultra — the only three-fragment row — the sentence that ran on was the
+ * warning that its specs are rumour-grade, fused to a capacity figure.
+ *
+ * **The issue named seven rows and one of them was not affected.** `ryzen-ai-max-395` is tunable but
+ * already at its own ceiling, so it composes one fragment and never had a seam; the three it missed
+ * are `mac-studio-m2-ultra-192`, `mac-studio-m4-max-36` and `macbook-pro-m1-max-64`. Swept rather
+ * than named for exactly that reason.
+ *
+ * The second half is the length. The claim is what a reader chooses *by* and it is the control's
+ * `aria-describedby`; the curated note is 40 to 180 words of provenance for a reader who has already
+ * chosen. Concatenating them read the whole derivation out on every focus, so the assertion here is
+ * that the two are separate strings and that only one of them is short.
+ */
+describe('the Hardware picker states a claim, not the catalog', () => {
+  /**
+   * How many clauses the picker is entitled to derive for this row, read off the row itself rather
+   * than off the composed note — otherwise this checks the implementation against itself.
+   */
+  const clauses = (device: (typeof DEVICES)[number]) =>
+    (device.status !== 'shipping' ? 1 : 0) +
+    (device.allocatableTunable === true && maxAllocatablePerDevice(device) > device.allocatableBytes
+      ? 1
+      : 0);
+
+  const composed = DEVICES.map((device) => ({
+    device,
+    clauses: clauses(device),
+    ...devicePickerNote(device, maxAllocatablePerDevice(device)),
+  }));
+
+  it('has rows with a seam to check, or this sweep proves nothing', () => {
+    // The nine rows the old composition fused: a derived clause immediately followed by a curated
+    // note. Eight Apple machines with a raiseable ceiling, plus the rumoured M5 Ultra.
+    expect(composed.filter((c) => c.clauses > 0 && c.device.note)).toHaveLength(9);
+    // And the one row that still has an internal seam after the split, because it derives two
+    // clauses of its own. That is the case the issue calls out as the worst of them.
+    expect(composed.filter((c) => c.clauses > 1).map((c) => c.device.id)).toEqual([
+      'mac-studio-m5-ultra-512',
+    ]);
+    // Most of the catalog derives nothing, so a sweep that only ever saw those would say nothing.
+    expect(composed.filter((c) => c.clauses === 0).length).toBeGreaterThan(20);
+  });
+
+  it.each(composed.map((c) => [c.device.id, c] as const))(
+    '%s ends every clause it states',
+    (id, { claim, clauses: count }) => {
+      if (count === 0) {
+        expect(claim, `${id} derives no clause, so it should carry no picker note`).toBeUndefined();
+        return;
+      }
+
+      // Whatever the last clause is, the note finishes as a sentence.
+      expect(claim, `${id}: “${claim}” does not end a sentence`).toMatch(/[.!?…]$/);
+
+      // And where anything follows the status warning, the warning is closed first. This is the
+      // seam the issue names. Checked against the clause's own fixed wording rather than with the
+      // issue's suggested /[a-z0-9)] [A-Z]/ sweep over the whole string, which cannot be used
+      // here: "5070 Ti" and "512 GiB" match it inside prose that is punctuated perfectly well.
+      if (count > 1) {
+        expect(claim, `${id}: the rumour warning runs into the clause after it`).toMatch(
+          /^(Rumoured|Announced) — specs may change\. /
+        );
+      }
+    }
+  );
+
+  it.each(composed.map((c) => [c.device.id, c] as const))(
+    '%s keeps its catalog note out of the claim',
+    (id, { device, claim, detail }) => {
+      // The curated prose is still rendered — it is `Select`'s `detail`, behind a disclosure — and
+      // it is verbatim. It was dropped from the picker entirely once before, taking the 3090's
+      // NVLink caveat with it, which is the regression this half of the split must not repeat.
+      expect(detail, `${id} lost its curated note`).toBe(device.note);
+      if (device.note) {
+        expect(claim ?? '', `${id} still concatenates its catalog note`).not.toContain(
+          device.note.slice(0, 40)
+        );
+      }
+
+      // Fourteen words is the longest claim the catalog can produce today (a rumour warning plus a
+      // raiseable ceiling). The bound is there to fail loudly if reference prose gets folded back
+      // in: the shortest curated note on any row is 25 words, and the longest is 197.
+      const words = (claim ?? '').split(/\s+/).filter(Boolean);
+      expect(words.length, `${id}: ${words.length} words of picker note — “${claim}”`).toBeLessThan(
+        20
+      );
+    }
+  );
+
+  /**
+   * The curated field's own half of the rule, which the split changed the reason for rather than
+   * removing.
+   *
+   * `note` is no longer concatenated onto the derived clauses, so nothing appends a full stop to it
+   * any more and `sentences()` never sees it. The rule survives for a different reason: it renders
+   * as a paragraph of its own, with nothing after it to absorb a dangling clause, and prose that
+   * stops mid-clause is indistinguishable from prose that was truncated by the app. `devices.json`
+   * writes that rule down in `$comment-note`; this is what makes it a rule. The sibling field in
+   * `runtimes.ts` has the same guard in `runtimes.test.ts`, for the sibling reason — those two are
+   * interpolated mid-paragraph.
+   */
+  it('states every curated note in whole sentences', () => {
+    const noted = DEVICES.filter((d) => d.note !== undefined);
+    // Two thirds of the catalog carries one, so this is not a sweep over three rows.
+    expect(
+      noted.length,
+      'no row carries a curated note, so this sweep proves nothing'
+    ).toBeGreaterThan(20);
+
+    for (const device of noted) {
+      expect(
+        device.note!.trim(),
+        `${device.id}: its note is a paragraph of its own and does not end a sentence`
+      ).toMatch(/[.!?…][»”’"')\]]?$/);
+    }
+  });
+
+  /**
+   * And the half of it a reader reaches *before* choosing, which the note structurally cannot be
+   * (#69).
+   *
+   * `Select` renders every option's label and only the selected option's note, so "Rumoured — specs
+   * may change." was a true sentence about a machine nobody could yet have chosen to be told about.
+   * The two strings are composed from one `PRE_RELEASE_WORDS` table for exactly this reason, and what
+   * is swept here is that they name the same rows: a marker on a shipping row is a false alarm, and a
+   * shipping-looking label on a rumoured one is #69 back again.
+   *
+   * Driven off `status` rather than off a list of ids, because the row that matters is the row added
+   * next. Nothing in the catalog is `announced` today — `toDevice` accepts it, `PRE_RELEASE_WORDS`
+   * has a word for it, and the first such row joins this sweep rather than slipping through it.
+   */
+  describe('the pre-release marker in the option a reader is scanning', () => {
+    /** The words the app is allowed to use for a status that is not `shipping`, as a reader sees them. */
+    const MARKER = /\s·\s(rumoured|announced)$/;
+
+    const preRelease = DEVICES.filter((d) => d.status !== 'shipping');
+
+    it('has a pre-release row to mark, or this sweep proves nothing', () => {
+      // The M5 Ultra today. `docs/ROADMAP.md` records it as press-rumour grade and says it must stay
+      // labelled while it is in the catalog; if it ever ships or leaves, the sweep below goes vacuous
+      // rather than wrong, and that is worth being told about. Not pinned to the id — a row added
+      // with a non-shipping status should join this, not fail it.
+      expect(
+        preRelease.map((d) => d.id),
+        'no row is rumoured or announced'
+      ).not.toEqual([]);
+    });
+
+    it.each(DEVICES.map((d) => [d.id, d] as const))(
+      '%s carries a marker exactly when its specs are not final',
+      (id, device) => {
+        const label = deviceOptionLabel(device);
+        const { claim } = devicePickerNote(device, maxAllocatablePerDevice(device));
+
+        // The label is still the label. A marker is an addition to what a row is chosen on, and
+        // `MARKER` anchors to the end of the string, so both figures stay in front of it.
+        expect(label, `${id} lost its name`).toContain(device.name);
+        expect(label, `${id} lost its capacity`).toMatch(/\d+(\.\d)? GiB/);
+
+        if (device.status === 'shipping') {
+          expect(label, `${id} ships, so a caveat here is a false alarm`).not.toMatch(MARKER);
+          expect(claim ?? '', `${id} ships and its note warns about specs`).not.toMatch(
+            /specs may change/
+          );
+          return;
+        }
+
+        expect(label, `${id} is ${device.status} and reads as shipping hardware`).toMatch(MARKER);
+        // And the note still carries the sentence, in the register prose is written in. The marker is
+        // a tag on a row being scanned; this is the clause for the row that was chosen, and the fix
+        // for #69 is not to move it.
+        expect(claim ?? '', `${id} is ${device.status} and its note says nothing about it`).toMatch(
+          /^(Rumoured|Announced) — specs may change\./
+        );
+        // The same word, so the two surfaces cannot come to disagree about what the status is called.
+        expect(claim!.toLowerCase()).toContain(MARKER.exec(label)![1]);
+      }
+    );
+
+    /**
+     * The other pre-release status, which no row in the catalog can reach.
+     *
+     * `announced` is in `DeviceStatus`, `toDevice` accepts it and `PRE_RELEASE_WORDS` has a word for
+     * it — and every committed row is either shipping or rumoured, so the branch would otherwise ship
+     * untested. Same reasoning as `toDevice`'s own guards being exercised from a synthetic row: proving
+     * a status is labelled means building one that is.
+     *
+     * The synthetic row is a real device with its status changed, so the label around the marker is a
+     * label the catalog actually produces.
+     */
+    it('labels an announced row too, not only the rumoured one that exists', () => {
+      const announced = { ...getDevice('mac-studio-m3-ultra-512'), status: 'announced' as const };
+
+      expect(deviceOptionLabel(announced)).toMatch(/ · announced$/);
+      expect(deviceOptionLabel(announced)).toContain('Mac Studio M3 Ultra (512 GB) — 512 GiB');
+      // And not the other word, which is the failure a ternary over `status` would have produced.
+      expect(deviceOptionLabel(announced)).not.toMatch(/rumoured/);
+      expect(devicePickerNote(announced, maxAllocatablePerDevice(announced)).claim).toMatch(
+        /^Announced — specs may change\. /
+      );
+    });
   });
 });

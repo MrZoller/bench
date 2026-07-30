@@ -8,10 +8,13 @@ import { DEVICES, MODELS, getDevice, getModel } from '@/data/catalog';
 import { params, tokens } from '@/lib/format';
 import { SETTING_LABELS, SETTING_NOTES, deviceCountNote } from '@/lib/stops';
 import { DETAIL_ANCHOR_ID } from '@/components/Matrix';
+// The one component this file mounts on its own, and only to sweep a renderer over all 43 catalog
+// rows — see "leaves none of the markup in any note the catalog carries".
+import { Select } from '@/components/Controls';
 import { judgeWorkloads } from '@/engine/verdict';
 import { RUNTIMES, getRuntime, kvSubstitutionFor, runtimeDrives } from '@/data/runtimes';
 import { effectiveActiveParams } from '@/engine/weights';
-import { canShard } from '@/engine/placement';
+import { canShard, maxAllocatablePerDevice } from '@/engine/placement';
 import { colors, marks } from '@/design/tokens';
 
 /**
@@ -408,8 +411,21 @@ describe('every mark drawn over another is named in a legend', () => {
 
     const key = within(envelope()).getByText('You are here').closest('li');
     expect(key).not.toBeNull();
-    // In the legend itself, beside the state keys, rather than as a caption of its own somewhere.
-    expect(key?.parentElement).toBe(within(envelope()).getByText('Comfortable').closest('ul'));
+    /*
+     * In the legend itself, beside the other keys, rather than as a caption of its own somewhere.
+     * Anchored on the ramp's key rather than on a state's since #65: the field is coloured by a
+     * magnitude now, so the ramp is what the neighbouring *keys* key, and "Comfortable" is a line of
+     * prose in the same list rather than a swatch.
+     *
+     * On the ramp key's own clause rather than on either end label, because the ends are per-measure
+     * ("less room", "slower", "quicker to start") and this test is about where a key sits, not about
+     * which measure is in force.
+     */
+    expect(key?.parentElement).toBe(
+      within(envelope())
+        .getByText(/graded against the others on this grid/)
+        .closest('ul')
+    );
   });
 
   /**
@@ -617,6 +633,112 @@ describe('the workload strip keeps up with the scenario', () => {
       );
     }
   });
+
+  // The count's noun is its own text node, so it is what a text query can reach — the numerals sit
+  // in the nested `whitespace-nowrap` span `PanelCount` wraps them in. "workloads" plural also
+  // distinguishes it from the disclosure button's "what each workload means".
+  const headline = () =>
+    within(strip())
+      .getByText(/workloads/)
+      .textContent!.replace(/\s+/g, ' ')
+      .trim();
+
+  /**
+   * The headline counts what was graded, on both sides of the fraction (#75).
+   *
+   * This is the number the panel is read by, and at the setting every visitor arrives on it was
+   * wrong: multi-user serving is not measured at one concurrent user, and `usable` subtracted the
+   * ungraded row exactly as it subtracted a failing one. gpt-oss-120b on a Spark read "5 of 7
+   * workloads" while the seventh row said, in critical red, that the reader should move a slider.
+   *
+   * Asserted here rather than in the engine suite because the count is this component's arithmetic —
+   * `judgeWorkloads` returns seven verdicts either way. The pinned pair is the issue's own
+   * measurement of the default scenario; the row count beside it is what says the denominator moved
+   * for the stated reason rather than because the engine regraded something.
+   */
+  it('leaves an ungraded workload out of both sides of the headline', () => {
+    render(<App />);
+
+    const ungraded = rows().filter((text) => text.includes('Not measured'));
+    const serving = rows().find((text) => text.includes('Multi-user serving'))!;
+
+    // The default scenario — gpt-oss-120b on a Spark at one user — has exactly one ungraded row.
+    expect(ungraded).toHaveLength(1);
+    expect(serving).toContain('Not measured');
+    // Neutral, not the strongest negative in the vocabulary: `fail` renders "No".
+    expect(serving).not.toMatch(/\bNo\b/);
+
+    /**
+     * **The denominator has to name itself while it is short of the list** (found in review on #94).
+     *
+     * Dropping the ungraded row from both sides is right — it is not evidence in either direction —
+     * but the fraction it leaves is read as a headline, and "5 of 6 workloads" beside seven visible
+     * rows claims the panel covered all of them. That is the same false implication the omission
+     * exists to prevent, arriving through the total instead of through the numerator. It is most
+     * visible one step from here: a rig that clears every graded bar renders "6 of 6", which reads as
+     * a clean sweep of a list whose seventh row says it was never measured.
+     */
+    expect(headline()).toBe('5 of 6 measured workloads');
+    expect(headline()).not.toMatch(/of 7 workloads/);
+    // The qualifier is what stops the fraction claiming coverage it does not have.
+    expect(headline()).not.toBe('5 of 6 workloads');
+  });
+
+  it('does not paint an ungraded row in the colour that means "will not run"', () => {
+    render(<App />);
+
+    const serving = within(strip())
+      .getAllByRole('listitem')
+      .find((li) => li.textContent?.includes('Multi-user serving'))!;
+    const status = serving.children[0] as HTMLElement;
+
+    // `--color-critical` is this panel's "No" and Telemetry's "Will not run". Wearing it for "you
+    // have not configured this yet" made the strongest negative in the vocabulary mean two things —
+    // and the row it sat next to, RAG at 31s to read a 32K document, means the other one. An
+    // ungraded row is not on that scale at all, so it takes recessive ink instead.
+    expect(status.textContent).toContain('Not measured');
+    expect(status.style.color).toBe('var(--color-text-faint)');
+    expect(status.style.color).not.toBe('var(--color-critical)');
+  });
+
+  it('counts every row again as soon as they are all graded', () => {
+    render(<App />);
+
+    // Two users is enough to put serving back on the scale, and nothing else can go ungraded — so
+    // the denominator returns to seven. The precondition for the case above: this asserts the
+    // denominator tracks the grading rather than simply being one smaller.
+    act(() => useConfig.getState().set('concurrency', 2));
+
+    expect(rows().filter((text) => text.includes('Not measured'))).toHaveLength(0);
+    expect(headline()).toMatch(/of 7 workloads$/);
+    // And the qualifier goes away with the shortfall: once the denominator is the whole list there
+    // is nothing to disclose, and "of 7 measured workloads" would imply some other total exists.
+    expect(headline()).not.toMatch(/measured/);
+  });
+
+  /**
+   * And the collapse for a configuration that cannot run must not lose the ungraded row's sentence.
+   *
+   * The strip says one shared reason above the list and blanks the rows' own — which is right when
+   * all seven say the same thing, and would delete the only sentence explaining an ungraded row. The
+   * refusal path grades all seven `fail`, so the two states cannot meet; this is the assertion that
+   * keeps it that way.
+   */
+  it('still collapses seven identical reasons into one when nothing runs', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // MLX is Apple-only; on an NVIDIA card nothing loads at all.
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+
+    expect(rows().filter((text) => text.includes('Not measured'))).toHaveLength(0);
+    expect(within(strip()).getByText(/does not run/i)).toBeInTheDocument();
+    // Every row keeps its status and gives up its reason to the sentence above the list.
+    for (const row of within(strip()).getAllByRole('listitem')) {
+      expect(row.children[2].textContent).toBe('');
+    }
+  });
 });
 
 describe('the Bench keeps the controls and the engine in step', () => {
@@ -724,6 +846,11 @@ describe('the Bench keeps its claims consistent with its own numbers', () => {
     // one really is raiseable — and the curated note still has to survive beside the warning.
     await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
     expect(screen.getByText(/raiseable to/i)).toBeInTheDocument();
+    // "Beside" is now "behind a disclosure under": the derivation is 96 words and was the control's
+    // accessible description (#68). Still on the page, still one interaction away, no longer read
+    // out before the reader can choose.
+    await user.click(screen.getByRole('button', { name: /show the full hardware note/i }));
+    expect(screen.getByText(/what the sysctl parses/i)).toBeInTheDocument();
   });
 
   it('does not promise a ceiling the platform will not raise', async () => {
@@ -734,7 +861,9 @@ describe('the Bench keeps its claims consistent with its own numbers', () => {
     // at its ceiling, so telling the user to raise it is advice they cannot take.
     await user.selectOptions(screen.getByLabelText('Hardware'), 'ryzen-ai-max-395');
     expect(screen.queryByText(/raiseable/i)).not.toBeInTheDocument();
-    // The curated bandwidth note is a separate claim and must still be there.
+    // The curated bandwidth note is a separate claim and must still be there — in the disclosure,
+    // which is where the provenance for a row a reader has already picked now lives.
+    await user.click(screen.getByRole('button', { name: /show the full hardware note/i }));
     expect(screen.getByText(/213/)).toBeInTheDocument();
   });
 });
@@ -1185,6 +1314,403 @@ describe('the Matrix stays informative', () => {
     const byFit = fills();
     await user.click(within(matrix()).getByRole('button', { name: 'How fast' }));
     expect(fills()).not.toEqual(byFit);
+  });
+});
+
+/**
+ * Every figure on the grid used to be behind a native `title` (#71).
+ *
+ * A mouse, a second of dwell, one cell at a time, gone on the next move. That leaves the colour and
+ * nothing else for three readers: a sighted keyboard user, who sees the ring move and never hears the
+ * `aria-label`; a touch user, who has no hover at all and can only read a cell by committing to it,
+ * which rewrites five store keys and scrolls several sections away; and anyone comparing two cells,
+ * since a native tooltip shows one and dismisses it on the way to the second. `fill` log-scales onto
+ * seven steps deliberately, so the colour is a rank and never a magnitude — which leaves no other
+ * route to one.
+ *
+ * All of this is DOM: which string the line holds, when it fills, when it clears, and whether it is
+ * announced. jsdom answers every one of those in a second. What it cannot answer is whether the
+ * reservation actually holds a line of height, which is `e2e/matrix-readout.spec.ts` — the same split
+ * the focus-indicator suite draws between the indicator a control *declares* and the one it paints.
+ */
+describe('the comparison grid puts a cell’s value where it can be read', () => {
+  const matrix = () => screen.getByRole('region', { name: /every model on every machine/i });
+
+  /**
+   * The readout, addressed structurally.
+   *
+   * It has no role of its own on purpose — see the `aria-hidden` test below — so there is no accessible
+   * name to find it by. The section's only direct paragraph is unambiguous: the workload caveat sits
+   * inside the `header` and the measure hint inside the `fieldset`. Deliberately *not* keyed on
+   * `aria-hidden`, which is the subject of one of the tests below and would make that one circular —
+   * and the assertions here all compare its text against a cell's own `aria-label`, so a locator that
+   * found the wrong element could not pass for the wrong reason either way.
+   */
+  const line = () => matrix().querySelector<HTMLElement>(':scope > p')!;
+  const readout = () => line().textContent;
+  const cells = () => [...matrix().querySelectorAll<HTMLButtonElement>('td button')];
+  const legend = () => [...matrix().querySelectorAll<HTMLElement>(':scope > div')].at(-1)!;
+
+  it('reserves the line before anything is pointed at', () => {
+    render(<App />);
+
+    // Present and empty, rather than absent until it has something to say: a line that appears
+    // reflows whatever is under it every time a reader moves between two cells. Whether the
+    // reservation is worth a line of height is geometry, and geometry is e2e's half.
+    expect(line()).toBeInTheDocument();
+    expect(readout()).toBe('');
+    expect(line().className).toMatch(/min-h-/);
+  });
+
+  it('fills on focus, which is the half that answers the keyboard', () => {
+    render(<App />);
+    const cell = cells()[5];
+
+    act(() => cell.focus());
+
+    // The same sentence the cell announces, not a second wording of it: one `tooltip()` call feeding
+    // both channels is what keeps the line and the accessible name from drifting apart.
+    expect(readout()).toBe(cell.getAttribute('aria-label'));
+    expect(readout()).toMatch(/ on .+:/);
+
+    act(() => cell.blur());
+    expect(readout()).toBe('');
+  });
+
+  it('fills on hover, without the dwell the tooltip charged for', () => {
+    render(<App />);
+    const cell = cells()[7];
+
+    fireEvent.mouseEnter(cell);
+    expect(readout()).toBe(cell.getAttribute('aria-label'));
+
+    fireEvent.mouseLeave(cell);
+    expect(readout()).toBe('');
+  });
+
+  it('falls back to the focused cell when the pointer leaves, rather than blanking', () => {
+    render(<App />);
+    const [held, pointed] = [cells()[0], cells()[9]];
+
+    act(() => held.focus());
+    fireEvent.mouseEnter(pointed);
+    // The pointer wins while there is one — it is the more recent intent.
+    expect(readout()).toBe(pointed.getAttribute('aria-label'));
+
+    fireEvent.mouseLeave(pointed);
+    // And the focus ring is still drawn on the first cell, so its sentence is still the true one. A
+    // single `hovered` flag blanks here, which is a visible mark with nothing on the page explaining
+    // it — the disagreement `isCurrent` exists to prevent, pointed the other way.
+    expect(document.activeElement).toBe(held);
+    expect(readout()).toBe(held.getAttribute('aria-label'));
+  });
+
+  /**
+   * And the other order, which is the one that shipped broken.
+   *
+   * `hovered ?? focused` is the fallback above with no way back out of it: a pointer resting anywhere
+   * on the grid fires `mouseenter` and, because the mouse does not move, never fires `mouseleave`. A
+   * reader who then tabs in and arrows across a row moves the ring while the line goes on printing the
+   * cell the pointer happens to be sitting on — indefinitely, and with no `hover:` style on the cells,
+   * the ring is the only mark on screen. That is a *wrong* figure where #71's sighted keyboard reader
+   * previously got none, which is worse than the defect being fixed.
+   *
+   * No contrivance in this test but the missing `mousemove`, which is the whole point: the pointer is
+   * where it was and the keyboard has moved twice.
+   */
+  it('lets the keyboard take the line back from a pointer that has stopped moving', () => {
+    render(<App />);
+    const resting = cells()[0];
+
+    fireEvent.mouseEnter(resting);
+    expect(readout()).toBe(resting.getAttribute('aria-label'));
+
+    const stepped = cells()[300];
+    act(() => stepped.focus());
+    fireEvent.keyDown(stepped, { key: 'ArrowRight' });
+    const arrowed = document.activeElement as HTMLButtonElement;
+
+    // The ring moved, so the line has to have moved with it.
+    expect(arrowed).not.toBe(resting);
+    expect(readout()).toBe(arrowed.getAttribute('aria-label'));
+    expect(readout()).not.toBe(resting.getAttribute('aria-label'));
+
+    // And the pointer is not disabled by having been outranked once: the next `mouseenter` is a new
+    // move, and the rule is that the newer input wins.
+    const pointed = cells()[7];
+    fireEvent.mouseEnter(pointed);
+    expect(readout()).toBe(pointed.getAttribute('aria-label'));
+  });
+
+  /**
+   * And the way back that `mouseenter` alone cannot provide (found in review on #71).
+   *
+   * The test above proves the pointer can reclaim the line by entering a *different* cell. It cannot
+   * prove it can reclaim the cell it is already in, and it could not: `mouseenter` needs a boundary
+   * crossing, so once `onFocus` expired the hover claim, a reader whose mouse was resting on a cell
+   * had to leave it and come back. Last-input-wins held in one direction only, and the direction it
+   * failed in is the one a mixed keyboard-and-mouse reader hits first — the mouse is where they left
+   * it, and the hand that moves is the one already on it.
+   *
+   * `mousemove` without a preceding `mouseenter` is exactly that state, and it is why the contrivance
+   * is the *absence* of an enter rather than the presence of a move.
+   */
+  it('lets a pointer that never left reclaim the line by moving in place', () => {
+    render(<App />);
+    const resting = cells()[3];
+
+    fireEvent.mouseEnter(resting);
+    expect(readout()).toBe(resting.getAttribute('aria-label'));
+
+    // Keyboard takes it, which also expires the pointer's claim.
+    const stepped = cells()[200];
+    act(() => stepped.focus());
+    expect(readout()).toBe(stepped.getAttribute('aria-label'));
+
+    // The pointer has not moved between cells and so fires no `mouseenter` — only a move inside the
+    // one it is already in.
+    fireEvent.mouseMove(resting);
+    expect(
+      readout(),
+      'a pointer resting on a cell cannot get the line back without leaving it'
+    ).toBe(resting.getAttribute('aria-label'));
+
+    // The focus ring has not moved, so the fallback is still the stepped cell once the pointer goes.
+    expect(document.activeElement).toBe(stepped);
+    fireEvent.mouseLeave(resting);
+    expect(readout()).toBe(stepped.getAttribute('aria-label'));
+  });
+
+  /**
+   * The line is derived from where the reader is, not stored when they get there.
+   *
+   * Reachable without contriving anything: a pointer resting on a cell while the keyboard drives one
+   * of the Usage sliders — which is what this does, since that is exactly what a slider does to the
+   * store. Nothing moves the pointer, so no `mouseleave` fires, and every figure on the grid changes
+   * underneath it. A stored string would keep quoting the old scenario over the new grid.
+   */
+  it('tracks the scenario instead of freezing the sentence it arrived with', () => {
+    render(<App />);
+    // A cell that runs, so it has a figure to report at all.
+    const cell = cells().find((c) => /: \d/.test(c.getAttribute('aria-label') ?? ''))!;
+
+    fireEvent.mouseEnter(cell);
+    const before = readout();
+    expect(before).toBe(cell.getAttribute('aria-label'));
+
+    act(() => useConfig.getState().set('contextTokens', 131072));
+
+    expect(readout()).not.toBe(before);
+    expect(readout()).toBe(cell.getAttribute('aria-label'));
+  });
+
+  /**
+   * The one place this deliberately departs from `BudgetBar`'s hint, which is `aria-live="polite"`.
+   *
+   * There the sentence exists nowhere else — a legend item is named "Weights 14 GiB" and the
+   * explanation is not part of that name. Here the line is a verbatim copy of the focused cell's
+   * accessible name, so a live region would announce every cell twice: once as the name, once as the
+   * update, on every arrow key across a 42-column row. The channel #71 is missing is the visual one.
+   */
+  it('does not read the cell’s own sentence out a second time', () => {
+    render(<App />);
+    const cell = cells()[11];
+
+    act(() => cell.focus());
+
+    expect(line().getAttribute('aria-hidden')).toBe('true');
+    expect(line().getAttribute('aria-live')).toBeNull();
+    // And the spoken channel is untouched: the cell still carries the whole sentence.
+    expect(cell.getAttribute('aria-label')).toBe(readout());
+  });
+
+  /**
+   * The sweep. #71 names the cells, and the same defect was live on both headings.
+   *
+   * `headerColumns` shortens every device name — the vendor line goes, and the bracketed qualifier
+   * with it wherever the stem is already unique — and the full name lived only in a `title`. The row
+   * heading truncates at 9rem and put the model name *and* its parameter count in one. Three
+   * hover-only strings, one line to put them in.
+   */
+  it('names the machine a shortened column heading stands for', () => {
+    render(<App />);
+    const heading = [...matrix().querySelectorAll('thead th')].at(-1)!;
+    const label = heading.querySelector('span[title]')!;
+
+    fireEvent.mouseEnter(heading);
+
+    // The full catalog name, which is longer than what the column can print.
+    expect(readout()).toBe(label.getAttribute('title'));
+    expect(readout()!.length).toBeGreaterThan(label.textContent!.length);
+  });
+
+  it('carries the runtime refusal a struck heading only says in colour and ink', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'vllm');
+
+    const struck = [...matrix().querySelectorAll('thead th')].find((th) =>
+      th.querySelector('span[title]')?.className.includes('line-through')
+    )!;
+    fireEvent.mouseEnter(struck);
+
+    // Same string as the heading's own `aria-label`, from the same derivation — the strike is the
+    // sighted channel and it says nothing about why on its own.
+    expect(readout()).toBe(struck.getAttribute('aria-label'));
+    expect(readout()).toMatch(/does not support this hardware, at any size/i);
+  });
+
+  it('punctuates a refusal once, now that the sentence is printed rather than hovered', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    // vLLM drives no Mac, no Strix Halo and no CPU host, so this fills the grid with the refusals
+    // `planPlacement` writes — each of which already ends in a full stop.
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'vllm');
+
+    const blocked = cells().filter((c) =>
+      /does not run on/i.test(c.getAttribute('aria-label') ?? '')
+    );
+    expect(blocked.length).toBeGreaterThan(50);
+
+    fireEvent.mouseEnter(blocked[0]);
+    expect(readout()).toMatch(/does not run on .+[^.]\.$/);
+    for (const cell of blocked) expect(cell.getAttribute('aria-label')).not.toContain('..');
+  });
+
+  it('spells out a truncated model row, parameter count and all', () => {
+    render(<App />);
+    const heading = matrix().querySelectorAll('tbody th')[3];
+
+    fireEvent.mouseEnter(heading);
+
+    expect(readout()).toBe(heading.getAttribute('title'));
+    expect(readout()).toContain(heading.textContent);
+    // The parameter count, which had no channel at all besides that `title`.
+    expect(readout()).toMatch(/\d+(\.\d+)?B$/);
+  });
+
+  /**
+   * And the parameter count needs a spoken channel of its own, which the line cannot be.
+   *
+   * The readout is `aria-hidden` for the reason above — it copies a cell's accessible name, so a live
+   * region says every cell twice — and these headings take no focus, so hover was the *only* route to
+   * the count: a cell's sentence names the model but never its size. An `aria-label` on the row header
+   * is the same answer the column header already uses for its runtime refusal, from the same one
+   * derivation, and a grid announces a row header once per row rather than once per cell.
+   */
+  it('tells a screen reader the row’s parameter count, which no cell states', () => {
+    render(<App />);
+    const headings = [...matrix().querySelectorAll('tbody th')];
+
+    expect(headings.length).toBeGreaterThan(10);
+    for (const heading of headings) {
+      // One string in all three channels — the visible name, the tooltip and the accessible name.
+      expect(heading.getAttribute('aria-label')).toBe(heading.getAttribute('title'));
+      expect(heading.getAttribute('aria-label')).toMatch(/\d+(\.\d+)?B$/);
+      expect(heading.getAttribute('aria-label')).toContain(heading.textContent);
+    }
+  });
+
+  /**
+   * And the ramp is a scale now rather than an ordering.
+   *
+   * `worse [gradient] better` says which way to read the colour and nothing about what it spans, so a
+   * mid-blue under "How fast" could be 20 tok/s or 200. The endpoints are asserted against the
+   * *cells'* own sentences rather than recomputed here: whatever the engine says, the figure at each
+   * end of the legend has to be the figure some cell reports, and the extreme one.
+   */
+  const spoken = (cells: HTMLButtonElement[], pattern: RegExp) =>
+    cells.flatMap((cell) => {
+      const found = pattern.exec(cell.getAttribute('aria-label') ?? '');
+      return found ? [found[1]] : [];
+    });
+
+  /**
+   * The extreme is chosen by number and asserted as the *string the cell printed*.
+   *
+   * `Math.min(...rates.map(Number))` and `toContain` looks equivalent and is not: `rate()` keeps a
+   * decimal below 10 tok/s, so the day the slowest running cell lands on an exact tenth-free value the
+   * legend correctly renders "worse 3.0 tok/s" while the round trip through `Number` asks for "worse
+   * 3 tok/s" — a red test with nothing wrong in the code. It passes today only because the minimum is
+   * 0.5. Same reason the TTFT test below compares by `asSeconds` and asserts the figure verbatim.
+   */
+  const extremeBy = (figures: string[], value: (figure: string) => number, want: 'min' | 'max') =>
+    figures.reduce((a, b) =>
+      want === 'min' ? (value(b) < value(a) ? b : a) : value(b) > value(a) ? b : a
+    );
+
+  it('anchors the ramp with the throughput its own cells report', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(within(matrix()).getByRole('button', { name: 'How fast' }));
+
+    const rates = spoken(cells(), /: ([\d.]+) tok\/s per user\.$/);
+    expect(rates.length).toBeGreaterThan(100);
+
+    const text = legend().textContent!;
+    expect(text).toContain(`worse ${extremeBy(rates, Number, 'min')} tok/s`);
+    expect(text).toContain(`${extremeBy(rates, Number, 'max')} tok/s better`);
+  });
+
+  it('puts the longest wait at the worse end, which the stored value inverts', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(within(matrix()).getByRole('button', { name: 'How responsive' }));
+
+    /** "188 ms", "2.7 s", "84 min" — one axis, three units, as `seconds()` prints them. */
+    const UNIT: Record<string, number> = { ms: 0.001, s: 1, min: 60 };
+    const asSeconds = (figure: string) => {
+      const [value, unit] = figure.split(' ');
+      return Number(value) * UNIT[unit];
+    };
+
+    const waits = spoken(cells(), /: (.+) to first token\.$/);
+    expect(waits.length).toBeGreaterThan(100);
+    const longest = extremeBy(waits, asSeconds, 'max');
+    const shortest = extremeBy(waits, asSeconds, 'min');
+
+    // `measureValue` inverts TTFT so that larger is better, so the ramp's worst end is the *slowest*
+    // machine. An endpoint pair ordered by the number it prints puts the fastest one under "worse"
+    // and leaves every colour on the grid correct, which is what makes it invisible.
+    const text = legend().textContent!;
+    expect(text).toContain(`worse ${longest}`);
+    expect(text).toContain(`${shortest} better`);
+    expect(asSeconds(longest)).toBeGreaterThan(asSeconds(shortest));
+  });
+
+  it('anchors the fit ramp with the most headroom any cell has', () => {
+    render(<App />);
+
+    const free = spoken(cells(), /: (\d+)% of the ceiling free\.$/);
+    expect(free.length).toBeGreaterThan(100);
+
+    const text = legend().textContent!;
+    expect(text).toContain(`${extremeBy(free, Number, 'max')}% free better`);
+  });
+
+  /**
+   * And the low end of the *fit* ramp is the one endpoint that is not a cell's own figure.
+   *
+   * `measureValue('fit')` collapses every offloaded cell to zero headroom deliberately, so the dark
+   * end is a population: a pair that just fits and a pair spilling most of its weights paint the same
+   * square. "0% free" is the one statement true of all of them, which is why it is what the label
+   * says — and the consequence is that the figure appears on no tooltip, since a spilled cell's own
+   * sentence quotes the spill instead. Pinned rather than left to `/worse \d+% free/`, which any digit
+   * satisfies: printing the tied cell's own 66% spill would describe every other square wrongly, and
+   * `measureRange` hands back whichever tied cell came first in row-major order, so a label reading
+   * any other field off it would be reading an arbitrary cell.
+   */
+  it('says the fit ramp’s dark end has no headroom, not what the worst cell spills', () => {
+    render(<App />);
+
+    const spilling = cells().filter((c) =>
+      /spilling \d+% of its weights/.test(c.getAttribute('aria-label') ?? '')
+    );
+    expect(spilling.length, 'no cell spills, so the low end is a resident cell').toBeGreaterThan(0);
+
+    const text = legend().textContent!;
+    expect(text).toContain('worse 0% free');
+    expect(text).not.toMatch(/worse \d+% (spilled|of its weights)/);
   });
 });
 
@@ -2597,10 +3123,167 @@ describe('the cache-width marker', () => {
 });
 
 /**
- * The Matrix is 408 cells, each a `<button>` carrying a full-sentence `aria-label`, and it sits
- * above the Usage controls in DOM order. Every one of those cells in the tab sequence put 422 Tab
- * presses between the top of the page and the context slider that drives every figure on the page,
- * and a screen-reader user heard 408 sentences on the way.
+ * Tabbable, not merely focusable — the distinction #52's whole fix turns on, since `tabindex="-1"`
+ * is reachable by script and never by Tab. Shared by the two suites below because they are two
+ * readings of one sequence: which stops exist, and what order a reader meets them in.
+ */
+const TABBABLE = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]',
+]
+  .map((selector) => `${selector}:not([tabindex="-1"])`)
+  .join(', ');
+
+/**
+ * The page leads with the controls that drive it, which #52 explicitly left open.
+ *
+ * The five Usage sliders set the scenario every figure here is computed at — the memory bar, the three
+ * verdict tiles, the workload strip, the Envelope, and a Matrix heading that prints the very numbers
+ * they hold ("32K context, 8K prompt, 1 user, FP16 KV"). They used to render after all five: 2,260px
+ * below the memory bar at 1440x900 when the issue measured it, 2,402px on `main` by the time this
+ * landed — two and a half viewport heights either way — and past four screens of grid on an iPhone 14,
+ * where the slider and the bar it fills were never on screen together at any scroll position. #52 took the keyboard cost from 422 Tab presses to 15 and closed by naming this as the
+ * open question — "whether the Usage controls should sit above the two large grids in DOM order. They
+ * are the primary input of the tool and are currently last." #66 is that question answered.
+ *
+ * **DOM order is the half jsdom can answer, and it is not the lesser half.** Whether the slider and
+ * the bar land in one viewport is geometry, so it is `e2e/usage-placement.spec.ts` — every rect here
+ * reads 0. But DOM order *is* reading order: it is the sequence a screen-reader user is handed, one
+ * panel at a time, and no amount of CSS `order` changes it. Six panels of output before the first
+ * input was the same defect in the channel that has no viewport at all. So the sequence is pinned
+ * here, where it costs a second, and where a panel slipped in between later fails a test.
+ */
+describe('the controls come before the figures they drive', () => {
+  /** True when `a` is announced before `b` — document order, which is reading order. */
+  const precedes = (a: Element, b: Element) =>
+    Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+  /**
+   * Every landmark the Bench renders, in the order a reader must meet them.
+   *
+   * Named rather than indexed, so the assertion survives a panel being added and fails on one being
+   * moved — which is the direction that matters. The two inputs first, then the four figures they
+   * drive, then the two grids as the terminal panels.
+   */
+  const ORDER: readonly (string | RegExp)[] = [
+    'Configuration',
+    'Usage',
+    /memory budget/i,
+    'Verdicts',
+    /what you could do with it/i,
+    /how much room is left/i,
+    /every model on every machine/i,
+  ];
+
+  it('announces the two control panels before any of the six they drive', () => {
+    render(<App />);
+    const landmarks = ORDER.map((name) => screen.getByRole('region', { name }));
+
+    for (let i = 1; i < landmarks.length; i++) {
+      expect(
+        precedes(landmarks[i - 1], landmarks[i]),
+        `${String(ORDER[i])} is announced before ${String(ORDER[i - 1])}`
+      ).toBe(true);
+    }
+  });
+
+  /**
+   * The same claim in the channel a keyboard reader travels, and a stronger form of it: the controls
+   * are not merely early, they are a *prefix* of the page's tab sequence. Nothing that reports a
+   * figure is reachable before every control that sets one.
+   *
+   * Scoped to `<main>` so the masthead's share button — a real stop, and legitimately first — is not
+   * counted as a figure sitting ahead of the sliders.
+   */
+  it('offers every control before any figure in the tab sequence', () => {
+    const { container } = render(<App />);
+    const main = container.querySelector<HTMLElement>('main')!;
+    const setup = main.querySelector<HTMLElement>('section[aria-label="Configuration"]')!;
+    const usage = main.querySelector<HTMLElement>('section[aria-label="Usage"]')!;
+
+    const stops = [...main.querySelectorAll<HTMLElement>(TABBABLE)];
+    const controls = stops.filter((el) => setup.contains(el) || usage.contains(el));
+
+    // Both panels are actually in the sweep — twelve elements today: four selects, the hardware
+    // note's disclosure, four sliders and three KV options. A zero here would satisfy the prefix
+    // trivially.
+    //
+    // Twelve *elements*, ten stops: a radio group offers Tab only its checked member, so the three
+    // KV options are one press in a browser and three in this enumeration. That does not weaken the
+    // prefix — a stop the browser skips cannot reorder the ones it does not — but it is why this
+    // figure and `e2e/matrix-grid.spec.ts`'s differ by two on identical markup.
+    expect(controls.length).toBeGreaterThan(8);
+    expect(stops.slice(0, controls.length), 'a figure is reachable before a control').toEqual(
+      controls
+    );
+  });
+
+  /**
+   * And the anchor a Matrix click scrolls back to still aims at the figures.
+   *
+   * It is the one thing in this section that had to *stay* where it was. A Matrix click rewrites the
+   * model and device, so the detail it loads is the budget bar and the tiles; moving the anchor up
+   * with the controls would scroll two panels of input into view and push the figures the click
+   * actually changed back under the fold. #66 named this as the thing to check when moving the panel.
+   */
+  it('leaves the detail anchor between the controls and the figures', () => {
+    const { container } = render(<App />);
+    const anchor = container.querySelector(`#${DETAIL_ANCHOR_ID}`)!;
+    const usage = container.querySelector('section[aria-label="Usage"]')!;
+    const budget = screen.getByRole('region', { name: /memory budget/i });
+
+    expect(anchor, 'the anchor is missing, so a Matrix click scrolls nowhere').not.toBeNull();
+    expect(precedes(usage, anchor), 'the anchor scrolls the controls into view').toBe(true);
+    expect(precedes(anchor, budget), 'the anchor sits past the detail it is meant to show').toBe(
+      true
+    );
+  });
+
+  /**
+   * The same rule one level down, where it was already being followed and had nothing holding it.
+   *
+   * Both picture panels carry a measure switch that recolours the whole picture, and both put it
+   * *above* the picture — which is the #66 property inside a panel rather than across the page. A
+   * review of this change audited the class and found these two clean and two disclosures (the
+   * workload glossary, the budget table) sitting under their output, which is the "show more under a
+   * list" convention and stays: they reveal detail already in the same viewport rather than setting a
+   * scenario something else is computed from. The two that recolour a whole figure are the ones worth
+   * pinning, because moving one is a plausible tidy-up and nothing would have failed.
+   */
+  it('puts each measure switch above the picture it recolours', () => {
+    const { container } = render(<App />);
+
+    const gridSwitch = screen.getByRole('group', { name: /colour the grid by/i });
+    const table = container.querySelector('table[role="grid"]')!;
+    expect(precedes(gridSwitch, table), 'the Matrix recolours a grid drawn above its switch').toBe(
+      true
+    );
+
+    const fieldSwitch = screen.getByRole('group', { name: /colour the field by/i });
+    const canvas = screen
+      .getByRole('region', { name: /how much room is left/i })
+      .querySelector('canvas')!;
+    expect(canvas, 'the Envelope drew no canvas, so this proves nothing').not.toBeNull();
+    expect(
+      precedes(fieldSwitch, canvas),
+      'the Envelope recolours a field drawn above its switch'
+    ).toBe(true);
+  });
+});
+
+/**
+ * The Matrix is 408 cells at the catalog #52 was measured against — 714 today — each a `<button>`
+ * carrying a full-sentence `aria-label`, and it sat above the Usage controls in DOM order. Every one
+ * of those cells in the tab sequence put 422 Tab presses between the top of the page and the context
+ * slider that drives every figure on the page, and a screen-reader user heard 408 sentences on the
+ * way. #66 has since moved those controls above the grid, which does not retire the pattern: the grid
+ * is the page's last tab stop, so the 714 presses it used to cost are now the price of leaving the
+ * document rather than of reaching the next panel. One press either way, and only with the roving
+ * index.
  *
  * The counting lives here rather than in `e2e/` because the tab *sequence* is a DOM property —
  * `tabindex="-1"` is reachable by script and never by Tab — and jsdom can answer it in a second.
@@ -2608,18 +3291,6 @@ describe('the cache-width marker', () => {
  * it implements no sequential focus navigation at all; that assertion is in `e2e/matrix-grid.spec.ts`.
  */
 describe('the comparison grid is one tab stop, not four hundred', () => {
-  /** Tabbable, not merely focusable — the distinction the whole fix turns on. */
-  const TABBABLE = [
-    'a[href]',
-    'button:not([disabled])',
-    'input:not([disabled])',
-    'select:not([disabled])',
-    'textarea:not([disabled])',
-    '[tabindex]',
-  ]
-    .map((selector) => `${selector}:not([tabindex="-1"])`)
-    .join(', ');
-
   const grid = (container: HTMLElement) =>
     container.querySelector<HTMLTableElement>('table[role="grid"]')!;
   const cellsOf = (container: HTMLElement) => [
@@ -2636,16 +3307,30 @@ describe('the comparison grid is one tab stop, not four hundred', () => {
     expect(cells.filter((c) => c.tabIndex === -1)).toHaveLength(cells.length - 1);
   });
 
-  it('leaves the Usage controls a short walk from the top of the page', () => {
+  /**
+   * The whole page, not the walk to one panel — which is what this counted until #66.
+   *
+   * It measured the index of the first Usage control, because the Usage panel was the one *after* the
+   * grid: 422 before the roving index, 19 after it. #66 moved those controls to the top of the page,
+   * where their index is 6 whatever the grid does with its 714 cells, so the original assertion would
+   * have passed against a grid that had never been fixed. The total is the property #52 actually
+   * bought, and it is indifferent to where any panel sits.
+   */
+  it('keeps the whole page inside forty tab stops', () => {
     const { container } = render(<App />);
     const stops = [...container.querySelectorAll<HTMLElement>(TABBABLE)];
-    const usage = container.querySelector<HTMLElement>('section[aria-label="Usage"]')!;
-    const firstControl = usage.querySelector<HTMLElement>(TABBABLE)!;
 
-    // 422 before this. The bound is deliberately loose — what matters is the order of magnitude,
-    // and pinning the exact figure would fail on any unrelated control being added.
-    expect(stops.indexOf(firstControl)).toBeLessThan(30);
-    expect(stops.indexOf(firstControl)).toBeGreaterThan(0);
+    // The grid has to be in this page, or the count is of a page without the problem on it.
+    expect(cellsOf(container).length).toBeGreaterThan(300);
+    /* 26 as it stands, one of which is the grid. 739 if every cell were in the sequence again —
+       26 − 1 + 714 — which is what replacing the roving `tabIndex` with `tabIndex={0}` reports.
+
+       Forty, the same ceiling `e2e/matrix-grid.spec.ts` uses, because the two count one sequence and
+       a bound that fires in one channel and not the other is a bug report about the wrong file. Loose
+       on purpose: at 30 this sat four stops from red on a measured 26, and this sweep has been adding
+       two to five stops a PR — so the next disclosure would have failed a test named after the grid
+       while nothing about the grid had changed. What matters is the order of magnitude. */
+    expect(stops.length).toBeLessThan(40);
   });
 
   it('moves between cells with the arrow keys', async () => {
@@ -3414,10 +4099,364 @@ describe('the controls that drive every figure explain what they are', () => {
     const group = screen.getByRole('group', { name: /colour the grid by/i });
     expect(description(group)).toMatch(/headroom left/i);
 
-    // It tracks the selection, which is what makes it this group's description rather than a static
-    // caption: each measure means something different by a bright cell.
-    await user.click(screen.getByRole('button', { name: 'How fast' }));
+    /**
+     * It tracks the selection, which is what makes it this group's description rather than a static
+     * caption: each measure means something different by a bright cell.
+     *
+     * Scoped to the group since #65 gave the Envelope a measure control of its own, reading the same
+     * `MEASURES`. A page-wide `getByRole('button', { name: 'How fast' })` then finds two and throws —
+     * and the failure is a real one about the query rather than about either control, because "the
+     * grid" in this test's name is the Matrix and the Envelope's switch answers for a different
+     * picture. Both surfaces having the toggle is the point of sharing the vocabulary.
+     */
+    await user.click(within(group).getByRole('button', { name: 'How fast' }));
     expect(description(group)).toMatch(/tokens per second/i);
+  });
+
+  /**
+   * The Hardware picker, whose note was doing two jobs and neither of them well (#68).
+   *
+   * `[statusWarning, ceilingClause, row.note].join(' ')` fused a derived claim onto 40-180 words of
+   * catalog provenance with a bare space, and handed the whole thing to the control as its
+   * `aria-describedby`. Two consequences, and the DOM is where both are visible:
+   *
+   *   - **The punctuation.** "raiseable to 240 GiB The allocation ceiling reserves 16 GiB for
+   *     macOS" reads as a parse error on the most prominent control on the page, and on the M5
+   *     Ultra the sentence that ran on was the warning that its specs are rumour-grade.
+   *   - **The audience.** A screen-reader user heard the entire derivation — `iogpu.wired_limit_mb`,
+   *     unwired allocations, what the sysctl parses — every time focus landed on the picker, before
+   *     they could choose anything.
+   *
+   * `src/data/catalog.test.ts` sweeps the composition across all 43 rows. These assert the wiring:
+   * that the short claim is what the control is described by, that the provenance is still reachable,
+   * and that it is reachable somewhere other than the description.
+   */
+  describe('the Hardware picker', () => {
+    const hardware = () => screen.getByLabelText(SETTING_LABELS.deviceId);
+    const toggle = () => screen.getByRole('button', { name: /the full hardware note/i });
+
+    /** The disclosure's region, found through the button that controls it. */
+    const detail = () => {
+      const id = toggle().getAttribute('aria-controls');
+      return id === null ? null : document.getElementById(id);
+    };
+
+    /**
+     * Every row where a derived clause used to be followed immediately by a curated note — the nine
+     * seams, derived from the catalog rather than listed, so a row added later joins the sweep.
+     * The issue named seven of them and one of those (`ryzen-ai-max-395`, already at its own
+     * ceiling) composes a single fragment and never had a seam at all.
+     */
+    const seams = DEVICES.filter(
+      (d) =>
+        d.note !== undefined &&
+        (d.status !== 'shipping' ||
+          (d.allocatableTunable === true && maxAllocatablePerDevice(d) > d.allocatableBytes))
+    );
+
+    it('describes the rumoured Mac with closed sentences instead of one fused figure', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.selectOptions(hardware(), 'mac-studio-m5-ultra-512');
+
+      // The only three-fragment row, and the one the issue calls out: the rumour warning was fused
+      // to a capacity figure, which is the sentence on that row that most needs to stand alone.
+      const note = description(hardware());
+      expect(note).toMatch(/^Rumoured — specs may change\. /);
+      expect(note).toMatch(/384 GiB allocatable by default, raiseable to 480 GiB\.$/);
+
+      // Fourteen words, against 146 before — and none of the derivation.
+      expect(note.split(/\s+/)).toHaveLength(14);
+      expect(note).not.toMatch(/iogpu|window server|sysctl|per-core rate|rumour-grade/i);
+    });
+
+    it.each(seams.map((d) => [d.id, d] as const))(
+      'gives %s a description that is a claim, not a derivation',
+      async (_id, device) => {
+        const user = userEvent.setup();
+        render(<App />);
+        await user.selectOptions(hardware(), device.id);
+
+        const note = description(hardware());
+        // Something is still said about every one of these rows — this is not a deletion.
+        expect(note).not.toBe('');
+        // The claim ends as a sentence, so nothing that follows it can look like part of it.
+        expect(note).toMatch(/[.!?…]$/);
+        // And the curated prose is not in it. First 40 characters rather than the whole string,
+        // because a substring is what a bare join produces.
+        expect(note).not.toContain(device.note!.slice(0, 40));
+      }
+    );
+
+    it('keeps the curated note reachable, and out of the description while open', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.selectOptions(hardware(), 'mac-studio-m3-ultra-512');
+
+      // Collapsed: the provenance is not on the page at all, which is what stops it setting the
+      // height of a grid cell whose row also holds the Quantization and Runtime pickers.
+      expect(screen.queryByText(/what the sysctl parses/i)).not.toBeInTheDocument();
+
+      await user.click(toggle());
+      expect(screen.getByText(/what the sysctl parses/i)).toBeInTheDocument();
+      // Open, and still not part of the control's accessible description. A disclosure that got
+      // wired into `aria-describedby` when expanded would be the same defect with a click in front
+      // of it.
+      expect(description(hardware())).not.toMatch(/sysctl/i);
+    });
+
+    it('renders the catalog’s prose rather than printing its markup', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      // Five rows write `**strong**`, two write `*emphasis*` and nine write backticked identifiers;
+      // nothing rendered any of them, so the picker printed literal asterisks. Moving the prose to
+      // its own region without this would have moved the glitch with it.
+      await user.selectOptions(hardware(), 'mac-studio-m3-ultra-96');
+      await user.click(toggle());
+
+      const region = detail();
+      expect(region).not.toBeNull();
+      expect(region!.querySelector('strong')?.textContent).toMatch(/80-core GPU/);
+      expect(region!.querySelector('code')?.textContent).toBe('iogpu.wired_limit_mb');
+      // Verbatim apart from the marks: the note is provenance, and losing a clause of it in a
+      // renderer would be worse than printing the asterisks.
+      expect(region!.textContent).toBe(
+        getDevice('mac-studio-m3-ultra-96').note!.replace(/\*\*|\*|`/g, '')
+      );
+
+      // The single-asterisk register, which the first version of this renderer did not read: two
+      // rows write their contrast with one mark rather than two, and both printed the asterisks in
+      // the region this change created for them.
+      await user.selectOptions(hardware(), 'rx-9070-xt');
+      expect(detail()!.querySelector('em')?.textContent).toBe('matrix');
+    });
+
+    /**
+     * And over the whole catalog, because "five rows write `**strong**`" is a fact about the file on
+     * the day it was read.
+     *
+     * The property is that nothing of the markup reaches the reader as text: the region's text is
+     * the note with its marks removed, exactly, which fails both ways — an unrendered mark shows up
+     * as a stray asterisk, and a renderer that ate a clause shows up as missing prose. A fourth
+     * mark, or a stray `*` in a figure, fails here rather than printing itself at a reader.
+     *
+     * `Select` on its own rather than the whole Bench, which is the one place in this file that
+     * mounts a component instead of the app: the wiring from the catalog through `devicePickerNote`
+     * to this control is what the tests above assert, on the real picker. What is swept here is the
+     * renderer against every note in the file, and mounting the Matrix's 408 cells 29 times to read
+     * one paragraph cost 19 seconds of a suite that runs in two minutes. One mount and one click
+     * either way, since the disclosure deliberately stays open across a change of selection.
+     */
+    it('leaves none of the markup in any note the catalog carries', async () => {
+      const user = userEvent.setup();
+      const noted = DEVICES.filter((d) => d.note !== undefined);
+      expect(noted.length, 'no row carries a note, so this sweep proves nothing').toBeGreaterThan(
+        20
+      );
+
+      const picker = (value: string) => (
+        <Select
+          label={SETTING_LABELS.deviceId}
+          value={value}
+          onChange={() => {}}
+          options={noted.map((d) => ({ value: d.id, label: d.name, detail: d.note }))}
+        />
+      );
+
+      const { rerender } = render(picker(noted[0].id));
+      await user.click(toggle());
+
+      const wrong: string[] = [];
+      for (const device of noted) {
+        rerender(picker(device.id));
+        if (detail()?.textContent !== device.note!.replace(/\*\*|\*|`/g, '')) wrong.push(device.id);
+      }
+      expect(wrong, 'notes whose markup reached the reader as text').toEqual([]);
+    });
+
+    /**
+     * The other 34 rows, where the split leaves the control with no accessible description at all.
+     *
+     * That is what #68 asks for — the derivation was never a description of the control — but a
+     * description that is deliberately absent and one that vanished by accident are the same DOM,
+     * and nothing else in the suite looks at this panel's descriptions. So the sanctioned state is
+     * pinned: no description, and the prose one click away in the disclosure. This row is the one
+     * whose note was dropped from the picker entirely once before.
+     */
+    it('describes the control only where it has derived a claim', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.selectOptions(hardware(), 'rtx-3090');
+
+      const device = getDevice('rtx-3090');
+      expect(device.status).toBe('shipping');
+      expect(device.allocatableTunable).toBeUndefined();
+      expect(device.note).toBeDefined();
+
+      expect(hardware()).not.toHaveAttribute('aria-describedby');
+      expect(description(hardware())).toBe('');
+
+      await user.click(toggle());
+      expect(detail()!.textContent).toMatch(/NVLink/);
+    });
+
+    it('offers no disclosure for a row the catalog says nothing extra about', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+
+      // The 5090 carries no curated note, so there is nothing to disclose — and an empty
+      // disclosure is a control that promises something and does nothing.
+      await user.selectOptions(hardware(), 'rtx-5090');
+      expect(getDevice('rtx-5090').note).toBeUndefined();
+      expect(
+        screen.queryByRole('button', { name: /the full hardware note/i })
+      ).not.toBeInTheDocument();
+    });
+  });
+});
+
+/**
+ * What a picker says *before* the choice, which is not the same string as what it says after (#69).
+ *
+ * `Controls.tsx` renders every option's label and only the **selected** option's note. So the
+ * caveats that decide whether a row is worth choosing lived in the one string a `<select>` will not
+ * show until the choice has been made: "Mac Studio M5 Ultra (512 GB) — 512 GiB" scrolled past as an
+ * equal of the 512 GB M3 Ultra one line above it, which is real hardware with measured bandwidth,
+ * and its `Rumoured — specs may change.` appeared only afterwards. CLAUDE.md states that one as a
+ * requirement: pre-release specs must stay visibly labelled in the UI.
+ *
+ * **Swept over both pickers that share the component**, because the mechanism is the component's and
+ * not the catalog's. The Runtime picker had the same shape and a harder consequence — on a Mac Studio
+ * it offered llama.cpp, vLLM and MLX as three equals and produced "Does not run on …" only once vLLM
+ * had been selected and every figure on the page had been replaced by a refusal.
+ *
+ * These read `option.textContent`, which is the one place a sweep like this is not vacuous: the file
+ * already records that reading notes off the `<option>`s finds nothing and passes whatever the copy
+ * says. Here the text under test really is the option's own.
+ */
+describe('a picker states its caveats where the choice is made', () => {
+  /** Every option's own text, which is all a closed `<select>` has to distinguish its rows by. */
+  const optionsOf = (label: string) =>
+    Array.from((screen.getByLabelText(label) as HTMLSelectElement).options).map((o) => ({
+      value: o.value,
+      text: (o.textContent ?? '').trim(),
+    }));
+
+  /** The marker as a reader sees it, not as the code spells it — `devices.json` says `rumored`. */
+  const PRE_RELEASE = /\s·\s(rumoured|announced)$/;
+
+  it('marks every row whose specs are not final, in the option text', () => {
+    render(<App />);
+
+    const options = optionsOf(SETTING_LABELS.deviceId);
+    expect(options.length, 'the picker offered no hardware at all').toBe(DEVICES.length);
+
+    // From `status`, so a row added to the catalog as announced or rumoured fails this rather than
+    // slipping through it. The named instance is one device; the class is the field.
+    const preRelease = new Set(DEVICES.filter((d) => d.status !== 'shipping').map((d) => d.id));
+    expect(
+      preRelease.size,
+      'no catalogued row is rumoured or announced, so this sweep proves nothing'
+    ).toBeGreaterThan(0);
+
+    expect(
+      options
+        .filter((o) => preRelease.has(o.value) && !PRE_RELEASE.test(o.text))
+        .map((o) => o.text),
+      'pre-release hardware offered as though it were shipping'
+    ).toEqual([]);
+    // The other half of it: a marker on every row would satisfy the assertion above and mean nothing.
+    expect(
+      options
+        .filter((o) => !preRelease.has(o.value) && PRE_RELEASE.test(o.text))
+        .map((o) => o.text),
+      'shipping hardware carrying a pre-release marker'
+    ).toEqual([]);
+  });
+
+  it('marks the rumoured Mac without spending the figures the row is chosen on', () => {
+    render(<App />);
+
+    // The string the issue quotes, plus the marker it was missing. Pinned whole because the defect
+    // was not "the marker is absent" but "the label is indistinguishable from a shipping row": a
+    // marker that displaced the name or the capacity would satisfy a regex and lose the comparison.
+    expect(
+      optionsOf(SETTING_LABELS.deviceId).find((o) => o.value === 'mac-studio-m5-ultra-512')?.text
+    ).toBe('Mac Studio M5 Ultra (512 GB) — 512 GiB · rumoured');
+  });
+
+  it('still gives the chosen row the fuller sentence, rather than moving it into the label', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // The marker is a tag on a row being scanned; this is the clause for the row that was picked, and
+    // it is the control's accessible description. Adding the first must not cost the second.
+    await user.selectOptions(
+      screen.getByLabelText(SETTING_LABELS.deviceId),
+      'mac-studio-m5-ultra-512'
+    );
+    expect(screen.getByLabelText(SETTING_LABELS.deviceId)).toHaveAccessibleDescription(
+      /^Rumoured — specs may change\./
+    );
+  });
+
+  it('marks a runtime that cannot drive the machine currently selected', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    /**
+     * Two machines, because the marked runtime differs between them: vLLM does not run on Apple
+     * unified memory and MLX runs on nothing else. A marker hard-coded to either would pass on one
+     * device and fail on the other, which is why the expectation is derived from `runtimeDrives`.
+     */
+    for (const deviceId of ['mac-studio-m3-ultra-256', 'rtx-5090']) {
+      await user.selectOptions(screen.getByLabelText(SETTING_LABELS.deviceId), deviceId);
+      const device = getDevice(deviceId);
+
+      const options = optionsOf(SETTING_LABELS.runtimeId);
+      expect(options.length, 'the picker offered no runtimes').toBe(RUNTIMES.length);
+      expect(
+        RUNTIMES.filter((r) => !runtimeDrives(r, device)).length,
+        `every runtime drives ${deviceId}, so it marks nothing`
+      ).toBeGreaterThan(0);
+
+      const wrong = options.filter(
+        (o) =>
+          runtimeDrives(getRuntime(o.value), device) ===
+          /does not run on this hardware/.test(o.text)
+      );
+      expect(
+        wrong.map((o) => `${deviceId}: “${o.text}”`),
+        'runtime options whose marker disagrees with whether the runtime drives this machine'
+      ).toEqual([]);
+    }
+
+    // And the note still names the machine, which the marker deliberately does not — it is what a
+    // screen-reader user hears on the control once the choice has been made.
+    await user.selectOptions(screen.getByLabelText(SETTING_LABELS.runtimeId), 'mlx');
+    expect(screen.getByLabelText(SETTING_LABELS.runtimeId)).toHaveAccessibleDescription(
+      /Does not run on GeForce RTX 5090/
+    );
+  });
+
+  it('says what a runtime will not run on, rather than leaving the reader to supply it', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    /**
+     * Pinned whole, because the first version of this marker said "does not run here" and an option's
+     * own text is *all* that is announced for a row nobody has selected — so "here" resolved to
+     * nothing, and the string that names the machine is the selected option's note, which is exactly
+     * the dependency the marker exists to remove (found in review). The referent has to be inside the
+     * option: "this hardware" is the control one row up.
+     */
+    await user.selectOptions(
+      screen.getByLabelText(SETTING_LABELS.deviceId),
+      'mac-studio-m3-ultra-256'
+    );
+    expect(optionsOf(SETTING_LABELS.runtimeId).find((o) => o.value === 'vllm')?.text).toBe(
+      'vLLM · does not run on this hardware'
+    );
   });
 });
 

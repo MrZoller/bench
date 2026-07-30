@@ -135,3 +135,79 @@ export function uniqueLabels(values: readonly number[]): string[] {
     seen.get(label)! > 1 ? values[i].toLocaleString('en-US') : label
   );
 }
+
+/**
+ * The marks that end a sentence, optionally behind a closing quote or bracket.
+ *
+ * `—` is in the set because a fragment that trails off into an em dash is already handing over to
+ * whatever follows it, and `…` for the same reason. A closing delimiter is allowed *after* the
+ * mark so that a fragment ending `(as the datasheet says.)` is recognised as finished.
+ */
+const TERMINAL = /[.!?…—][»”’"')\]]?$/;
+
+/**
+ * Independent fragments composed into prose, each one ending as its own sentence.
+ *
+ * `[a, b, c].filter(Boolean).join(' ')` is the obvious way to assemble a note out of clauses that
+ * may or may not apply, and it is wrong the moment a clause does not end in punctuation. Nine
+ * Hardware rows read "192 GiB allocatable by default, raiseable to 240 GiB The allocation ceiling
+ * reserves 16 GiB for macOS…" — and on the one rumoured machine the sentence that ran on was the
+ * rumour warning, fused to a capacity figure (#68).
+ *
+ * **Both halves of the fix, deliberately.** The clauses the app generates now carry their own full
+ * stops, because a fragment that reads as a sentence where it is written is a fragment a future
+ * caller cannot misuse. This function is the guarantee behind that convention: half of these
+ * fragments come from `devices.json`, which is curated by hand, so source discipline there is a
+ * habit and not an invariant — and the next note added is exactly where the habit lapses.
+ *
+ * **The last fragment is left exactly as written.** There is nothing after it to run into, and
+ * appending a full stop would overrule a curator who chose to end on a question or an ellipsis.
+ *
+ * Returns `undefined` rather than `''` for an empty composition, because every caller feeds this
+ * to an optional `note` and an empty string would emit an `aria-describedby` pointing at nothing.
+ */
+export function sentences(...fragments: (string | false | null | undefined)[]): string | undefined {
+  const present = fragments
+    .filter((f): f is string => typeof f === 'string' && f.trim() !== '')
+    .map((f) => f.trim());
+  if (present.length === 0) return undefined;
+
+  return present
+    .map((fragment, i) =>
+      i === present.length - 1 || TERMINAL.test(fragment) ? fragment : `${fragment}.`
+    )
+    .join(' ');
+}
+
+/**
+ * An `<option>`'s own text, plus any caveat a reader needs *before* the choice rather than after it.
+ *
+ * The sibling of `sentences` above, for the other half of what a picker says — and it exists because
+ * a `Select` renders only the **selected** option's note. A warning that lives there is unreachable
+ * until the choice it was meant to inform has already been made: the rumoured Mac Studio's
+ * "Rumoured — specs may change." sat one line under the control and appeared only once someone had
+ * picked the machine, so in the open list it was indistinguishable from real hardware with real
+ * measured bandwidth (#69). An `<option>` renders no children, so its text is the only place a
+ * marker can go.
+ *
+ * ` · ` rather than a comma, a bracket or a dash, because the labels this is appended to have spent
+ * all three: "Mac Studio M5 Ultra (512 GB) — 512 GiB" is a parenthetical, an em dash and a unit
+ * already, and a fourth kind of separator is what keeps the marker from reading as part of the spec.
+ *
+ * Variadic and falsy-tolerant like `sentences`, for the same two reasons: a call site composes
+ * conditions instead of nesting ternaries, and a row that earns a second marker does not need a
+ * second joiner written somewhere else.
+ *
+ * **Markers are short and lower case, and that is a rule about where they are.** They are not
+ * sentences — `sentences` is for the note, which is prose. This is a tag inside a line of tabular
+ * label text, and a full stop in the middle of one reads as the end of the option.
+ */
+export function optionLabel(
+  label: string,
+  ...markers: (string | false | null | undefined)[]
+): string {
+  const present = markers
+    .filter((m): m is string => typeof m === 'string' && m.trim() !== '')
+    .map((m) => m.trim());
+  return [label, ...present].join(' · ');
+}

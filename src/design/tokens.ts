@@ -115,6 +115,64 @@ export const sequential = [
   '#0d366b',
 ] as const;
 
+/**
+ * The sequential ramp as a *chart* has to read it: brightest is best.
+ *
+ * `sequential` runs light to dark for a light surface. On this chassis the darkest step is the one
+ * that recedes into the panel, so higher values have to be *brighter* — otherwise the best cells
+ * are the ones you cannot see. Both grids read this rather than reversing it themselves, which is
+ * what the Matrix used to do alone.
+ */
+export const magnitudeRamp = [...sequential].reverse();
+
+/**
+ * Where a value sits on the ramp: one step of `magnitudeRamp`, log-placed inside a stated domain.
+ *
+ * **Log-placed, because these quantities span orders of magnitude.** Decode runs from ~2 tok/s on
+ * a CPU host to ~300 on a B200 and first-token latency from a second to twelve minutes; a linear
+ * ramp spends every step but the last on the top of the range and leaves the whole rest of the
+ * grid in one indistinguishable band. The comparison people need is "is this twice as fast", not
+ * "what fraction of the best is it".
+ *
+ * **The domain is the caller's, and the floor is the half that was wrong.** With `min: 0` this is
+ * the expression the Matrix has always used, which is right for a grid whose worst cell really is
+ * near zero — 25 devices from a desktop CPU to a B200. It is wrong wherever the interesting
+ * variation sits on top of a large constant: the Envelope's headroom at the default scenario runs
+ * 18% to 49% of one machine's ceiling, because 60 GiB of weights is in every cell, and zero-floored
+ * that whole range lands on three steps of seven with 76% of the field sharing one. A domain of
+ * `{min, max}` over the cells actually on the scale subtracts the constant and spends the ramp on
+ * what differs, which is the only thing a field can show. Log placement keeps its other property
+ * there too: `log1p` is concave, so equal steps of ramp cover smaller differences at the bottom of
+ * the domain — where the wall is, and where the decision is.
+ *
+ * **A rank-relative domain is a rank-relative claim, and the caller owes the reader that.** A cell on
+ * the darkest step is the lowest reading *on its own grid* and not necessarily a poor one: on
+ * gpt-oss-20b against an EPYC 9755 every Envelope cell runs, headroom spans 0.726 to 0.991 of the
+ * ceiling, and the bottom step lands on a corner with 1,052 of the machine's 1,450 allocatable GiB
+ * free. So the Envelope keys
+ * its ramp "less room / more room" and states the comparison class, where the Matrix — floored at
+ * zero across a desktop CPU to a B200 — can honestly say "worse / better". Anchoring is not the
+ * escape: with `min: 0` that same grid puts **55 of 56** cells on one step against 50 for the span
+ * domain, and the default scenario 35 of 56 against 28. The floor buys nothing here and costs the
+ * boundary.
+ *
+ * A degenerate domain — every cell identical, or a single cell — has nothing for a ramp to say and
+ * takes the top step: with no variation each cell is simultaneously the best and the worst on its
+ * own grid, and the brightest step is the one that does not imply a deficit that was never measured.
+ */
+export function magnitudeFill(value: number, domain: { min: number; max: number }): string {
+  const steps = magnitudeRamp.length;
+  const top = magnitudeRamp[steps - 1];
+  // `log1p` rather than `log` so a zero floor — the Matrix's domain — is 0 rather than -Infinity,
+  // and a zero value with it. Both are real: a cell that did not fit has no headroom at all.
+  const span = Math.log1p(domain.max) - Math.log1p(domain.min);
+  if (!(span > 0)) return top;
+  const placed = (Math.log1p(value) - Math.log1p(domain.min)) / span;
+  // Clamped at both ends: `placed` is 1 at the top of the domain, which would index past the ramp,
+  // and a caller may legitimately ask about a value below its own floor.
+  return magnitudeRamp[Math.max(0, Math.min(steps - 1, Math.floor(placed * steps)))];
+}
+
 /** Parse a `#rrggbb` token into an `[r, g, b]` tuple. */
 function hexToRgb(hex: string): [number, number, number] {
   const h = hex.replace('#', '');
