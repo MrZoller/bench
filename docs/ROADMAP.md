@@ -36,16 +36,16 @@ ruleset that had been convention rather than enforcement since the start.
 What remains is a naming decision, not work: the site serves from the Pages project URL, and a
 zoller.ai subdomain is one repository variable away. See **Deployment**, below.
 
-| Phase                              | State             | Notes                                                                                               |
-| ---------------------------------- | ----------------- | --------------------------------------------------------------------------------------------------- |
-| 1. Scaffold                        | **done**          | React 19 + TS strict + Vite + Tailwind v4 + Zustand. CI: lint → format:check → test → build         |
-| 2. Engine                          | **done**          | `src/engine/`, pure, no React. Pinned to published measurements at both ends of the hardware range  |
-| 3. Catalogs                        | **done** (#1)     | 17 models derived from HF, 43 devices curated (#78). `npm run catalog` regenerates the models.      |
-| 4. Design tokens + the Bench       | **done** (#5)     | Hero surface. Load the `dataviz` skill before any chart/meter/palette code                          |
-| 5. Verdict + explain layers        | **done** (#4)     | Seven workload archetypes. See **Verdicts**, below                                                  |
-| 6. Envelope + Matrix surfaces      | **done** (#7, #8) | Context × concurrency feasibility field; model × device heatmap                                     |
-| 7. URL state, responsive, a11y     | **done** (#6)     | Querystring round-trips a scenario. Browser pass in `e2e/` (#19); reflow and hit targets (#35, #29) |
-| 8. Weekly catalog refresh + deploy | **done**          | Refresh opens a PR on a _substantive_ diff. Deployed to Pages, 28 July 2026 — see below             |
+| Phase                              | State             | Notes                                                                                                |
+| ---------------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------- |
+| 1. Scaffold                        | **done**          | React 19 + TS strict + Vite + Tailwind v4 + Zustand. CI: lint → format:check → test → build          |
+| 2. Engine                          | **done**          | `src/engine/`, pure, no React. Pinned to published measurements at both ends of the hardware range   |
+| 3. Catalogs                        | **done** (#1)     | 35 models derived from HF (#77), 43 devices curated (#78). `npm run catalog` regenerates the models. |
+| 4. Design tokens + the Bench       | **done** (#5)     | Hero surface. Load the `dataviz` skill before any chart/meter/palette code                           |
+| 5. Verdict + explain layers        | **done** (#4)     | Seven workload archetypes. See **Verdicts**, below                                                   |
+| 6. Envelope + Matrix surfaces      | **done** (#7, #8) | Context × concurrency feasibility field; model × device heatmap                                      |
+| 7. URL state, responsive, a11y     | **done** (#6)     | Querystring round-trips a scenario. Browser pass in `e2e/` (#19); reflow and hit targets (#35, #29)  |
+| 8. Weekly catalog refresh + deploy | **done**          | Refresh opens a PR on a _substantive_ diff. Deployed to Pages, 28 July 2026 — see below              |
 
 **Correctness debt is tracked as issues, not here.** #9 and #10, which graded a configuration as
 working when it is not, are fixed — together with #11, which printed a figure measured at a
@@ -56,6 +56,69 @@ prefill having no notion of a cached prefix (#23); see **Engine** below. The bro
 **Tests** below. Reflow at 200% text (#35) and the coarse-pointer targets (#29) are fixed, both by
 sweeping the class rather than the named instance. The labelling (#13) and clipboard (#15) bugs
 turned out to have been fixed in passing by #25 and #26 and were closed on the evidence.
+
+### The post-release sweep, 29–31 July 2026
+
+Eighteen issues filed against the live site, worked as one pass and merged as eighteen pull requests.
+Most are written up in the sections below where they change a derivation; what follows is what the
+_shape_ of the sweep taught, because that part is not visible from any single diff.
+
+**Every issue named a subset of its class, and the ones that hurt were the ones I swept badly.** This
+file already recorded that pattern three times; the sweep added five more. The Apple GPU-bin defect
+was filed against one row and was live on four. The pointer-reclaim fix on the Matrix readout landed
+on the cell handler and left both heading handlers with the identical bug. A candidate-report fix
+taught the failed-fetch path to admit failure and left the capped-walk path publishing an
+ordinary-looking table. In each case the reviewer named instance _n_ and the class was _n + 2_, and
+in each case the second round was more expensive than sweeping would have been.
+
+**A review round costs less than it looks and converges slower than it looks.** Codex found real
+defects on every round of every PR; across the sweep exactly one premise was false, and even that one
+had a true half. But three PRs took four and five rounds, and rounds three onward were almost
+entirely defects in the _previous round's fix_ — a gate that fixed a dead control and created a trap
+door, a reservation that fixed the panel and moved the page. `ROADMAP.md`'s existing rule (merge on
+green CI, triage and file the rest) is what stops that; six issues were filed under it rather than
+patched, and each carries its measurement so the next session does not re-derive it.
+
+**Catalog growth is a load-bearing input to the test suite, and nothing was watching it.** The Matrix
+is models × devices, so #78 and #77 together took it from 425 cells to 1,505 and the unit suite from
+42s to about fourteen minutes — 3.5× the cells for 20× the wall clock, because `userEvent` slows
+superlinearly with tree size. Two separate pull requests failed CI on a per-test timeout for changes
+that touched no component, and each was diagnosed from scratch. The timeout has now been raised twice
+and must not be raised a third time; see #101.
+
+**Codex needs a nudge here, and the ROADMAP's "~40 minutes" reads as patience when it is absence.**
+Every clean verdict in the sweep arrived within about two minutes of an `@codex review` comment, and
+several PRs sat 30 to 60 minutes with no reaction and no verdict before being nudged. The last one
+bounds it: #107 sat **27 hours** on a green, thread-free head with no verdict of any kind, then
+answered a nudge in two and a half minutes. And the connector was provably healthy the whole time —
+it cleared #106 three minutes _before_ that push and #104 and #105 two hours before, so the silence
+was specific to one push rather than a backlog. A silent push is not a queue position, and waiting
+longer does not help. Treat a quiet half-hour as a skipped push rather than a slow one — one nudge per
+push, per `watch-pr`.
+
+The corollary is a detection rule, because the skipped push is invisible from the surface a reader
+naturally checks. #107 carried a `+1` reaction from the connector and nothing else: no 👀, no review,
+no comment. A reaction is not a verdict and 👀 is the only one that means a run is in flight, so
+"the bot has touched this PR" and "the bot has reviewed this head" are separate questions. Ask the
+second one, against both the reviews API and the issue comments, and compare the SHA as a prefix —
+the no-findings form abbreviates it to ten characters.
+
+**The tooling gaps were worktree-shaped.** Running agents in git worktrees needs a symlinked
+`node_modules`, and `.gitignore` listed `node_modules/` with a trailing slash — which matches a
+directory and not a symlink of that name, so `git add -A` staged the link. Worse, each worktree
+carries its own `tsconfig.json`, so `npm run lint` reported 936 parse errors across the real `src/`
+tree and `vitest` collected 22 copies of `App.test.tsx` and reported 44 failures belonging to another
+checkout. Both are fixed in `.gitignore`, `eslint.config.js` and `vite.config.ts`; the general lesson
+is that a nested checkout is invisible to a human and not to a tool that walks the tree.
+
+**Cleaning up afterwards needs GitHub, because neither git command for "is this branch merged" works
+against a squash merge.** The repo squash-merges, so a merged branch's tip is not an ancestor of
+`main` and `git merge-base --is-ancestor` reports every one of them unmerged. `git cherry` fails the
+same way for a subtler reason: the squash commit's patch is the _union_ of the branch's commits, so no
+individual commit has a matching patch-id and every branch reports `+`. Both answers look like
+"unmerged work you are about to delete", which is the answer that stops a cleanup. The test that
+actually holds is matching the local tip against the merged PR's `headRefOid` — GitHub squashed
+exactly that commit, so identity there is proof and nothing local can substitute for it.
 
 MLX's 8-bit KV cache (#33) is **derived rather than marked**: `mlx-lm`'s source states the group
 size and the scale-plus-bias dtypes, so the width is 8.5 bits and the catalog says so (#38). That
@@ -559,10 +622,30 @@ reading the test that guards them.
   against a reinjected defect, and the two that fail in the browser are exactly the two jsdom
   cannot see.
 
-  Left alone deliberately: **the Usage controls stay below the two grids in DOM order.** They are
-  the primary input and there is a real argument for moving them, but that is a layout decision
+  Left alone at the time: **the Usage controls stayed below the two grids in DOM order.** They are the
+  primary input and there was a real argument for moving them, but that read as a layout decision
   about what the page leads with rather than a keyboard-reachability bug, and the fix above already
-  takes the walk from 422 presses to 15.
+  took the walk from 422 presses to 15.
+
+  **That deferral was resolved the other way in #66, and the reason is worth recording because it is
+  not the one this paragraph anticipated.** The argument that carried it was not distance and not
+  keypresses: it was **discoverability**. A reader who never scrolls to the bottom never learns the
+  controls exist, so the page presents figures they chose as fixed properties of the model and the
+  hardware — which makes it a claim about what the numbers _are_, not a preference about what the page
+  leads with. Measured before the move, at 1440x900: the context slider sat at y=3004 and the memory
+  bar it fills at y=602, so the control was 2,402px below its own output. The pixel count is the
+  evidence; the misrepresentation is the reason.
+
+  Usage now sits directly under Configuration, and Envelope and Matrix remain the terminal panels. The
+  roving tab index is untouched and still does the work this entry is about — 15 presses either way.
+
+  **The cost is real and was accepted rather than solved.** At 390px both panels stack, so nine
+  controls — about 620px — now precede the first figure, where before there were none. #66 named a
+  sticky summary strip as the mitigation and deprioritised it, and the phone spec asserts the honest
+  property (the controls are inside the first two screens) rather than pretending a slider and the bar
+  share a viewport there. Three source comments that asserted the old geometry moved with it, on the
+  reasoning that a comment describing the old layout is how the next reader concludes the fix was a
+  mistake.
 
 - **A focus indicator is a mark of its own, never a colour swap and never a channel a resting state
   already uses** ([#67](https://github.com/MrZoller/bench/issues/67)). The four primary selects —
@@ -655,6 +738,67 @@ reading the test that guards them.
   not assumed — so `getClientRects().length === 1` is true with the class and true without it. The
   spec asserts the computed style instead. Worth stating because writing the geometry version is
   the obvious move and it would pass against markup with the protection deleted.
+
+- **A probe that filters on a field the type does not have reports a clean sweep over zero cases.**
+  Verifying that a serving failure at one user cannot recover at more meant sweeping the catalog, and
+  the sweep filtered candidate quants with `runtime.weightFormats.includes(quant.format)`. `QuantSpec`
+  has no `format` — the id _is_ the format — so `includes(undefined)` was false for every combination
+  and the probe reported perfect monotonicity over **nothing**. It printed the sample count only
+  because that had been added on a whim; asserting the property directly would have written a
+  confident falsehood into a commit message. Every sweep in this repo now asserts it matched a
+  plausible number of cases _before_ trusting its result, which is the same fail-open shape the
+  touch-target exemption list is guarded against below.
+
+- **`aria-describedby` is an IDREF _list_, and resolving it as one id fails in the direction that
+  passes** ([#74](https://github.com/MrZoller/bench/issues/74)). Specs handed the whole attribute to
+  `getElementById`, which returns `null` the moment a control carries two ids — so appending a second
+  description to a picker would have reported a control that _has_ a note as having none, and every
+  "no note runs past two lines" budget in `config-notes.spec.ts` is satisfied by zero lines. The
+  resolvers split on whitespace and sum across the elements now. This is the third instance of one
+  class in this file — with the `quant.format` probe above and the touch-target exemption list below —
+  and the class is worth naming: **a resolver that fails silently makes a spec pass on broken
+  markup.** All three failed by finding nothing and reading nothing as compliance, so the general
+  guard is the same one: assert the sweep found something before believing what it says about it. Each
+  affected spec now also asserts the note's _text_, because a line count alone is one-sided and the
+  curated note was in fact dropped from that control once before, taking the 3090's NVLink caveat
+  with it.
+
+- **`getBoundingClientRect().top` is the border-box edge, so a padding comparison must add the border.**
+  Asserting that an `sr-only` heading takes no grid track meant measuring the first control against
+  the panel's content edge, and `panel.top + paddingTop` is short by the border width — which reads as
+  the control sitting _lower_ than it does, making the assertion pass with slack it had not earned.
+  `borderTopWidth` rides along with `paddingTop` everywhere this is computed.
+
+- **A premise that becomes unsatisfiable when the fix works is not a weak premise — but it cannot also
+  be the evidence.** The Envelope's readout reservation pads a three-line sentence into a four-line
+  box, so the test written to prove "two sentences of different height do not move the panel" found
+  equal heights once the fix landed and failed on its own precondition. The right shape is to assert
+  the _consequence_ here and put the _evidence that the inputs differ_ in a sibling test — in that
+  case a sweep measuring every sentence against the reservation, which would fail if they all fitted
+  one line.
+
+- **Reflow tests measure the panel; the page is a different question.** The Matrix readout was moved to
+  be the panel's last child so its height could not push the legend, and the commit claimed "nothing
+  follows it". `Bench.tsx` renders the Usage section immediately after `<Matrix>`, so a height change
+  still moved that panel: the claim was verified inside the component and written about the document.
+  Assert against the following _section_, not the following sibling.
+
+- **A locator re-resolves, so an interaction that renames its target invalidates it.** A disclosure
+  toggle's accessible name _is_ its label, and clicking it turns "Show the full hardware note" into
+  "Hide…". Reading `aria-controls` off the `/show…/` locator after the click waited the full timeout
+  for a button that no longer existed, and reported the failure against the region lookup two lines
+  later — pointing at the wrong code entirely. Read what you need from an element before the gesture
+  that changes it.
+
+- **Pick the viewport the defect needs, then assert the defect is reachable there.** Two specs in the
+  sweep passed against unfixed markup for want of this. A sticky-placement test written at 1280x900
+  could not fail, because the grid is 745px tall and the readout is on screen anyway at that height;
+  it needed 600px. A stress-font precondition measured `'Not measured'`, a short string of wide
+  lowercase letters where a proportional sans and a monospace agree most — 1.191 on macOS and **1.019
+  on the CI runner**, under its own 1.05 floor, so the guard failed the build for typography rather
+  than layout. It probes `'Inline code completion'` now, the string `reflow.spec.ts` uses. That pair of
+  ratios also measures something worth keeping: Courier New is metric-aliased on both platforms, so
+  1.191/1.019 puts **the Linux runner's default sans about 17% wider than SF**.
 
 - **A touch-target spec that names its controls will always be out of date.** The old one measured
   the three Matrix toggles it knew about, and three 16px buttons on other surfaces went unnoticed
@@ -780,6 +924,41 @@ ceiling)` keeps an over-budget stack on screen, which is right and stays. What i
   clamping it inward would draw the ceiling where the ceiling is not — so the assertion now names the
   overhang and its own precondition instead of implying a guarantee.
 
+**Catalog figures the UI quotes**
+
+- **Three quantities are called "active params" and two of them are wrong for any given sentence.**
+  `activeParams` is the _published_ convention — it excludes the input embedding unconditionally and,
+  on a multimodal model, includes the non-language towers a token never touches. `activeDenseParams`
+  is the always-active dense part and excludes the routed experts. `effectiveActiveParams(model, b)`
+  is `activeDenseParams + expertParams * expertFraction(model, b)`, and it is the only one `speed.ts`
+  divides by. The Bench's aside says a token "routes through" a figure and then attributes the decode
+  rate to it, so it must print the third; it printed the first, was "corrected" to the second, and
+  both were caught in review. The first was wrong by ~7% on the multimodal MoEs (Mistral Small 4 at
+  6.524B against a 6.096B basis); the second was wrong by a factor of three on _every_ MoE (Kimi K2 at
+  10.6B where a token traverses ~31.7B). Trading a small error for a large one in the other direction.
+
+  **A test for this has to pick a multimodal MoE, and that is the whole trick.** On a text-only MoE the
+  published and physical bases coincide _exactly_ — gpt-oss-20b is 3.61B either way, as are
+  Qwen3-30B-A3B, Mixtral and GLM-4.7-Flash — so a test written against one passes whichever figure the
+  component prints. The gap only opens where non-language towers sit inside `activeParams`, which today
+  is Command A+ and Mistral Small 4. `App.test.tsx` selects on that gap rather than on "is an MoE".
+
+- **A row identified by capacity or price must not carry another configuration's compute.** Filed
+  against one row and live on four. Apple sells most SoCs in two GPU bins and offers the same memory
+  with both, so capacity does not identify the part: the $999 MacBook Air ships 8 GPU cores and carried
+  the 10-core rate; the 64 GiB M1 Max, the 192 GiB M2 Ultra and the 96 GiB M3 Ultra each carried their
+  larger bin's. Each overstated prefill 25–33% on a machine somebody owns. Every Apple row now states
+  its core count — including the rows where capacity _does_ pin the bin, because "capacity implies it"
+  is precisely the reasoning that was wrong four times — and `catalog.test.ts` pins the convention
+  rather than the values: `fp16` must equal the stated core count times the generation's per-core rate,
+  which is constant within a generation (the M4 family is 0.85 across Air, Pro and Max).
+
+  **Where the bin is written is not cosmetic.** `headerColumns()` keeps a trailing parenthesised
+  qualifier whenever a name-stem repeats, so putting the bin in the _name_ of the three M3 Ultra rows
+  or the two Mac mini M4 Pro rows takes the longest rotated header label from 25 characters to 38 and
+  regresses #64. Those rows carry it in the note; unique-stem rows carry it in the name, where the
+  header strips the qualifier anyway.
+
 **Verdicts**
 
 - **Grade a tier on the measurement its own sentence quotes, and on the scenario it recommends.**
@@ -877,6 +1056,28 @@ ceiling)` keeps an over-budget stack on screen, which is right and stays. What i
   **The family presents under at least eight spellings, the issue named two, and the first draft of
   the guard enumerated four and believed that was all of them.** Do not trust a count here. What the
   guard matches, and why it is shaped that way:
+
+- **Three list orders were deliberate, load-bearing and stated nowhere**
+  ([#79](https://github.com/MrZoller/bench/issues/79)). Nothing sorts `devices.json`, `QUANTS` or
+  `RUNTIMES` — every surface renders the file as written — so the order was a convention living only
+  in whoever last edited it. That is a silent-breakage shape rather than a cosmetic one: a plausible
+  "tidy the list" edit regroups it against itself and no test, type or review notices. The order is
+  now stated in `CLAUDE.md` and in each file's docblock, and split by whether a machine can check it.
+  `catalog.test.ts` enforces what is structural — rows grouped by `class`, a vendor's rows contiguous
+  within a class — and `$comment-order` carries what is not.
+
+  **The unenforceable half is the half worth writing down.** Within a vendor the rule is
+  newest-generation-leading and largest-bin-first _inside a tiered ladder_, but newest-released-first
+  where a product line is not a ladder — which is why the datacenter GPUs read B200, H200, L40S,
+  H100, A100 rather than grouping Hopper together. No assertion distinguishes that from a mistake, so
+  a test asserting it would be asserting a snapshot. Stating it is the only available guard.
+
+  **Grouping is rendered by adjacency, so the component cannot own the order.** `<optgroup>` is a run
+  of contiguous options, so the picker labels each option with its group and splits on _change_ of
+  label. A list whose groups are interleaved therefore renders as two `<optgroup>`s carrying the same
+  heading instead of being tidied into one — deliberately, because the alternative is filtering the
+  list three times, which would silently make the component the authority on an order `devices.json`
+  is supposed to state. The honest rendering makes a broken order visible; the tidy one hides it.
 
   | Spelling                                                         | Model                      | Matched by             |
   | ---------------------------------------------------------------- | -------------------------- | ---------------------- |
@@ -1003,6 +1204,21 @@ ceiling)` keeps an over-budget stack on screen, which is right and stays. What i
 
 Correctness follow-ups live in [issues #12–#20](https://github.com/MrZoller/bench/issues). This
 section is for the questions those issues cannot settle.
+
+### Filed out of the July 2026 sweep, with their measurements
+
+Six findings were triaged, replied to and filed rather than patched, under the merge rule recorded
+above. Each is real, each touches something shared enough that fixing it inside another PR would have
+been the third patch at one root cause, and each issue carries the numbers so they are not re-derived:
+
+|                                                                                               | why it was not fixed in place                                                                                                                                                                                                                                                                                                    |
+| --------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [#90](https://github.com/MrZoller/bench/issues/90) cpu-ram compute basis                      | No formula reproduces any of the five rows (catalogued/fp32-peak runs 0.41 to 1.12). `epyc-9654` is a calibration anchor and there is **no CPU prefill anchor** to validate a re-derivation against. Correcting one row makes it the odd one out, not the right one.                                                             |
+| [#96](https://github.com/MrZoller/bench/issues/96) serving graded at the slider's concurrency | Third symptom of one asymmetry: serving is the only archetype taking its defining parameter from a slider. `verdict.test.ts` already names grading it at its own user count as the coherent end state. 2 of 2,278 configurations affected.                                                                                       |
+| [#97](https://github.com/MrZoller/bench/issues/97) TTFT ramp collapses                        | `log1p(1/t) ≈ 1/t` above a second, so inverting before the log makes the scale harmonic: **29 of 46 cells on one step, two of seven steps unused**. Pre-existing in the Matrix and worse there (zero-floored domain gives `placed ≈ t_fastest/t`). Changes a shared colour primitive on two surfaces; wants the `dataviz` skill. |
+| [#101](https://github.com/MrZoller/bench/issues/101) the unit suite                           | 425 cells → 1,505 and 42s → ~14 minutes across #78 and #77. The per-test timeout has been raised twice and must not be a third time. The property to keep: **a change that touches no component must not fail CI on grid size.**                                                                                                 |
+| [#102](https://github.com/MrZoller/bench/issues/102) readout on touch, and at 200%            | Tap is activation, so touch still cannot inspect without committing — that needs a gesture design. And the `rem` reservation doubles at a 32px root while the wrapping doubles too, which neither suite covers: `reflow.spec.ts` never fills the readout and `matrix-readout.spec.ts` runs at default text size.                 |
+| [#103](https://github.com/MrZoller/bench/issues/103) `NOT_SEEDED` never revalidated           | A written refusal is permanent, so the high-download models the candidate report exists to resurface are the ones it can never see. Needs an expiry _policy_, and the two expiry paths — a capability arriving versus a repo changing under the same id — need different mechanisms.                                             |
 
 - **MLX has no native quantization entries** ([#18](https://github.com/MrZoller/bench/issues/18)).
   Other catalogued formats stand in _by width_ — Q4_K_M's 4.85 bpw against MLX's ~4.5, and the
