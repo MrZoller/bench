@@ -305,6 +305,39 @@ function preReleaseWord(status: DeviceStatus): string | undefined {
 }
 
 /**
+ * What each hardware class is called where a reader is shown the band, and — by the order these are
+ * written in — the order the catalog's rows are required to be in.
+ *
+ * `devices.json` is grouped by `class` and every surface takes that order literally: `DEVICES` is the
+ * file, mapped, and both the Hardware picker and the Matrix iterate it unsorted. Nothing said so, and
+ * nothing showed it — the picker was a flat list of 43 options, so a reader scrolling from
+ * `arc-pro-b60` to `dgx-spark` left discrete cards for unified memory with no signal at all, and the
+ * three classes read as one undifferentiated list of machines (#79).
+ *
+ * **Class, and no finer.** `$comment-order` also groups a vendor's product lines — GeForce, then RTX
+ * PRO, then the datacenter parts — and those boundaries deliberately get no heading here: they are a
+ * curator's aid for editing the file, not a distinction a reader chooses hardware by, and eleven
+ * headings over 43 rows is a list that has stopped being scannable. What a reader needs is the answer
+ * to "am I looking at cards, a whole machine, or a CPU host", which is exactly `class`.
+ *
+ * `Record<DeviceSpec['class'], string>` for the reason `PRE_RELEASE_WORDS` above is one: a fourth
+ * class added to the engine's union fails to compile *here*, naming the class that has no heading
+ * for it. A ternary or a lookup with a fallback keeps compiling and files the new hardware under
+ * whichever band happens to be first.
+ *
+ * **The declaration order is the convention, which is why the band order is read off this and not
+ * written down a second time.** Property order on an object literal with string keys is insertion
+ * order, so `Object.keys` here *is* `discrete-gpu, unified-soc, cpu-ram` — and `catalog.test.ts`
+ * asserts the catalog's own class runs against it. That makes adding a class one edit rather than
+ * three: a heading, a position, and the sequence the rows have to follow, all in one place.
+ */
+export const DEVICE_CLASS_LABELS: Record<DeviceSpec['class'], string> = {
+  'discrete-gpu': 'Discrete GPUs',
+  'unified-soc': 'Unified memory',
+  'cpu-ram': 'CPU + system RAM',
+};
+
+/**
  * What the Hardware picker calls a machine in the open list, which is the only place a reader
  * compares two of them.
  *
@@ -316,11 +349,14 @@ function preReleaseWord(status: DeviceStatus): string | undefined {
  * requirement rather than a preference: pre-release specs must stay visibly labelled in the UI, and
  * a label that waits for the selection is not visible where the comparison happens.
  *
- * **Not an `<optgroup>`, which the issue floats as the stronger version.** A group is contiguous, so
- * grouping the non-shipping rows imposes an order on the picker — and the order of the hardware list
- * is a separate question with an issue of its own (#79). A marker holds for any list order and for
- * any number of pre-release rows, including the zero of them this catalog may have after the M5
- * ships; a group of one row is a heading with nothing to group.
+ * **Still a marker rather than an `<optgroup>` over `status`, which #69 floated as the stronger
+ * version.** The picker *is* grouped now — #79 gave it a heading per class band — and that does not
+ * change the argument here, because a group is contiguous: grouping the non-shipping rows would move
+ * them out of the band they belong to and impose a second order on the list. A marker holds for any
+ * list order and for any number of pre-release rows, including the zero of them this catalog may have
+ * after the M5 ships; a group of one row is a heading with nothing to group. #79 settled the ordering
+ * question the other way round — the rumoured row sorts on its release date like every other row, so
+ * it leads the Apple run, which is precisely the placement that needs this marker to be legible.
  *
  * The note keeps the fuller sentence. This is a tag on a row you are scanning; that is a clause for
  * the row you chose, and `devicePickerNote` below is where it is composed.

@@ -46,4 +46,9 @@ CI runs **lint → format:check → test → build → test:e2e**; run them befo
   safetensors index. Unknown architecture is a loud failure, never a guess.
 - Every `devices.json` row carries a `source` URL and a `status` (`shipping`/`announced`/
   `rumored`). Pre-release specs must stay visibly labelled in the UI.
+- **`devices.json` row order is display order.** Nothing sorts it: both the Hardware picker and the
+  Matrix render the file as written. Rows are grouped by `class` — `discrete-gpu`, `unified-soc`,
+  `cpu-ram` — a vendor's rows are contiguous within a class, and a vendor's product lines are
+  contiguous within that, newest generation first. `catalog.test.ts` enforces the first two;
+  `$comment-order` in the file states the rest and the blank lines are its record.
 - Load the `dataviz` skill before writing any chart, meter, heatmap, or palette code.

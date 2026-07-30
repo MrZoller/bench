@@ -17,7 +17,7 @@ import { evaluate } from '@/engine';
 import { LLAMA_CPP, GPT_OSS_120B, DEEPSEEK_V3, QWEN3_32B } from '@/engine/fixtures';
 import { GIB } from '@/engine/types';
 import { maxAllocatablePerDevice, raisingCeilingWouldHelp } from '@/engine/placement';
-import { deviceOptionLabel, devicePickerNote } from '@/lib/stops';
+import { DEVICE_CLASS_LABELS, deviceOptionLabel, devicePickerNote } from '@/lib/stops';
 
 describe('device catalog', () => {
   it('covers all three hardware classes', () => {
@@ -151,6 +151,116 @@ describe('device catalog', () => {
     // High capacity and high bandwidth, but weaker compute than the Spark.
     expect(mac.bandwidthBytesPerSec).toBeGreaterThan(spark.bandwidthBytesPerSec * 2);
     expect(mac.flops.fp16!).toBeLessThan(spark.flops.fp16!);
+  });
+});
+
+/**
+ * The row order, which *is* the display order — and was a convention nothing stated, enforced or
+ * showed (#79).
+ *
+ * `catalog.ts` maps `devices.json` straight through, there is no device sort function anywhere in
+ * the repo, and no `order` field on `DeviceRow`. So both surfaces take the file literally: the
+ * Hardware picker renders `DEVICES` unsorted and the Matrix renders it filtered to `shipping`. The
+ * file is the order, and reordering it was invisible to CI.
+ *
+ * **Two levels of it are structural and asserted here; the third is editorial and deliberately is
+ * not.** Class runs and vendor runs are facts about fields every row carries, so they are checkable
+ * and checked. The sequence *inside* a vendor's rows is the vendor's own ladder — GeForce 50 before
+ * 40 before 30 with the flagship leading each generation, Apple's Ultra before Max before Pro before
+ * Air — and no field in the row encodes a product line or a tier. The only way to check it would be
+ * to add a rank to every row, which is the display order restated rather than derived, and it would
+ * pass by construction. `devices.json`'s `$comment-order` states that level in prose instead, and the
+ * third assertion below is what keeps the prose and the rows from drifting apart — the #51 failure,
+ * where a convention was written down and broken in the same week.
+ *
+ * Asserted over `DEVICES` rather than the raw rows because the claim is about what the app displays,
+ * and over the whole catalog rather than the three rows the issue named: `ryzen-ai-max-395` splitting
+ * the Apple run was one of *two* live vendor splits, and the second was in a class the issue never
+ * looked at (`threadripper-7995wx`, between the Xeon and the EPYCs).
+ */
+describe('the device catalog is listed in the order it states', () => {
+  /**
+   * Maximal runs of adjacent rows sharing a key, which is the shape every claim here is about.
+   *
+   * A run per *group* would answer the wrong question: `DEVICES.filter(d => d.class === c)` finds
+   * every discrete GPU whether or not they sit together, and grouping is exactly what is being
+   * asserted. One walk over the list in order, splitting where the key changes, cannot be satisfied
+   * by a file where a vendor appears twice — that file produces two runs with the same key.
+   */
+  const runs = <T, K>(rows: readonly T[], key: (row: T) => K): { key: K; rows: T[] }[] => {
+    const out: { key: K; rows: T[] }[] = [];
+    for (const row of rows) {
+      const k = key(row);
+      const last = out.at(-1);
+      if (last && last.key === k) last.rows.push(row);
+      else out.push({ key: k, rows: [row] });
+    }
+    return out;
+  };
+
+  const classRuns = runs(DEVICES, (d) => d.class);
+
+  it('groups the rows by class, in the order the picker and the Matrix show the bands', () => {
+    // Against `DEVICE_CLASS_LABELS`' own declaration order, which is where the band sequence is
+    // written down: property order on a string-keyed object literal is insertion order, so the table
+    // that supplies the `<optgroup>` headings also states which band comes first. One edit adds a
+    // class, rather than a heading here and a position somewhere else.
+    //
+    // Equality, not containment: each class appears exactly once, in that order. A class appearing
+    // twice produces two runs and fails here, which is the contiguity half of the claim.
+    expect(classRuns.map((run) => run.key)).toEqual(Object.keys(DEVICE_CLASS_LABELS));
+    // And every band has rows in it, or the ordering claim is about a list with a hole in it.
+    for (const run of classRuns) {
+      expect(run.rows.length, `the ${run.key} band is empty`).toBeGreaterThan(0);
+    }
+  });
+
+  /**
+   * The assertion that fails against the catalog as #79 found it, twice.
+   *
+   * `ryzen-ai-max-395` sat between `macbook-air-m4-16` and `mac-studio-m5-ultra-512`, so the Apple
+   * run was split around a single AMD row — vendor grouping held for every other block and not that
+   * one. The issue named it. It did not name `threadripper-7995wx`, which sat after `xeon-6980p` and
+   * split the AMD `cpu-ram` rows the same way: one finding, two live instances, which is the pattern
+   * `docs/ROADMAP.md` records three times.
+   */
+  it('keeps a vendor’s rows together inside its class', () => {
+    // Every band in one assertion rather than one `expect` per band, because an `expect` that throws
+    // reports the first offender and hides the rest — which is how a finding that names one instance
+    // gets fixed one instance at a time. Against the catalog as #79 found it this listed both.
+    const split = classRuns.flatMap((band) =>
+      runs(band.rows, (d) => d.vendor)
+        .map((run) => run.key)
+        .filter((vendor, i, all) => all.indexOf(vendor) !== i)
+        .map((vendor) => `${band.key} lists ${vendor} in more than one run`)
+    );
+
+    expect(
+      split,
+      classRuns
+        .map((band) => `${band.key}: ${band.rows.map((d) => `${d.vendor}/${d.id}`).join(' → ')}`)
+        .join('\n')
+    ).toEqual([]);
+  });
+
+  /**
+   * The statement and the data, checked against each other.
+   *
+   * `$comment-order` is where the convention is written down for the curator who is adding the next
+   * row, and a comment cannot be wrong loudly. Backticked class names in it are read in order and
+   * compared with the order the rows are actually in, so moving a band without rewriting the sentence
+   * fails here rather than leaving the file's own documentation describing a list it no longer
+   * describes. First mention of each, so prose that refers back to a band it has already introduced
+   * is not a failure.
+   */
+  it('writes that order down in the file it constrains', () => {
+    const comment = String((devicesJson as Record<string, unknown>)['$comment-order'] ?? '');
+    expect(comment, 'devices.json states no row-order convention').not.toBe('');
+
+    const named = [...comment.matchAll(/`([a-z-]+)`/g)]
+      .map((match) => match[1])
+      .filter((name) => Object.hasOwn(DEVICE_CLASS_LABELS, name));
+    expect([...new Set(named)]).toEqual(classRuns.map((run) => run.key));
   });
 });
 

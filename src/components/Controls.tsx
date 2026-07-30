@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from 'react';
+import { Fragment, useId, useState, type ReactNode } from 'react';
 import { DisclosureToggle } from './DisclosureToggle';
 
 /**
@@ -20,6 +20,13 @@ import { DisclosureToggle } from './DisclosureToggle';
  * pick — which renders behind a disclosure and stays out of the accessible description. Without that
  * second slot the Hardware picker had one string for both jobs, so 180 words of catalog provenance
  * were read out on every focus and drawn as five lines of 12px text inside a two-column grid (#68).
+ *
+ * **And an option can carry a `group`, which is the one structural thing a native `select` gives you
+ * for free and this had no way to ask for** (#79). The Hardware picker was a flat list of 43 options
+ * whose order was grouped, deliberate and completely unmarked — discrete cards, whole machines and
+ * CPU hosts running together with nothing to say where one kind ended. `<optgroup>` is the browser's
+ * own answer: a heading a reader sees while scanning, announced by a screen reader on entering the
+ * run, and free on touch, where a custom listbox would have cost all three.
  */
 
 /**
@@ -98,6 +105,59 @@ function inlineProse(text: string): ReactNode[] {
   );
 }
 
+/** One option of a `Select`, in the order the control renders them. */
+interface Option<T extends string> {
+  value: T;
+  label: string;
+  disabled?: boolean;
+  note?: string;
+  /**
+   * Reference prose about the selected option, shown behind a disclosure and *not* part of the
+   * control's accessible description. See `devicePickerNote`.
+   */
+  detail?: string;
+  /**
+   * The heading this option sits under, or `undefined` for an option that belongs to no group.
+   *
+   * A `<select>` groups by *adjacency* — an `<optgroup>` is a run of contiguous options — so this is
+   * a label on each option rather than a list of groups with options inside them. That is not a
+   * shortcut: it means the component cannot reorder the list to make its groups, so the sequence a
+   * call site passes is exactly the sequence a reader gets. The Hardware picker's order is
+   * `devices.json`'s row order, which `$comment-order` states and `catalog.test.ts` enforces (#79);
+   * a component that grouped by filtering three times would silently own that order instead.
+   */
+  group?: string;
+}
+
+/**
+ * The options split into the runs an `<optgroup>` can be made of.
+ *
+ * A run per *change* of `group`, walking the list once — so a list whose groups are interleaved
+ * renders as two `<optgroup>`s carrying one label rather than being tidied into one. That is the
+ * honest rendering of it: the sequence the call site passed survives, and the fact that its groups are
+ * not runs is visible instead of being repaired behind its back.
+ */
+function optionRuns<T extends string>(
+  options: readonly Option<T>[]
+): { group?: string; options: Option<T>[] }[] {
+  const runs: { group?: string; options: Option<T>[] }[] = [];
+  for (const option of options) {
+    const last = runs.at(-1);
+    if (last && last.group === option.group) last.options.push(option);
+    else runs.push({ group: option.group, options: [option] });
+  }
+  return runs;
+}
+
+/** One `<option>`, written once so a grouped run and an ungrouped one cannot render differently. */
+function renderOption<T extends string>(option: Option<T>) {
+  return (
+    <option key={option.value} value={option.value} disabled={option.disabled}>
+      {option.label}
+    </option>
+  );
+}
+
 export function Select<T extends string>({
   label,
   value,
@@ -107,17 +167,7 @@ export function Select<T extends string>({
   label: string;
   value: T;
   onChange: (value: T) => void;
-  options: readonly {
-    value: T;
-    label: string;
-    disabled?: boolean;
-    note?: string;
-    /**
-     * Reference prose about the selected option, shown behind a disclosure and *not* part of the
-     * control's accessible description. See `devicePickerNote`.
-     */
-    detail?: string;
-  }[];
+  options: readonly Option<T>[];
 }) {
   const id = useId();
   /**
@@ -180,11 +230,21 @@ export function Select<T extends string>({
          */
         className="w-full rounded-md border border-[var(--color-control-border)] bg-[var(--color-surface-raised)] px-3 py-2 text-sm text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-2 focus:outline-offset-2 focus:outline-[var(--color-accent)]"
       >
-        {options.map((option) => (
-          <option key={option.value} value={option.value} disabled={option.disabled}>
-            {option.label}
-          </option>
-        ))}
+        {/* Grouped where a call site says so, flat where it does not — the two compose, so a
+            picker with headings for some of its rows and none for the rest still renders in one
+            pass and in one order. `Fragment` keyed on the run's first option, since a run has no
+            id of its own and its heading may be absent. */}
+        {optionRuns(options).map((run) =>
+          run.group === undefined ? (
+            <Fragment key={`ungrouped:${run.options[0].value}`}>
+              {run.options.map(renderOption)}
+            </Fragment>
+          ) : (
+            <optgroup key={`${run.group}:${run.options[0].value}`} label={run.group}>
+              {run.options.map(renderOption)}
+            </optgroup>
+          )
+        )}
       </select>
       {note && (
         <p id={`${id}-note`} className="text-xs text-[var(--color-text-muted)]">

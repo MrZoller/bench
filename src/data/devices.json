@@ -5,6 +5,8 @@
 
   "$comment-apple-ceiling": "allocatableGiB on the Apple rows is what Metal reports as its recommended working set — two thirds of RAM at 32 GiB and below, three quarters above it — because that is the figure llama.cpp warns against exceeding, and it is the default a user has before touching anything. maxAllocatableGiB is capacity minus max(8 GiB, 1/16 of RAM). Those two rules *cross over* below 32 GiB: on a 24 GiB machine the recommendation and the reserve both land on 16 GiB, and on a 16 GiB machine the reserve would put the ceiling below the default. Those rows therefore state no raiseable ceiling at all rather than one that promises less than what the machine already offers — the sysctl still exists, there is simply no figure above the default this size of machine survives.",
 
+  "$comment-order": "Row order is display order, and nothing in the app sorts these rows: catalog.ts maps this array straight through, the Hardware picker renders DEVICES unsorted, and the Matrix renders it filtered to shipping. The sequence below is therefore curated, and these are its rules — nothing stated them until #79, which is how three rows came to break them without anything noticing. Rows are grouped by `class`, in the order the UI shows the bands: `discrete-gpu`, then `unified-soc`, then `cpu-ram`. Within a class a vendor's rows are contiguous; the order of the vendors themselves is editorial and claims nothing. Within a vendor a product line is contiguous and separated from the next by a blank line — GeForce, then RTX PRO, then the datacenter parts; Radeon then Instinct; Arc then Arc Pro; Apple's Ultra, then Max, then Pro, then Air — and inside a line the newest generation leads, with the largest or fastest bin first within a generation. Where a line is not a tiered ladder at all (the datacenter run is four generations of five unrelated products, so no ladder exists to descend) the rows run newest-released first, which is why that block reads B200, H200, L40S, H100, A100. Status is not an ordering key: a pre-release row sorts on its release date like any other, so the rumoured M5 Ultra leads the Apple run rather than sitting behind the machines it supersedes. Position then follows a fact that does not change when the machine ships, and the marker in the option label is what says the specs are not final (#69). data/catalog.test.ts enforces the first two levels, which are properties of fields every row carries. The sequence inside a product line is not machine-checked: no field encodes a line or a tier, and the only way to check it would be to add a rank to every row — which is this order restated rather than derived, and would pass by construction. The blank lines are the record of it, and they survive prettier.",
+
   "$comment-note": "note is reference prose for a reader who has already chosen this row: provenance, which bin the figures describe, and what the spec sheet does not say. It is not picker copy. The Hardware control shows only the short claims the app derives — pre-release status, and a raiseable allocation ceiling — and this field renders behind a disclosure below them, deliberately outside the control's accessible description, because 40 to 180 words of derivation read out on every focus is what a screen-reader user was getting instead of a choice (#68). Two rules follow from that, and both are checked over every row — the punctuation in data/catalog.test.ts, the markup in App.test.tsx — so neither is a request. Write it in whole sentences ending in terminal punctuation: this is a paragraph of its own with nothing after it to absorb a dangling clause, and a reader cannot tell prose that stops mid-clause from prose that was truncated. It used to be concatenated onto the derived claims as well, where a missing full stop read as 'raiseable to 240 GiB The allocation ceiling reserves...' on nine rows (#68) — that seam is gone, but the sentence discipline is the same discipline and lib/format.ts's sentences() still guarantees it wherever fragments are composed. And keep it prose: inline **strong**, *emphasis* and `identifiers` are rendered, and nothing else is.",
 
   "devices": [
@@ -203,20 +205,20 @@
     },
 
     {
-      "id": "h100-sxm",
-      "name": "H100 SXM5",
+      "id": "b200-sxm",
+      "name": "B200 SXM",
       "vendor": "NVIDIA",
       "class": "discrete-gpu",
       "status": "shipping",
-      "capacityGiB": 80,
-      "allocatableGiB": 79,
-      "bandwidthGBs": 3350,
-      "tflops": { "fp16": 989, "fp8": 1979 },
-      "interconnect": "NVLink 4.0",
+      "capacityGiB": 180,
+      "allocatableGiB": 178,
+      "bandwidthGBs": 8000,
+      "tflops": { "fp16": 2250, "fp8": 4500, "fp4": 9000 },
+      "interconnect": "NVLink 5.0",
       "hostLinkGBs": 63.0,
-      "tdpWatts": 700,
-      "releasedAt": "2022-10-01",
-      "source": "https://www.nvidia.com/en-us/data-center/h100/"
+      "tdpWatts": 1000,
+      "releasedAt": "2024-03-18",
+      "source": "https://www.nvidia.com/en-us/data-center/dgx-b200/"
     },
     {
       "id": "h200-sxm",
@@ -235,20 +237,36 @@
       "source": "https://www.nvidia.com/en-us/data-center/h200/"
     },
     {
-      "id": "b200-sxm",
-      "name": "B200 SXM",
+      "id": "l40s",
+      "name": "L40S",
       "vendor": "NVIDIA",
       "class": "discrete-gpu",
       "status": "shipping",
-      "capacityGiB": 180,
-      "allocatableGiB": 178,
-      "bandwidthGBs": 8000,
-      "tflops": { "fp16": 2250, "fp8": 4500, "fp4": 9000 },
-      "interconnect": "NVLink 5.0",
+      "capacityGiB": 48,
+      "allocatableGiB": 47,
+      "bandwidthGBs": 864,
+      "tflops": { "fp16": 362, "fp8": 733 },
+      "interconnect": "PCIe 4.0 x16",
+      "hostLinkGBs": 31.5,
+      "tdpWatts": 350,
+      "releasedAt": "2023-08-08",
+      "source": "https://www.nvidia.com/en-us/data-center/l40s/"
+    },
+    {
+      "id": "h100-sxm",
+      "name": "H100 SXM5",
+      "vendor": "NVIDIA",
+      "class": "discrete-gpu",
+      "status": "shipping",
+      "capacityGiB": 80,
+      "allocatableGiB": 79,
+      "bandwidthGBs": 3350,
+      "tflops": { "fp16": 989, "fp8": 1979 },
+      "interconnect": "NVLink 4.0",
       "hostLinkGBs": 63.0,
-      "tdpWatts": 1000,
-      "releasedAt": "2024-03-18",
-      "source": "https://www.nvidia.com/en-us/data-center/dgx-b200/"
+      "tdpWatts": 700,
+      "releasedAt": "2022-10-01",
+      "source": "https://www.nvidia.com/en-us/data-center/h100/"
     },
     {
       "id": "a100-80gb",
@@ -265,22 +283,6 @@
       "tdpWatts": 400,
       "releasedAt": "2020-11-16",
       "source": "https://www.nvidia.com/en-us/data-center/a100/"
-    },
-    {
-      "id": "l40s",
-      "name": "L40S",
-      "vendor": "NVIDIA",
-      "class": "discrete-gpu",
-      "status": "shipping",
-      "capacityGiB": 48,
-      "allocatableGiB": 47,
-      "bandwidthGBs": 864,
-      "tflops": { "fp16": 362, "fp8": 733 },
-      "interconnect": "PCIe 4.0 x16",
-      "hostLinkGBs": 31.5,
-      "tdpWatts": 350,
-      "releasedAt": "2023-08-08",
-      "source": "https://www.nvidia.com/en-us/data-center/l40s/"
     },
 
     {
@@ -339,20 +341,21 @@
     },
 
     {
-      "id": "mi300x",
-      "name": "Instinct MI300X",
+      "id": "mi355x",
+      "name": "Instinct MI355X",
       "vendor": "AMD",
       "class": "discrete-gpu",
       "status": "shipping",
-      "capacityGiB": 192,
-      "allocatableGiB": 190,
-      "bandwidthGBs": 5300,
-      "tflops": { "fp16": 1307, "fp8": 2615 },
+      "capacityGiB": 288,
+      "allocatableGiB": 285,
+      "bandwidthGBs": 8000,
+      "tflops": { "fp16": 2500, "fp8": 5000, "fp4": 10000 },
+      "note": "Compute was MI350X's, not this part's: the row read 2300/4600/9200 — the air-cooled sibling's dense figures — because the source pointed at the MI350 family page rather than the MI355X one. Same silicon and the same 288 GB at 8 TB/s; MI355X is the 1400W liquid-cooled bin at 2400 MHz against MI350X's 1000W at 2200, which is the ~9% this restores. Found in the pre-publish verification pass.",
       "interconnect": "Infinity Fabric",
       "hostLinkGBs": 63.0,
-      "tdpWatts": 750,
-      "releasedAt": "2023-12-06",
-      "source": "https://www.amd.com/en/products/accelerators/instinct/mi300/mi300x.html"
+      "tdpWatts": 1400,
+      "releasedAt": "2025-06-12",
+      "source": "https://www.amd.com/en/products/accelerators/instinct/mi350/mi355x.html"
     },
     {
       "id": "mi325x",
@@ -372,21 +375,20 @@
       "note": "The step that was missing between the catalogued MI300X and MI355X: the same CDNA 3 compute as the MI300X, with 256 GiB of HBM3E at 6 TB/s in place of 192 GiB at 5.3."
     },
     {
-      "id": "mi355x",
-      "name": "Instinct MI355X",
+      "id": "mi300x",
+      "name": "Instinct MI300X",
       "vendor": "AMD",
       "class": "discrete-gpu",
       "status": "shipping",
-      "capacityGiB": 288,
-      "allocatableGiB": 285,
-      "bandwidthGBs": 8000,
-      "tflops": { "fp16": 2500, "fp8": 5000, "fp4": 10000 },
-      "note": "Compute was MI350X's, not this part's: the row read 2300/4600/9200 — the air-cooled sibling's dense figures — because the source pointed at the MI350 family page rather than the MI355X one. Same silicon and the same 288 GB at 8 TB/s; MI355X is the 1400W liquid-cooled bin at 2400 MHz against MI350X's 1000W at 2200, which is the ~9% this restores. Found in the pre-publish verification pass.",
+      "capacityGiB": 192,
+      "allocatableGiB": 190,
+      "bandwidthGBs": 5300,
+      "tflops": { "fp16": 1307, "fp8": 2615 },
       "interconnect": "Infinity Fabric",
       "hostLinkGBs": 63.0,
-      "tdpWatts": 1400,
-      "releasedAt": "2025-06-12",
-      "source": "https://www.amd.com/en/products/accelerators/instinct/mi350/mi355x.html"
+      "tdpWatts": 750,
+      "releasedAt": "2023-12-06",
+      "source": "https://www.amd.com/en/products/accelerators/instinct/mi300/mi300x.html"
     },
 
     {
@@ -408,23 +410,6 @@
       "note": "Intel's first row in this catalog, and $249 for 12 GiB is a price point nothing else here occupies. The fp16 figure is derived: Intel publishes peak INT8 (233 TOPS) and no FP16 rate, and XMX runs INT8 at exactly twice FP16. llama.cpp reaches it through SYCL or Vulkan. Eight PCIe lanes at 4.0, so spilling costs 15.75 GB/s."
     },
     {
-      "id": "arc-pro-b60",
-      "name": "Arc Pro B60 (24 GB)",
-      "vendor": "Intel",
-      "class": "discrete-gpu",
-      "status": "shipping",
-      "capacityGiB": 24,
-      "allocatableGiB": 23,
-      "bandwidthGBs": 456,
-      "tflops": { "fp16": 98.5, "int8": 197 },
-      "interconnect": "PCIe 5.0 x8",
-      "hostLinkGBs": 31.5,
-      "tdpWatts": 200,
-      "releasedAt": "2025-09-19",
-      "source": "https://www.intel.com/content/www/us/en/products/sku/243916/intel-arc-pro-b60-graphics/specifications.html",
-      "note": "24 GiB aimed explicitly at local inference and sold on multi-GPU boards, which is what makes it the one non-NVIDIA row worth pointing the linked-rig slider at. No msrpUsd: Intel sets no reference price and partner cards landed between roughly $500 and $800. Board power is configurable from 120W; 200W is the ceiling."
-    },
-    {
       "id": "arc-a770-16gb",
       "name": "Arc A770 (16 GB)",
       "vendor": "Intel",
@@ -444,6 +429,24 @@
     },
 
     {
+      "id": "arc-pro-b60",
+      "name": "Arc Pro B60 (24 GB)",
+      "vendor": "Intel",
+      "class": "discrete-gpu",
+      "status": "shipping",
+      "capacityGiB": 24,
+      "allocatableGiB": 23,
+      "bandwidthGBs": 456,
+      "tflops": { "fp16": 98.5, "int8": 197 },
+      "interconnect": "PCIe 5.0 x8",
+      "hostLinkGBs": 31.5,
+      "tdpWatts": 200,
+      "releasedAt": "2025-09-19",
+      "source": "https://www.intel.com/content/www/us/en/products/sku/243916/intel-arc-pro-b60-graphics/specifications.html",
+      "note": "24 GiB aimed explicitly at local inference and sold on multi-GPU boards, which is what makes it the one non-NVIDIA row worth pointing the linked-rig slider at. No msrpUsd: Intel sets no reference price and partner cards landed between roughly $500 and $800. Board power is configurable from 120W; 200W is the ceiling."
+    },
+
+    {
       "id": "dgx-spark",
       "name": "DGX Spark (GB10)",
       "vendor": "NVIDIA",
@@ -460,41 +463,23 @@
       "source": "https://www.lmsys.org/blog/2025-10-13-nvidia-dgx-spark/",
       "note": "Fully coherent CPU/GPU pool, so no VRAM split to model. Strong prefill against modest bandwidth — the clearest case for reporting decode and TTFT separately."
     },
+
     {
-      "id": "mac-studio-m3-ultra-96",
-      "name": "Mac Studio M3 Ultra (96 GB)",
+      "id": "mac-studio-m5-ultra-512",
+      "name": "Mac Studio M5 Ultra (512 GB)",
       "vendor": "Apple",
       "class": "unified-soc",
-      "status": "shipping",
-      "capacityGiB": 96,
-      "allocatableGiB": 72,
+      "status": "rumored",
+      "capacityGiB": 512,
+      "allocatableGiB": 384,
       "allocatableTunable": true,
-      "maxAllocatableGiB": 88,
-      "bandwidthGBs": 819,
-      "tflops": { "fp16": 54 },
+      "maxAllocatableGiB": 480,
+      "bandwidthGBs": 1000,
+      "tflops": { "fp16": 90 },
       "tdpWatts": 270,
-      "msrpUsd": 3999,
-      "releasedAt": "2025-03-12",
-      "source": "https://www.apple.com/mac-studio/specs/",
-      "note": "The allocation ceiling reserves 8 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives. **This row is the 80-core GPU, and it is stated because 96 GiB does not imply it \u2014 the ambiguous end of the M3 Ultra line.** Apple's base Mac Studio M3 Ultra pairs 96 GiB with a 60-core GPU and sells the larger bin as an upgrade at the same capacity, so unlike the 256 and 512 GiB rows, which require the larger part, capacity does not identify this one. At 54 TFLOPS fp16 this is the larger bin; the base machine is 60/80 of it, about 40.7, so reading this row for one overstates prefill by a third."
-    },
-    {
-      "id": "mac-studio-m3-ultra-256",
-      "name": "Mac Studio M3 Ultra (256 GB)",
-      "vendor": "Apple",
-      "class": "unified-soc",
-      "status": "shipping",
-      "capacityGiB": 256,
-      "allocatableGiB": 192,
-      "allocatableTunable": true,
-      "maxAllocatableGiB": 240,
-      "bandwidthGBs": 819,
-      "tflops": { "fp16": 54 },
-      "tdpWatts": 270,
-      "msrpUsd": 5599,
-      "releasedAt": "2025-03-12",
-      "source": "https://www.apple.com/mac-studio/specs/",
-      "note": "The allocation ceiling reserves 16 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives. This is the 80-core GPU. 256 GiB requires it, so capacity identifies the bin here \u2014 stated anyway, because capacity-implies-the-bin is the reasoning that was wrong on the three rows where it does not."
+      "releasedAt": "2026-10-01",
+      "source": "https://www.macrumors.com/2026/06/25/m5-ultra-mac-studio-2026/",
+      "note": "Unreleased. Specs are press-rumour grade and must stay labelled as such in the UI — included because it is the machine people are waiting on, not because the numbers are trustworthy. The allocation ceiling reserves 32 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives. The GPU bin here is an assumption rather than a spec: this row is rumour-grade, and 90 TFLOPS implies a 100-core GPU at M5's per-core rate. If the part ships in more than one bin, this row is the top one, like every other Ultra in this catalog."
     },
     {
       "id": "mac-studio-m3-ultra-512",
@@ -515,6 +500,42 @@
       "note": "The allocation ceiling reserves 32 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives. This is the 80-core GPU, which 512 GiB requires \u2014 stated for the same reason as the 256 GiB row."
     },
     {
+      "id": "mac-studio-m3-ultra-256",
+      "name": "Mac Studio M3 Ultra (256 GB)",
+      "vendor": "Apple",
+      "class": "unified-soc",
+      "status": "shipping",
+      "capacityGiB": 256,
+      "allocatableGiB": 192,
+      "allocatableTunable": true,
+      "maxAllocatableGiB": 240,
+      "bandwidthGBs": 819,
+      "tflops": { "fp16": 54 },
+      "tdpWatts": 270,
+      "msrpUsd": 5599,
+      "releasedAt": "2025-03-12",
+      "source": "https://www.apple.com/mac-studio/specs/",
+      "note": "The allocation ceiling reserves 16 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives. This is the 80-core GPU. 256 GiB requires it, so capacity identifies the bin here \u2014 stated anyway, because capacity-implies-the-bin is the reasoning that was wrong on the three rows where it does not."
+    },
+    {
+      "id": "mac-studio-m3-ultra-96",
+      "name": "Mac Studio M3 Ultra (96 GB)",
+      "vendor": "Apple",
+      "class": "unified-soc",
+      "status": "shipping",
+      "capacityGiB": 96,
+      "allocatableGiB": 72,
+      "allocatableTunable": true,
+      "maxAllocatableGiB": 88,
+      "bandwidthGBs": 819,
+      "tflops": { "fp16": 54 },
+      "tdpWatts": 270,
+      "msrpUsd": 3999,
+      "releasedAt": "2025-03-12",
+      "source": "https://www.apple.com/mac-studio/specs/",
+      "note": "The allocation ceiling reserves 8 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives. **This row is the 80-core GPU, and it is stated because 96 GiB does not imply it \u2014 the ambiguous end of the M3 Ultra line.** Apple's base Mac Studio M3 Ultra pairs 96 GiB with a 60-core GPU and sells the larger bin as an upgrade at the same capacity, so unlike the 256 and 512 GiB rows, which require the larger part, capacity does not identify this one. At 54 TFLOPS fp16 this is the larger bin; the base machine is 60/80 of it, about 40.7, so reading this row for one overstates prefill by a third."
+    },
+    {
       "id": "mac-studio-m2-ultra-192",
       "name": "Mac Studio M2 Ultra (192 GB, 76-core GPU)",
       "vendor": "Apple",
@@ -531,6 +552,7 @@
       "source": "https://support.apple.com/en-us/111835",
       "note": "Still one of the most common large-model Macs in use, and the machine an owner has to be able to see before deciding whether to replace it — 800 GB/s against the M3 Ultra's 819 is most of the answer. The allocation ceiling reserves 12 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives. **The GPU bin is in the name because 192 GiB does not imply it:** M2 Ultra shipped as a 60-core and a 76-core GPU and Apple offered 192 GiB with both, so this row is the 76-core at 54 TFLOPS fp16 and a 60-core machine is 60/76 of it, about 42.7 \u2014 reading this row for one overstates prefill by 27%."
     },
+
     {
       "id": "macbook-pro-m4-max-128",
       "name": "MacBook Pro M4 Max (128 GB, 40-core GPU)",
@@ -584,6 +606,7 @@
       "source": "https://support.apple.com/en-us/111901",
       "note": "The M1 generation, which had no row at all: 64 GiB at 400 GB/s is still a capable local-inference machine, and \"is the new one worth it\" is a question that needs both machines in the same list. The allocation ceiling reserves 8 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need. **The GPU bin is in the name because 64 GiB does not imply it.** M1 Max shipped as a 24-core and a 32-core GPU, and Apple offered 64 GiB with both, so capacity alone does not identify the part — this row is the 32-core at 21 TFLOPS fp16. A 24-core machine is 3/4 of that, about 15.7, and reading this row for one overstates prefill and understates TTFT by a third. Capacity identifies most rows in this catalog; on this one it does not, which is why the bin is stated rather than implied."
     },
+
     {
       "id": "mac-mini-m4-pro-64",
       "name": "Mac mini M4 Pro (64 GB)",
@@ -618,6 +641,7 @@
       "source": "https://support.apple.com/en-us/121555",
       "note": "The base M4 Pro — 24 GiB and the 16-core GPU — which is the M4 Pro most people who have one have. No raiseable ceiling is stated, and that is deliberate rather than missing: Metal recommends two thirds of RAM at this size (16 GiB) and the 8 GiB the OS needs leaves exactly the same figure, so there is nothing above the default to raise it to."
     },
+
     {
       "id": "macbook-air-m4-16",
       "name": "MacBook Air M4 (16 GB, 8-core GPU)",
@@ -634,6 +658,7 @@
       "source": "https://support.apple.com/en-us/122209",
       "note": "The Mac most Mac owners actually have, and it has a real answer rather than no answer: 10 GiB of working set at 120 GB/s takes a 4B at Q4 comfortably, a 12B slowly, and nothing above that. Metal recommends two thirds of 16 GiB, and the 8 GiB reserve the larger rows apply would put a ceiling *below* that default — so this row states none. The sysctl exists; there is no figure above the default a machine this size survives. **The compute is the 8-core GPU's, because the price is the 8-core machine's.** The $999 Air ships 8 GPU cores; 10 is a paid upgrade. M4 cores are 0.85 TFLOPS fp16 each — the M4 Pro row's 13.6 over 16 cores — so this row is 8 × 0.85 = 6.8, not the 8.5 that describes the configuration nobody gets at this price. Pairing a base price with an upgraded part overstated prefill and TTFT here by 25%, on the axis a $999 machine is least able to absorb it."
     },
+
     {
       "id": "ryzen-ai-max-395",
       "name": "Ryzen AI Max+ 395 (128 GB)",
@@ -652,39 +677,7 @@
       "source": "https://www.amd.com/en/products/processors/laptop/ryzen/ai-max.html",
       "note": "Variable Graphics Memory exposes 96 of 128 GB. Bandwidth is AMD's 256 GB/s rating; measured runs near 213, and that gap is charged by bandwidthEfficiency and CLASS_BANDWIDTH_UTILIZATION rather than folded in here — see the catalog convention."
     },
-    {
-      "id": "mac-studio-m5-ultra-512",
-      "name": "Mac Studio M5 Ultra (512 GB)",
-      "vendor": "Apple",
-      "class": "unified-soc",
-      "status": "rumored",
-      "capacityGiB": 512,
-      "allocatableGiB": 384,
-      "allocatableTunable": true,
-      "maxAllocatableGiB": 480,
-      "bandwidthGBs": 1000,
-      "tflops": { "fp16": 90 },
-      "tdpWatts": 270,
-      "releasedAt": "2026-10-01",
-      "source": "https://www.macrumors.com/2026/06/25/m5-ultra-mac-studio-2026/",
-      "note": "Unreleased. Specs are press-rumour grade and must stay labelled as such in the UI — included because it is the machine people are waiting on, not because the numbers are trustworthy. The allocation ceiling reserves 32 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives. The GPU bin here is an assumption rather than a spec: this row is rumour-grade, and 90 TFLOPS implies a 100-core GPU at M5's per-core rate. If the part ships in more than one bin, this row is the top one, like every other Ultra in this catalog."
-    },
 
-    {
-      "id": "epyc-9654",
-      "name": "EPYC 9654 (12-ch DDR5-4800)",
-      "vendor": "AMD",
-      "class": "cpu-ram",
-      "status": "shipping",
-      "capacityGiB": 768,
-      "allocatableGiB": 720,
-      "bandwidthGBs": 460.8,
-      "tflops": { "fp16": 6 },
-      "tdpWatts": 360,
-      "releasedAt": "2022-11-10",
-      "source": "https://www.amd.com/en/products/processors/server/epyc/9004-series/amd-epyc-9654.html",
-      "note": "Anchors the low end of the roofline: ~6 tok/s on DeepSeek-671B Q8. CPU cores cannot saturate 12 channels of DDR5, so achieved bandwidth sits near half of nominal."
-    },
     {
       "id": "epyc-9755",
       "name": "EPYC 9755 (12-ch DDR5-6000)",
@@ -700,20 +693,21 @@
       "source": "https://www.amd.com/en/products/processors/server/epyc/9005-series/amd-epyc-9755.html"
     },
     {
-      "id": "xeon-6980p",
-      "name": "Xeon 6980P (12-ch MRDIMM-8800)",
-      "vendor": "Intel",
+      "id": "epyc-9654",
+      "name": "EPYC 9654 (12-ch DDR5-4800)",
+      "vendor": "AMD",
       "class": "cpu-ram",
       "status": "shipping",
-      "capacityGiB": 1536,
-      "allocatableGiB": 1450,
-      "bandwidthGBs": 844.8,
-      "tflops": { "fp16": 8 },
-      "tdpWatts": 500,
-      "releasedAt": "2024-09-24",
-      "source": "https://www.intel.com/content/www/us/en/products/sku/240777/intel-xeon-6980p-processor-504m-cache-2-00-ghz/specifications.html",
-      "note": "Twelve channels of MRDIMM-8800 is 844.8 GB/s exactly, which is more than any EPYC row here and the reason high-bandwidth CPU inference is not an AMD-only technique. Capacity assumes one 128 GB MRDIMM per channel. Compute deliberately excludes AMX: its tile rate is roughly an order of magnitude higher, nothing catalogued here reaches it for a GGUF today, and folding it in would report a CPU's time to first token as better than a 4090's. **The 8 TFLOPS is not a computed vector peak, and this note used to claim it was.** 128 cores at 2.0 GHz with two 512-bit FMA pipelines is 16.4 TFLOPS fp32, or 32.8 with AVX512-FP16 — both well above this figure. It is carried on the same conservative basis as the four other `cpu-ram` rows, which is what keeps this row comparable with them and with the EPYC 9654 calibration anchor; that basis is not reproducible from a stated formula on any of the five (catalogued/fp32-peak runs 0.41 to 1.12 across them), and correcting one row alone would make it the odd one out rather than the right one. Deriving all five on one declared basis is filed separately — see #90."
+      "capacityGiB": 768,
+      "allocatableGiB": 720,
+      "bandwidthGBs": 460.8,
+      "tflops": { "fp16": 6 },
+      "tdpWatts": 360,
+      "releasedAt": "2022-11-10",
+      "source": "https://www.amd.com/en/products/processors/server/epyc/9004-series/amd-epyc-9654.html",
+      "note": "Anchors the low end of the roofline: ~6 tok/s on DeepSeek-671B Q8. CPU cores cannot saturate 12 channels of DDR5, so achieved bandwidth sits near half of nominal."
     },
+
     {
       "id": "threadripper-7995wx",
       "name": "Threadripper PRO 7995WX (8-ch DDR5-5200)",
@@ -729,6 +723,23 @@
       "releasedAt": "2023-10-19",
       "source": "https://www.amd.com/en/products/processors/workstations/ryzen-threadripper.html"
     },
+
+    {
+      "id": "xeon-6980p",
+      "name": "Xeon 6980P (12-ch MRDIMM-8800)",
+      "vendor": "Intel",
+      "class": "cpu-ram",
+      "status": "shipping",
+      "capacityGiB": 1536,
+      "allocatableGiB": 1450,
+      "bandwidthGBs": 844.8,
+      "tflops": { "fp16": 8 },
+      "tdpWatts": 500,
+      "releasedAt": "2024-09-24",
+      "source": "https://www.intel.com/content/www/us/en/products/sku/240777/intel-xeon-6980p-processor-504m-cache-2-00-ghz/specifications.html",
+      "note": "Twelve channels of MRDIMM-8800 is 844.8 GB/s exactly, which is more than any EPYC row here and the reason high-bandwidth CPU inference is not an AMD-only technique. Capacity assumes one 128 GB MRDIMM per channel. Compute deliberately excludes AMX: its tile rate is roughly an order of magnitude higher, nothing catalogued here reaches it for a GGUF today, and folding it in would report a CPU's time to first token as better than a 4090's. **The 8 TFLOPS is not a computed vector peak, and this note used to claim it was.** 128 cores at 2.0 GHz with two 512-bit FMA pipelines is 16.4 TFLOPS fp32, or 32.8 with AVX512-FP16 — both well above this figure. It is carried on the same conservative basis as the four other `cpu-ram` rows, which is what keeps this row comparable with them and with the EPYC 9654 calibration anchor; that basis is not reproducible from a stated formula on any of the five (catalogued/fp32-peak runs 0.41 to 1.12 across them), and correcting one row alone would make it the odd one out rather than the right one. Deriving all five on one declared basis is filed separately — see #90."
+    },
+
     {
       "id": "desktop-ddr5-dual-channel",
       "name": "Desktop CPU (2-ch DDR5-6000)",
