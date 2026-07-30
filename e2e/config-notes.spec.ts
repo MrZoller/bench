@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 /**
- * The Configuration panel's geometry, once a picker note stops being a page of prose. Issue #68.
+ * The Setup panel's geometry, once a picker note stops being a page of prose. Issue #68.
  *
  * The Hardware note was `[statusWarning, ceilingClause, row.note].join(' ')` — up to 180 words of
  * catalog provenance under a `<select>` at `text-xs`. The issue's own "side effect worth noting" is
@@ -55,16 +55,22 @@ async function panelGeometry(page: Page) {
       const select = document.getElementById(label.htmlFor) as HTMLSelectElement | null;
       if (!select) throw new Error(`${labelText} has no select`);
 
-      const noteId = select.getAttribute('aria-describedby');
-      const note = noteId === null ? null : document.getElementById(noteId);
-      const lines = (() => {
-        if (note === null) return 0;
+      // Split rather than handed to `getElementById` whole, because `aria-describedby` is an IDREF
+      // *list*: a second id appended to a control would resolve to nothing and report a control that
+      // carries a note as carrying none — which is exactly the one-sided reading the `text` comment
+      // below exists to refuse.
+      const notes = (select.getAttribute('aria-describedby') ?? '')
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((id) => document.getElementById(id))
+        .filter((el): el is HTMLElement => el !== null);
+      const lines = notes.reduce((total, note) => {
         const range = document.createRange();
         range.selectNodeContents(note);
         // One rect per line box. The same technique the Envelope's title assertions use, and the
         // only way to count wrapped lines without hard-coding a line height.
-        return range.getClientRects().length;
-      })();
+        return total + range.getClientRects().length;
+      }, 0);
 
       // The grid item, which `align-items: stretch` sizes to the whole track — so its height is the
       // row's height and its bottom is where the next row begins.
@@ -79,7 +85,10 @@ async function panelGeometry(page: Page) {
          * is not a hypothetical failure — the curated note was dropped from this control once
          * before, and it took the 3090's NVLink caveat with it. So the sweeps assert on this too.
          */
-        text: note?.textContent?.trim() ?? '',
+        text: notes
+          .map((note) => note.textContent?.trim() ?? '')
+          .join(' ')
+          .trim(),
         /**
          * Where this cell's own content stops, which is not where its box stops.
          *
@@ -95,8 +104,11 @@ async function panelGeometry(page: Page) {
       };
     };
 
-    const panel = document
-      .querySelector('section[aria-label="Configuration"]')!
+    /* Found by its heading rather than by an `aria-label`, because the panel no longer has one: its
+       accessible name is an `sr-only` <h2>, so that the four controls in here are reachable by
+       heading navigation and not only as a landmark (#74). */
+    const panel = [...document.querySelectorAll('main section')]
+      .find((section) => section.querySelector('h2')?.textContent?.trim() === 'Setup')!
       .getBoundingClientRect();
 
     return {
@@ -120,7 +132,7 @@ test.beforeEach(async ({ page }) => {
   // another cell's void, and below `sm` the panel stacks and there is nothing here to measure.
   expect(
     await page.evaluate(() => matchMedia('(min-width: 40rem)').matches),
-    'this viewport is below sm, so the Configuration panel is not the two-column layout'
+    'this viewport is below sm, so the Setup panel is not the two-column layout'
   ).toBe(true);
 });
 
