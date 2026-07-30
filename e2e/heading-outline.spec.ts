@@ -46,12 +46,19 @@ const heading = (page: Page, name: string | RegExp) =>
   page.getByRole('heading', { name, level: 2 });
 
 /**
- * A box in *document* coordinates, plus the two computed values the assertions below need.
+ * A box in *document* coordinates, plus the computed values the assertions below need.
  *
  * Document rather than viewport, like `usage-placement.spec.ts`: `boundingBox()` is viewport-relative
  * and every spec in this directory that forgot it reported a shift per run. `evaluate` throws on a
  * locator that matched nothing or matched several, so a mis-addressed element fails loudly here rather
  * than measuring zero and passing.
+ *
+ * `borderTopWidth` rides along with `paddingTop` because `top` is the *border-box* edge and
+ * `paddingTop` excludes the border, so the two are only a content edge together. `.panel` is
+ * `border: 1px` in `src/index.css`: computing the content edge from padding alone leaves the
+ * "nothing above the first control" assertion below reading exactly 1 against its 2px tolerance, so a
+ * design tweak to that one declaration would turn this spec red pointing at a heading that had not
+ * moved.
  */
 const boxOf = async (locator: Locator) => {
   const box = await locator.evaluate((el) => {
@@ -64,6 +71,7 @@ const boxOf = async (locator: Locator) => {
       height: rect.height,
       position: styles.position,
       paddingTop: parseFloat(styles.paddingTop),
+      borderTopWidth: parseFloat(styles.borderTopWidth),
     };
   });
   return box;
@@ -113,10 +121,11 @@ test('a hidden heading takes no cell from the grid it names', async ({ page }) =
   expect(model.left, 'Model is not the first column').toBeLessThan(hardware.left);
   expect(quantization.top, 'Quantization is not on the second row').toBeGreaterThan(model.top);
   expect(quantization.left, 'Quantization is not under Model').toBeCloseTo(model.left, 0);
-  // Nothing above the first row: the top control starts at the panel's padding edge. This is the
-  // assertion a visible heading fails outright, whatever the columns end up doing.
+  // Nothing above the first row: the top control starts at the panel's content edge — border and
+  // padding, since `top` is the border-box edge. This is the assertion a visible heading fails
+  // outright, whatever the columns end up doing.
   expect(
-    model.top - (panel.top + panel.paddingTop),
+    model.top - (panel.top + panel.borderTopWidth + panel.paddingTop),
     'something is laid out above the first control'
   ).toBeLessThan(2);
 

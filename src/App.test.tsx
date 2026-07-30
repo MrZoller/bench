@@ -3334,12 +3334,23 @@ describe('the heading outline reaches every control and mis-parents nothing', ()
     panel.querySelector('h1, h2, h3, h4, h5, h6')?.textContent?.trim() ??
     `${(panel.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 40)}…`;
 
-  /** The heading a panel's accessible name is computed from, where it has one. */
-  const namingHeading = (panel: HTMLElement) => {
-    const id = panel.getAttribute('aria-labelledby');
-    const target = id ? panel.ownerDocument.getElementById(id) : null;
-    return target !== null && /^H[1-6]$/.test(target.tagName) ? target : null;
-  };
+  /**
+   * The heading a panel's accessible name is computed from, where it has one.
+   *
+   * `aria-labelledby` is an IDREF *list*, so the value is split rather than handed to
+   * `getElementById` whole — the same reason the `aria-describedby` resolver further down splits.
+   * A panel written as `aria-labelledby="headingId subheadId"`, which is the obvious way to append a
+   * subhead to a landmark name, would otherwise resolve to `null` and be reported by the sweep below
+   * as having no heading at all: a red pointing at correctly-named markup instead of at the resolver.
+   */
+  const namingHeading = (panel: HTMLElement) =>
+    (panel.getAttribute('aria-labelledby') ?? '')
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((id) => panel.ownerDocument.getElementById(id))
+      .find(
+        (target): target is HTMLElement => target !== null && /^H[1-6]$/.test(target.tagName)
+      ) ?? null;
 
   /**
    * The three ways a panel can be outside the outline, listed rather than counted.
