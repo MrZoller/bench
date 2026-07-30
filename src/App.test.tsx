@@ -4334,3 +4334,148 @@ describe('the controls that drive every figure explain what they are', () => {
     });
   });
 });
+
+/**
+ * What a picker says *before* the choice, which is not the same string as what it says after (#69).
+ *
+ * `Controls.tsx` renders every option's label and only the **selected** option's note. So the
+ * caveats that decide whether a row is worth choosing lived in the one string a `<select>` will not
+ * show until the choice has been made: "Mac Studio M5 Ultra (512 GB) — 512 GiB" scrolled past as an
+ * equal of the 512 GB M3 Ultra one line above it, which is real hardware with measured bandwidth,
+ * and its `Rumoured — specs may change.` appeared only afterwards. CLAUDE.md states that one as a
+ * requirement: pre-release specs must stay visibly labelled in the UI.
+ *
+ * **Swept over both pickers that share the component**, because the mechanism is the component's and
+ * not the catalog's. The Runtime picker had the same shape and a harder consequence — on a Mac Studio
+ * it offered llama.cpp, vLLM and MLX as three equals and produced "Does not run on …" only once vLLM
+ * had been selected and every figure on the page had been replaced by a refusal.
+ *
+ * These read `option.textContent`, which is the one place a sweep like this is not vacuous: the file
+ * already records that reading notes off the `<option>`s finds nothing and passes whatever the copy
+ * says. Here the text under test really is the option's own.
+ */
+describe('a picker states its caveats where the choice is made', () => {
+  /** Every option's own text, which is all a closed `<select>` has to distinguish its rows by. */
+  const optionsOf = (label: string) =>
+    Array.from((screen.getByLabelText(label) as HTMLSelectElement).options).map((o) => ({
+      value: o.value,
+      text: (o.textContent ?? '').trim(),
+    }));
+
+  /** The marker as a reader sees it, not as the code spells it — `devices.json` says `rumored`. */
+  const PRE_RELEASE = /\s·\s(rumoured|announced)$/;
+
+  it('marks every row whose specs are not final, in the option text', () => {
+    render(<App />);
+
+    const options = optionsOf(SETTING_LABELS.deviceId);
+    expect(options.length, 'the picker offered no hardware at all').toBe(DEVICES.length);
+
+    // From `status`, so a row added to the catalog as announced or rumoured fails this rather than
+    // slipping through it. The named instance is one device; the class is the field.
+    const preRelease = new Set(DEVICES.filter((d) => d.status !== 'shipping').map((d) => d.id));
+    expect(
+      preRelease.size,
+      'no catalogued row is rumoured or announced, so this sweep proves nothing'
+    ).toBeGreaterThan(0);
+
+    expect(
+      options
+        .filter((o) => preRelease.has(o.value) && !PRE_RELEASE.test(o.text))
+        .map((o) => o.text),
+      'pre-release hardware offered as though it were shipping'
+    ).toEqual([]);
+    // The other half of it: a marker on every row would satisfy the assertion above and mean nothing.
+    expect(
+      options
+        .filter((o) => !preRelease.has(o.value) && PRE_RELEASE.test(o.text))
+        .map((o) => o.text),
+      'shipping hardware carrying a pre-release marker'
+    ).toEqual([]);
+  });
+
+  it('marks the rumoured Mac without spending the figures the row is chosen on', () => {
+    render(<App />);
+
+    // The string the issue quotes, plus the marker it was missing. Pinned whole because the defect
+    // was not "the marker is absent" but "the label is indistinguishable from a shipping row": a
+    // marker that displaced the name or the capacity would satisfy a regex and lose the comparison.
+    expect(
+      optionsOf(SETTING_LABELS.deviceId).find((o) => o.value === 'mac-studio-m5-ultra-512')?.text
+    ).toBe('Mac Studio M5 Ultra (512 GB) — 512 GiB · rumoured');
+  });
+
+  it('still gives the chosen row the fuller sentence, rather than moving it into the label', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // The marker is a tag on a row being scanned; this is the clause for the row that was picked, and
+    // it is the control's accessible description. Adding the first must not cost the second.
+    await user.selectOptions(
+      screen.getByLabelText(SETTING_LABELS.deviceId),
+      'mac-studio-m5-ultra-512'
+    );
+    expect(screen.getByLabelText(SETTING_LABELS.deviceId)).toHaveAccessibleDescription(
+      /^Rumoured — specs may change\./
+    );
+  });
+
+  it('marks a runtime that cannot drive the machine currently selected', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    /**
+     * Two machines, because the marked runtime differs between them: vLLM does not run on Apple
+     * unified memory and MLX runs on nothing else. A marker hard-coded to either would pass on one
+     * device and fail on the other, which is why the expectation is derived from `runtimeDrives`.
+     */
+    for (const deviceId of ['mac-studio-m3-ultra-256', 'rtx-5090']) {
+      await user.selectOptions(screen.getByLabelText(SETTING_LABELS.deviceId), deviceId);
+      const device = getDevice(deviceId);
+
+      const options = optionsOf(SETTING_LABELS.runtimeId);
+      expect(options.length, 'the picker offered no runtimes').toBe(RUNTIMES.length);
+      expect(
+        RUNTIMES.filter((r) => !runtimeDrives(r, device)).length,
+        `every runtime drives ${deviceId}, so it marks nothing`
+      ).toBeGreaterThan(0);
+
+      const wrong = options.filter(
+        (o) =>
+          runtimeDrives(getRuntime(o.value), device) ===
+          /does not run on this hardware/.test(o.text)
+      );
+      expect(
+        wrong.map((o) => `${deviceId}: “${o.text}”`),
+        'runtime options whose marker disagrees with whether the runtime drives this machine'
+      ).toEqual([]);
+    }
+
+    // And the note still names the machine, which the marker deliberately does not — it is what a
+    // screen-reader user hears on the control once the choice has been made.
+    await user.selectOptions(screen.getByLabelText(SETTING_LABELS.runtimeId), 'mlx');
+    expect(screen.getByLabelText(SETTING_LABELS.runtimeId)).toHaveAccessibleDescription(
+      /Does not run on GeForce RTX 5090/
+    );
+  });
+
+  it('says what a runtime will not run on, rather than leaving the reader to supply it', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    /**
+     * Pinned whole, because the first version of this marker said "does not run here" and an option's
+     * own text is *all* that is announced for a row nobody has selected — so "here" resolved to
+     * nothing, and the string that names the machine is the selected option's note, which is exactly
+     * the dependency the marker exists to remove (found in review). The referent has to be inside the
+     * option: "this hardware" is the control one row up.
+     */
+    await user.selectOptions(
+      screen.getByLabelText(SETTING_LABELS.deviceId),
+      'mac-studio-m3-ultra-256'
+    );
+    expect(optionsOf(SETTING_LABELS.runtimeId).find((o) => o.value === 'vllm')?.text).toBe(
+      'vLLM · does not run on this hardware'
+    );
+  });
+});

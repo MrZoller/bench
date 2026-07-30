@@ -3,6 +3,7 @@ import { contextStopsFor } from './stops';
 import {
   gib,
   multiple,
+  optionLabel,
   params,
   percent,
   rate,
@@ -188,5 +189,39 @@ describe('composing prose from independent fragments', () => {
   it('returns undefined when nothing applies, so no description points at an empty node', () => {
     expect(sentences()).toBeUndefined();
     expect(sentences(undefined, false, '', '   ')).toBeUndefined();
+  });
+});
+
+/**
+ * The same composition one layer over, for the string a picker shows a reader who has not chosen yet
+ * (#69).
+ *
+ * `sentences` above composes the *note*, which `Select` renders for the selected option only. So a
+ * caveat that decides whether a row is real — the rumoured Mac Studio's specs, a runtime that cannot
+ * drive the selected machine — was unreachable until after the choice it was meant to inform. An
+ * `<option>` renders no children, so the marker has to be in the text, and this is where it is joined.
+ */
+describe('marking an option a reader has not chosen yet', () => {
+  it('leaves a label with nothing to say about it exactly as it was', () => {
+    // Most rows are ordinary, and a separator with nothing after it is a label that looks truncated.
+    expect(optionLabel('RTX 5090 — 32 GiB')).toBe('RTX 5090 — 32 GiB');
+    expect(optionLabel('RTX 5090 — 32 GiB', undefined, false, null, '', '   ')).toBe(
+      'RTX 5090 — 32 GiB'
+    );
+  });
+
+  it('separates the marker from a label that has already spent its punctuation', () => {
+    // The row the issue names. A comma or a bracket would read as part of the spec: the name has a
+    // parenthetical, the capacity has an em dash and a unit.
+    expect(optionLabel('Mac Studio M5 Ultra (512 GB) — 512 GiB', 'rumoured')).toBe(
+      'Mac Studio M5 Ultra (512 GB) — 512 GiB · rumoured'
+    );
+  });
+
+  it('composes more than one marker without a second joiner somewhere else', () => {
+    expect(optionLabel('vLLM', false, 'does not run on this hardware')).toBe(
+      'vLLM · does not run on this hardware'
+    );
+    expect(optionLabel('a', 'one', undefined, ' two ')).toBe('a · one · two');
   });
 });

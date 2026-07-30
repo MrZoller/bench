@@ -1,10 +1,10 @@
 import type { Measure } from '@/engine/measure';
-import type { KvPrecision, RuntimeSpec } from '@/engine/types';
+import type { DeviceSpec, DeviceStatus, KvPrecision, RuntimeSpec } from '@/engine/types';
 // The curator's `note` is not an engine field — the engine has no use for it — so the picker's
 // prose is typed against the catalog's row. Type-only, so it erases and this module still pulls in
 // no data at runtime.
 import type { CatalogDevice } from '@/data/catalog';
-import { gibLabel, sentences } from './format';
+import { gibLabel, optionLabel, sentences } from './format';
 // The scenario *shape*, not the store: `scenario.ts` deliberately depends on nothing but engine
 // types so that everything needing the shape can have it without a cycle. Type-only, so it erases.
 import type { Config } from '@/store/scenario';
@@ -277,6 +277,93 @@ export function deviceCountNote(runtime: RuntimeSpec, drives: boolean): string {
 }
 
 /**
+ * `Record<Exclude<DeviceStatus, 'shipping'>, string>` rather than a ternary, and that is the whole
+ * reason it is a table: a fourth status added to the engine's union fails to compile *here*, naming
+ * the status that has no word for it. A ternary keeps compiling and quietly calls it "announced" —
+ * the same claim `DEVICE_STATUSES` makes about the loader in `catalog.ts`, at the other end of the
+ * same field.
+ *
+ * The catalog spells the field `rumored` and the app says "rumoured": the data follows its schema,
+ * the UI follows its own register, and this is the one place the two are reconciled.
+ */
+const PRE_RELEASE_WORDS: Record<Exclude<DeviceStatus, 'shipping'>, string> = {
+  rumored: 'rumoured',
+  announced: 'announced',
+};
+
+/**
+ * What a status other than `shipping` is called where a reader sees it, or `undefined` for hardware
+ * that exists.
+ *
+ * One resolution, read by both halves of what the Hardware picker says — the marker in the
+ * `<option>` and the warning in the note — so the two cannot come to disagree about which rows are
+ * pre-release. It was one expression in each of two places before, and only one of them ran at the
+ * point of choice (#69).
+ */
+function preReleaseWord(status: DeviceStatus): string | undefined {
+  return status === 'shipping' ? undefined : PRE_RELEASE_WORDS[status];
+}
+
+/**
+ * What the Hardware picker calls a machine in the open list, which is the only place a reader
+ * compares two of them.
+ *
+ * The pre-release marker is here rather than in the note because of where the browser renders each:
+ * `Select` draws every option's *label* and only the selected option's *note*, so the caveat that
+ * decides whether a row is hardware at all was reachable only after the row had been chosen. In the
+ * list "Mac Studio M5 Ultra (512 GB) — 512 GiB" sat one line above the 512 GB M3 Ultra — a real
+ * machine with measured bandwidth — presented as its equal (#69). CLAUDE.md states the rule as a
+ * requirement rather than a preference: pre-release specs must stay visibly labelled in the UI, and
+ * a label that waits for the selection is not visible where the comparison happens.
+ *
+ * **Not an `<optgroup>`, which the issue floats as the stronger version.** A group is contiguous, so
+ * grouping the non-shipping rows imposes an order on the picker — and the order of the hardware list
+ * is a separate question with an issue of its own (#79). A marker holds for any list order and for
+ * any number of pre-release rows, including the zero of them this catalog may have after the M5
+ * ships; a group of one row is a heading with nothing to group.
+ *
+ * The note keeps the fuller sentence. This is a tag on a row you are scanning; that is a clause for
+ * the row you chose, and `devicePickerNote` below is where it is composed.
+ */
+export function deviceOptionLabel(device: DeviceSpec): string {
+  return optionLabel(
+    `${device.name} — ${gibLabel(device.capacityBytes)}`,
+    preReleaseWord(device.status)
+  );
+}
+
+/**
+ * The same rule one control over, for the fact that decides whether any figure on the page means
+ * anything.
+ *
+ * `runtimeOptions` has said "Does not run on <machine>." since the Runtime picker existed, in the
+ * note — so on a Mac Studio the open list offered llama.cpp, vLLM and MLX as three equals, and the
+ * refusal arrived only after vLLM had been picked and every tile on the page had been replaced by
+ * "Unsupported". That is the pre-release defect exactly: a caveat a reader needs in order to choose,
+ * living in the one string a `<select>` will not show them until they have. Swept rather than waited
+ * for, because these two pickers share a component and therefore share the failure.
+ *
+ * **"on this hardware", not "here", and the difference is the whole point of moving the fact.** An
+ * option's own text is *all* that is announced for a row nobody has selected — a screen-reader user
+ * arrowing this listbox hears "vLLM · …" and no surrounding context — so a marker whose referent
+ * lives outside itself has reintroduced, one word smaller, the dependency it was written to remove:
+ * "here" resolves to nothing, and the string that names the machine is still the selected option's
+ * note. "this hardware" points at the control one row up, which is labelled Hardware (found in
+ * review). Not the machine's name, which is the note's job: this is a tag on a row being scanned, and
+ * `Does not run on Mac Studio M3 Ultra (256 GB).` inside three of them is a paragraph in a picker.
+ *
+ * `drives` is a parameter for the reason `deviceCountNote` above takes one: this module reads engine
+ * types and no engine values, and the caller already has the answer.
+ *
+ * Marked rather than `disabled`. An unsupported pairing is a legitimate thing to select here — the
+ * page's answer to it is a full explanation of the refusal, which is more use than a row that cannot
+ * be clicked and says nothing about why.
+ */
+export function runtimeOptionLabel(runtime: RuntimeSpec, drives: boolean): string {
+  return optionLabel(runtime.label, !drives && 'does not run on this hardware');
+}
+
+/**
  * What the Hardware picker says about the selected machine, split into the two different kinds of
  * text that used to be one string.
  *
@@ -313,11 +400,15 @@ export function devicePickerNote(
   device: CatalogDevice,
   ceilingBytes: number
 ): { claim?: string; detail?: string } {
+  const preRelease = preReleaseWord(device.status);
   return {
     claim: sentences(
-      // Pre-release specs must stay visibly labelled, not silently mixed in with shipping ones.
-      device.status !== 'shipping' &&
-        `${device.status === 'rumored' ? 'Rumoured' : 'Announced'} — specs may change.`,
+      // Pre-release specs must stay visibly labelled, not silently mixed in with shipping ones. The
+      // marker in the option label is the half of that a reader sees while choosing; this is the
+      // sentence, which says what being pre-release costs them. Sentence case from the shared word
+      // rather than a second ternary over `status`: the two surfaces have to name the same rows, and
+      // `PRE_RELEASE_WORDS` is where they agree.
+      preRelease && `${preRelease[0].toUpperCase()}${preRelease.slice(1)} — specs may change.`,
       // The tunable ceiling matters for the same reason in reverse: it is a default, and treating
       // it as a hardware limit turns a raiseable setting into a flat "will not run".
       device.allocatableTunable === true &&
