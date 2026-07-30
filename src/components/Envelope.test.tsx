@@ -501,10 +501,17 @@ describe('the measure group says what it colours by', () => {
     render(<Envelope config={DEFAULT_CONFIG} />);
 
     const group = within(field()).getByRole('group', { name: /colour the field by/i });
-    const describedBy = (el: HTMLElement) => {
-      const id = el.getAttribute('aria-describedby');
-      return id ? (document.getElementById(id)?.textContent ?? '') : '';
-    };
+    // The ids are split rather than handed to `getElementById` whole, because `aria-describedby` is
+    // an IDREF *list*: a second id appended here would resolve to nothing and report the group as
+    // undescribed, failing on the component instead of on this line. Same form as `App.test.tsx`'s
+    // `description`.
+    const describedBy = (el: HTMLElement) =>
+      (el.getAttribute('aria-describedby') ?? '')
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((id) => document.getElementById(id)?.textContent?.trim() ?? '')
+        .join(' ')
+        .trim();
 
     expect(describedBy(group)).toMatch(/headroom left/i);
 

@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useId, useMemo } from 'react';
 import { DEVICES, RUNTIMES, evaluateConfig, useConfig } from '@/store/config';
 import { useUrlSync } from '@/store/useUrlSync';
 import { getRuntime, kvSubstitutionFor, runtimeDrives, substitutionFor } from '@/data/runtimes';
@@ -59,6 +59,25 @@ export function Bench() {
   const config = useConfig();
   useUrlSync();
   const set = useConfig((s) => s.set);
+
+  /**
+   * The three headings this file owns, each its own section's `aria-labelledby` target.
+   *
+   * **A landmark named by a string is not in the document outline, and the outline is how a
+   * screen-reader user moves through a page this tall** (#74). Both control panels carried an
+   * `aria-label` and no heading, so navigating by heading reached five panels of output and none of
+   * the nine inputs that produce them — on a page 3,043px at 1440 and 4,887px on a phone. Landmark
+   * navigation did reach them, but that is a second, less-used mechanism, and it puts nothing in the
+   * outline.
+   *
+   * One source for each name rather than a heading *and* an `aria-label`, which is the pattern the
+   * other four sections already use: the accessible name is computed from the heading, so the two
+   * cannot come to disagree.
+   */
+  const setupHeadingId = useId();
+  const usageHeadingId = useId();
+  /** The MoE aside's heading, which is a sentence that changes with the verdict — see below. */
+  const architectureHeadingId = useId();
 
   const evaluation = useMemo(() => evaluateConfig(config), [config]);
   const model = getModel(config.modelId);
@@ -370,11 +389,27 @@ export function Bench() {
           they just no longer own the only copy of it. The Matrix already names one of these settings
           a second time — its row axis is an `sr-only` "Model" — and agrees with the control here by
           coincidence rather than by construction, which is the coincidence `kvLabel` was written
-          after. */}
+          after.
+
+          **The heading is this comment's first three words, which is where it should have been all
+          along** (#74). The panel was `aria-label="Configuration"` — a landmark name and nothing in
+          the outline — and "Setup" is what every other reader of this panel already calls it: this
+          comment, `App.test.tsx`'s variable, `e2e/usage-placement.spec.ts`'s locator. The rename is
+          the smaller half of the change; having one source for the name is the point. */}
       <section
-        aria-label="Configuration"
+        aria-labelledby={setupHeadingId}
         className="panel grid gap-4 p-[min(1.25rem,5vw)] sm:grid-cols-2"
       >
+        {/* `sr-only`, for the reason #66 measured rather than out of deference to the design: the
+            landing view already holds 620px of controls and no computed figure at 1440x900, and two
+            visible headings push the memory bar further from the sliders that fill it. The outline is
+            what was missing, not a label on screen — the four selects are already labelled — and an
+            absolutely-positioned heading is not a grid item, so it takes no track from the two-column
+            layout either. Same mechanism the Envelope's `<caption>` and the Matrix's `<legend>`
+            already use for a name a reader does not need to see. */}
+        <h2 id={setupHeadingId} className="sr-only">
+          Setup
+        </h2>
         <Select
           label={SETTING_LABELS.modelId}
           value={config.modelId}
@@ -438,8 +473,22 @@ export function Bench() {
           from `SETTING_NOTES` for the same reason and one more: these five controls *are* the
           KV-cache argument — context times users times bits per token is most of what the budget bar
           draws — and until they carried a sentence each, the panel's whole text content was the
-          labels and the values, with the argument made only in `Envelope.tsx`'s docstring (#80). */}
-      <section aria-label="Usage" className="panel grid gap-5 p-[min(1.25rem,5vw)] sm:grid-cols-2">
+          labels and the values, with the argument made only in `Envelope.tsx`'s docstring (#80).
+
+          **And the same section is now in the heading outline** (#74), which compounded with the
+          placement above rather than being separate from it: while these five controls were the last
+          thing on the page, they were also absent from the one navigation mechanism that would have
+          got a screen-reader user to them without travelling the whole document. */}
+      <section
+        aria-labelledby={usageHeadingId}
+        className="panel grid gap-5 p-[min(1.25rem,5vw)] sm:grid-cols-2"
+      >
+        {/* Hidden for the same reason as Setup's, and named for what the panel asks rather than for
+            what it contains — a reader hunting the context slider is looking for "how am I using
+            it", which is the distinction that keeps these two panels apart at all. */}
+        <h2 id={usageHeadingId} className="sr-only">
+          Usage
+        </h2>
         <StopSlider
           label={SETTING_LABELS.contextTokens}
           stops={contextStops}
@@ -578,8 +627,19 @@ export function Bench() {
        * small per-token read. Shown only when the distinction exists.
        */}
       {model.expertParams > 0 && (
-        <aside className="panel p-[min(1.25rem,5vw)] text-sm leading-relaxed text-[var(--color-text-muted)]">
-          <h2 className="mb-1 text-sm font-semibold text-[var(--color-text)]">
+        /* Named by its own heading, like every panel above it. An `<aside>` outside a sectioning
+           element is a `complementary` landmark whether or not it has a name, so this one was in
+           landmark navigation as an anonymous entry — with a perfectly good heading sitting inside
+           it, unused. Two attributes for one string is the defect #74 is about; a landmark with a
+           heading it does not point at is the same defect from the other end. */
+        <aside
+          aria-labelledby={architectureHeadingId}
+          className="panel p-[min(1.25rem,5vw)] text-sm leading-relaxed text-[var(--color-text-muted)]"
+        >
+          <h2
+            id={architectureHeadingId}
+            className="mb-1 text-sm font-semibold text-[var(--color-text)]"
+          >
             {/*
               The heading follows the verdict, and `fits` alone is not the verdict: it is computed
               even when the runtime cannot drive the device at all, which would put "why this fits

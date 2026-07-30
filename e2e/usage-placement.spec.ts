@@ -42,7 +42,10 @@ const LAPTOP = { width: 1440, height: 900 };
 const PHONE = { width: 390, height: 844 };
 
 const usage = (page: Page) => page.getByRole('region', { name: 'Usage' });
-const setup = (page: Page) => page.getByRole('region', { name: 'Configuration' });
+// "Setup", not "Configuration": the panel's name is its own `sr-only` heading now, so it is in the
+// document outline rather than only in landmark navigation (#74) — and the name matches what this
+// file, the component's comment and `App.test.tsx` were all already calling it.
+const setup = (page: Page) => page.getByRole('region', { name: 'Setup' });
 const budget = (page: Page) => page.getByRole('region', { name: /memory budget/i });
 const matrix = (page: Page) => page.getByRole('region', { name: /every model on every machine/i });
 

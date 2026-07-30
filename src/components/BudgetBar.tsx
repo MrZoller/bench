@@ -71,8 +71,14 @@ export function BudgetBar({
    */
   if (placement.unsupported) {
     return (
-      <section className="panel p-[min(1.25rem,5vw)]">
-        <h2 className="text-sm font-semibold tracking-wide">
+      /* The same `aria-labelledby` the drawn branch below uses, off the same id (#74's class).
+         Without it this `<section>` had no accessible name, and an unnamed `<section>` is not a
+         landmark at all — so the panel that survives a runtime the hardware cannot use was the one
+         branch of this component missing from landmark navigation, on a page where the refusal is the
+         only thing left to read. Pointed at this branch's own heading rather than duplicating the
+         string, so the two branches cannot come to name the panel differently. */
+      <section aria-labelledby={`${tableId}-title`} className="panel p-[min(1.25rem,5vw)]">
+        <h2 id={`${tableId}-title`} className="text-sm font-semibold tracking-wide">
           Memory budget
           <span className="ml-2 font-normal text-[var(--color-text-faint)]">per device</span>
         </h2>
