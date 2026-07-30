@@ -198,30 +198,42 @@ test('the readout stays on screen while a cell near the top of the grid is focus
 /**
  * The property that actually matters, and the one my first version of this got wrong.
  *
- * A readout whose height changes changes the Matrix section's height, and `Bench.tsx` renders the
- * Usage panel immediately after `<Matrix>` — so "the readout is last in the panel, nothing follows
- * it" was true inside the panel and false on the page (found in review on #71). Being last saves the
- * legend and not the section below.
+ * A readout whose height changes changes the Matrix section's height, and everything downstream of
+ * the section moves with it — so "the readout is last in the panel, nothing follows it" was true
+ * inside the panel and false on the page (found in review on #71). Being last saves the legend and
+ * not what comes after the section.
  *
- * So this asserts the page, not the panel: the Usage panel's position, across sentences that wrap to
- * different heights, at the two widths where the readout wraps at all.
+ * **What is downstream is not a fixed thing, so it is not what this measures.** The original canary
+ * here was the Usage panel, which `Bench.tsx` then rendered immediately after `<Matrix>`. #66 moved
+ * those five controls to the top of the page, *above* the grid — which would have left this test
+ * asserting that a panel upstream of the readout does not move when the readout grows. That is true
+ * of any markup at all, including markup with the reservation deleted: a passing geometry assertion
+ * measuring nothing, which this repo has now had to unpick three times.
+ *
+ * So the canary is the two things that cannot stop being downstream of the readout: the **section's
+ * own height**, which is where the growth would be, and the **document's height**, which is every
+ * panel after it at once, whichever ones those turn out to be.
  */
 for (const width of [320, 640]) {
-  test(`a wrapped readout moves the Usage panel at neither height, at ${width}px`, async ({
+  test(`a wrapped readout changes neither the section nor the page height, at ${width}px`, async ({
     page,
   }) => {
     await page.setViewportSize({ width, height: 800 });
     await page.goto('/');
     await expect(grid(page)).toBeVisible();
 
-    const usage = page.getByRole('region', { name: /usage/i }).first();
     const cells = grid(page).locator('td button');
-    const before = (await boxOf(usage)).top;
+    const pageHeight = () => page.evaluate(() => document.documentElement.scrollHeight);
+    const before = { section: (await boxOf(matrix(page))).height, document: await pageHeight() };
 
     const at = async (index: number) => {
       await cells.nth(index).focus();
       await expect(readout(page)).not.toBeEmpty();
-      return { line: (await boxOf(readout(page))).height, usage: (await boxOf(usage)).top };
+      return {
+        line: (await boxOf(readout(page))).height,
+        section: (await boxOf(matrix(page))).height,
+        document: await pageHeight(),
+      };
     };
 
     const a = await at(0);
@@ -234,8 +246,13 @@ for (const width of [320, 640]) {
      * reservation and would fail if they all fitted one line. What this test owns is the consequence.
      */
     expect(a.line, 'the readout is not at its reserved height').toBeCloseTo(b.line, 0);
-    expect(a.usage).toBeCloseTo(before, 0);
-    expect(b.usage, 'the Usage panel moved when the readout grew').toBeCloseTo(before, 0);
+    expect(a.section).toBeCloseTo(before.section, 0);
+    expect(b.section, 'the Matrix section grew when the readout did').toBeCloseTo(
+      before.section,
+      0
+    );
+    expect(a.document).toBeCloseTo(before.document, 0);
+    expect(b.document, 'the page grew when the readout did').toBeCloseTo(before.document, 0);
   });
 }
 
