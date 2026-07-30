@@ -18,6 +18,35 @@ import type { QuantSpec } from '@/engine/types';
  * total parameters varies. llama.cpp's own published figure for Llama-3.1-8B Q4_K_M is 4.89
  * bpw; a small-vocab model lands slightly lower. The table carries a representative value and
  * the tests assert within a tolerance band rather than pretending to more precision than exists.
+ *
+ * ## Row order is display order, and it is not a width sort
+ *
+ * `Bench.tsx`'s `quantOptions` filters this array to the formats a scenario admits and maps it.
+ * Nothing anywhere sorts it, there is no rank field, and no test looked at the sequence — so the file
+ * *is* the order a reader gets, which is the contract `devices.json` states in `$comment-order` and
+ * this file did not state at all until #79's review audited the class.
+ *
+ * The sequence is grouped by **checkpoint family**, because family is what decides whether a format is
+ * offered at all: first the float and integer formats a framework loads natively (BF16, FP8, INT8, and
+ * the two vendor 4-bit schemes), then the GGUF K- and I-quants, then the calibrated packer a GPU
+ * serving stack reads (AWQ). Within a family the widest format leads, so a reader scanning down moves
+ * towards smaller and lossier — which is the direction `qualityNote` reads in too.
+ *
+ * **So the list is deliberately not bits-descending end to end, and sorting it would be a behaviour
+ * change rather than a tidy-up.** `q8_0` at 8.5 bpw sits *below* `nvfp4` at 4.5 because Q8_0 is a GGUF
+ * and NVFP4 is not, and `mxfp4` sits with the vendor formats rather than beside the 4-bit K-quants it
+ * is closest to in width. `quants.test.ts` pins the one boundary that is derivable from data other
+ * than this file — the formats llama.cpp reads and vLLM cannot are exactly the GGUF run — plus the
+ * widest-first rule inside it. The other two boundaries are prose here, for the reason `$comment-order`
+ * gives for the same level of the device list: no field encodes a family, and adding one to check the
+ * order would restate the order rather than derive it.
+ *
+ * **No `<optgroup>` on the format picker, unlike the Hardware one (#79).** Two reasons, and the first
+ * is that a family heading would be false on one of the three runtimes: MLX reads none of the GGUF
+ * rows — they stand in *by width* for MLX's own affine scheme, which `runtimes.ts` documents at
+ * length — so "GGUF" printed over them in the MLX picker would assert exactly what that note exists to
+ * deny. The second is size: the control is already filtered per runtime, which leaves at most eight
+ * options in two runs, where the Hardware picker had 43 rows across three bands.
  */
 export const QUANTS: readonly QuantSpec[] = [
   {

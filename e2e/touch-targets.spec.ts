@@ -150,31 +150,49 @@ test('Matrix cells meet the hit target this repo declares', async ({ page }) => 
 /**
  * The columns the sample above cannot reach, and which are the ones at risk (#79).
  *
- * A column that opens a class band carries an 8px border in the panel's colour, which is how the
- * catalog's grouping is shown on the grid. The column is widened by exactly that border so the square
- * inside keeps its size — and if it were not, the coarse-pointer branch would hand a touch user a
- * 36px target, since `w-11` sets the *cell* and the border is inside it. The three sampled indices are
- * 0, 357 and 713, and the two band starts are 25 and 37: the failure would sit in the gaps of the
- * existing sweep, which is the shape #29 was filed about in the first place.
+ * A column that opens a class band carries a two-spacing-step border in the panel's colour, which is
+ * how the catalog's grouping is shown on the grid. The column is widened by exactly that border so the
+ * square inside keeps its size — and if it were not, the coarse-pointer branch would hand a touch user
+ * a 36px target, since `w-11` sets the *cell* and the border is inside it.
  *
- * Located by the class rather than by index, so this measures whatever columns the catalog actually
- * bands rather than the two it bands today.
+ * The sweep above cannot see it. The grid is 35 models x 42 shipping devices, so its three sampled
+ * indices are 0, 735 and 1469 — columns 0, 21 and 41 — while the two band starts are columns 25 and 37.
+ * The failure would sit in the gaps of the existing sample, which is the shape #29 was filed about in
+ * the first place.
+ *
+ * Located by `data-band-start` rather than by index, so this measures whatever columns the catalog
+ * actually bands rather than the two it bands today — and by the attribute rather than by the border
+ * utility, since the border's *length* is a thing that changes (it was a flat 8px before the unit
+ * fix) while "this column opens a band" is not.
  */
 test('a column that opens a class band keeps the full hit target, gap and all', async ({
   page,
 }) => {
-  const banded = page
+  const rows = page
     .getByRole('region', { name: /every model on every machine/i })
-    .locator('table td.border-l-8 button');
+    .locator('tbody tr');
 
-  const count = await banded.count();
-  expect(count, 'no column opens a class band, so this measures nothing').toBeGreaterThan(0);
+  // A sample, for the reason the test above states: the gap is one pair of classes on one pair of
+  // columns, so the first and last row of each band column proves it applies down the grid. Measuring
+  // all 70 was a `boundingBox()` round trip apiece and grew with the catalog.
+  const rowCount = await rows.count();
+  expect(rowCount, 'the grid has no rows').toBeGreaterThan(1);
 
-  for (let i = 0; i < count; i++) {
-    const box = await banded.nth(i).boundingBox();
-    expect(box, `band-start cell ${i} is not laid out`).not.toBeNull();
-    expect(box!.height, `band-start cell ${i} height`).toBeGreaterThanOrEqual(marks.hitTarget);
-    expect(box!.width, `band-start cell ${i} width`).toBeGreaterThanOrEqual(marks.hitTarget);
+  for (const r of [0, rowCount - 1]) {
+    const banded = rows.nth(r).locator('td[data-band-start] button');
+    const count = await banded.count();
+    expect(count, `no column opens a class band in row ${r}, so this measures nothing`).toBe(2);
+
+    for (let i = 0; i < count; i++) {
+      const box = await banded.nth(i).boundingBox();
+      expect(box, `band-start cell ${i} in row ${r} is not laid out`).not.toBeNull();
+      expect(box!.height, `band-start cell ${i} in row ${r} height`).toBeGreaterThanOrEqual(
+        marks.hitTarget
+      );
+      expect(box!.width, `band-start cell ${i} in row ${r} width`).toBeGreaterThanOrEqual(
+        marks.hitTarget
+      );
+    }
   }
 });
 

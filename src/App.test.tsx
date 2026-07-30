@@ -4607,10 +4607,18 @@ describe('the catalog shows the order it is listed in', () => {
     const expected = shipping.filter((d, i) => i > 0 && d.class !== shipping[i - 1].class);
     expect(expected.length, 'the shipping catalog spans one class, so this proves nothing').toBe(2);
 
-    /** Every column's heading, paired with whether it carries the band gap. */
+    /**
+     * Every column's heading, paired with whether it carries the band gap.
+     *
+     * By `data-band-start` rather than by the utility class that draws the gap. The first version of
+     * this read `classList.contains()` on the border utility, and that border is a
+     * `calc(var(--spacing) * 2)` now — the same length in the unit the columns are measured in — so a
+     * class-name assertion would have gone quietly false while the markup got *more* correct. The
+     * attribute is what the component promises; the border is how it currently looks.
+     */
     const separated = [...matrix.querySelectorAll('thead th')]
       .slice(1)
-      .map((th, i) => ({ id: shipping[i].id, gap: th.classList.contains('border-l-8') }));
+      .map((th, i) => ({ id: shipping[i].id, gap: th.hasAttribute('data-band-start') }));
     expect(separated.filter((c) => c.gap).map((c) => c.id)).toEqual(expected.map((d) => d.id));
 
     // And down the grid, not only across the header — the gap is a full-height channel or it is a
@@ -4618,9 +4626,35 @@ describe('the catalog shows the order it is listed in', () => {
     const firstRow = matrix.querySelectorAll('tbody tr')[0];
     const cells = [...firstRow.querySelectorAll('td')].map((td, i) => ({
       id: shipping[i].id,
-      gap: td.classList.contains('border-l-8'),
+      gap: td.hasAttribute('data-band-start'),
     }));
     expect(cells.filter((c) => c.gap).map((c) => c.id)).toEqual(expected.map((d) => d.id));
+  });
+
+  /**
+   * The gap, keyed where a sighted reader can find it.
+   *
+   * The band gap shipped named only inside the `sr-only` caption: a screen-reader user was told the
+   * columns are grouped, and a sighted reader met two channels of whitespace with nothing on the page
+   * saying what divided them — while the legend beside it keys every other mark on the surface. That is
+   * #73's asymmetry, on the same surface and in the same direction, and the caption assertion below
+   * passes happily with it live, which is why this is a separate case.
+   */
+  it('keys the band gap on the page, not only in the caption', () => {
+    render(<App />);
+
+    const matrix = screen.getByRole('region', { name: /every model on every machine/i });
+    const key = within(matrix).getByText(/a gap between columns/i);
+    // Outside the caption, which is the whole claim: `sr-only` text would satisfy a text query and
+    // leave the sighted channel exactly as unkeyed as it was.
+    expect(key.closest('caption')).toBeNull();
+    // And it answers the question the gap raises rather than only labelling it — the bands, in order,
+    // in the words the picker's headings use.
+    expect(key).toHaveTextContent(
+      expectedBands(DEVICES.filter((d) => d.status === 'shipping'))
+        .map((band) => band.label)
+        .join(', ')
+    );
   });
 
   it('names both of the Matrix’s axes in its caption, which its headings cannot', () => {

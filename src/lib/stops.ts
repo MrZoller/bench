@@ -460,6 +460,14 @@ export function devicePickerNote(
 /**
  * The cache precisions a control can offer, with the name to use when a runtime has none of
  * its own.
+ *
+ * **Row order is display order, widest first.** `Bench.tsx` filters this to the precisions the runtime
+ * can store and maps it; nothing sorts it. Said out loud so that every list in this repo whose file
+ * order is its display order now says so — `devices.json` in `$comment-order`, `QUANTS` and `RUNTIMES`
+ * in their own docblocks, `MEASURE_ENTRIES` and `SUBSTITUTE_QUANT_IDS` where they already did (#79).
+ * Not machine-checked, and that is the honest line rather than laziness: here the label *is* the width,
+ * so a row out of place is legible in the control itself, where `QUANTS`' family grouping and
+ * `devices.json`'s vendor runs are not.
  */
 export const KV_PRECISIONS: readonly { value: KvPrecision; label: string }[] = [
   { value: 'fp16', label: 'FP16' },

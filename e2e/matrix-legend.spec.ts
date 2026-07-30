@@ -93,6 +93,10 @@ test('renders every prose key at once, which is the state the overflow needs', a
   await expect(keys).toContainText(/does not support this hardware, at any size/i);
   await expect(keys).toContainText(/stand-in format/i);
   await expect(keys).toContainText(/past the default allocation/i);
+  // The band gap's key (#79), listed here for the reason the endpoints below are: the two containment
+  // tests measure whatever this row happens to hold, so a key added without being named here lets them
+  // keep passing about a legend that no longer exists. This one carries the three band names.
+  await expect(keys).toContainText(/a gap between columns/i);
 });
 
 test('the legend stays inside the panel on a narrow viewport', async ({ page }) => {

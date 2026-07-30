@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { RUNTIMES, getRuntime, kvSubstitutionFor, runtimesFor } from './runtimes';
+import { RUNTIMES, getRuntime, kvSubstitutionFor, runtimeDrives, runtimesFor } from './runtimes';
 import { LLAMA_CPP, MLX, VLLM } from '@/engine/fixtures';
 import { kvElementBytes } from '@/engine/kv';
-import { getDevice } from './catalog';
+import { DEVICES, getDevice } from './catalog';
 
 /**
  * The app's runtime catalog and the engine's calibration fixtures must not drift.
@@ -64,6 +64,37 @@ describe('runtime support', () => {
 
   it('throws on an unknown id rather than returning a default', () => {
     expect(() => getRuntime('tensorrt')).toThrow(/Unknown runtime/);
+  });
+});
+
+/**
+ * The list's own order, which is the order the Runtime picker shows (#79).
+ *
+ * `Bench.tsx`'s `runtimeOptions` maps `RUNTIMES` and nothing sorts it, so the file is the sequence a
+ * reader gets. That was true of `devices.json` as well, where it went three rows wrong precisely because
+ * nothing stated or checked it; the review of #79 found the same shape here and in `quants.ts`.
+ *
+ * The rule is breadth, and it is checkable without a rank field: coverage comes from `runtimeDrives`
+ * over the real catalog, which answers from each runtime's `supports` rules rather than from this
+ * sequence. So a runtime added with a narrow `supports` and dropped at the top of the file fails here.
+ */
+describe('the runtime catalog is listed in the order it states', () => {
+  it('runs widest catalog coverage first', () => {
+    const covered = RUNTIMES.map((runtime) => ({
+      id: runtime.id,
+      devices: DEVICES.filter((device) => runtimeDrives(runtime, device)).length,
+    }));
+
+    expect(
+      covered.map((r) => r.devices),
+      covered.map((r) => `${r.id}: ${r.devices}`).join(', ')
+    ).toEqual([...covered.map((r) => r.devices)].sort((a, b) => b - a));
+
+    // Strictly, not merely non-increasing: two runtimes covering the same number of machines would
+    // leave the order between them unstated, and an unstated order is what this describe is about.
+    // Today it is 43 / 26 / 11 of the 43 catalogued machines — every class, then discrete plus the
+    // one NVIDIA SoC, then Apple only.
+    expect(new Set(covered.map((r) => r.devices)).size).toBe(covered.length);
   });
 });
 

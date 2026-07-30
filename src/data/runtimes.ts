@@ -20,6 +20,18 @@ import { GIB } from '@/engine/types';
  * The efficiency constants carry the caveat documented at the top of `speed.ts`: they are fitted
  * to a small number of published measurements, and only their product with the device-class
  * utilisation is observable.
+ *
+ * **Row order is display order, and the rule is breadth.** `Bench.tsx`'s `runtimeOptions` maps this
+ * array; nothing sorts it, so the file is the order the Runtime picker shows — the same contract
+ * `devices.json` states in `$comment-order`, unstated here until #79's review audited the class. The
+ * rows run **widest catalog coverage first**: llama.cpp drives all three hardware classes, vLLM drives
+ * two, MLX drives one vendor of one. So the list opens on the runtime the most readers can actually
+ * use and narrows, and every row below the first is a row that will be marked "Does not run on …" for
+ * some of the catalog. `runtimes.test.ts` asserts it against `runtimeDrives` over the real device list,
+ * which is a fact about the `supports` rules rather than a restatement of this sequence.
+ *
+ * `DEFAULT_CONFIG.runtimeId` is the first row today and that is deliberately *not* asserted: the
+ * default is a scenario decision, and pinning it to a list position would make one change fail as two.
  */
 export const RUNTIMES: readonly RuntimeSpec[] = [
   {

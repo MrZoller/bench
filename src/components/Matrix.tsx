@@ -52,13 +52,14 @@ const SUBSTITUTE_QUANT_IDS = ['q4_k_m', 'awq_4bit', 'int8', 'q8_0', FALLBACK_QUA
 export const DETAIL_ANCHOR_ID = 'bench-detail';
 
 /**
- * What separates one class band of columns from the next: 8px of the panel's own surface.
+ * What separates one class band of columns from the next: two spacing steps of the panel's own
+ * surface, which is 8px at the default root.
  *
  * **A gap rather than a rule, because the grid's existing separator between squares is already a
- * gap.** The table is `border-separate` with `border-spacing-0.5`, so every square is bounded by 2px
- * of surface — the `dataviz` guidance's "2px surface gap between fills" — and a band boundary is that
- * same channel, four times wider: 8px on top of the 2px gutter, so 10px against 2px. Ink was the
- * alternative and it has nowhere to come from:
+ * gap.** The table is `border-separate` with `border-spacing-0.5`, so every square is bounded by half
+ * a spacing step of surface — the `dataviz` guidance's "2px surface gap between fills" — and a band
+ * boundary is that same channel, five times wider: `2 × --spacing` on top of the `0.5 × --spacing`
+ * gutter. Ink was the alternative and it has nowhere to come from:
  * `tokens.ts` records `--color-border` at 1.18:1 on this fill, which is why it is the panel edge and
  * not a control boundary, and anything strong enough to read here would compete with the two borders
  * a cell already uses to mean something (dashed for "does not fit", warning for "past the default
@@ -71,12 +72,28 @@ export const DETAIL_ANCHOR_ID = 'bench-detail';
  * inside keeps its width and its 44px touch target: the gap is added to the column, not taken out of
  * the cell.
  *
+ * **`calc(var(--spacing) * 2)` rather than `8px`, and that is the whole of what "exactly the gap"
+ * means.** Every length this is compensated against is a multiple of `--spacing`, which is `0.25rem`:
+ * `.w-9{width:calc(var(--spacing) * 9)}` against `.w-7{width:calc(var(--spacing) * 7)}` is a
+ * difference of two steps, and `border-spacing-0.5` is half a step. Written as `8px` the arithmetic
+ * held at a 16px root and nowhere else — at 200% text the column grew by 16px while the border stayed
+ * at 8, so two of the 42 squares painted 8px (14%) wider than every other square, and the boundary
+ * gutter fell from 5x an ordinary one to 3x. That is #44 exactly ("a length measured from text belongs
+ * in the same units as the text"), one token away from the `marks.lineWidth` lesson in `BudgetBar`:
+ * two literals for one quantity, here across a *unit* boundary rather than across a file. In the
+ * spacing unit the identity `w-7 + gap = w-9` is true at every root, and
+ * `e2e/catalog-order.spec.ts` measures it at 16px and at 32px for that reason.
+ *
  * Two boundaries at 8px is 16px on a grid whose columns already reach ~1405px, which is the other
  * reason it is spent this way. #64 and #34 are both this header overflowing, so a separator that
  * reserved space per column, or leaned on free space that does not exist, would reopen them; this is
  * the whole cost, it is in flow, and `e2e/catalog-order.spec.ts` measures it at 320px.
+ *
+ * `data-band-start` carries no style and exists so a spec can find these columns without naming the
+ * utility that draws them — the e2e locators named that border class, so the unit fix above would have
+ * silently emptied every one of them and passed.
  */
-const BAND_GAP = 'border-l-8 border-l-[var(--color-surface)]';
+const BAND_GAP = 'border-l-[calc(var(--spacing)*2)] border-l-[var(--color-surface)]';
 
 /**
  * What the readout under the grid is pointed at.
@@ -758,8 +775,10 @@ export function Matrix({ config }: { config: Config }) {
                   // of its neighbours and skewed the whole grid.
                   //
                   // A column opening a class band carries the separator, and it is `BAND_GAP`:
-                  // whitespace in the panel's own colour, wider than the 2px `border-spacing` between
-                  // squares. See the constant for why it is a border and why it is a gap.
+                  // whitespace in the panel's own colour, four times the `border-spacing` between
+                  // squares. See the constant for why it is a border, why it is a gap, and why both
+                  // lengths are in the spacing unit.
+                  data-band-start={bands.separated.has(device.id) ? '' : undefined}
                   className={`relative p-0 align-bottom font-normal text-[var(--color-text-faint)] ${
                     bands.separated.has(device.id)
                       ? `${BAND_GAP} w-9 min-w-9 [@media(pointer:coarse)]:w-13 [@media(pointer:coarse)]:min-w-13`
@@ -895,6 +914,7 @@ export function Matrix({ config }: { config: Config }) {
                   <td
                     key={devices[c].id}
                     role="gridcell"
+                    data-band-start={bands.separated.has(cell.deviceId) ? '' : undefined}
                     className={`p-0 ${bands.separated.has(cell.deviceId) ? BAND_GAP : ''}`}
                   >
                     <button
@@ -1245,6 +1265,34 @@ export function Matrix({ config }: { config: Config }) {
           />
           will not run
         </span>
+        {/* The band gap, keyed rather than left to be inferred.
+            The gap is a mark this legend keys every neighbour of — the dashed border, the struck
+            heading, the selection ring, the warning border — and it shipped with its only sentence
+            inside a `sr-only` caption, so a screen-reader user was told the columns are grouped and a
+            sighted reader met two channels of whitespace with nothing on the page naming them. That is
+            #73's asymmetry, in the same direction and on the same surface. A boundary legible only to
+            someone who already knows that `dgx-spark` is not a discrete GPU is not a channel a legend
+            gets to rely on.
+
+            The bands are named here in order, so the key also answers the question the gap raises
+            rather than only labelling it — which makes this the visible half of the caption's column
+            sentence rather than a second copy of it. The words come from `DEVICE_CLASS_LABELS`, the
+            same table the picker's `<optgroup>` headings come from.
+
+            The sample *is* the mark, like the struck heading above: two squares in the empty-cell
+            colour with the real gap between them, `w-2` being the `2 × --spacing` the columns spend.
+            Conditional like its neighbours — one class band is a grid with no boundary in it, and a
+            key for a mark that appears nowhere is worse than prose. */}
+        {bands.labels.length > 1 && (
+          <span className="flex items-center gap-1.5">
+            <span aria-hidden="true" className="inline-flex items-center">
+              <span className="h-3 w-1.5 rounded-sm bg-[var(--color-grid)]" />
+              <span className="h-3 w-2" />
+              <span className="h-3 w-1.5 rounded-sm bg-[var(--color-grid)]" />
+            </span>
+            a gap between columns — the hardware class changes: {bands.labels.join(', ')}
+          </span>
+        )}
         {/* The other refusal — the one the swatch above used to absorb (#72).
             A state the grid is really in gets a line, and only when it is in it: the same rule the
             four conditional keys below follow, and the reason this cannot simply be listed
