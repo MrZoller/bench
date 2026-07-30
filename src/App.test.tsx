@@ -4,8 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 import { useConfig, DEFAULT_CONFIG, estimateConfig } from '@/store/config';
 import { configToShareSearch } from '@/store/url';
-import { DEVICES, getDevice, getModel } from '@/data/catalog';
-import { tokens } from '@/lib/format';
+import { DEVICES, MODELS, getDevice, getModel } from '@/data/catalog';
+import { params, tokens } from '@/lib/format';
 import { SETTING_LABELS, SETTING_NOTES, deviceCountNote } from '@/lib/stops';
 import { DETAIL_ANCHOR_ID } from '@/components/Matrix';
 // The one component this file mounts on its own, and only to sweep a renderer over all 43 catalog
@@ -13,6 +13,7 @@ import { DETAIL_ANCHOR_ID } from '@/components/Matrix';
 import { Select } from '@/components/Controls';
 import { judgeWorkloads } from '@/engine/verdict';
 import { RUNTIMES, getRuntime, kvSubstitutionFor, runtimeDrives } from '@/data/runtimes';
+import { effectiveActiveParams } from '@/engine/weights';
 import { canShard, maxAllocatablePerDevice } from '@/engine/placement';
 import { colors, marks } from '@/design/tokens';
 
@@ -1788,10 +1789,10 @@ describe('the Matrix tells a runtime refusal from a memory one', () => {
      * anywhere else may carry it.
      *
      * Marking a column that merely came up empty would be the same misattribution pointed the other
-     * way. At #72's own URL the two sets happen to coincide — the DGX Spark still runs 11 of its 17
-     * rows there, so the only empty columns are the undrivable ones — which is exactly why deriving
-     * from emptiness looks safe. Take that grid to 32 concurrent users and the RTX 3090, 4090 and
-     * 5080 columns empty out too, on counted bytes, under a runtime that drives all three.
+     * way. At #72's own URL the two sets happen to coincide — the DGX Spark still runs a good share
+     * of its rows there, so the only empty columns are the undrivable ones — which is exactly why
+     * deriving from emptiness looks safe. Take that grid to 32 concurrent users and the RTX 3090,
+     * 4090 and 5080 columns empty out too, on counted bytes, under a runtime that drives all three.
      */
     for (const column of struck) {
       for (const cell of column.cells) {
@@ -2937,42 +2938,21 @@ describe('a figure derived from a stand-in format says so', () => {
   });
 
   /**
-   * The all-blocked grid, which is the state gating the legend on `runs` hid it in.
+   * The all-blocked grid — the state that gating the legend on `runs` hid it in — is pinned in
+   * `src/components/Matrix.test.tsx` rather than here.
    *
-   * At the longest context and the most users, every Apple cell under MLX fails placement, so a
-   * scan for a *running* substituted cell finds nothing — while the grid goes on publishing a
-   * verdict for every cell and, on some of them, "past the default allocation, which this machine
-   * lets you raise". Every one of those rests on Q4_K_M's 4.85 bpw standing in for MLX's ~4.5,
-   * and since the stand-in is the heavier of the two, a borderline "past the default" is the
-   * verdict most likely to flip. The mark is least dispensable exactly where it was dropped.
+   * It was an App-level test driving the controls to the longest context and the most users, where
+   * every Apple cell under MLX failed placement. Its precondition was asserted rather than assumed,
+   * with a comment saying that a catalog change leaving one cell running would make it vacuous, and
+   * #77 is that change: `unsloth/gemma-3-4b-it` keeps a 1024-token window on 29 of its 34 layers, so
+   * it fits 128 users at 131K on the 512 GiB Mac Studio with room to spare. One running cell is
+   * enough for a `runs`-gated legend to render too, and no setting blocks it — context, concurrency
+   * and KV precision are already at their heaviest stops.
+   *
+   * So the scenario moved to where it can be *built*: one 671B row, mocked in, and no dependence on
+   * what the catalog happens to contain. The test above still covers the app-level wiring of the
+   * same marker.
    */
-  it('marks the Matrix when every cell was scored at a stand-in and none of them fit', async () => {
-    const user = userEvent.setup();
-    render(<App />);
-
-    const matrix = () => screen.getByRole('region', { name: /every model on every machine/i });
-    const legend = () => within(matrix()).queryByText(/stand-in format .* cannot load/i);
-
-    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-256');
-    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
-    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
-
-    const context = screen.getByLabelText('Context per sequence') as HTMLInputElement;
-    fireEvent.change(context, { target: { value: String(Number(context.max)) } });
-    const users = screen.getByLabelText('Concurrent users') as HTMLInputElement;
-    fireEvent.change(users, { target: { value: String(Number(users.max)) } });
-
-    // Nothing on the grid runs — the precondition, asserted rather than assumed, since a catalog
-    // change that leaves one cell running would make the rest of this test vacuous.
-    expect(
-      within(matrix()).getByText(
-        (_, el) =>
-          el?.tagName === 'CAPTION' && /\b0 of \d+ combinations run/.test(el.textContent ?? '')
-      )
-    ).toBeInTheDocument();
-
-    expect(legend()).toBeInTheDocument();
-  });
 });
 
 /**
@@ -4476,6 +4456,56 @@ describe('a picker states its caveats where the choice is made', () => {
     );
     expect(optionsOf(SETTING_LABELS.runtimeId).find((o) => o.value === 'vllm')?.text).toBe(
       'vLLM · does not run on this hardware'
+    );
+  });
+});
+
+/**
+ * The per-token figure in the Bench's aside, which claims to be what sets the speed (#77 review).
+ *
+ * Three quantities are in play and they differ by enough to matter on the models this catalog exists
+ * for. `activeParams` is the *published* convention — it excludes the input embedding unconditionally
+ * and, on a multimodal model, includes the non-language towers a token never touches.
+ * `activeDenseParams` is the always-active dense part and excludes the routed experts. Only
+ * `effectiveActiveParams(model, 1)` is what `speed.ts` divides by.
+ *
+ * Both wrong answers shipped briefly during #77 and each was caught by review rather than by a test:
+ * `activeParams` overstated the multimodal MoEs (Mistral Small 4 at 6.524B against a 6.096B basis),
+ * and the correction to `activeDenseParams` understated every MoE far more badly in the other
+ * direction (Kimi K2 at 10.6B where a token traverses about 31.7B). So this pins the sentence to the
+ * engine's own expression, and asserts the two near neighbours are *not* what it prints — a test that
+ * only checked the value against `effectiveActiveParams` would have passed on a dense model either
+ * way, since all three coincide there.
+ */
+describe('the aside prints the basis the speed is actually computed from', () => {
+  /**
+   * A *multimodal* MoE, chosen so all three figures differ. On a text-only MoE the published and
+   * physical bases coincide exactly — gpt-oss-20b is 3.61B on both — so a test written against one
+   * would pass whichever of the two the component printed, and the overstatement half of this would
+   * go uncovered. The gap only opens where non-language towers sit inside `activeParams`.
+   */
+  const moe = MODELS.find(
+    (m) => m.expertParams > 0 && Math.abs(effectiveActiveParams(m, 1) - m.activeParams) > 1e8
+  )!;
+
+  it('quotes the decode basis at one sequence, not the published or the dense figure', () => {
+    expect(moe, 'no multimodal MoE in the catalog, so this test has no subject').toBeDefined();
+
+    const basis = effectiveActiveParams(moe, 1);
+    // The premise: on an MoE the three figures genuinely differ, or none of this discriminates.
+    expect(basis).toBeGreaterThan(moe.activeDenseParams);
+    expect(Math.abs(basis - moe.activeParams)).toBeGreaterThan(1e8);
+
+    act(() => useConfig.getState().set('modelId', moe.id));
+    render(<App />);
+
+    const aside = screen.getByText(/routes each token through only/i).closest('p')!;
+    expect(aside.textContent).toContain(params(basis));
+    expect(aside.textContent, 'prints the dense part, dropping the routed experts').not.toContain(
+      params(moe.activeDenseParams)
+    );
+    expect(aside.textContent, 'prints the published figure, not the physical one').not.toContain(
+      params(moe.activeParams)
     );
   });
 });

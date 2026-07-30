@@ -333,6 +333,133 @@ describe('the catalog covers the hardware the audience owns', () => {
   });
 });
 
+/**
+ * Coverage of the *model* catalog, which is the same property #78 established for the device one and
+ * fails the same way: a model that is absent is not wrong about anything, and nothing in the repo
+ * noticed. The weekly refresh re-derives every figure on every row and cannot see a row that was
+ * never seeded, so the seed list sat unchanged from the day the catalog was built while every number
+ * in it stayed seven days old.
+ *
+ * Every assertion here is a measurement from #77 against the 17-row catalog, written as a property of
+ * the catalog rather than as a list of expected ids — the shape of the coverage is the point, and
+ * which particular repo satisfies it will change again. What they have in common is that they were
+ * all false before this list was re-probed.
+ */
+describe('the catalog covers the models people are choosing between', () => {
+  const byId = new Map(MODELS.map((m) => [m.id, m]));
+  const paramsB = (m: (typeof MODELS)[number]) => m.totalParams / 1e9;
+
+  /**
+   * The headline gap: the largest catalogued model was DeepSeek's 671B, so the top of the open-weight
+   * range had no row — and it is exactly where the MLA-versus-naive gap the project exists to
+   * demonstrate is widest, since a 1T MoE caches 61 layers of compressed latent rather than 61 layers
+   * of 64 KV heads.
+   */
+  it('reaches the top of the open-weight range', () => {
+    expect(Math.max(...MODELS.map(paramsB))).toBeGreaterThan(1000);
+  });
+
+  /**
+   * And the 480B class between them, which is what a 512 GB Mac is actually bought for. Nothing sat
+   * between 235B and 671B.
+   */
+  it('carries a model in the 400-600B class', () => {
+    const between = MODELS.filter((m) => paramsB(m) > 400 && paramsB(m) < 600);
+    expect(between.length).toBeGreaterThan(0);
+    // MoE, specifically: a dense model at that size answers a question no catalogued machine can ask.
+    expect(between.some((m) => m.expertParams > 0)).toBe(true);
+  });
+
+  /**
+   * The other end, and most of the audience: the smallest row was Qwen3-4B, so anyone deciding what
+   * an 8 GB card runs had one model to select and no way to compare it against anything.
+   */
+  it('answers the 8 GB question with more than one row', () => {
+    expect(Math.min(...MODELS.map(paramsB))).toBeLessThan(3.5);
+    // A tier rather than a token row: four models under 4.5B, from three publishers.
+    const small = MODELS.filter((m) => paramsB(m) < 4.5);
+    expect(small.length).toBeGreaterThanOrEqual(4);
+    expect(new Set(small.map((m) => m.org)).size).toBeGreaterThanOrEqual(3);
+  });
+
+  /**
+   * Five organisations shipping models people run locally had no row at all. Asserted as membership
+   * rather than as a count, since the reason each one matters is different — Phi-4 is high traffic in
+   * a size class the catalog barely covered, Granite is IBM's current generation, Command A+ is a
+   * 219B sparse MoE, Seed-OSS is a 36B dense.
+   *
+   * NVIDIA is deliberately not in this list and is the interesting absence: every current Nemotron is
+   * either a Mamba-2 hybrid or a per-block NAS export, and both are refused by the generator rather
+   * than catalogued at 10x and 13x their real cache. See `NOT_SEEDED` in `scripts/build-catalog.ts`.
+   */
+  it('represents the publishers whose models people actually run', () => {
+    const orgs = new Set(MODELS.map((m) => m.org));
+    for (const org of ['Microsoft', 'IBM', 'Cohere', 'ByteDance', 'Moonshot AI', 'MiniMax']) {
+      expect(orgs, `no model from ${org}`).toContain(org);
+    }
+  });
+
+  /**
+   * MLA at a scale someone owns hardware for.
+   *
+   * The family was represented only by 671B models, which is an argument about a cache nobody
+   * reading the page can run. A 30B MLA MoE puts the same comparison on a laptop: GLM 4.7 Flash
+   * caches 4.5 KiB/token against Qwen3-30B-A3B's 24.0 at the same active parameter count.
+   */
+  it('carries MLA at a size that fits on one consumer machine', () => {
+    const smallMla = MODELS.filter((m) => m.attention.core.kind === 'mla' && paramsB(m) < 150);
+    expect(smallMla.length).toBeGreaterThan(0);
+    // Two sizes, not one, or "MLA is what the enormous models do" survives with an extra row.
+    expect(new Set(smallMla.map((m) => Math.round(paramsB(m)))).size).toBeGreaterThan(1);
+  });
+
+  /**
+   * The stale-sibling problem, which is the one a user cannot see: the catalog carried the older
+   * member of six families and not the newer one, so picking the row that is there means picking the
+   * one that has been superseded.
+   *
+   * The successor is checked against the *predecessor's own* release date rather than against a
+   * hard-coded one, so this keeps meaning what it says as both rows move.
+   */
+  it.each([
+    ['NousResearch/Meta-Llama-3.1-70B-Instruct', 'unsloth/Llama-3.3-70B-Instruct'],
+    ['Qwen/Qwen3-4B', 'Qwen/Qwen3-4B-Instruct-2507'],
+    ['Qwen/Qwen3-30B-A3B', 'Qwen/Qwen3-30B-A3B-Instruct-2507'],
+    ['Qwen/Qwen3-235B-A22B', 'Qwen/Qwen3-235B-A22B-Instruct-2507'],
+    ['deepseek-ai/DeepSeek-V3', 'deepseek-ai/DeepSeek-V3.1'],
+    ['zai-org/GLM-4.5-Air', 'zai-org/GLM-4.7'],
+    ['mistralai/Mistral-Small-24B-Instruct-2501', 'mistralai/Mistral-Small-4-119B-2603'],
+  ])('carries %s and the model that has replaced it', (older, newer) => {
+    const before = byId.get(older);
+    const after = byId.get(newer);
+    expect(before, `${older} left the catalog`).toBeDefined();
+    expect(
+      after,
+      `${newer} is missing, so the stale sibling is the only one a user can pick`
+    ).toBeDefined();
+
+    // Both rows carry HF's own repo creation date, so this is a check that the "successor" really is
+    // one rather than a name that reads newer.
+    expect(Date.parse(after!.releasedAt!)).toBeGreaterThan(Date.parse(before!.releasedAt!));
+  });
+
+  /**
+   * Deliberately *not* asserted here: that the newest row is within some number of months of
+   * `CATALOG_GENERATED_AT`.
+   *
+   * It is the obvious way to state "the catalog has not aged", and it is a test that passes today and
+   * fails on a date — on somebody else's unrelated pull request, for a reason their diff has nothing
+   * to do with. It also barely discriminated: against the 17-row catalog the gap was 11.7 months,
+   * because gpt-oss shipped two weeks after the newest seed and dragged the figure under any
+   * threshold loose enough to be safe.
+   *
+   * Absence needs a mechanism rather than an assertion, and the mechanism is
+   * `reportSeedCandidates()` in `scripts/build-catalog.ts`: every refresh ends by asking the hub what
+   * the field is downloading and printing whatever this list neither carries nor has written down a
+   * reason for. That puts the evidence in front of a person weekly without failing anyone's build.
+   */
+});
+
 describe('generated model catalog', () => {
   it('was generated, and says when', () => {
     expect(MODELS.length).toBeGreaterThan(10);
@@ -366,12 +493,22 @@ describe('generated model catalog', () => {
    * The derivation has to reproduce what vendors publish, or it is not deriving — it is
    * inventing. These are the figures the model cards state; each exercises a different part of
    * the pipeline (MXFP4 packed counts, MTP exclusion, MLA, plain gated MoE).
+   *
+   * GLM 4.7 is here because it was the one row that stopped reconciling and nothing failed: it
+   * shipped 35.06B active against Z.ai's stated 32B — 9.6% out, on a row whose own note quotes
+   * "355B-A32B" into the control that renders the derived figure. The cause was its published total
+   * standing in for a measured one: 355B is 2.2B above the sum of the architecture's own tensors, and
+   * `denseParams` is `totalParams - expertParams` with the experts exact, so the whole 2.2B landed in
+   * a 16.8B residual and the decode basis with it. The seed now carries the measured 352.8B and the
+   * generator checks the active count against the published one on every refresh
+   * (`reconcileActiveParams`); this is the same claim at the other end of the pipeline.
    */
   it.each([
     ['openai/gpt-oss-120b', 117, 5.1],
     ['openai/gpt-oss-20b', 21, 3.6],
     ['deepseek-ai/DeepSeek-V3', 671, 37],
     ['zai-org/GLM-4.5-Air', 106, 12],
+    ['zai-org/GLM-4.7', 355, 32],
     ['Qwen/Qwen3-235B-A22B', 235, 22],
     ['Qwen/Qwen3-30B-A3B', 30, 3],
   ])('%s matches its published parameter counts', (id, totalB, activeB) => {
@@ -446,6 +583,7 @@ describe('generated model catalog', () => {
   it.each([
     ['Qwen/Qwen3-4B', true],
     ['unsloth/gemma-3-12b-it', true],
+    ['ibm-granite/granite-4.1-8b', true],
     ['openai/gpt-oss-20b', false],
     ['Qwen/Qwen3-8B', false],
   ])('%s keeps its embedding table per-token only when tied', (id, tied) => {
@@ -455,6 +593,33 @@ describe('generated model catalog', () => {
     const embedding = model.vocabSize * model.hiddenSize;
     const dense = model.totalParams - model.expertParams - (model.nonLanguageParams ?? 0);
     expect(model.activeDenseParams).toBeCloseTo(tied ? dense : dense - embedding, -6);
+  });
+
+  /**
+   * A tied model that ships the output table anyway, which is the mirror of the Gemma 3 case above
+   * and was unguarded: `granite-4.1-8b` states `tie_word_embeddings: true` *and* carries
+   * `lm_head.weight` at [100352, 4096] beside an identically-shaped `model.embed_tokens.weight`.
+   *
+   * `from_pretrained` lists that tensor in `_tied_weights_keys` and overwrites it with the embedding
+   * at load, and llama.cpp's converter drops it for the same reason — so the resident model holds one
+   * table where the index counts two. Read as an untied projection it was wrong twice: 8.79B against
+   * 8.38B of weights, and an embedding subtracted from a per-token count that reads it every step.
+   *
+   * Asserted as the exact difference rather than as a flag, because the two halves are one claim: if
+   * the row is tied, the total is 0.41B lighter, and a fix that changed only one of them would be a
+   * new inconsistency rather than a correction.
+   */
+  it('counts one output table on a tied model that ships two', () => {
+    const granite = getModel('ibm-granite/granite-4.1-8b');
+    const table = granite.vocabSize * granite.hiddenSize;
+
+    expect(granite.tiedEmbeddings).toBe(true);
+    expect(table).toBe(100352 * 4096);
+    // 8,791,592,960 elements are in the safetensors index; one 411,041,792-element table of them is
+    // the duplicate the loader discards.
+    expect(granite.totalParams).toBe(8_791_592_960 - table);
+    // And decode reads that table, so the per-token basis is the whole thing.
+    expect(granite.activeDenseParams).toBe(granite.totalParams);
   });
 
   /**
@@ -496,7 +661,7 @@ describe('generated model catalog', () => {
 
   it('has most of the catalog projecting to something other than its hidden size', () => {
     const differing = MODELS.filter((m) => m.attention.projectionWidth !== m.hiddenSize);
-    // 12 of 17 today. If this ever drops to zero the field has silently become hiddenSize again.
+    // 25 of 35 today. If this ever drops to zero the field has silently become hiddenSize again.
     expect(differing.length).toBeGreaterThan(8);
     // Both directions are represented, so the correction cannot be a one-way fudge.
     expect(differing.some((m) => m.attention.projectionWidth > m.hiddenSize)).toBe(true);
