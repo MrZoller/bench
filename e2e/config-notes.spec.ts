@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 /**
- * The Configuration panel's geometry, once a picker note stops being a page of prose. Issue #68.
+ * The Setup panel's geometry, once a picker note stops being a page of prose. Issue #68.
  *
  * The Hardware note was `[statusWarning, ceilingClause, row.note].join(' ')` — up to 180 words of
  * catalog provenance under a `<select>` at `text-xs`. The issue's own "side effect worth noting" is
@@ -95,8 +95,11 @@ async function panelGeometry(page: Page) {
       };
     };
 
-    const panel = document
-      .querySelector('section[aria-label="Configuration"]')!
+    /* Found by its heading rather than by an `aria-label`, because the panel no longer has one: its
+       accessible name is an `sr-only` <h2>, so that the four controls in here are reachable by
+       heading navigation and not only as a landmark (#74). */
+    const panel = [...document.querySelectorAll('main section')]
+      .find((section) => section.querySelector('h2')?.textContent?.trim() === 'Setup')!
       .getBoundingClientRect();
 
     return {
@@ -120,7 +123,7 @@ test.beforeEach(async ({ page }) => {
   // another cell's void, and below `sm` the panel stacks and there is nothing here to measure.
   expect(
     await page.evaluate(() => matchMedia('(min-width: 40rem)').matches),
-    'this viewport is below sm, so the Configuration panel is not the two-column layout'
+    'this viewport is below sm, so the Setup panel is not the two-column layout'
   ).toBe(true);
 });
 

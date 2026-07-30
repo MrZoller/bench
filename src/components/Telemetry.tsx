@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import type { Evaluation } from '@/engine';
 import type { StatusTone } from '@/design/tokens';
 import { CAPACITY_TIGHT, HOST_RAM_UNCHECKED, classifyDecode, classifyTtft } from '@/lib/verdicts';
@@ -219,6 +220,21 @@ export function Telemetry({
   tunableCeiling: boolean;
 }) {
   /**
+   * The strip's own heading, and the fix for a claim this layout was built to refuse (#74).
+   *
+   * Each tile is an `h3` and the section carried an `aria-label`, so the nearest `h2` above them was
+   * the *memory budget's* — and the outline read `h1 bench → h2 Memory budget → h3 Capacity`, which
+   * says capacity is a subsection of the budget. It is not. The docstring at the top of this file is
+   * explicit that these are three independent axes and that collapsing them into one score is the
+   * move this panel exists to avoid; the outline collapsed two of them under the third's neighbour.
+   *
+   * So the `h2` is here to *re-parent* the three, not to add a title. Which is also why it is the
+   * section's `aria-labelledby` rather than an `aria-label` kept alongside: one string, one source,
+   * and the landmark and the outline cannot come to name this panel two different things.
+   */
+  const headingId = useId();
+
+  /**
    * A runtime that cannot drive this hardware has no throughput, so none is shown.
    *
    * The engine still returns arithmetic for the combination — it has no opinion about whether
@@ -261,7 +277,14 @@ export function Telemetry({
       ];
 
   return (
-    <section aria-label="Verdicts" className="grid gap-3 sm:grid-cols-3">
+    <section aria-labelledby={headingId} className="grid gap-3 sm:grid-cols-3">
+      {/* `sr-only`, so the outline gains a parent and the strip gains no chrome. The three tiles
+          already title themselves and a fourth title above them would read as a summary of the very
+          kind this panel refuses to compute. Absolutely positioned, so it is not a grid item and
+          takes none of the three columns. */}
+      <h2 id={headingId} className="sr-only">
+        Verdicts
+      </h2>
       {readings.map((reading) => {
         const tone = TONE_STYLE[reading.tone];
         return (
