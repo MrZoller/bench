@@ -39,6 +39,20 @@
   --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+/*
+ * The app is dark-only by design, and everything author-painted knows it — but the UA paints
+ * surfaces of its own from this declaration, not from any token: the sliders' range tracks
+ * (`accent-color` styles only the thumb-and-fill), the select popups Chromium draws on Windows
+ * and Linux, classic scrollbars including the always-visible one on the Matrix's scroll
+ * container, and form-control base colours. Undeclared, every one of those renders in its light
+ * variant against the #08090d page (#133). macOS overlay scrollbars and popovers mostly hide
+ * the defect, which is how it survived — the same measuring-on-one-machine's-chrome shape the
+ * ROADMAP records for fonts.
+ */
+:root {
+  color-scheme: dark;
+}
+
 html,
 body,
 #root {

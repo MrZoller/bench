@@ -7,6 +7,11 @@ import { GIB } from '@/engine/types';
  *   - **Memory is binary and labelled GiB.** A "32GB" card holds 32 GiB, and calling that 34.4
  *     GB — technically correct — makes every figure look wrong to someone reading a spec sheet.
  *   - **Rates are decimal**, as vendors and benchmarks quote them.
+ *
+ * And one rule about thresholds: **a unit or precision cutoff tests the figure as it will print,
+ * not the raw value.** Rounding happens on the display side of every branch, so testing the raw
+ * value lets a number round across the cutoff it was tested against — 599.7 failed `>= 600` and
+ * then printed "600 s", 999,500 failed `>= 1e6` and printed "1000K" (#126).
  */
 
 /** Memory, in GiB, with precision that falls away as the number grows. */
@@ -14,20 +19,27 @@ export function gib(bytes: number): string {
   if (!Number.isFinite(bytes)) return '—';
   const value = bytes / GIB;
   if (value === 0) return '0';
-  if (value < 10) return value.toFixed(1);
-  return Math.round(value).toString();
+  // Round-then-test at the decimal branch's own granularity: 9.97 would print "10.0" astride
+  // the cutoff, while 9.7 still keeps its tenth.
+  if (Math.round(value * 10) >= 100) return Math.round(value).toString();
+  return value.toFixed(1);
 }
 
 export function gibLabel(bytes: number): string {
   return `${gib(bytes)} GiB`;
 }
 
-/** Parameter counts, as people say them: 8B, 116.8B, 671B. */
+/**
+ * Parameter counts, as people say them: 8B, 116.8B, 671B.
+ *
+ * One decimal from 10B up, trimmed where it is a round `.0` — people do say "116.8B", and the
+ * branch that rounded it to "117B" made that promise unkeepable (#126). Under 10B two decimals
+ * still matter: 1.24B and 1.2B are different models.
+ */
 export function params(count: number): string {
   if (!Number.isFinite(count)) return '—';
   const b = count / 1e9;
-  if (b >= 100) return `${Math.round(b)}B`;
-  if (b >= 10) return `${b.toFixed(1)}B`;
+  if (b >= 10) return `${trim(b.toFixed(1))}B`;
   return `${b.toFixed(2).replace(/\.?0+$/, '')}B`;
 }
 
@@ -56,6 +68,9 @@ export function tokens(count: number): string {
   }
   if (count >= 1024) {
     const k = count / 1024;
+    // A non-integer K can still round to the M cutoff on the display side: 1,048,570 is
+    // 1023.994K, which prints "1024.0K" → "1024K". Rounded to the cutoff means the next unit up.
+    if (Math.round(k * 10) >= 10240) return `${trim((count / 1048576).toFixed(1))}M`;
     return Number.isInteger(k) ? `${k}K` : `${trim(k.toFixed(1))}K`;
   }
   return String(count);
@@ -70,16 +85,21 @@ function trim(value: string): string {
 export function rate(tokensPerSec: number): string {
   if (!Number.isFinite(tokensPerSec)) return '—';
   if (tokensPerSec >= 100) return Math.round(tokensPerSec).toString();
-  if (tokensPerSec >= 10) return tokensPerSec.toFixed(0);
+  // Round-then-test at the decimal branch's own granularity: 9.97 would print "10.0" astride
+  // the cutoff, while 9.7 still keeps its tenth.
+  if (Math.round(tokensPerSec * 10) >= 100) return tokensPerSec.toFixed(0);
   return tokensPerSec.toFixed(1);
 }
 
 /** Latency, switching units so the number stays small enough to read at a glance. */
 export function seconds(value: number): string {
   if (!Number.isFinite(value)) return '—';
-  if (value >= 600) return `${Math.round(value / 60)} min`;
-  if (value >= 10) return `${Math.round(value)} s`;
-  if (value >= 1) return `${value.toFixed(1)} s`;
+  // Every cutoff tests the figure at the granularity the branch below it prints: 599.7 must not
+  // print "600 s", 9.97 must not print "10.0 s", and 0.9996 must not print "1000 ms" — while
+  // 599.4 stays "599 s" and 9.7 stays "9.7 s".
+  if (Math.round(value) >= 600) return `${Math.round(value / 60)} min`;
+  if (Math.round(value * 10) >= 100) return `${Math.round(value)} s`;
+  if (Math.round(value * 1000) >= 1000) return `${value.toFixed(1)} s`;
   return `${Math.round(value * 1000)} ms`;
 }
 
@@ -114,7 +134,11 @@ export function multiple(ratio: number): string {
 /** Download counts for the model picker: 1.2M, 890K. */
 export function compact(count: number): string {
   if (!Number.isFinite(count)) return '—';
-  if (count >= 1e6) return `${(count / 1e6).toFixed(1)}M`;
+  // Round-then-test (999,500 rounds to "1000K"), and the M figure goes through `trim` like every
+  // other formatter here — 8,022,692 downloads is "8M", not a "8.0M" implying measured tenths.
+  if (count >= 1e6 || Math.round(count / 1e3) >= 1000) {
+    return `${trim((count / 1e6).toFixed(1))}M`;
+  }
   if (count >= 1e3) return `${Math.round(count / 1e3)}K`;
   return String(count);
 }
