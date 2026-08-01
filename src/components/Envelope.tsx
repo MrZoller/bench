@@ -28,6 +28,7 @@ import {
 import { percent, rate, seconds, tokens, uniqueLabels } from '@/lib/format';
 import { PanelCount } from './PanelCount';
 import { DisclosureToggle } from './DisclosureToggle';
+import { useDevicePixelRatio } from './useDevicePixelRatio';
 import type { Config } from '@/store/scenario';
 
 /**
@@ -328,6 +329,11 @@ export function Envelope({ config }: { config: Config }) {
     return () => observer.disconnect();
   }, []);
 
+  // As a dependency of the draw effect below, because a DPR-only change — a window dragged
+  // between displays of different scale — alters no CSS box, so the ResizeObserver above never
+  // fires and the bitmap went stale at the old resolution (#129).
+  const dpr = useDevicePixelRatio();
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -335,7 +341,6 @@ export function Envelope({ config }: { config: Config }) {
     if (!ctx) return;
 
     // Draw at device resolution so the cell edges stay crisp on a retina display.
-    const dpr = window.devicePixelRatio || 1;
     const { width, height } = canvas.getBoundingClientRect();
     canvas.width = Math.round(width * dpr);
     canvas.height = Math.round(height * dpr);
@@ -398,6 +403,7 @@ export function Envelope({ config }: { config: Config }) {
     config.concurrency,
     model.maxContext,
     resizeTick,
+    dpr,
   ]);
 
   /**
