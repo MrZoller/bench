@@ -105,3 +105,21 @@ test('a tap on a different cell moves the line rather than committing', async ({
   await expect(readout(page)).toContainText((secondSaid ?? '').split(':')[1].trim().slice(0, 20));
   expect(scenario(page), 'tapping a second cell loaded it').toBe(before);
 });
+
+test('a third tap commits the cell the second one moved to', async ({ page }) => {
+  /*
+   * The sequence a reader comparing two cells actually performs, and the one the implementation makes
+   * least obvious: inspect A, inspect B, take B. Whether the second tap left the pointer "inside" B
+   * depends on when the browser synthesises its compatibility `mouseenter`, which is the mechanism
+   * the mouse path reads — so this is here to pin the outcome rather than my model of the ordering.
+   */
+  const [first, second] = [cells(page).nth(5), cells(page).nth(9)];
+  const before = scenario(page);
+
+  await first.tap();
+  await second.tap();
+  expect(scenario(page), 'the second tap committed').toBe(before);
+
+  await second.tap();
+  expect(scenario(page), 'the third tap did not commit').not.toBe(before);
+});
