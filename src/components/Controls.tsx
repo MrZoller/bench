@@ -301,7 +301,25 @@ export function StopSlider<T extends number | string>({
   note?: string;
 }) {
   const id = useId();
-  const index = Math.max(0, stops.indexOf(value));
+
+  /**
+   * The stop list frozen for the duration of a pointer drag (#134).
+   *
+   * The lists fold the stored value in so a URL-borne off-stop value displays truthfully — that
+   * design stands — but the fold is keyed on the stored value, so the injected stop exists only
+   * while it is selected. Opened at `?u=3`, the first notch of a drag stored 4, the memo dropped
+   * the 3, and the input's `max` and index-to-value mapping changed under the held pointer: the
+   * thumb snapped back a notch mid-drag and the next pixel of movement re-mapped against the new
+   * scale. Capturing the list at `pointerdown` keeps one scale under the pointer; the release
+   * lets the collapse happen while nothing is being dragged against it.
+   *
+   * The guard on membership is for a value changed out from under an open drag by something that
+   * is not this slider — then the frozen list can no longer place the thumb truthfully, and the
+   * live list is the honest fallback.
+   */
+  const [dragStops, setDragStops] = useState<readonly T[] | null>(null);
+  const effective = dragStops !== null && dragStops.includes(value) ? dragStops : stops;
+  const index = Math.max(0, effective.indexOf(value));
 
   return (
     <div className="flex flex-col gap-1">
@@ -321,10 +339,13 @@ export function StopSlider<T extends number | string>({
         id={id}
         type="range"
         min={0}
-        max={stops.length - 1}
+        max={effective.length - 1}
         step={1}
         value={index}
-        onChange={(e) => onChange(stops[Number(e.target.value)])}
+        onChange={(e) => onChange(effective[Number(e.target.value)])}
+        onPointerDown={() => setDragStops(stops)}
+        onPointerUp={() => setDragStops(null)}
+        onPointerCancel={() => setDragStops(null)}
         aria-valuetext={format(value)}
         // On the input rather than beside it, for the same reason `Select`'s note is: adjacent text
         // is text a screen-reader user reaches after the control, if they reach it at all, and a
