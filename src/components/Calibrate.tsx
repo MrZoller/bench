@@ -4,6 +4,7 @@ import { effectivePromptTokens } from '@/engine/placement';
 import {
   CALIBRATION_BAND,
   compare,
+  hasSubmittablePair,
   parseLlamaBench,
   submissionUrl,
   type Comparison,
@@ -81,6 +82,13 @@ export function Calibrate({ evaluation }: { evaluation: Evaluation }) {
       decodeTokensPerSec: evaluation.decode.perUserTokensPerSec,
       promptTokens,
       generationTokens: Math.max(1, config.contextTokens - promptTokens),
+      /**
+       * The whole window, because that is what `estimateDecode` charges every step's cache read at
+       * — not the prompt, which was the first version's answer. In the default 8K-prompt/32K-context
+       * scenario a run near 8K depth was being graded against the predicted 32K-cache rate, and the
+       * run at the modelled 32K was marked as the mismatch.
+       */
+      residentContextTokens: config.contextTokens,
       concurrency: config.concurrency,
       /**
        * The four fields that let `describeMismatch` see the *job* rather than only the numbers.
@@ -96,6 +104,7 @@ export function Calibrate({ evaluation }: { evaluation: Evaluation }) {
        */
       runtimeId: config.runtimeId,
       quantLabel: getQuant(config.quantId).label,
+      modelName: model.name,
       kvType: LLAMA_KV_TYPES[config.kvPrecision],
       /**
        * Stated only when the placement is fully resident, where "every layer" is unambiguous.
@@ -103,9 +112,19 @@ export function Calibrate({ evaluation }: { evaluation: Evaluation }) {
        * fraction into one, which is the derivation #14 was about — so the field is omitted and the
        * check is skipped rather than made up.
        */
-      ...(evaluation.placement.offloadFraction === 0 ? { gpuLayers: model.layers } : {}),
+      /**
+       * Zero on a machine with no GPU, and that distinction is what the EPYC anchor depends on.
+       * `planPlacement` reports `offloadFraction === 0` for a `cpu-ram` rig because there is no
+       * faster tier to spill *from* — so reading that as "every layer on the GPU" marked exactly
+       * the CPU measurements this feature exists to collect as a different job.
+       */
+      ...(device.class === 'cpu-ram'
+        ? { gpuLayers: 0 }
+        : evaluation.placement.offloadFraction === 0
+          ? { gpuLayers: model.layers }
+          : {}),
     });
-  }, [pasted, config, evaluation, model.layers]);
+  }, [pasted, config, evaluation, model.layers, model.name, device.class]);
 
   const href = useMemo(
     () =>
@@ -113,6 +132,7 @@ export function Calibrate({ evaluation }: { evaluation: Evaluation }) {
         repoUrl: REPO_URL,
         scenarioUrl: `${window.location.origin}${window.location.pathname}${configToShareSearch(config as Config)}`,
         deviceName: device.name,
+        deviceCount: config.deviceCount,
         modelName: model.name,
         comparisons,
       }),
@@ -204,18 +224,28 @@ export function Calibrate({ evaluation }: { evaluation: Evaluation }) {
               </tbody>
             </table>
 
-            {/* The link, and only once there is a scenario to name — which is the whole reason the
-                querystring round-trips one. A measurement that cannot say which machine it was
-                taken on is unusable for calibration, so the template makes that field the first
-                line rather than an optional one. */}
-            <a
-              href={href}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex min-h-11 items-center self-start rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-accent)] hover:border-[var(--color-accent-dim)]"
-            >
-              Submit this pair as an issue
-            </a>
+            {/* The link, and only once there is a *comparable* pair to submit — which is the whole
+                reason the mismatches are computed. A row the panel has just called "not comparable"
+                would otherwise reach the issue table as a bare percentage with its explanation
+                stripped, which is a difference between two jobs entering the record as evidence.
+                The scenario link is the other half: a measurement that cannot say which machine it
+                was taken on is unusable, so the template makes that field the first line. */}
+            {!hasSubmittablePair(comparisons) ? (
+              <p className="text-xs leading-relaxed text-[var(--color-text-muted)]">
+                Nothing here is comparable with the figures above, so there is nothing to submit.
+                Fix the runs the rows describe — or change the scenario to match them — and the link
+                comes back.
+              </p>
+            ) : (
+              <a
+                href={href}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex min-h-11 items-center self-start rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-accent)] hover:border-[var(--color-accent-dim)]"
+              >
+                Submit this pair as an issue
+              </a>
+            )}
             <p className="text-[0.625rem] leading-relaxed text-[var(--color-text-muted)]">
               It opens a pre-filled GitHub form carrying this scenario's link and the figures above,
               and you see the issue before you post it. Misses are published with the same weight as

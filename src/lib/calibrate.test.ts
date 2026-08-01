@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CALIBRATION_BAND,
   compare,
+  hasSubmittablePair,
   parseLlamaBench,
   submissionUrl,
   type Prediction,
@@ -63,8 +64,11 @@ const prediction = (over: Partial<Prediction> = {}): Prediction => ({
   concurrency: 1,
   runtimeId: 'llama.cpp',
   quantLabel: 'Q4_K_M',
+  modelName: 'Llama 3.1 8B Instruct',
   kvType: 'f16',
   gpuLayers: 33,
+  // The scenario's whole window, which is what `estimateDecode` charges every step against.
+  residentContextTokens: 2048,
   ...over,
 });
 
@@ -298,6 +302,49 @@ describe('a measurement of a different job is not evidence about the model', () 
   });
 });
 
+describe('what the second review round found', () => {
+  it('marks a different model at the same format', () => {
+    // A Llama Q4_K_M measurement against a DeepSeek Q4_K_M prediction passed on the format alone,
+    // and the generated issue then labelled it as the DeepSeek run — a wrong data point entering
+    // the record under a name nobody will question.
+    const [pair] = compare(
+      parseLlamaBench(MARKDOWN),
+      prediction({ modelName: 'DeepSeek V3', quantLabel: 'Q4_K_M' })
+    );
+    expect(pair.mismatch).toMatch(/where the figures above are for DeepSeek V3/);
+  });
+
+  it('charges decode against the whole window, not the prompt', () => {
+    // `estimateDecode` prices every step at `usage.contextTokens`. At the default 8K-prompt,
+    // 32K-context scenario the first version accepted a run near 8K depth and marked the run at
+    // the modelled 32K — grading a measurement against a rate it does not describe.
+    const at32k = prediction({ promptTokens: 2048, residentContextTokens: 32768 });
+    const [, decode] = compare(parseLlamaBench(JSON_OUTPUT), at32k);
+    expect(decode.mismatch).toMatch(/depth of 2,048 where the prediction charges 32,768/);
+  });
+
+  it('reads the layer count out of the markdown table too', () => {
+    // The default output carries an `ngl` column, so a run with half the model on the host was
+    // accepted against a fully-resident prediction on any non-JSON paste.
+    const partial = parseLlamaBench(
+      `| llama 8B Q4_K - Medium | 4.58 GiB | 8.03 B | CUDA | 12 | pp2048 | 900.0 ± 1.0 |`
+    );
+    expect(partial[0].gpuLayers).toBe(12);
+    expect(compare(partial, prediction())[0].mismatch).toMatch(/12 layers on the GPU/);
+  });
+
+  it('requires both halves of the cache to match, not either', () => {
+    // They are charged separately and they are separate flags; a run matching on K alone is not a
+    // run at this precision.
+    const mixed = JSON.stringify([
+      { n_prompt: 2048, n_gen: 0, n_depth: 0, type_k: 'f16', type_v: 'q4_0', avg_ts: 7285.68 },
+    ]);
+    expect(compare(parseLlamaBench(mixed), prediction())[0].mismatch).toMatch(
+      /f16\/q4_0 cache where the figures above assume f16/
+    );
+  });
+});
+
 describe('the submission carries the scenario, not a description of it', () => {
   const url = (over: Parameters<typeof submissionUrl>[0] | undefined = undefined) =>
     submissionUrl(
@@ -305,6 +352,7 @@ describe('the submission carries the scenario, not a description of it', () => {
         repoUrl: 'https://github.com/MrZoller/bench',
         scenarioUrl: 'https://mrzoller.github.io/bench/?m=x&d=rtx-5090',
         deviceName: 'GeForce RTX 5090',
+        deviceCount: 1,
         modelName: 'Llama 3.1 8B Instruct',
         comparisons: compare(parseLlamaBench(JSON_OUTPUT), prediction()),
       }
@@ -333,6 +381,7 @@ describe('the submission carries the scenario, not a description of it', () => {
         repoUrl: 'https://github.com/MrZoller/bench',
         scenarioUrl: 'https://example.test/?d=rtx-5090',
         deviceName: 'GeForce RTX 5090',
+        deviceCount: 1,
         modelName: 'Llama 3.1 8B Instruct',
         // Markdown output, which carries no commit.
         comparisons: compare(parseLlamaBench(MARKDOWN), prediction()),
@@ -341,6 +390,47 @@ describe('the submission carries the scenario, not a description of it', () => {
 
     expect(body).toMatch(/llama\.cpp build:.*not in the pasted output/);
     expect(body).toMatch(/-o json/);
+  });
+
+  it('names the rig rather than one of its cards', () => {
+    // The scenario link keeps the count, but the title and the Machine field are what a maintainer
+    // groups by — an eight-card run filed as "RTX 5090" is grouped with the single-card ones.
+    const href = url({
+      repoUrl: 'https://github.com/MrZoller/bench',
+      scenarioUrl: 'https://example.test/?d=rtx-5090&n=8',
+      deviceName: 'GeForce RTX 5090',
+      deviceCount: 8,
+      modelName: 'Llama 3.1 8B Instruct',
+      comparisons: compare(parseLlamaBench(JSON_OUTPUT), prediction()),
+    });
+
+    expect(bodyOf(href)).toContain('8x GeForce RTX 5090');
+    expect(new URL(href).searchParams.get('title')).toContain('8x GeForce RTX 5090');
+  });
+
+  it('writes only the comparable pairs into the table', () => {
+    /**
+     * A row the panel has just called "not comparable" carries a percentage that is a difference
+     * between two *jobs*. Writing it into the issue strips the explanation and leaves a number that
+     * reads as evidence — which is how a bad data point enters the record and is never questioned.
+     */
+    const mixed = compare(parseLlamaBench(JSON_OUTPUT), prediction({ promptTokens: 16384 }));
+    expect(mixed.some((c) => c.mismatch !== undefined)).toBe(true);
+    expect(hasSubmittablePair(mixed.filter((c) => c.mismatch !== undefined))).toBe(false);
+
+    const body = bodyOf(
+      url({
+        repoUrl: 'https://github.com/MrZoller/bench',
+        scenarioUrl: 'https://example.test/?d=rtx-5090',
+        deviceName: 'GeForce RTX 5090',
+        deviceCount: 1,
+        modelName: 'Llama 3.1 8B Instruct',
+        comparisons: mixed,
+      })
+    );
+    // One data row per comparable pair, and none for the marked one.
+    const dataRows = body.split('\n').filter((line) => /^\| (prefill|decode) \|/.test(line));
+    expect(dataRows).toHaveLength(mixed.filter((c) => c.mismatch === undefined).length);
   });
 
   it('is a plain issues/new link with nothing else in it', () => {

@@ -184,9 +184,19 @@ function parseMarkdown(text: string): readonly Measurement[] {
      * different quantization is otherwise indistinguishable from a disagreement about the model.
      */
     const modelLabel = cells[0] === testCell || cells[0] === rateCell ? undefined : cells[0];
+    /**
+     * The `ngl` column, which the default output carries and this first discarded — so a run with
+     * half the model on the host was accepted as comparable with a fully-resident prediction, and
+     * only JSON pastes got the layer check. Found by position rather than by shape because a bare
+     * integer is not a shape that identifies it: it is the cell immediately before the `test` one,
+     * which is the table's own layout.
+     */
+    const nglCell = cells[cells.indexOf(testCell) - 1];
+    const ngl = nglCell !== undefined && /^\d+$/.test(nglCell) ? Number(nglCell) : undefined;
     rows.push({
       kind: test[1].toLowerCase() === 'pp' ? 'prefill' : 'decode',
       ...(modelLabel === undefined ? {} : { modelLabel }),
+      ...(ngl === undefined ? {} : { gpuLayers: ngl }),
       tokens: Number.parseInt(test[2], 10),
       ...(depth !== undefined && depth > 0 ? { depthTokens: depth } : {}),
       tokensPerSec: rate,
@@ -216,6 +226,14 @@ export interface Prediction {
   generationTokens: number;
   /** Tokens the archetype assumes are already resident when the *prompt* arrives, if any. */
   cachedPrefixTokens?: number;
+  /**
+   * The cache `estimateDecode` charges every step against — the scenario's whole window.
+   *
+   * Not the prompt, which was the first answer: decode is priced at `usage.contextTokens`
+   * throughout, so the run that reproduces it holds that much. Defaults to the prompt only so a
+   * caller that predates the field is no worse off than before.
+   */
+  residentContextTokens?: number;
   concurrency: number;
   /**
    * The runtime the figures were priced under.
@@ -227,6 +245,14 @@ export interface Prediction {
   runtimeId: string;
   /** The format the figures were priced at, so a paste of a different one can be caught. */
   quantLabel: string;
+  /**
+   * The model the figures were priced for.
+   *
+   * Checking only the *format* let a Llama Q4_K_M measurement pass against a DeepSeek Q4_K_M
+   * prediction — and the generated issue then labelled it as the DeepSeek run, which is a wrong
+   * data point entering the record under a name that will never be questioned.
+   */
+  modelName: string;
   /** Cache precision the figures were priced at — llama.cpp's `-ctk`/`-ctv` names. */
   kvType: string;
   /**
@@ -295,7 +321,7 @@ export function compare(
     const expectedDepth =
       measurement.kind === 'prefill'
         ? (prediction.cachedPrefixTokens ?? 0)
-        : prediction.promptTokens;
+        : (prediction.residentContextTokens ?? prediction.promptTokens);
 
     const mismatch = describeMismatch(measurement, expectedTokens, expectedDepth, prediction);
     const error = predicted > 0 ? measurement.tokensPerSec / predicted - 1 : 0;
@@ -368,15 +394,41 @@ function describeMismatch(
     );
   }
 
-  // The cache precision, which changes the bytes *and* the rate. JSON carries it; markdown does not.
+  /**
+   * The cache precision — **both halves of it**, and equal rather than merely present.
+   *
+   * The first version asked whether the expected type was *in* the pair, so a mixed run of
+   * `K=f16 V=q4_0` passed an f16 prediction on the strength of the K alone. They are charged
+   * separately and they are separate flags; a run that matches on one is not a run at this
+   * precision.
+   */
   if (measurement.kvTypes !== undefined) {
-    const used = new Set([measurement.kvTypes.k, measurement.kvTypes.v]);
-    if (!used.has(prediction.kvType)) {
+    const { k, v } = measurement.kvTypes;
+    if (k !== prediction.kvType || v !== prediction.kvType) {
       reasons.push(
-        `run with a ${[...used].join('/')} cache where the figures above assume ` +
+        `run with a ${k === v ? k : `${k}/${v}`} cache where the figures above assume ` +
           `${prediction.kvType}`
       );
     }
+  }
+
+  /**
+   * The model itself, which the quant check does not cover.
+   *
+   * Matched on the model's leading word — llama.cpp writes its own name for an architecture
+   * (`llama 8B Q4_K - Medium`, `deepseek2 671B`) and the catalog writes a product name, so nothing
+   * stricter survives contact. It is enough for the case that matters: a different *model* at the
+   * same format, which otherwise reads as a clean percentage and enters the record under the wrong
+   * name.
+   */
+  const family = prediction.modelName
+    .split(/[\s-]/)[0]
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+  if (labelKey !== undefined && family.length > 2 && !labelKey.includes(family)) {
+    reasons.push(
+      `run on "${measurement.modelLabel}" where the figures above are for ${prediction.modelName}`
+    );
   }
 
   /**
@@ -460,6 +512,11 @@ function describeMismatch(
   return `This pair is ${reasons.join('; and ')}.`;
 }
 
+/** Whether there is anything worth submitting — no comparable pair, no submission. */
+export function hasSubmittablePair(comparisons: readonly Comparison[]): boolean {
+  return comparisons.some((c) => c.mismatch === undefined);
+}
+
 /**
  * A pre-filled issue, carrying the scenario rather than a description of one.
  *
@@ -475,12 +532,25 @@ export function submissionUrl(options: {
   repoUrl: string;
   scenarioUrl: string;
   deviceName: string;
+  /** How many of them, since "8x RTX 5090" and "RTX 5090" are different machines. */
+  deviceCount: number;
   modelName: string;
   comparisons: readonly Comparison[];
 }): string {
-  const { repoUrl, scenarioUrl, deviceName, modelName, comparisons } = options;
+  const { repoUrl, scenarioUrl, deviceCount, modelName, comparisons } = options;
+  // The count belongs in the machine's *name*, not only in the scenario link: the issue title and
+  // the Machine field are what a maintainer groups by, and an 8-card run filed as "RTX 5090" is
+  // grouped with the single-card ones.
+  const deviceName = deviceCount > 1 ? `${deviceCount}x ${options.deviceName}` : options.deviceName;
 
-  const rows = comparisons.map((c) => {
+  /**
+   * **Only comparable pairs, and the reason is the whole feature.** A row the panel has just
+   * called "not comparable" carries a percentage that is a difference between two *jobs*, and
+   * writing it into the issue table strips the explanation and leaves a number that reads as
+   * evidence. Filtered here rather than in the caller so no caller can forget.
+   */
+  const usable = comparisons.filter((c) => c.mismatch === undefined);
+  const rows = usable.map((c) => {
     const kind = c.measurement.kind === 'prefill' ? 'prefill' : 'decode';
     return (
       `| ${kind} | ${c.measurement.tokens} | ${c.measurement.depthTokens ?? 0} | ` +
@@ -489,7 +559,7 @@ export function submissionUrl(options: {
     );
   });
 
-  const build = comparisons.find((c) => c.measurement.buildCommit !== undefined)?.measurement
+  const build = usable.find((c) => c.measurement.buildCommit !== undefined)?.measurement
     .buildCommit;
 
   const body = [
