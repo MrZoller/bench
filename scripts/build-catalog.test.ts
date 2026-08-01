@@ -1280,10 +1280,10 @@ describe('a written refusal expires rather than standing for ever', () => {
   it('re-asks what a capability or a re-upload could have changed, and nothing else', () => {
     const stale = staleRefusals({ refusals: REFUSALS, now: NOW });
 
-    // The two that age at the default window, oldest first — and *not* the `size` one, which is
-    // seven years old and still as true as the day it was written, because its assumption is a fact
-    // about `devices.json` that the suite asserts outright rather than dates.
-    expect(stale.map((entry) => entry.id)).toEqual(['old', 'export']);
+    // Every cause ages; these are the two at the *default* window, and the `size` one is seven
+    // years old so it is here too — just at the back, because the sort is by age and it is the
+    // oldest. Ordering asserted below rather than membership here.
+    expect(stale.map((entry) => entry.id).sort()).toEqual(['export', 'old', 'settled']);
     expect(stale[0].monthsOld).toBeGreaterThan(30);
   });
 
@@ -1338,16 +1338,17 @@ describe('a written refusal expires rather than standing for ever', () => {
     expect(atSix.length).toBeGreaterThan(30);
     expect(new Set(atSix.map((e) => e.refusal.cause))).toEqual(new Set(['engine', 'repo']));
 
-    const atEighteen = staleRefusals({ refusals: NOT_SEEDED, now: new Date('2028-06-01') });
-    expect(new Set(atEighteen.map((e) => e.refusal.cause))).toEqual(
+    // Thirteen months on, the deferrals join at twelve while the size claims are inside eighteen.
+    const atThirteen = staleRefusals({ refusals: NOT_SEEDED, now: new Date('2027-09-01') });
+    expect(new Set(atThirteen.map((e) => e.refusal.cause))).toEqual(
       new Set(['engine', 'repo', 'catalog'])
     );
-    // `size` never joins, at any distance, because its assumption is asserted rather than dated.
-    expect(
-      staleRefusals({ refusals: NOT_SEEDED, now: new Date('2099-01-01') }).some(
-        (e) => e.refusal.cause === 'size'
-      )
-    ).toBe(false);
+    // And `size` joins at eighteen, which is the claim that nothing in this table is permanent.
+    const atTwo = staleRefusals({ refusals: NOT_SEEDED, now: new Date('2028-08-01') });
+    expect(new Set(atTwo.map((e) => e.refusal.cause))).toEqual(
+      new Set(['engine', 'repo', 'catalog', 'size'])
+    );
+    expect(atTwo.length).toBe(Object.keys(NOT_SEEDED).length);
   });
 });
 

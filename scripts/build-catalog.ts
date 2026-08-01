@@ -2303,16 +2303,24 @@ export const REFUSAL_MONTHS = 6;
  * see. Twelve months rather than six because a shape changing under a stable id is rarer than a
  * capability arriving, and because the id check already covers the common case.
  *
- * `size` is the one that genuinely does not age, and it earns that: its assumption is a fact about
- * `devices.json` — every catalogued machine holds a 2B model comfortably — which is local, complete,
- * and asserted in `build-catalog.test.ts` against the smallest allocatable ceiling in the file. A
- * smaller machine arriving fails the suite the day it is added, which is strictly better than a date.
+ * **`size` ages at eighteen months, and two drafts had it never ageing.** Its assumption reads as
+ * purely local — every catalogued machine holds a 2B model comfortably, which
+ * `build-catalog.test.ts` asserts against the smallest allocatable ceiling in `devices.json` — and
+ * that is only half of it (found in review). The other half is a fact about the *repository*: it is
+ * sub-2B, and a publisher can revise a config under the same id, exactly as they can for a `repo`
+ * refusal. The device check catches a smaller machine arriving, the day it arrives, and cannot catch
+ * a model growing. Longest window of the three because both halves are slow, and because a
+ * misclassified entry would otherwise be invisible for ever.
+ *
+ * **So nothing in this table is permanent any more**, which is the whole of #103 and took three
+ * rounds to actually mean: every cause has a date, and the mechanical checks are what make the dates
+ * long rather than what make them unnecessary.
  */
-const CAUSE_MONTHS: Record<Refusal['cause'], number | null> = {
+const CAUSE_MONTHS: Record<Refusal['cause'], number> = {
   engine: REFUSAL_MONTHS,
   repo: REFUSAL_MONTHS,
   catalog: REFUSAL_MONTHS * 2,
-  size: null,
+  size: REFUSAL_MONTHS * 3,
 };
 
 /**
@@ -2324,11 +2332,10 @@ const CAUSE_MONTHS: Record<Refusal['cause'], number | null> = {
  * decision, a stale refusal needs a re-check. Printed as two sections for that reason.
  *
  * Each cause has its own window — see {@link CAUSE_MONTHS}, which is where the argument for each one
- * lives. `size` is the only cause that never ages, because its assumption is fully local and fully
- * asserted; everything else gets a date as well as whatever mechanical check it has, because a
- * mechanical check covers what it covers. **Written as a lookup keyed on the cause** rather than as
- * a list of exclusions, so a cause added later has to be classified deliberately instead of
- * inheriting a default in either direction.
+ * lives. Every cause has one: a mechanical check covers what it covers, and none of them covers a
+ * publisher revising a config under an id this table has already declined. **Written as a lookup
+ * keyed on the cause** rather than as a list of exclusions, so a cause added later has to be
+ * classified deliberately instead of inheriting a default.
  *
  * Pure and separated from the clock for the same reason `unseededCandidates` is separated from the
  * fetch: what it decides is which names land in front of a human, and a function that reads
@@ -2418,7 +2425,7 @@ export function seededIds(seeds: readonly Seed[] = SEEDS): Set<string> {
  */
 async function reportStaleRefusals(now = new Date()): Promise<void> {
   const heading =
-    `Refusals worth re-asking — checked over ${REFUSAL_MONTHS} months ago, and for a reason ` +
+    'Refusals worth re-asking — past the window their cause is trusted for, and for a reason ' +
     'something outside this repo could have changed';
   const stale = staleRefusals({ refusals: NOT_SEEDED, now });
 
@@ -2440,8 +2447,10 @@ async function reportStaleRefusals(now = new Date()): Promise<void> {
   await appendFile(
     summary,
     stale.length === 0
-      ? `\n### ${heading}\n\nNone — every refusal that can expire was checked inside the last ` +
-          `${REFUSAL_MONTHS} months.\n`
+      ? `\n### ${heading}\n\nNone — every refusal is inside its own window. Those windows differ by ` +
+          `cause: ${REFUSAL_MONTHS} months for \`engine\` and \`repo\`, ${REFUSAL_MONTHS * 2} for ` +
+          `\`catalog\`, ${REFUSAL_MONTHS * 3} for \`size\`. Saying "checked in the last ` +
+          `${REFUSAL_MONTHS} months" would be false of the longer ones the moment they pass six.\n`
       : `\n### ${heading}\n\n${stale.length} refusal(s) to re-ask. \`engine\` means the ` +
           'derivation could not price the architecture, so the question is whether it can now; ' +
           '`repo` means the export itself was the problem, so the question is whether it was ' +
