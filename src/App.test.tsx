@@ -1548,8 +1548,8 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
   const tap = (cell: HTMLElement) => {
     // `pointerenter` with a button already down, which is what a finger arriving *is* — and the
     // reason the readout's hover record does not pick it up. A mouse arrives with `buttons: 0`.
-    fireEvent.pointerEnter(cell, { pointerType: 'touch', buttons: 1 });
-    fireEvent.pointerDown(cell, { pointerType: 'touch' });
+    fireEvent.pointerEnter(cell, { pointerType: 'touch', buttons: 1, pointerId: 7 });
+    fireEvent.pointerDown(cell, { pointerType: 'touch', pointerId: 7 });
     // `act`, so React has *committed* the focus before the click — which is the half that makes this
     // bite. Without it the state update is still queued when `click` runs and the handler reads the
     // previous render's target, which is the value the fix stores deliberately: the test would pass
@@ -1666,9 +1666,9 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
 
     // A mouse arrives before it clicks, which is what makes one click enough — and the reason this
     // needs no pointer-type test: the hover *is* the inspection.
-    fireEvent.pointerEnter(cell, { pointerType: 'mouse', buttons: 0 });
+    fireEvent.pointerEnter(cell, { pointerType: 'mouse', buttons: 0, pointerId: 1 });
     fireEvent.mouseEnter(cell);
-    fireEvent.pointerDown(cell, { pointerType: 'mouse' });
+    fireEvent.pointerDown(cell, { pointerType: 'mouse', pointerId: 1 });
     fireEvent.click(cell, { detail: 1 });
 
     expect(useConfig.getState().deviceId).toBe('rtx-3060-12gb');
@@ -1688,8 +1688,8 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
     // The contact itself generates the enter, with the button already down — which is exactly why
     // it is not a hover, and why inferring provenance from the *reading* gesture's pointer type took
     // this for a mouse and committed on contact.
-    fireEvent.pointerEnter(cell, { pointerType: 'pen', buttons: 1 });
-    fireEvent.pointerDown(cell, { pointerType: 'pen' });
+    fireEvent.pointerEnter(cell, { pointerType: 'pen', buttons: 1, pointerId: 3 });
+    fireEvent.pointerDown(cell, { pointerType: 'pen', pointerId: 3 });
     act(() => {
       cell.focus();
     });
@@ -1713,7 +1713,7 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
      * ordinary click needed two after any keyboard use. Provenance at `pointerdown` answers both,
      * which is why nothing expires here now (found in review).
      */
-    fireEvent.pointerEnter(under, { pointerType: 'mouse', buttons: 0 });
+    fireEvent.pointerEnter(under, { pointerType: 'mouse', buttons: 0, pointerId: 1 });
     fireEvent.mouseEnter(under);
     // The premise: the hover really did register, or this measures a mouse that never arrived.
     expect(readout(), 'the mouse hover did not reach the readout').toContain('RTX 3060');
@@ -1723,10 +1723,40 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
     // And the keyboard really did take the line, which is the state the record has to survive.
     expect(readout(), 'the keyboard did not take the readout').toContain('DGX Spark');
 
-    fireEvent.pointerDown(under, { pointerType: 'mouse' });
+    fireEvent.pointerDown(under, { pointerType: 'mouse', pointerId: 1 });
     fireEvent.click(under, { detail: 1 });
 
     expect(useConfig.getState().deviceId).toBe('rtx-3060-12gb');
+  });
+
+  it('does not let a finger inherit a mouse’s hover on a hybrid', () => {
+    render(<App />);
+    const before = useConfig.getState().deviceId;
+    const [hovered, focusedElsewhere] = [
+      cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('RTX 3060'))!,
+      cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('DGX Spark'))!,
+    ];
+
+    /*
+     * A mouse hovers one cell, the keyboard moves the readout to another, and a finger then lands on
+     * the hovered one. Without an identity on the record the finger inherits the mouse's hover and
+     * commits on its first tap, while the line still describes the cell the keyboard is on — which is
+     * the whole gesture broken on any laptop with a touchscreen (found in review).
+     */
+    fireEvent.pointerEnter(hovered, { pointerType: 'mouse', buttons: 0, pointerId: 1 });
+    act(() => {
+      focusedElsewhere.focus();
+    });
+
+    fireEvent.pointerEnter(hovered, { pointerType: 'touch', buttons: 1, pointerId: 9 });
+    fireEvent.pointerDown(hovered, { pointerType: 'touch', pointerId: 9 });
+    act(() => {
+      hovered.focus();
+    });
+    fireEvent.click(hovered, { detail: 1 });
+
+    expect(useConfig.getState().deviceId, 'the finger committed on its first tap').toBe(before);
+    expect(readout()).toContain('RTX 3060');
   });
 
   it('names the runtime when a narrow readout reports a refusal', async () => {

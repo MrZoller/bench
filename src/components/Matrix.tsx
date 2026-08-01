@@ -428,8 +428,15 @@ export function Matrix({ config }: { config: Config }) {
    * actually differs: a mouse and a hovering pen arrive with none pressed, a finger and a
    * contact-only pen arrive already in contact. So the record means "this pointer has been shown the
    * figures", which is the rule, rather than "a pointer of a kind that usually can".
+   *
+   * **And it names the pointer, because on a hybrid there is more than one** (found in review). A
+   * mouse hovers cell A, the keyboard moves the readout to B, and a finger then lands on A: without
+   * an identity the finger inherits the mouse's record and commits on its first tap, while the line
+   * still describes B. `pointerId` is stable for the mouse and distinct per contact, so the record
+   * answers "*this* pointer has been shown the figures" — which is what the sentence meant all along
+   * and what three rounds of narrowing were converging on.
    */
-  const pointerOver = useRef<string>('');
+  const pointerOver = useRef<{ cell: string; pointerId: number } | null>(null);
 
   const rowCount = cells.length;
   const colCount = devices.length;
@@ -1025,13 +1032,13 @@ export function Matrix({ config }: { config: Config }) {
                        * same reason.
                        */
                       // Before the browser's own focus moves the line — see `gesture`.
-                      onPointerDown={() => {
+                      onPointerDown={(event) => {
                         gesture.current = {
                           inspected:
-                            // Read plainly: the record only exists if a pointer hovered this cell
-                            // without being pressed, which `pointerOver` enforces where it is
-                            // written. Nothing about the reading gesture needs asking.
-                            pointerOver.current === `${r}:${c}` ||
+                            // The record only exists if a pointer hovered this cell without being
+                            // pressed, and it has to be *this* pointer — see `pointerOver`.
+                            (pointerOver.current?.cell === `${r}:${c}` &&
+                              pointerOver.current.pointerId === event.pointerId) ||
                             (target?.kind === 'cell' && target.row === r && target.col === c),
                         };
                       }}
@@ -1146,10 +1153,17 @@ export function Matrix({ config }: { config: Config }) {
                       // pointer event carries `buttons` — see `pointerOver`. The readout state stays
                       // on the mouse events, which are what the hover rule was written against.
                       onPointerEnter={(event) => {
-                        if (event.buttons === 0) pointerOver.current = `${r}:${c}`;
+                        if (event.buttons === 0) {
+                          pointerOver.current = {
+                            cell: `${r}:${c}`,
+                            pointerId: event.pointerId,
+                          };
+                        }
                       }}
-                      onPointerLeave={() => {
-                        if (pointerOver.current === `${r}:${c}`) pointerOver.current = '';
+                      onPointerLeave={(event) => {
+                        if (pointerOver.current?.pointerId === event.pointerId) {
+                          pointerOver.current = null;
+                        }
                       }}
                       onMouseEnter={() => setHovered({ kind: 'cell', row: r, col: c })}
                       onMouseLeave={() => setHovered(null)}
