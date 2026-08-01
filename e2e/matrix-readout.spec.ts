@@ -275,7 +275,11 @@ for (const width of [320, 640]) {
  */
 for (const { width, reserved } of [
   { width: 320, reserved: 80 },
-  { width: 640, reserved: 40 },
+  // 60 and 40, not the pre-#127 40 and 20: a spilled cell's sentence carries HOST_RAM_UNCHECKED
+  // now, and the reservation was raised to the new tallest render. 1024 joined the sweep with the
+  // raise — the lg tier's floor was previously held by luck rather than measurement.
+  { width: 640, reserved: 60 },
+  { width: 1024, reserved: 40 },
 ]) {
   test(`no sentence outgrows the space reserved for it at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 800 });

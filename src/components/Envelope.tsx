@@ -890,6 +890,9 @@ function describe(
   const runnable = [
     (counts.tight ?? 0) > 0 && `${counts.tight} run but sit near a limit`,
     (counts.offloaded ?? 0) > 0 &&
+      // An inline plural clause rather than `HOST_RAM_UNCHECKED` verbatim — the constant's
+      // sentence-initial "Loads" cannot sit mid-list — but it states the same fact; the legend
+      // hint above carries the constant itself, which is what anchors against drift.
       `${counts.offloaded} run only by spilling weights to host RAM, if the host has room for them`,
   ].filter((s): s is string => typeof s === 'string');
   /**

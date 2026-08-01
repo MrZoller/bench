@@ -1,6 +1,7 @@
 import { useId, useState } from 'react';
 import type { Evaluation } from '@/engine';
 import { gibLabel, multiple, percent } from '@/lib/format';
+import { HOST_RAM_UNCHECKED } from '@/lib/verdicts';
 import { marks } from '@/design/tokens';
 import { DisclosureToggle } from './DisclosureToggle';
 
@@ -208,7 +209,10 @@ export function BudgetBar({
         : ` — the cache and overhead alone need ${gibLabel(floorBytes)}, and neither can be offloaded, so spilling every weight would still leave it over`
       : ' — and this memory is the machine’s own, so there is nowhere faster to spill to'
     : placement.offloadFraction > 0
-      ? ` — ${percent(placement.offloadFraction)} of weights would spill to host RAM`
+      ? // The third near-copy of the spill claim, now carrying the one qualifier (#127): the
+        // conditional mood ("would") softened it, but the bar under it still renders the
+        // placement as achieved, and the engine never checked the host's RAM.
+        ` — ${percent(placement.offloadFraction)} of weights would spill to host RAM. ${HOST_RAM_UNCHECKED}`
       : '';
 
   return (
