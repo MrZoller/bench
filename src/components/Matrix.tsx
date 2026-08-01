@@ -783,6 +783,25 @@ export function Matrix({ config }: { config: Config }) {
           Rows are capped at each model’s own context limit, so a model that stops short of{' '}
           {tokens(config.contextTokens)} is scored at whatever it does accept.
         </p>
+        {/* The membership and the order, on the channel sighted readers scan (#135). #79 put both
+            facts in the sr-only caption and the visual channel got neither — the inversion of how
+            this usually breaks. The absence clause is the load-bearing half: on a grid whose whole
+            point is refusals with reasons, the one refusal it cannot explain is a missing row, and
+            without the sentence a reader cannot tell "was not asked" from "does not run".
+
+            Three softenings, each a review catch on the first draft (#155): the criterion reads
+            as curation guidance rather than a per-row guarantee (a family's superseded sibling
+            can outlive the rule that admitted it); "derived" carries a stated-overrides aside
+            (six rows carry a human-typed totalParams, documented per row); and absence says what
+            the list does not carry rather than asserting seed status, since a seed that failed a
+            partial generation is also absent and the weekly report owns naming why. */}
+        <p className="basis-full text-sm text-[var(--color-text-faint)]">
+          The {models.length} models are a curated set, not a top-N chart — picked to cover distinct
+          size classes, attention families and active-parameter ratios, and to keep each
+          family&rsquo;s current head present — with figures derived from Hugging Face, a handful of
+          stated overrides aside. Rows run most-downloaded first, and a missing model is one the
+          list does not carry, not one found unable to run.
+        </p>
       </header>
 
       {/* One filter row above the grid, as the dataviz guidance puts it.
@@ -845,9 +864,10 @@ export function Matrix({ config }: { config: Config }) {
                 This is also the whole of the band channel for a reader who cannot see the gap, which
                 is why it is one sentence with the mark rather than prose somewhere else. */}
             Columns run left to right in {bands.labels.length} bands — {bands.labels.join(', ')} —
-            with a gap between them, and rows run most-downloaded first. This grid is a single tab
-            stop: use the arrow keys to move between cells, Home and End for the ends of a row, and
-            Control with Home or End for the ends of the grid.
+            with a gap between them, and rows run most-downloaded first from a curated seed list — a
+            missing model is one the list does not carry, not one found unable to run. This grid is
+            a single tab stop: use the arrow keys to move between cells, Home and End for the ends
+            of a row, and Control with Home or End for the ends of the grid.
           </caption>
           <thead>
             <tr>

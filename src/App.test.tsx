@@ -5602,4 +5602,24 @@ describe('the catalog shows the order it is listed in', () => {
     // are name-only, so 35 rows appeared in an order with no stated basis.
     expect(caption).toMatch(/rows run most-downloaded first/i);
   });
+
+  /**
+   * The other channel (#135). #79 gave the sort and the membership to the sr-only caption, and the
+   * visual channel got neither — a sighted reader scanning 35 rows could not tell top-N from
+   * curation, and so could not tell whether a missing model was refused or simply never asked.
+   * That last misreading is the harmful one on a grid whose whole point is refusals with reasons.
+   */
+  it('states how a model earns a row, and what absence means, on both channels', () => {
+    render(<App />);
+
+    const statements = screen.getAllByText(/not one found unable to run/i);
+    // One in the sr-only caption, one where sighted readers scan — parity, not a swap: the
+    // original defect was one channel getting less than the other, in either direction.
+    expect(statements.some((el) => el.closest('caption') !== null)).toBe(true);
+    const visible = statements.find((el) => el.closest('caption') === null);
+    expect(visible).toBeDefined();
+    // The visible sentence carries all three facts: the criterion, the sort, the absence rule.
+    expect(visible!.textContent).toMatch(/curated set, not a top-N/i);
+    expect(visible!.textContent).toMatch(/most-downloaded first/i);
+  });
 });
