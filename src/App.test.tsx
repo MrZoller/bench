@@ -4706,15 +4706,23 @@ describe('a picker states its caveats where the choice is made', () => {
  * The per-token figure in the Bench's aside, which claims to be what sets the speed (#77 review).
  *
  * Three quantities are in play and they differ by enough to matter on the models this catalog exists
- * for. `activeParams` is the *published* convention — it excludes the input embedding unconditionally
- * and, on a multimodal model, includes the non-language towers a token never touches.
- * `activeDenseParams` is the always-active dense part and excludes the routed experts. Only
- * `effectiveActiveParams(model, 1)` is what `speed.ts` divides by.
+ * for. `activeParams` is the *published* convention: `publishedActiveParams` returns `totalParams`
+ * outright on a dense model and only on an MoE rebuilds an embedding-subtracted dense residual with
+ * the routed share added back, so it disagrees with the physical count exactly where something is
+ * excluded per token — a non-language tower, or an untied input embedding — and nowhere else.
+ * `activeDenseParams` is the always-active dense part and excludes the routed experts.
+ * `effectiveActiveParams(model, 1)` is the physical count, and the one this sentence has to print.
+ *
+ * `speed.ts` divides by neither, which is worth saying here because the aside sounds as though it
+ * does: `estimateDecode` reads `activeWeightBytes`, which prices the dense and expert halves at
+ * their own widths — about a factor of two on an expert-only scheme like MXFP4, where the dense
+ * tensors stay BF16. `effectiveActiveParams` is the parameter count behind that byte figure.
  *
  * Both wrong answers shipped briefly during #77 and each was caught by review rather than by a test:
  * `activeParams` overstated the multimodal MoEs (Mistral Small 4 at 6.524B against a 6.096B basis),
- * and the correction to `activeDenseParams` understated every MoE far more badly in the other
- * direction (Kimi K2 at 10.6B where a token traverses about 31.7B). So this pins the sentence to the
+ * and the correction to `activeDenseParams` understated every MoE in the other direction, by a
+ * ratio that spans the catalog rather than one factor (Kimi K2 at 10.6B where a token traverses
+ * 31.75B, but 1.91x on GLM-4.7-Flash and 8.65x on Mixtral). So this pins the sentence to the
  * engine's own expression, and asserts the two near neighbours are *not* what it prints — a test that
  * only checked the value against `effectiveActiveParams` would have passed on a dense model either
  * way, since all three coincide there.

@@ -658,7 +658,15 @@ reading the test that guards them.
   Usage now sits directly under Setup — the landmark's own name since #74, where it stopped being
   "Configuration" and became an `sr-only` heading, which is what `App.test.tsx` and
   `usage-placement.spec.ts` both locate it by. Envelope and Matrix remain the terminal panels. The
-  roving tab index is untouched and still does the work this entry is about — 15 presses either way.
+  roving tab index is untouched and still does the work this entry is about, though not in the figure
+  this paragraph first quoted. "15 presses either way" was the walk to the Usage panel, and #66 moved
+  Usage to the top of the page, so that quantity no longer describes anything: the grid costs **one**
+  press to cross whichever end of the page it sits at, and what is worth counting now is the page.
+  `App.test.tsx` measures 26 DOM tab-stop candidates against 739 without the roving index —
+  26 − 1 + 714 — and `e2e/matrix-grid.spec.ts` measures 23 real browser stops, the two differing
+  because the KV radio group is one stop in a browser and three candidates in the DOM. Both hold a
+  ceiling of forty, deliberately the same number, since a bound that fires in one channel and not the
+  other is a bug report about the wrong file.
 
   **The cost is real and was accepted rather than solved.** At 390px both panels stack, so nine
   controls — about 620px — now precede the first figure, where before there were none. #66 named a
