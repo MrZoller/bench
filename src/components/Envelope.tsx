@@ -5,7 +5,7 @@ import {
   type EnvelopeCell,
   type EnvelopeGrid,
 } from '@/engine/envelope';
-import { measureOf, type Measure } from '@/engine/measure';
+import { MEASURE_DIRECTION, measureOf, type Measure } from '@/engine/measure';
 import { getDevice, getModel } from '@/data/catalog';
 import { getQuant } from '@/data/quants';
 import { getRuntime } from '@/data/runtimes';
@@ -129,7 +129,12 @@ function fieldFill(
   measure: Measure,
   domain: { min: number; max: number }
 ): string {
-  return STATE_STYLE[cell.state].fill ?? magnitudeFill(measureOf(cell, measure), domain);
+  return (
+    STATE_STYLE[cell.state].fill ??
+    // The direction travels with the measure rather than being folded into the value: inverting
+    // TTFT before `magnitudeFill`'s `log1p` is what flattened this field onto one step (#97).
+    magnitudeFill(measureOf(cell, measure), domain, MEASURE_DIRECTION[measure])
+  );
 }
 
 /**

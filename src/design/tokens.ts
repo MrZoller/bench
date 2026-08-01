@@ -159,18 +159,37 @@ export const magnitudeRamp = [...sequential].reverse();
  * A degenerate domain — every cell identical, or a single cell — has nothing for a ramp to say and
  * takes the top step: with no variation each cell is simultaneously the best and the worst on its
  * own grid, and the brightest step is the one that does not imply a deficit that was never measured.
+ *
+ * **`direction` is where "larger is better" is finally said, and it is required rather than
+ * defaulted** ([#97](https://github.com/MrZoller/bench/issues/97)). It used to be said by the
+ * caller, by handing this function `1 / seconds` for the one measure that runs the other way — and
+ * composing a reciprocal with a logarithm is the defect, not a style: `log1p(1/t) ≈ 1/t` for any
+ * latency above about a second, so the log did nothing and the scale was harmonic, collapsing 63% of
+ * the Envelope's graded cells and 81% of the Matrix's onto one step. Taking the logarithm of the
+ * quantity itself and reversing the *placement* is the same picture read the right way round. No
+ * default, because a defaulted direction is wrong silently and in the direction that still renders:
+ * the grid paints, the legend still reads "worse … better", and every cell is on the wrong step.
  */
-export function magnitudeFill(value: number, domain: { min: number; max: number }): string {
+export function magnitudeFill(
+  value: number,
+  domain: { min: number; max: number },
+  direction: 'higher' | 'lower'
+): string {
   const steps = magnitudeRamp.length;
   const top = magnitudeRamp[steps - 1];
-  // `log1p` rather than `log` so a zero floor — the Matrix's domain — is 0 rather than -Infinity,
-  // and a zero value with it. Both are real: a cell that did not fit has no headroom at all.
+  // `log1p` rather than `log` so a zero floor — the Matrix's domain for the two measures that have
+  // one — is 0 rather than -Infinity, and a zero value with it. Both are real: a cell that did not
+  // fit has no headroom at all.
   const span = Math.log1p(domain.max) - Math.log1p(domain.min);
   if (!(span > 0)) return top;
   const placed = (Math.log1p(value) - Math.log1p(domain.min)) / span;
-  // Clamped at both ends: `placed` is 1 at the top of the domain, which would index past the ramp,
-  // and a caller may legitimately ask about a value below its own floor.
-  return magnitudeRamp[Math.max(0, Math.min(steps - 1, Math.floor(placed * steps)))];
+  // The reflection, and the whole of what `direction` buys: the domain is always stated
+  // low-to-high in the measure's own units, so a lower-is-better measure is the same placement
+  // read from the other end.
+  const ranked = direction === 'lower' ? 1 - placed : placed;
+  // Clamped at both ends: `ranked` is 1 at the good end of the domain, which would index past the
+  // ramp, and a caller may legitimately ask about a value outside its own domain.
+  return magnitudeRamp[Math.max(0, Math.min(steps - 1, Math.floor(ranked * steps)))];
 }
 
 /** Parse a `#rrggbb` token into an `[r, g, b]` tuple. */

@@ -6,7 +6,7 @@ import {
   wasEvaluated,
 } from './placement';
 import { estimateDecode, estimatePrefill } from './speed';
-import { measureOf, type Measure } from './measure';
+import { MEASURE_DIRECTION, measureOf, type Measure } from './measure';
 
 /**
  * Every model against every device, at one usage setting.
@@ -162,11 +162,12 @@ export function computeMatrix(request: MatrixRequest): MatrixCell[][] {
 }
 
 /**
- * The value a measure reads off a cell, oriented so larger is better — or nothing at all.
+ * The value a measure reads off a cell, in the measure's own units — or nothing at all.
  *
- * The reading itself is `measureOf`, shared with the Envelope so the direction of each measure is
- * stated once. What stays here is the pair of questions only this grid can answer: whether the cell
- * ran, and whether a spill puts it off the scale rather than merely low on it.
+ * **Not oriented**, since #97: the reading is `measureOf` and the direction is `MEASURE_DIRECTION`,
+ * both shared with the Envelope so each is stated once. What stays here is the set of questions only
+ * this grid can answer — whether the cell ran, whether a spill puts it off the scale rather than
+ * merely low on it, and whether a reading exists at all.
  *
  * Read against the grid rather than against an absolute scale, because the useful comparison is
  * between the options in front of you: a heatmap where every cell is pale because nothing reaches
@@ -177,18 +178,26 @@ export function measureValue(cell: MatrixCell, measure: MatrixMeasure): number |
   // An offloaded fit scores below any resident one — a categorical answer rather than a degree,
   // since the weights are crossing the bus whatever the headroom arithmetic says.
   if (measure === 'fit' && cell.offloadFraction > 0) return 0;
+  /**
+   * A cell that ran and was never timed is off this scale rather than at the good end of it.
+   *
+   * Unreachable today — every running cell gets a `ttftSeconds` from `estimatePrefill` — and stated
+   * because the polarity of the guard inverted with #97. Under the old orientation `measureOf`
+   * returned `0` for an untimed cell and `0` was the *worst* reading, so the two zeros agreed by
+   * accident. In seconds, zero is instantaneous: the same cell would take the brightest step on the
+   * grid and drag the domain's floor down with it. Turning it away is the only reading that is not a
+   * claim about a measurement nobody made.
+   */
+  if (measure === 'ttft' && !(cell.ttftSeconds > 0)) return undefined;
   return measureOf(cell, measure);
 }
 
 /**
- * The two ends of what a measure actually spans on this grid, and the top value for scaling.
+ * The two ends of what a measure actually spans on this grid, and the domain its ramp is placed in.
  *
- * The cells rather than only their numbers, because for two of the three measures the number a
- * reader needs at the end of a ramp is the one the cell itself reports — `tokensPerSec`,
- * `ttftSeconds` — and `measureValue` is not that. It inverts TTFT so that larger is better, so the
- * ramp's *low* end is the *longest* wait, and recovering the seconds from `1 / value` is both a
- * second derivation of a figure the cell already holds and a floating-point round trip. Handing back
- * the cell lets a label read the field.
+ * The cells rather than only their numbers, because the number a reader needs at the end of a ramp
+ * is the one the cell itself reports — `tokensPerSec`, `ttftSeconds` — and handing back the cell
+ * lets a label read the field rather than re-deriving it.
  *
  * **`low` is a tie in the ordinary case, and a caller reading anything but the ramp value off it is
  * reading an arbitrary cell.** `measureValue('fit')` returns exactly 0 for every offloaded cell by
@@ -197,55 +206,71 @@ export function measureValue(cell: MatrixCell, measure: MatrixMeasure): number |
  * of them yields the same *value*, which is what the legend prints; see `rampEnd`, which argues why
  * the fit label is the ramp's figure rather than the worst spiller's sentence.
  *
- * **There is deliberately no `min`.** Nothing scales against the bottom: `fill` anchors its log
- * curve at zero rather than at the lowest cell, so a minimum would be a number no mark is derived
- * from — and the legend's low label comes off `low` for the reason above. `max` is here because it
- * *is* what the ramp divides by, and deriving it twice is how a scale and its legend come to
- * disagree about the same grid.
+ * **`domain` replaced a bare `max`, and the floor is the half that changed**
+ * ([#97](https://github.com/MrZoller/bench/issues/97)). The old field was `high`'s value and the
+ * caller floored the ramp at zero, on the argument that this grid runs from a desktop CPU to a B200
+ * so its bottom really is near nothing. That argument holds for headroom and for tokens per second
+ * and does not survive being pointed at a latency. Zero seconds is not a reading any cell can have,
+ * and anchoring a log curve at an unreachable point is what took `placed` down to roughly
+ * `t_fastest / t`: a cell ten times slower than the grid's fastest landed on step 0, on a grid whose
+ * span is far more than tenfold. **A zero floor anchors the ramp's worst end, and for a
+ * lower-is-better measure the worst end is unbounded** — there is nothing to anchor to, so the
+ * domain is the grid's own span. Stated here rather than at the call site because the ramp and the
+ * legend are two readings of one grid, and deriving the domain twice is how they come to disagree.
  */
 export interface MeasureRange {
   /** The cell at the worst end of the ramp. */
   low: MatrixCell;
   /** The cell at the best end. */
   high: MatrixCell;
-  /** `high`'s value — what the ramp is scaled against. */
-  max: number;
+  /**
+   * What the ramp is placed inside, in the measure's own units and always stated low-to-high.
+   *
+   * Which end is *good* is `MEASURE_DIRECTION`, not this — see `magnitudeFill`.
+   */
+  domain: { min: number; max: number };
 }
 
 /**
  * The span a measure covers across the grid, or `undefined` when nothing ran.
  *
- * Ordered by `measureValue`, which is the ramp's own ordering rather than any cell field: for TTFT
- * that puts the slowest cell at `low`, which is the point. A grid where no pair runs has no span —
- * it also has no ink, since `fill` returns the empty fill for every cell — so the absence is a
- * value the caller can render rather than a zero it has to interpret.
+ * Ordered by `measureValue` **and the measure's direction**, so `low` is the worst cell for a
+ * lower-is-better measure too: on TTFT that is the largest number rather than the smallest, which is
+ * the sign flip the old inverted value was hiding. A grid where no pair runs has no span — it also
+ * has no ink, since `fill` returns the empty fill for every cell — so the absence is a value the
+ * caller can render rather than a zero it has to interpret.
  */
 export function measureRange(
   cells: MatrixCell[][],
   measure: MatrixMeasure
 ): MeasureRange | undefined {
-  let range: MeasureRange | undefined;
-  let min = Number.POSITIVE_INFINITY;
+  const higherIsBetter = MEASURE_DIRECTION[measure] === 'higher';
+
+  let smallest: { cell: MatrixCell; value: number } | undefined;
+  let largest: { cell: MatrixCell; value: number } | undefined;
 
   for (const row of cells) {
     for (const cell of row) {
       const value = measureValue(cell, measure);
       if (value === undefined) continue;
-      if (range === undefined) {
-        range = { low: cell, high: cell, max: value };
-        min = value;
-        continue;
-      }
-      if (value < min) {
-        range.low = cell;
-        min = value;
-      }
-      if (value > range.max) {
-        range.high = cell;
-        range.max = value;
-      }
+      if (smallest === undefined || value < smallest.value) smallest = { cell, value };
+      if (largest === undefined || value > largest.value) largest = { cell, value };
     }
   }
 
-  return range;
+  if (smallest === undefined || largest === undefined) return undefined;
+
+  return {
+    low: (higherIsBetter ? smallest : largest).cell,
+    high: (higherIsBetter ? largest : smallest).cell,
+    /**
+     * Floored at zero only where zero is a reading — see the interface above. For headroom it is
+     * one: `measureValue` returns exactly 0 for every offloaded cell. For tokens per second it is
+     * the physical bottom of the scale, and keeping it is what lets this grid say "worse" rather
+     * than "worst here".
+     */
+    domain: higherIsBetter
+      ? { min: 0, max: largest.value }
+      : { min: smallest.value, max: largest.value },
+  };
 }
