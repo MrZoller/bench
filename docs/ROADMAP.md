@@ -1030,11 +1030,17 @@ ceiling)` keeps an over-budget stack on screen, which is right and stays. What i
     8.65x on Mixtral, whose dense stack is tiny beside eight experts. "A factor of three" is Kimi's
     number and nobody else's.
 
-  **A test for this has to pick a multimodal MoE, and that is the whole trick.** On a text-only MoE the
-  published and physical bases coincide _exactly_ — gpt-oss-20b is 3.614B either way, as are
+  **A test for this has to pick a model where the two bases differ, and that is the whole trick.** On
+  an _untied_ text-only MoE they coincide exactly — gpt-oss-20b is 3.614B either way, as are
   Qwen3-30B-A3B, Mixtral and GLM-4.7-Flash — so a test written against one passes whichever figure the
-  component prints. The gap only opens where non-language towers sit inside `activeParams`, which today
-  is Command A+ and Mistral Small 4. `App.test.tsx` selects on that gap rather than on "is an MoE".
+  component prints. `App.test.tsx` selects on the numeric gap rather than on "is an MoE", which is
+  what makes it right for the reason rather than by luck.
+
+  **The rows that satisfy it today are the two multimodal MoEs, and that is a snapshot rather than the
+  rule.** A tied _text-only_ MoE would discriminate just as well, with no tower involved, because the
+  MoE branch subtracts a tied embedding the physical basis keeps — so a maintainer who reads "it has
+  to be multimodal" would reject a perfectly good fixture. The rule is the gap; the list is today's
+  catalog.
 
 - **A row identified by capacity or price must not carry another configuration's compute.** Filed
   against one row and live on four. Apple sells most SoCs in two GPU bins and offers the same memory

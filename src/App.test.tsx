@@ -4724,7 +4724,7 @@ describe('a picker states its caveats where the choice is made', () => {
  * tensors stay BF16. `effectiveActiveParams` is the parameter count behind that byte figure.
  *
  * Both wrong answers shipped briefly during #77 and each was caught by review rather than by a test:
- * `activeParams` overstated the multimodal MoEs (Mistral Small 4 at 6.524B against a 6.096B basis),
+ * `activeParams` overstated Mistral Small 4 (6.524B against a 6.096B basis),
  * and the correction to `activeDenseParams` understated every MoE in the other direction, by a
  * ratio that spans the catalog rather than one factor (Kimi K2 at 10.6B where a token traverses
  * 31.75B, but 1.91x on GLM-4.7-Flash and 8.65x on Mixtral). So this pins the sentence to the
@@ -4734,17 +4734,28 @@ describe('a picker states its caveats where the choice is made', () => {
  */
 describe('the aside prints the basis the speed is actually computed from', () => {
   /**
-   * A *multimodal* MoE, chosen so all three figures differ. On a text-only MoE the published and
-   * physical bases coincide exactly — gpt-oss-20b is 3.61B on both — so a test written against one
-   * would pass whichever of the two the component printed, and the overstatement half of this would
-   * go uncovered. The gap only opens where non-language towers sit inside `activeParams`.
+   * An MoE whose published and physical bases actually differ, selected on the gap itself.
+   *
+   * On an *untied text-only* MoE the two coincide exactly — gpt-oss-20b is 3.61B on both — so a test
+   * written against one passes whichever the component prints and the overstatement half goes
+   * uncovered. What opens the gap is either a non-language tower inside `activeParams` or a **tied**
+   * embedding, which the MoE branch of `publishedActiveParams` subtracts and the physical basis
+   * keeps.
+   *
+   * The rows that satisfy it today are the two multimodal MoEs, and this deliberately does not say
+   * "find a multimodal MoE": a tied text-only one would discriminate just as well with no tower
+   * involved, and a selector naming the *cause* would reject it. The gap is the rule; which rows have
+   * it is this week's catalog.
    */
   const moe = MODELS.find(
     (m) => m.expertParams > 0 && Math.abs(effectiveActiveParams(m, 1) - m.activeParams) > 1e8
   )!;
 
   it('quotes the decode basis at one sequence, not the published or the dense figure', () => {
-    expect(moe, 'no multimodal MoE in the catalog, so this test has no subject').toBeDefined();
+    expect(
+      moe,
+      'no MoE in the catalog whose published and physical bases differ, so this has no subject'
+    ).toBeDefined();
 
     const basis = effectiveActiveParams(moe, 1);
     // The premise: on an MoE the three figures genuinely differ, or none of this discriminates.
