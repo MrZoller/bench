@@ -97,6 +97,19 @@ export const DETAIL_ANCHOR_ID = 'bench-detail';
 const BAND_GAP = 'border-l-[calc(var(--spacing)*2)] border-l-[var(--color-surface)]';
 
 /**
+ * The current-cell mark — the two-tone inset frame the #67 rationale below derives — as one
+ * string the cell and its legend key both read.
+ *
+ * One fact, once, because the two had already drifted (#130): the mark was redesigned from an
+ * offset outer ring to this inset frame, and the legend's swatch went on drawing the retired
+ * ring — accent painted outside the square with a surface gap, the exact bleed-over geometry the
+ * redesign removed. It was the one key on the panel whose sample was not the mark. A swatch that
+ * shares the mark's classes cannot depict a shape the grid no longer paints.
+ */
+const CURRENT_CELL_MARK =
+  'inset-ring-2 inset-ring-[var(--color-accent)] shadow-[inset_0_0_0_3px_var(--color-surface)]';
+
+/**
  * What the readout under the grid is pointed at.
  *
  * A position rather than a sentence, so the line is derived from the same state the grid is drawn
@@ -1304,9 +1317,7 @@ export function Matrix({ config }: { config: Config }) {
                           ? 'border border-dashed border-[var(--color-border)]'
                           : ''
                       } ${cell.raiseCeilingWouldHelp ? 'border-[var(--color-warning)]' : ''} ${
-                        isCurrent(cell)
-                          ? 'inset-ring-2 inset-ring-[var(--color-accent)] shadow-[inset_0_0_0_3px_var(--color-surface)]'
-                          : ''
+                        isCurrent(cell) ? CURRENT_CELL_MARK : ''
                       }`}
                       style={{ background: fill(cell, measure, domain) }}
                     />
@@ -1486,7 +1497,7 @@ export function Matrix({ config }: { config: Config }) {
             — {runtime.label} does not support this hardware, at any size
           </span>
         )}
-        {/* The selection ring, which had no key — the third mark in this app drawn on top of a fill
+        {/* The selection mark, which had no key — the third mark in this app drawn on top of a fill
             with nothing on the page naming it (#73; the budget bar's ceiling rule and the Envelope's
             ring were the other two). `aria-current` names it for a screen reader and the accent hue
             says "live" to anyone who already knows the palette, which is not a channel a legend gets
@@ -1498,9 +1509,13 @@ export function Matrix({ config }: { config: Config }) {
             false for every cell on a linked rig, since these are all scored at one device. */}
         {marksCurrent && (
           <span className="flex items-center gap-1.5">
+            {/* The sample is the mark — `CURRENT_CELL_MARK`, the same classes the cell paints —
+                over a mid-ramp fill, since the frame's whole design is about staying readable on
+                the ramp rather than on the panel surface. */}
             <span
               aria-hidden="true"
-              className="inline-block h-3 w-3 rounded-sm bg-[var(--color-grid)] ring-2 ring-[var(--color-accent)] ring-offset-1 ring-offset-[var(--color-surface)]"
+              className={`inline-block h-3 w-3 rounded-sm ${CURRENT_CELL_MARK}`}
+              style={{ background: magnitudeRamp[Math.floor(magnitudeRamp.length / 2)] }}
             />
             the cell the Bench above is set to
           </span>

@@ -569,6 +569,22 @@ describe('every mark drawn over another is named in a legend', () => {
     expect(matrix().querySelectorAll('[aria-current="true"]')).toHaveLength(1);
     expect(within(matrix()).getByText(/the cell the Bench above is set to/)).toBeInTheDocument();
 
+    // And the sample is the mark (#130): the swatch wears the marked cell's own inset-frame
+    // utilities, not the retired offset ring — one constant, read by both, so the legend cannot
+    // drift from the grid again. The mark utilities are exactly those the cell adds when marked.
+    const marked = matrix().querySelector('[aria-current="true"]')!;
+    const swatch = within(matrix())
+      .getByText(/the cell the Bench above is set to/)
+      .querySelector('span[aria-hidden="true"]')!;
+    const markUtilities = (marked.getAttribute('class') ?? '')
+      .split(/\s+/)
+      .filter((u) => !u.includes('focus') && /^(inset-ring|shadow)/.test(u));
+    expect(markUtilities.length).toBeGreaterThanOrEqual(2);
+    for (const utility of markUtilities) {
+      expect(swatch.getAttribute('class')).toContain(utility);
+    }
+    expect(swatch.getAttribute('class')).not.toMatch(/ring-offset/);
+
     // Every cell here is scored at one device, so a two-card rig marks nothing.
     act(() => {
       useConfig.getState().set('deviceCount', 2);
