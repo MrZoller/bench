@@ -1370,6 +1370,52 @@ export function deriveLayerWindows(
     return Array.from({ length: layers }, (_, i) => ((i + 1) % pattern === 0 ? null : window));
   }
 
+  /**
+   * Two config shapes state or imply a partial split and used to fall through to the uniform
+   * fallback below — silently, and in the under-charging direction: a KV figure derived low is a
+   * "fits" for a configuration that OOMs (#118). Same class as the #76 hybrid-stack refusals,
+   * one axis over — the fallback was written for the Mistral shape, uniformly sliding, and
+   * admitted every other shape that spells its window the same way.
+   *
+   * Qwen2's convention states the split outright: `max_window_layers` names where it falls,
+   * with the window applied to only part of the stack. Which side slides is exactly the thing
+   * the config docstring and the modeling code are easy to get backwards, so this refuses
+   * rather than deriving; equal-to-layers is the one value every reading agrees on (uniformly
+   * sliding) and falls through. Today's Qwen seeds ship `use_sliding_window: false` and return
+   * above — the guard that saved them was the vendor's default, now also this script's.
+   */
+  const maxWindowLayers = num(config, 'max_window_layers');
+  if (maxWindowLayers !== undefined && maxWindowLayers !== layers) {
+    throw new DerivationError(
+      `${id}: states max_window_layers ${maxWindowLayers} for ${layers} layers with the window ` +
+        'on — a partial sliding stack whose direction this script has no verified reading of. ' +
+        `Deriving all ${layers} layers as sliding understates KV without bound as context ` +
+        'grows, since the full-attention layers are exactly the ones whose cache keeps growing. ' +
+        'Read the split out of the modeling code and give it a derivation before seeding this ' +
+        'shape.'
+    );
+  }
+
+  /**
+   * Gemma 2: a bare `sliding_window` with `cache_implementation: "hybrid"` and *no* per-layer
+   * evidence at all — no `layer_types`, no `sliding_window_pattern`; its every-other-layer
+   * alternation lives in the modeling code. The chunked-attention guard above deliberately does
+   * not key on this field unconditionally, because the two Gemma 3 seeds carry it and derive
+   * correctly from their pattern — but a hybrid cache with nothing to explain which layers it
+   * is hybrid *over* is the refusal signal, and both Gemma 3 seeds returned before this line.
+   */
+  if (config.cache_implementation === 'hybrid') {
+    throw new DerivationError(
+      `${id}: declares cache_implementation "hybrid" beside a bare sliding_window ${window}, ` +
+        'with neither layer_types nor sliding_window_pattern to say which layers slide — ' +
+        "Gemma 2's shape, whose alternation lives in the modeling code rather than the config. " +
+        `Deriving all ${layers} layers as sliding understates KV by the whole ratio of the ` +
+        'split — ~33% for the real 23 full / 23 sliding stack at the Gemma 2 27B 8K max ' +
+        'context — which reads as a fits for a configuration that OOMs. State the split per ' +
+        'layer before seeding it.'
+    );
+  }
+
   return Array.from({ length: layers }, () => window);
 }
 

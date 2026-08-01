@@ -364,6 +364,41 @@ const MISTRAL_SMALL_4 = {
   sliding_window: null,
 };
 
+/**
+ * https://huggingface.co/google/gemma-2-27b-it/raw/main/config.json
+ *
+ * The shape the bare-window fallback was not written for: 46 layers, a bare `sliding_window`
+ * 4096 and `cache_implementation: "hybrid"`, with no `layer_types` and no
+ * `sliding_window_pattern` — the every-other-layer alternation lives in the modeling code, not
+ * the config. The true stack is 23 full / 23 sliding, so all-46-sliding understates KV ~33% at
+ * its 8K max context, more on RoPE-scaled variants (#118).
+ */
+const GEMMA_2_27B = {
+  num_hidden_layers: 46,
+  num_attention_heads: 32,
+  num_key_value_heads: 16,
+  head_dim: 128,
+  hidden_size: 4608,
+  sliding_window: 4096,
+  cache_implementation: 'hybrid',
+};
+
+/**
+ * The Qwen2 convention with the window on: `use_sliding_window: true` and `max_window_layers`
+ * naming where a genuine split falls. No shipped seed carries this shape — today's Qwen seeds
+ * switch the window off, so the guard that saved them was the vendor's default (#118).
+ */
+const QWEN2_SPLIT = {
+  num_hidden_layers: 40,
+  num_attention_heads: 40,
+  num_key_value_heads: 8,
+  head_dim: 128,
+  hidden_size: 5120,
+  sliding_window: 32768,
+  use_sliding_window: true,
+  max_window_layers: 28,
+};
+
 // ---------------------------------------------------------------------------
 // The fourth, fifth and sixth ways a stack can fail to be uniform
 // ---------------------------------------------------------------------------
@@ -563,6 +598,36 @@ describe('the attention shapes the shipped catalog is built from', () => {
     // proves the average is being taken over the right two quantities rather than over hidden size.
     expect(attention.projectionWidth).toBe(4096);
     expect(attention.projectionWidth / MISTRAL_SMALL_4.hidden_size).toBe(1);
+  });
+
+  /**
+   * The two shapes the uniform fallback admitted and must not (#118) — the #76 class, one axis
+   * over: an open enumeration written for the Mistral shape, admitting every config that spells
+   * its window the same way. Both errors run in the under-charging direction, a "fits" for a
+   * configuration that OOMs. Both assert the guard's own wording, per this file's rule that a
+   * loose "could not|refus" pattern passes with the guard deleted.
+   */
+  it('refuses a stated Qwen2 split rather than reading every layer as sliding', () => {
+    expect(() => deriveLayerWindows('Qwen/qwen2-shaped', QWEN2_SPLIT, 40)).toThrow(
+      /states max_window_layers 28 for 40 layers with the window on/
+    );
+    // Equal to the layer count is the one value every reading of the key agrees on — uniformly
+    // sliding — so it derives rather than refusing.
+    expect(
+      deriveLayerWindows('Qwen/qwen2-uniform', { ...QWEN2_SPLIT, max_window_layers: 40 }, 40)
+    ).toEqual(Array.from({ length: 40 }, () => 32768));
+  });
+
+  it('refuses a bare Gemma 2 window beside a hybrid cache nothing explains', () => {
+    expect(() => deriveLayerWindows('google/gemma-2-27b-it', GEMMA_2_27B, 46)).toThrow(
+      /cache_implementation "hybrid" beside a bare sliding_window 4096/
+    );
+  });
+
+  it('still reads a bare window with nothing else — the Mistral shape — as uniformly sliding', () => {
+    expect(deriveLayerWindows('mistralai/bare-window', { sliding_window: 4096 }, 32)).toEqual(
+      Array.from({ length: 32 }, () => 4096)
+    );
   });
 });
 
