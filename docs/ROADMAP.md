@@ -80,11 +80,19 @@ green CI, triage and file the rest) is what stops that; six issues were filed un
 patched, and each carries its measurement so the next session does not re-derive it.
 
 **Catalog growth is a load-bearing input to the test suite, and nothing was watching it.** The Matrix
-is models × devices, so #78 and #77 together took it from 425 cells to 1,505 and the unit suite from
-42s to about fourteen minutes — 3.5× the cells for 20× the wall clock, because `userEvent` slows
+is models × devices, so #78 and #77 together took it from 408 cells to 1,470 and the unit suite from
+42s to about fourteen minutes — 3.6× the cells for 20× the wall clock, because `userEvent` slows
 superlinearly with tree size. Two separate pull requests failed CI on a per-test timeout for changes
 that touched no component, and each was diagnosed from scratch. The timeout has now been raised twice
 and must not be raised a third time; see #101.
+
+**The grid is _shipping_ devices, not catalog rows, and every count of it has to say so.** The first
+draft of this paragraph multiplied 35 models by all 43 rows and reported 1,505 — but `Matrix.tsx`
+filters on `status === 'shipping'`, so the rumoured M5 Ultra has never been a column and the true
+products are 17 × 24 = 408, 17 × 42 = 714 and 35 × 42 = 1,470. The error is invisible at a glance
+because both series grow the same way, and it is the same shape as every other figure in this file
+that was derived from the wrong denominator: the number came from the catalog, and what the reader
+needed came from the surface. #101 carried the wrong figures too and has been corrected.
 
 **Codex needs a nudge here, and the ROADMAP's "~40 minutes" reads as patience when it is absence.**
 Every clean verdict in the sweep arrived within about two minutes of an `@codex review` comment, and
@@ -770,7 +778,8 @@ reading the test that guards them.
   `borderTopWidth` rides along with `paddingTop` everywhere this is computed.
 
 - **A premise that becomes unsatisfiable when the fix works is not a weak premise — but it cannot also
-  be the evidence.** The Envelope's readout reservation pads a three-line sentence into a four-line
+  be the evidence.** The Matrix's readout reservation — the responsive `min-h` on that paragraph,
+  held by `e2e/matrix-readout.spec.ts` — pads a three-line sentence into a four-line
   box, so the test written to prove "two sentences of different height do not move the panel" found
   equal heights once the fix landed and failed on its own precondition. The right shape is to assert
   the _consequence_ here and put the _evidence that the inputs differ_ in a sibling test — in that
@@ -927,8 +936,11 @@ ceiling)` keeps an over-budget stack on screen, which is right and stays. What i
 **Catalog figures the UI quotes**
 
 - **Three quantities are called "active params" and two of them are wrong for any given sentence.**
-  `activeParams` is the _published_ convention — it excludes the input embedding unconditionally and,
-  on a multimodal model, includes the non-language towers a token never touches. `activeDenseParams`
+  `activeParams` is the _published_ convention, which is not one rule: `publishedActiveParams` returns
+  `totalParams` outright on a dense model — embedding and all — and only on an MoE builds an
+  embedding-subtracted dense residual back up with the routed share. So on a multimodal model it
+  includes the non-language towers a token never touches, and on a dense one it is not a per-token
+  basis at all. `activeDenseParams`
   is the always-active dense part and excludes the routed experts. `effectiveActiveParams(model, b)`
   is `activeDenseParams + expertParams * expertFraction(model, b)`, and it is the only one `speed.ts`
   divides by. The Bench's aside says a token "routes through" a figure and then attributes the decode
@@ -1057,28 +1069,6 @@ ceiling)` keeps an over-budget stack on screen, which is right and stays. What i
   the guard enumerated four and believed that was all of them.** Do not trust a count here. What the
   guard matches, and why it is shaped that way:
 
-- **Three list orders were deliberate, load-bearing and stated nowhere**
-  ([#79](https://github.com/MrZoller/bench/issues/79)). Nothing sorts `devices.json`, `QUANTS` or
-  `RUNTIMES` — every surface renders the file as written — so the order was a convention living only
-  in whoever last edited it. That is a silent-breakage shape rather than a cosmetic one: a plausible
-  "tidy the list" edit regroups it against itself and no test, type or review notices. The order is
-  now stated in `CLAUDE.md` and in each file's docblock, and split by whether a machine can check it.
-  `catalog.test.ts` enforces what is structural — rows grouped by `class`, a vendor's rows contiguous
-  within a class — and `$comment-order` carries what is not.
-
-  **The unenforceable half is the half worth writing down.** Within a vendor the rule is
-  newest-generation-leading and largest-bin-first _inside a tiered ladder_, but newest-released-first
-  where a product line is not a ladder — which is why the datacenter GPUs read B200, H200, L40S,
-  H100, A100 rather than grouping Hopper together. No assertion distinguishes that from a mistake, so
-  a test asserting it would be asserting a snapshot. Stating it is the only available guard.
-
-  **Grouping is rendered by adjacency, so the component cannot own the order.** `<optgroup>` is a run
-  of contiguous options, so the picker labels each option with its group and splits on _change_ of
-  label. A list whose groups are interleaved therefore renders as two `<optgroup>`s carrying the same
-  heading instead of being tidied into one — deliberately, because the alternative is filtering the
-  list three times, which would silently make the component the authority on an order `devices.json`
-  is supposed to state. The honest rendering makes a broken order visible; the tidy one hides it.
-
   | Spelling                                                         | Model                      | Matched by             |
   | ---------------------------------------------------------------- | -------------------------- | ---------------------- |
   | `full_attention_interval` + `linear_*`, no per-layer array       | Qwen3-Next-80B             | exact key + `^linear_` |
@@ -1178,9 +1168,33 @@ ceiling)` keeps an over-budget stack on screen, which is right and stays. What i
   before-figures out of what `deriveAttention` returns for the same fields with the hybrid keys
   removed — arithmetic on literals beside a refusal is documentation, not a test.
 
-- **`activeParams` excludes the input embedding unconditionally, and that is the _published_
-  convention, not the physical one.** It is what reconciles every derived figure with its
-  vendor's, and it is the wrong basis for decode. The engine reads `activeDenseParams`:
+- **Three list orders were deliberate, load-bearing and stated nowhere**
+  ([#79](https://github.com/MrZoller/bench/issues/79)). Nothing sorts `devices.json`, `QUANTS` or
+  `RUNTIMES` — every surface renders the file as written — so the order was a convention living only
+  in whoever last edited it. That is a silent-breakage shape rather than a cosmetic one: a plausible
+  "tidy the list" edit regroups it against itself and no test, type or review notices. The order is
+  now stated in `CLAUDE.md` and in each file's docblock, and split by whether a machine can check it.
+  `catalog.test.ts` enforces what is structural — rows grouped by `class`, a vendor's rows contiguous
+  within a class — and `$comment-order` carries what is not.
+
+  **The unenforceable half is the half worth writing down.** Within a vendor the rule is
+  newest-generation-leading and largest-bin-first _inside a tiered ladder_, but newest-released-first
+  where a product line is not a ladder — which is why the datacenter GPUs read B200, H200, L40S,
+  H100, A100 rather than grouping Hopper together. No assertion distinguishes that from a mistake, so
+  a test asserting it would be asserting a snapshot. Stating it is the only available guard.
+
+  **Grouping is rendered by adjacency, so the component cannot own the order.** `<optgroup>` is a run
+  of contiguous options, so the picker labels each option with its group and splits on _change_ of
+  label. A list whose groups are interleaved therefore renders as two `<optgroup>`s carrying the same
+  heading instead of being tidied into one — deliberately, because the alternative is filtering the
+  list three times, which would silently make the component the authority on an order `devices.json`
+  is supposed to state. The honest rendering makes a broken order visible; the tidy one hides it.
+
+- **`activeParams` is the _published_ convention, not the physical one — and on a dense row it is
+  simply `totalParams`.** `publishedActiveParams` returns the total outright when there is no MoE
+  derivation, so the embedding is subtracted only on the MoE branch, where the dense residual is
+  rebuilt and the routed share added back. It is what reconciles every derived figure with its
+  vendor's, and it is the wrong basis for decode on every row. The engine reads `activeDenseParams`:
   - the embedding is subtracted only when **untied**. A tied table _is_ the output projection —
     a full vocab matmul every step — so subtracting it understates Gemma 3 12B by 5%.
   - **tied-ness comes from the absence of an `lm_head.weight` tensor**, never from
@@ -1216,7 +1230,7 @@ been the third patch at one root cause, and each issue carries the numbers so th
 | [#90](https://github.com/MrZoller/bench/issues/90) cpu-ram compute basis                      | No formula reproduces any of the five rows (catalogued/fp32-peak runs 0.41 to 1.12). `epyc-9654` is a calibration anchor and there is **no CPU prefill anchor** to validate a re-derivation against. Correcting one row makes it the odd one out, not the right one.                                                             |
 | [#96](https://github.com/MrZoller/bench/issues/96) serving graded at the slider's concurrency | Third symptom of one asymmetry: serving is the only archetype taking its defining parameter from a slider. `verdict.test.ts` already names grading it at its own user count as the coherent end state. 2 of 2,278 configurations affected.                                                                                       |
 | [#97](https://github.com/MrZoller/bench/issues/97) TTFT ramp collapses                        | `log1p(1/t) ≈ 1/t` above a second, so inverting before the log makes the scale harmonic: **29 of 46 cells on one step, two of seven steps unused**. Pre-existing in the Matrix and worse there (zero-floored domain gives `placed ≈ t_fastest/t`). Changes a shared colour primitive on two surfaces; wants the `dataviz` skill. |
-| [#101](https://github.com/MrZoller/bench/issues/101) the unit suite                           | 425 cells → 1,505 and 42s → ~14 minutes across #78 and #77. The per-test timeout has been raised twice and must not be a third time. The property to keep: **a change that touches no component must not fail CI on grid size.**                                                                                                 |
+| [#101](https://github.com/MrZoller/bench/issues/101) the unit suite                           | 408 cells → 1,470 and 42s → ~14 minutes across #78 and #77. The per-test timeout has been raised twice and must not be a third time. The property to keep: **a change that touches no component must not fail CI on grid size.**                                                                                                 |
 | [#102](https://github.com/MrZoller/bench/issues/102) readout on touch, and at 200%            | Tap is activation, so touch still cannot inspect without committing — that needs a gesture design. And the `rem` reservation doubles at a 32px root while the wrapping doubles too, which neither suite covers: `reflow.spec.ts` never fills the readout and `matrix-readout.spec.ts` runs at default text size.                 |
 | [#103](https://github.com/MrZoller/bench/issues/103) `NOT_SEEDED` never revalidated           | A written refusal is permanent, so the high-download models the candidate report exists to resurface are the ones it can never see. Needs an expiry _policy_, and the two expiry paths — a capability arriving versus a repo changing under the same id — need different mechanisms.                                             |
 
@@ -1301,12 +1315,21 @@ been the third patch at one root cause, and each issue carries the numbers so th
   test drives that with a synthetic runtime, and the two surfaces that render it are held by a
   mocked `kvSubstitutionFor`, because an unreachable branch is one nobody notices breaking.
 
-- ~~Codex connector coverage is unconfirmed.~~ **Confirmed working**, and now well characterised.
-  Reviews arrive roughly 40 minutes after a push, which is long enough to look like absence — don't
-  conclude the connector is missing from a quiet first half-hour. Two further traps: it signals
-  "no findings" with a 👍 _reaction_ rather than a comment, and that reaction survives later pushes,
-  so merge-readiness needs the reaction's `created_at` to postdate the head commit. Zero unresolved
-  threads right after a push usually means the review has not posted yet.
+- ~~Codex connector coverage is unconfirmed.~~ **Confirmed working**, and characterised in
+  **The post-release sweep** above, which is the current runbook and supersedes what this entry used
+  to say. Two corrections, because the superseded version was actively misleading in both halves:
+
+  - "Reviews arrive roughly 40 minutes after a push, so don't conclude the connector is missing from
+    a quiet first half-hour" was patience described as evidence. Every clean verdict in the sweep
+    arrived within about two minutes of a nudge, and one push sat 27 hours in silence on a healthy
+    connector. **A quiet half-hour is a skipped push, not a queue position** — nudge once.
+  - "It signals no findings with a 👍 reaction, so merge-readiness needs the reaction's `created_at`
+    to postdate the head commit" is the right mechanism attached to the wrong reaction. 👍 is indeed
+    the no-findings form, but `+1` also arrives on pushes that were never reviewed at all, and 👀 is
+    the only reaction meaning a run is in flight. **Ask whether _this head_ was reviewed**, against
+    both the reviews API and the issue comments, comparing the SHA as a prefix — the no-findings
+    form abbreviates it to ten characters. A reaction alone does not answer that question.
+
 - ~~`main` is unprotected.~~ **Enforced since 28 July 2026**, when the repo went public. The
   ruleset requires a pull request, squash merges only, both CI checks green, and every review
   thread resolved; deletion and force-push are blocked, with no bypass actors. What had been
