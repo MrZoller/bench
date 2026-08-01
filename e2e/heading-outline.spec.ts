@@ -109,8 +109,17 @@ test('the three hidden headings are in the outline without being on the page', a
 test('a hidden heading takes no cell from the grid it names', async ({ page }) => {
   const setup = page.getByRole('region', { name: 'Setup' });
   const panel = await boxOf(setup);
-  // The four `Select`s are the section's only element children besides the heading.
-  const cells = await setup.locator(':scope > div').all();
+  /**
+   * The four `Select`s, located by **having a `select` in them** rather than by being the section's
+   * only `div` children.
+   *
+   * That was true when this was written and stopped being true the moment #137 added the detection
+   * affordance, which is a fifth direct `div` and not a control cell — so the guard failed with
+   * "the Setup panel does not hold four controls" about a panel that holds exactly four. A locator
+   * that describes a position rather than a thing goes stale on the next sibling; this one names
+   * what the assertions below are actually about, and would still catch a `Select` going missing.
+   */
+  const cells = await setup.locator(':scope > div:has(select)').all();
   expect(cells, 'the Setup panel does not hold four controls').toHaveLength(4);
   const [model, hardware, quantization] = await Promise.all(cells.slice(0, 3).map(boxOf));
 

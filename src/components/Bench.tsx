@@ -12,7 +12,11 @@ import { Telemetry } from './Telemetry';
 import { Workloads } from './Workloads';
 import { Launch } from './Launch';
 import { Calibrate } from './Calibrate';
+<<<<<<< HEAD
 import { Recommend } from './Recommend';
+=======
+import { Detect } from './Detect';
+>>>>>>> 39fc36d (feat(detect): narrow the hardware picker to what the browser will admit)
 import { Envelope } from './Envelope';
 import { DETAIL_ANCHOR_ID, Matrix } from './Matrix';
 import { Segmented, Select, StopSlider } from './Controls';
@@ -437,6 +441,11 @@ export function Bench() {
           onChange={(v) => set('runtimeId', v)}
           options={runtimeOptions}
         />
+        {/* Inside Setup and last, spanning both columns. It answers the question the Hardware
+            picker above assumes you can already answer, so it belongs beside that control rather
+            than in a panel of its own — and after it, because a reader who knows their machine
+            should meet the picker first. */}
+        <Detect />
       </section>
 
       {/* Usage: the half of the question that is about you, not the hardware.
