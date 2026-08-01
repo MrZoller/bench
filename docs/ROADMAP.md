@@ -1275,21 +1275,32 @@ ceiling)` keeps an over-budget stack on screen, which is right and stays. What i
   simply `totalParams`.** `publishedActiveParams` returns the total outright when there is no MoE
   derivation, so the embedding is subtracted only on the MoE branch, where the dense residual is
   rebuilt and the routed share added back. It is what reconciles every derived figure with its
-  vendor's, and it is the wrong basis for decode wherever the two conventions disagree — which is
-  **exactly where something is excluded per token**: a non-language tower, or an untied input
-  embedding. Everywhere else they agree to the digit, and the list of those places is longer than it
-  looks. Every text-only MoE: `publishedActiveParams` and `effectiveActiveParams(m, 1)` are the same
-  expression there, so gpt-oss, the Qwen3 MoEs, Mixtral, GLM and the DeepSeek rows all reconcile
-  exactly. Every tied text-only dense row, since a tied table is the output projection and is read in
-  full. Stated this way round because the invariant a maintainer needs is _when to distrust the
+  vendor's, and it is the wrong basis for decode wherever the two conventions **exclude different
+  things**. Three ways they can, and the third is the one two drafts of this paragraph missed:
+
+  - a **non-language tower**, which the published figure includes and a token never touches;
+  - an **untied input embedding** on a dense row, which the published figure includes — there it is
+    simply `totalParams` — and decode never reads;
+  - a **tied input embedding on an MoE**, which the published figure _subtracts_ (the MoE branch does
+    so unconditionally) and `activeDenseParams` correctly keeps, because a tied table is the output
+    projection and is read in full every step.
+
+  That last one is live: Command A+ is a tied multimodal MoE where the omitted 1.074B table outweighs
+  the included 0.495B tower, which is the whole of why its published figure is 0.578B _low_ where
+  Mistral Small 4's is 7% high. And it means a future tied text-only MoE would disagree with no tower
+  involved at all — so the derivation is `nonLanguageParams` and `tiedEmbeddings` **crossed with
+  whether the row is an MoE**, not either field alone.
+
+  Everywhere else they agree to the digit, and that list is longer than it looks: every _untied_
+  text-only MoE — gpt-oss, the Qwen3 MoEs, Mixtral, GLM, the DeepSeek rows — and every tied text-only
+  dense row. Stated this way round because the invariant a maintainer needs is _when to distrust the
   published figure_, and "every MoE" would have them replacing correct values.
 
-  What is left, as the catalog stands — a snapshot of the rule rather than a list to trust, since the
-  rule is what survives the next seed: **Command A+ and Mistral Small 4** (multimodal MoEs, towers),
-  **every Gemma 3 row and Ministral 3 3B** (tied dense, but with a tower — Ministral publishes 3.849B
-  against a 3.429B basis on a 0.420B encoder, and it is not a Gemma, which is how it went missing from
-  the first draft of this sentence), and **the untied dense rows** on the embedding. Derive the list
-  from `nonLanguageParams` and `tiedEmbeddings` rather than reading it here.
+  As the catalog stands, a snapshot of the rule rather than a list to trust: **Command A+** (tied MoE
+  plus tower), **Mistral Small 4** (untied MoE plus tower), **every Gemma 3 row and Ministral 3 3B**
+  (tied dense plus tower — Ministral publishes 3.849B against a 3.429B basis on a 0.420B encoder, and
+  it is not a Gemma, which is how it went missing from an earlier draft), and **the untied dense
+  rows** on the embedding.
   The engine reads `activeDenseParams`:
   - the embedding is subtracted only when **untied**. A tied table _is_ the output projection —
     a full vocab matmul every step — so subtracting it understates Gemma 3 12B by 5%.
