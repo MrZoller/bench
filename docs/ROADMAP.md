@@ -657,16 +657,27 @@ reading the test that guards them.
 
   Usage now sits directly under Setup — the landmark's own name since #74, where it stopped being
   "Configuration" and became an `sr-only` heading, which is what `App.test.tsx` and
-  `usage-placement.spec.ts` both locate it by. Envelope and Matrix remain the terminal panels. The
-  roving tab index is untouched and still does the work this entry is about, though not in the figure
-  this paragraph first quoted. "15 presses either way" was the walk to the Usage panel, and #66 moved
-  Usage to the top of the page, so that quantity no longer describes anything: the grid costs **one**
-  press to cross whichever end of the page it sits at, and what is worth counting now is the page.
-  `App.test.tsx` measures 26 DOM tab-stop candidates against 739 without the roving index —
-  26 − 1 + 714 — and `e2e/matrix-grid.spec.ts` measures 23 real browser stops, the two differing
-  because the KV radio group is one stop in a browser and three candidates in the DOM. Both hold a
-  ceiling of forty, deliberately the same number, since a bound that fires in one channel and not the
-  other is a bug report about the wrong file.
+  `usage-placement.spec.ts` both locate it by. Envelope and Matrix are the last two _output_ panels,
+  and deliberately not "the terminal panels": on any MoE selection `Bench.tsx` renders the
+  architecture aside after `<Matrix>`, which is a conditional panel and the reason
+  `matrix-readout.spec.ts` measures section and document heights rather than a following sibling.
+
+  The roving tab index is untouched and still does the work this entry is about, though not in the
+  figure this paragraph first quoted. "15 presses either way" was the walk to the Usage panel, and #66
+  moved Usage to the top of the page, so that quantity no longer describes anything: the grid costs
+  **one** press to cross whichever end of the page it sits at, and what is worth counting now is the
+  page. Two counts, from the two suites, and the gap between them is worth stating exactly:
+
+  - `App.test.tsx` — **26** DOM tab-stop candidates over the whole document, against 739 without the
+    roving index (26 − 1 + 714).
+  - `e2e/matrix-grid.spec.ts` — **23** real browser stops, inside `<main>`.
+
+  Three apart, from two unrelated causes and not one. **Two** are the KV radio group, which offers Tab
+  only its checked member and a `querySelectorAll` all three. The **third** is scope rather than
+  semantics: the masthead's copy-link button is a real stop that the browser walk excludes, because it
+  sits outside `<main>` and that walk ends when focus leaves. Both hold a ceiling of forty,
+  deliberately the same number, since a bound that fires in one channel and not the other is a bug
+  report about the wrong file.
 
   **The cost is real and was accepted rather than solved.** At 390px both panels stack, so nine
   controls — about 620px — now precede the first figure, where before there were none. #66 named a
