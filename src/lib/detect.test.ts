@@ -197,6 +197,45 @@ describe('what each signal is worth is stated, and it is less than it looks', ()
   });
 });
 
+describe('what a GPU adapter is and is not evidence about', () => {
+  it('does not infer Apple silicon from macOS alone', () => {
+    /**
+     * The conflict rule only fires once a *vendor* prune has happened — so on an Intel Mac whose
+     * adapter info is withheld, `MacIntel` alone kept only the Apple rows and reported Apple
+     * silicon confidently, with nothing to conflict against. The platform corroborates a vendor; it
+     * never establishes one.
+     */
+    const withheld = detect({ platform: 'MacIntel' }, DEVICES);
+
+    expect(withheld.candidates.map((d) => d.id)).toEqual(shipping.map((d) => d.id));
+    expect(withheld.evidence.join(' ')).toMatch(/Intel Macs run macOS too/i);
+  });
+
+  it('still narrows on macOS once the adapter has said Apple', () => {
+    // The corroborating case, which is what the platform prune is for.
+    const confirmed = detect({ adapterVendor: 'apple', platform: 'macOS' }, DEVICES);
+    for (const device of confirmed.candidates) expect(device.vendor).toBe('Apple');
+  });
+
+  it('offers no CPU row on the strength of a GPU adapter', () => {
+    // An Intel adapter says nothing about the host CPU, and matching on vendor alone offered the
+    // Xeon row beside the Arc GPUs. On a machine whose CPU and GPU vendors differ it would also
+    // have excluded the CPU row the reader owns.
+    for (const device of detect({ adapterVendor: 'intel' }, DEVICES).candidates) {
+      expect(device.class, device.id).not.toBe('cpu-ram');
+    }
+  });
+
+  it('does not read "ati" out of the middle of another word', () => {
+    // `ati` sits inside "Imagination", so the loose form classified a PowerVR adapter as AMD and
+    // removed every non-AMD row — the opposite of the stated fallback for an unrecognised vendor.
+    expect(ids({ adapterVendor: 'Imagination Technologies' })).toEqual(shipping.map((d) => d.id));
+    // And the legacy name on its own still resolves, so the token match is not simply a deletion.
+    const legacy = detect({ adapterVendor: 'ATI Technologies Inc.' }, DEVICES);
+    for (const device of legacy.candidates) expect(device.vendor).toBe('AMD');
+  });
+});
+
 describe('signals that contradict each other keep the machine in the list', () => {
   /**
    * **An Intel Mac, which is reachable hardware and broke the first version outright.**

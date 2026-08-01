@@ -121,17 +121,21 @@ describe('when the signals contradict each other', () => {
 });
 
 describe('when the signals do not narrow enough', () => {
-  it('asks rather than offering seventeen rows as a shortlist', async () => {
-    // A redacting browser: vendor and nothing else. Seventeen shipping NVIDIA rows is not a
-    // shortlist, and the issue scopes the follow-up question as a first-class path.
+  it('says the list is long and offers it anyway', async () => {
+    /**
+     * A redacting browser: vendor and nothing else, which is seventeen shipping NVIDIA rows. The
+     * first version hid them and pointed at the picker — **discarding the narrowing exactly where
+     * it was worth most**, since the picker is the unfiltered forty-three. Seventeen buttons is
+     * still far better than that, so the reader is told it is a long list and given it.
+     */
     const user = userEvent.setup();
     stubAdapter({ vendor: 'nvidia' });
     render(<Detect />);
     await user.click(button());
 
-    const panel = await screen.findByRole('region', { name: /what the browser would say/i });
-    expect(within(panel).getByText(/which is not a shortlist/i)).toBeInTheDocument();
-    expect(within(panel).queryAllByRole('button')).toHaveLength(0);
+    const panel = await screen.findByRole('region', { name: /which of these is yours/i });
+    expect(within(panel).getByText(/more than a shortlist/i)).toBeInTheDocument();
+    expect(within(panel).getAllByRole('button').length).toBeGreaterThan(6);
   });
 
   it('says why a Mac cannot be narrowed, which is the platform it matters most on', async () => {
@@ -142,8 +146,22 @@ describe('when the signals do not narrow enough', () => {
     render(<Detect />);
     await user.click(button());
 
-    const panel = await screen.findByRole('region', { name: /what the browser would say/i });
+    const panel = await screen.findByRole('region', { name: /which of these is yours/i });
     expect(within(panel).getByText(/Metal feature family/i)).toBeInTheDocument();
     expect(within(panel).getByText(/How much memory does it have/i)).toBeInTheDocument();
+  });
+
+  it('announces the result, since the read is asynchronous and inserts only visual content', async () => {
+    // Without a status role a screen-reader user who pressed the button gets no indication that
+    // anything happened — there is not even a new focusable control on the unavailable path.
+    const user = userEvent.setup();
+    stubAdapter({ vendor: 'nvidia' });
+    render(<Detect />);
+    await user.click(button());
+
+    const panel = await screen.findByRole('region', { name: /which of these is yours/i });
+    // `aria-live`, not `role="status"` — the latter replaces the implicit role and would take this
+    // element out of the landmark it is named by, which is what the locator above proves.
+    expect(panel.getAttribute('aria-live')).toBe('polite');
   });
 });

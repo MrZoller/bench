@@ -211,7 +211,17 @@ export function detect(signals: DetectionSignals, devices: readonly DeviceSpec[]
         ? 'Apple'
         : ARCHITECTURE_VENDORS[architecture]) ?? vendorFromString(signals.adapterVendor);
 
-  if (vendor !== undefined && prune((d) => d.vendor === vendor) !== 'conflict') {
+  /**
+   * **A GPU adapter is evidence about a GPU, so the CPU rows are ruled out rather than matched**
+   * (raised by Codex on #168). Matching on vendor alone offered an Intel reader the `xeon-6980p`
+   * CPU-RAM row beside the Arc GPUs, on a signal that says nothing about the host CPU at all — and
+   * on a machine whose CPU and GPU vendors differ it would have excluded the CPU row they own. A
+   * reader running on CPU has no adapter worth detecting; the picker is their path.
+   */
+  if (
+    vendor !== undefined &&
+    prune((d) => d.vendor === vendor && d.class !== 'cpu-ram') !== 'conflict'
+  ) {
     evidence.push(
       isApple
         ? `Your browser reports an Apple GPU. It reports the Metal feature family (${architecture}) ` +
@@ -230,31 +240,50 @@ export function detect(signals: DetectionSignals, devices: readonly DeviceSpec[]
    * not true in the way it looks: a Windows or Linux machine rules out the Apple rows, and says
    * nothing about which of the remaining thirty-odd it is.
    */
+  /**
+   * **The platform corroborates a vendor; it never establishes one** (raised by Codex on #168).
+   *
+   * The conflict rule below only fires once a *vendor* prune has happened, so on an Intel Mac whose
+   * adapter info is withheld — a state `readSignals` explicitly supports — `MacIntel` alone kept
+   * only the Apple rows and reported Apple silicon confidently. There was nothing to conflict with.
+   * So the macOS arm requires the adapter to have said Apple already; without a vendor it says
+   * nothing, which is the honest reading of a platform string that Intel Macs also produce.
+   *
+   * The non-macOS arm is unaffected and stays unconditional: no Apple silicon Mac reports a
+   * non-macOS platform, so ruling the Apple rows out there needs no corroboration.
+   */
   const platform = signals.platform?.toLowerCase();
   if (platform !== undefined && platform !== '') {
     const mac = platform.includes('mac') || platform.includes('darwin');
-    const outcome = prune((d) => (mac ? d.vendor === 'Apple' : d.vendor !== 'Apple'));
+    if (mac && vendor === undefined) {
+      evidence.push(
+        'The platform is macOS, but the adapter was withheld — and Intel Macs run macOS too, so ' +
+          'this alone does not say the machine is Apple silicon.'
+      );
+    } else {
+      const outcome = prune((d) => (mac ? d.vendor === 'Apple' : d.vendor !== 'Apple'));
 
-    if (outcome === 'conflict') {
-      /**
-       * **An Intel Mac, and the comment this replaced said macOS "implies Apple silicon".** It does
-       * not: Chrome ships WebGPU on Metal for Intel Macs, whose adapter is Intel or AMD. Taking the
-       * platform at its word there leaves no rows at all, and tells a reader whose Mac is not Apple
-       * silicon that it is. The adapter is the more specific witness, so it wins.
-       */
-      evidence.push(
-        mac
-          ? 'The platform is macOS but the adapter is not an Apple GPU — an Intel Mac. The adapter ' +
-              'is the more specific signal, so the platform is ignored here.'
-          : 'The adapter reports an Apple GPU on a platform that is not macOS, which cannot both ' +
-              'be true of a catalogued machine. The platform is ignored here.'
-      );
-    } else if (outcome === 'narrowed') {
-      evidence.push(
-        mac
-          ? 'The platform is macOS and the adapter is an Apple GPU, so this is Apple silicon.'
-          : 'The platform is not macOS, which rules out the Apple rows and little else.'
-      );
+      if (outcome === 'conflict') {
+        /**
+         * **An Intel Mac, and the comment this replaced said macOS "implies Apple silicon".** It does
+         * not: Chrome ships WebGPU on Metal for Intel Macs, whose adapter is Intel or AMD. Taking the
+         * platform at its word there leaves no rows at all, and tells a reader whose Mac is not Apple
+         * silicon that it is. The adapter is the more specific witness, so it wins.
+         */
+        evidence.push(
+          mac
+            ? 'The platform is macOS but the adapter is not an Apple GPU — an Intel Mac. The adapter ' +
+                'is the more specific signal, so the platform is ignored here.'
+            : 'The adapter reports an Apple GPU on a platform that is not macOS, which cannot both ' +
+                'be true of a catalogued machine. The platform is ignored here.'
+        );
+      } else if (outcome === 'narrowed') {
+        evidence.push(
+          mac
+            ? 'The platform is macOS and the adapter is an Apple GPU, so this is Apple silicon.'
+            : 'The platform is not macOS, which rules out the Apple rows and little else.'
+        );
+      }
     }
   }
 
@@ -334,7 +363,10 @@ function vendorFromString(raw: string | undefined): DeviceSpec['vendor'] | undef
   if (value.includes('intel')) return 'Intel';
   // Last, and the two spellings are why: AMD's adapter string is often `amd` and sometimes the
   // marketing name, and `radeon` appears in both. Neither collides with the three above.
-  if (value.includes('amd') || value.includes('radeon') || value.includes('ati')) return 'AMD';
+  // `ati` on a word boundary, never as a substring: it sits inside "Imagination", so the loose form
+  // classified a PowerVR adapter as AMD and removed every non-AMD row — the opposite of the stated
+  // fallback for an unrecognised vendor. Raised by Codex on #168.
+  if (value.includes('amd') || value.includes('radeon') || /\bati\b/.test(value)) return 'AMD';
   return undefined;
 }
 
@@ -352,10 +384,30 @@ export async function readSignals(): Promise<DetectionSignals | undefined> {
   if (gpu?.requestAdapter === undefined) return undefined;
 
   try {
-    const adapter = await gpu.requestAdapter();
+    /**
+     * **Both power preferences, because the default is one GPU and a laptop has two** (raised by
+     * Codex on #168). `requestAdapter()` with no preference returns the browser's own default,
+     * which on a dual-GPU laptop is routinely the integrated Intel part — and the vendor prune then
+     * removed the discrete card the reader actually cares about, with no way to get it back.
+     *
+     * The discrete one is the machine bench is about, so `high-performance` is asked first and its
+     * answer wins. The default is the fallback, not the other way round.
+     */
+    const adapter =
+      (await gpu.requestAdapter({ powerPreference: 'high-performance' })) ??
+      (await gpu.requestAdapter());
     // A browser with `navigator.gpu` and no adapter is a real state — a blocklisted driver, a
     // headless run — and it means the picker, not an error.
     if (!adapter) return undefined;
+
+    /**
+     * `GPUAdapter.info` is newer than the adapter itself, and browsers that predate it expose the
+     * same fields through the deprecated async `requestAdapterInfo()`. Without the fallback those
+     * otherwise-capable browsers reported everything withheld and fell to the platform-only path,
+     * which is the weakest reading available. Raised by Codex on #168.
+     */
+    const legacy = adapter as { requestAdapterInfo?: () => Promise<AdapterInfo | undefined> };
+    const info = adapter.info ?? (await legacy.requestAdapterInfo?.());
 
     const nav = navigator as Navigator & {
       deviceMemory?: number;
@@ -363,8 +415,8 @@ export async function readSignals(): Promise<DetectionSignals | undefined> {
     };
 
     return {
-      adapterVendor: adapter.info?.vendor,
-      adapterArchitecture: adapter.info?.architecture,
+      adapterVendor: info?.vendor,
+      adapterArchitecture: info?.architecture,
       maxBufferBytes: adapter.limits?.maxBufferSize,
       deviceMemoryGiB: nav.deviceMemory,
       platform: nav.userAgentData?.platform ?? navigator.platform,
@@ -383,9 +435,17 @@ export async function readSignals(): Promise<DetectionSignals | undefined> {
  * build-time dependency behind a progressive enhancement. Every field is optional because every
  * one is: `GPUAdapter.info` is newer than `requestAdapter`, and older Chromiums expose neither.
  */
+/** The two fields read off an adapter, however this browser exposes them. */
+interface AdapterInfo {
+  vendor?: string;
+  architecture?: string;
+}
+
 interface GPUFallback {
-  requestAdapter?: () => Promise<{
-    info?: { vendor?: string; architecture?: string };
+  requestAdapter?: (options?: { powerPreference?: 'high-performance' | 'low-power' }) => Promise<{
+    info?: AdapterInfo;
+    /** The deprecated predecessor of `info`, still the only route on older Chromiums. */
+    requestAdapterInfo?: () => Promise<AdapterInfo | undefined>;
     limits?: { maxBufferSize?: number };
   } | null>;
 }

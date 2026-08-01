@@ -70,12 +70,23 @@ export function Detect() {
       {state === 'done' && result !== null && (
         <section
           aria-labelledby={headingId}
+          /* Announced, because the read is asynchronous and inserts only visual content — without
+             this a reader who pressed the button got no indication that anything had happened
+             (raised by Codex on #168).
+
+             `aria-live` rather than `role="status"`, and the difference is not cosmetic: `role`
+             *replaces* the implicit one, so `role="status"` took this element out of the region
+             landmark it is named by — the panel stopped being addressable as "Which of these is
+             yours?" at the same moment it became announceable. `aria-live` adds the behaviour and
+             leaves the role alone. */
+          aria-live="polite"
           className="mt-3 flex flex-col gap-2 rounded-md border border-[var(--color-border)] p-3"
         >
+          {/* One heading, because there is now one shape of answer: candidates to choose from.
+              It read "What the browser would say" on the long-list path, which was a heading for a
+              panel that offered nothing to do. */}
           <h3 id={headingId} className="text-xs font-medium text-[var(--color-text)]">
-            {result.askAbout === undefined
-              ? 'Which of these is yours?'
-              : 'What the browser would say'}
+            Which of these is yours?
           </h3>
 
           {/* Always, in every state. This is what makes a guess visibly a guess — and on a Mac it
@@ -105,30 +116,36 @@ export function Detect() {
             )}
           </ul>
 
-          {result.askAbout === undefined ? (
-            <ul className="flex list-none flex-wrap gap-2">
-              {result.candidates.map((device) => (
-                <li key={device.id}>
-                  <button
-                    type="button"
-                    /* A confirmation, and the only place detection ever writes to the store. The
-                       reader picks; nothing here is applied on their behalf. */
-                    onClick={() => set('deviceId', device.id)}
-                    className="inline-flex min-h-11 items-center rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-text)] hover:border-[var(--color-accent-dim)]"
-                  >
-                    {deviceOptionLabel(device)}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : (
+          {/**
+           * **The candidates are offered whether or not the list is short**, and the first version
+           * hid them past six — discarding the narrowing exactly where it was worth most (raised by
+           * Codex on #168). A vendor-only NVIDIA read leaves seventeen rows, and seventeen buttons
+           * is still far better than searching forty-three: the reader is told it is a long list and
+           * given it anyway, rather than sent back to the unfiltered picker.
+           */}
+          {result.askAbout !== undefined && (
             <p className="text-xs leading-relaxed text-[var(--color-text-muted)]">
-              That still leaves {result.candidates.length} machines, which is not a shortlist.{' '}
+              That still leaves {result.candidates.length} machines, which is more than a shortlist.{' '}
               {result.askAbout === 'memory'
-                ? 'How much memory does it have? Pick the matching row above — the memory is in every name.'
-                : 'Pick yours from the Hardware list above; everything below the vendor is a guess this browser will not let anyone make.'}
+                ? 'How much memory does it have? The memory is in every name below.'
+                : 'Everything below the vendor is a guess this browser will not let anyone make — but these are the rows it could be.'}
             </p>
           )}
+          <ul className="flex list-none flex-wrap gap-2">
+            {result.candidates.map((device) => (
+              <li key={device.id}>
+                <button
+                  type="button"
+                  /* A confirmation, and the only place detection ever writes to the store. The
+                       reader picks; nothing here is applied on their behalf. */
+                  onClick={() => set('deviceId', device.id)}
+                  className="inline-flex min-h-11 items-center rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-text)] hover:border-[var(--color-accent-dim)]"
+                >
+                  {deviceOptionLabel(device)}
+                </button>
+              </li>
+            ))}
+          </ul>
         </section>
       )}
     </div>
