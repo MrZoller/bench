@@ -805,9 +805,17 @@ reading the test that guards them.
   held by `e2e/matrix-readout.spec.ts` — pads a three-line sentence into a four-line
   box, so the test written to prove "two sentences of different height do not move the panel" found
   equal heights once the fix landed and failed on its own precondition. The right shape is to assert
-  the _consequence_ here and put the _evidence that the inputs differ_ in a sibling test — in that
-  case a sweep measuring every sentence against the reservation, which would fail if they all fitted
-  one line.
+  the _consequence_ here and put the _evidence that the inputs differ_ in a sibling test.
+
+  **The sibling test is owed rather than written, and saying otherwise was this entry making the
+  mistake it is about.** The sweep that exists samples every seventh cell and asserts the rendered
+  height is positive and no greater than the reservation — but the rendered height already _includes_
+  the `min-height`, so a readout whose sentences all fit one line satisfies it, and deleting the
+  reservation escapes it. That is evidence of the reservation working, not evidence that the inputs
+  differ, which are the two halves this entry exists to separate. What it needs is a natural height
+  measured with the reservation lifted, and an assertion that the line counts genuinely differ. It
+  belongs with [#102](https://github.com/MrZoller/bench/issues/102), which reworks that reservation
+  for a 32px root and has to measure the unreserved wrapping anyway.
 
 - **Reflow tests measure the panel; the page is a different question.** The Matrix readout was moved to
   be the panel's last child so its height could not push the legend, and the commit claimed "nothing
@@ -1249,9 +1257,16 @@ ceiling)` keeps an over-budget stack on screen, which is right and stays. What i
   derivation, so the embedding is subtracted only on the MoE branch, where the dense residual is
   rebuilt and the routed share added back. It is what reconciles every derived figure with its
   vendor's, and it is the wrong basis for decode wherever the two conventions disagree — which is
-  every MoE, every multimodal row, and every untied dense one. On a tied text-only dense row they
-  agree exactly, and that is a coincidence of the arithmetic rather than a property to rely on. The
-  engine reads `activeDenseParams`:
+  **exactly where something is excluded per token**: a non-language tower, or an untied input
+  embedding. Everywhere else they agree to the digit, and the list of those places is longer than it
+  looks. Every text-only MoE: `publishedActiveParams` and `effectiveActiveParams(m, 1)` are the same
+  expression there, so gpt-oss, the Qwen3 MoEs, Mixtral, GLM and the DeepSeek rows all reconcile
+  exactly. Every tied text-only dense row, since a tied table is the output projection and is read in
+  full. What is left is Command A+ and Mistral Small 4 on the towers, the Gemma rows on the vision
+  encoder, and the untied dense rows on the embedding. Stated this way round because the invariant a
+  maintainer needs is _when to distrust the published figure_, and "every MoE" would have them
+  replacing correct values.
+  The engine reads `activeDenseParams`:
   - the embedding is subtracted only when **untied**. A tied table _is_ the output projection —
     a full vocab matmul every step — so subtracting it understates Gemma 3 12B by 5%.
   - **tied-ness comes from the absence of an `lm_head.weight` tensor**, never from
