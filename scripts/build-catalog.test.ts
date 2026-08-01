@@ -9,6 +9,7 @@ import {
   publishedActiveParams,
   reconcileActiveParams,
   seededIds,
+  staleRefusals,
   unseededCandidates,
 } from './build-catalog';
 
@@ -1257,6 +1258,86 @@ describe('the expert count', () => {
  * editing a `config.json` is caught within days. A model that was never listed is invisible to it —
  * which is how this list came to be a year behind the field with every number in it seven days old.
  */
+/**
+ * Re-asking a refusal, which nothing in the shipped table can currently trigger
+ * ([#103](https://github.com/MrZoller/bench/issues/103)).
+ *
+ * Every entry was checked on the same day, so the six-month window will not open on any of them for
+ * months — and an unreachable branch is one nobody notices breaking, which this repo has written
+ * down twice in other words. The clock is a parameter for exactly that reason: these drive the
+ * mechanism at the dates that matter instead of waiting for the calendar to reach them.
+ */
+describe('a written refusal expires rather than standing for ever', () => {
+  const REFUSALS = {
+    old: { cause: 'engine', checkedAt: '2024-01-01', why: 'hybrid: 8 of 32 layers attend' },
+    recent: { cause: 'engine', checkedAt: '2026-07-01', why: 'sparse-attention indexer' },
+    export: { cause: 'repo', checkedAt: '2024-01-01', why: 'int4 export: counts group scales' },
+    settled: { cause: 'catalog', checkedAt: '2019-01-01', why: 'same shape as a seeded row' },
+  } as const;
+  const NOW = new Date('2026-08-01T00:00:00Z');
+
+  it('re-asks what a capability or a re-upload could have changed, and nothing else', () => {
+    const stale = staleRefusals({ refusals: REFUSALS, now: NOW });
+
+    // The two whose answer lives outside this repo, oldest first — and *not* the `catalog` one,
+    // which is seven years old and still exactly as true as the day it was written, because nothing
+    // a publisher does can make "this row answers no new question" false.
+    expect(stale.map((entry) => entry.id)).toEqual(['old', 'export']);
+    expect(stale[0].monthsOld).toBeGreaterThan(30);
+  });
+
+  it('keeps a refusal checked inside the window', () => {
+    // The precondition for the case above: this is a filter, not a list of everything that can age.
+    const stale = staleRefusals({ refusals: REFUSALS, now: NOW });
+    expect(stale.map((entry) => entry.id)).not.toContain('recent');
+    // And the boundary is the window rather than the entry, so a shorter one reaches it.
+    expect(staleRefusals({ refusals: REFUSALS, now: NOW, months: 1 }).map((e) => e.id)).toContain(
+      'recent'
+    );
+  });
+
+  it('treats an unreadable date as stale rather than as fresh', () => {
+    /*
+     * The direction is the whole assertion. Failing open would exempt a typo'd entry from re-checking
+     * for ever, silently — and the entries most likely to be mid-edit are the ones somebody is
+     * halfway through revisiting. This repo has shipped three filters that reported compliance over
+     * nothing; the guard is to make the unreadable case the loud one.
+     */
+    const broken = {
+      one: { cause: 'engine', checkedAt: 'last Tuesday', why: 'hybrid stack' },
+    } as const;
+    const stale = staleRefusals({ refusals: broken, now: NOW });
+
+    expect(stale.map((entry) => entry.id)).toEqual(['one']);
+    expect(stale[0].monthsOld).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  it('sorts the oldest first, since that is the order a reader works down', () => {
+    const many = {
+      middle: { cause: 'engine', checkedAt: '2025-01-01', why: 'hybrid stack' },
+      oldest: { cause: 'engine', checkedAt: '2023-01-01', why: 'hybrid stack' },
+      newest: { cause: 'repo', checkedAt: '2025-06-01', why: 'int4 export' },
+    } as const;
+
+    expect(staleRefusals({ refusals: many, now: NOW }).map((entry) => entry.id)).toEqual([
+      'oldest',
+      'middle',
+      'newest',
+    ]);
+  });
+
+  it('re-asks nothing on the table as it stands, which is why the cases above are synthetic', () => {
+    // The claim that makes this whole describe necessary rather than redundant: on the shipped table
+    // at the day it was written, the mechanism produces an empty list — so every assertion above
+    // would be vacuous if it used `NOT_SEEDED`, and a future date is what will exercise it.
+    expect(staleRefusals({ refusals: NOT_SEEDED, now: new Date('2026-08-01') })).toEqual([]);
+    // And that it is a window rather than a switch that is off: six months on, it fires.
+    expect(
+      staleRefusals({ refusals: NOT_SEEDED, now: new Date('2027-06-01') }).length
+    ).toBeGreaterThan(30);
+  });
+});
+
 describe('the seed list knows what it is not carrying', () => {
   it('never lists a repo as both seeded and deliberately absent', () => {
     // The two halves of one decision, and a repo in both is a contradiction that would also make the
@@ -1268,9 +1349,34 @@ describe('the seed list knows what it is not carrying', () => {
   });
 
   it('states a reason for every absence, since the list is the written record', () => {
-    for (const [id, reason] of Object.entries(NOT_SEEDED)) {
-      expect(reason.length, `${id} has no reason`).toBeGreaterThan(10);
+    for (const [id, refusal] of Object.entries(NOT_SEEDED)) {
+      expect(refusal.why.length, `${id} has no reason`).toBeGreaterThan(10);
     }
+  });
+
+  /**
+   * And the structure that makes a refusal expirable rather than permanent (#103).
+   *
+   * Prose alone could say why a repo was declined and could not say *when* or *what would change
+   * it*, so `unseededCandidates` dropped every id in this table for ever — and the ids in it are, by
+   * construction, the high-download ones the report exists to surface. Both fields are asserted
+   * because both are read by a machine: `cause` decides whether an entry ages at all, and
+   * `checkedAt` decides when.
+   */
+  it('says what would change each answer, and when it was last asked', () => {
+    const causes = new Set(['engine', 'repo', 'catalog']);
+    for (const [id, refusal] of Object.entries(NOT_SEEDED)) {
+      expect(causes.has(refusal.cause), `${id} has cause "${refusal.cause}"`).toBe(true);
+      // A date `Date.parse` cannot read is treated as infinitely stale by `staleRefusals`, which
+      // fails loud rather than open — but a typo should not need the weekly report to surface it.
+      expect(refusal.checkedAt, `${id} has no check date`).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(Number.isFinite(Date.parse(refusal.checkedAt)), `${id}'s date is unreadable`).toBe(
+        true
+      );
+    }
+    // The precondition: all three causes are in use, so none of them is a branch nothing exercises.
+    const used = new Set(Object.values(NOT_SEEDED).map((r) => r.cause));
+    expect([...used].sort()).toEqual(['catalog', 'engine', 'repo']);
   });
 
   it('seeds each repo once, and names each row once', () => {
