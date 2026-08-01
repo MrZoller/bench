@@ -27,6 +27,13 @@ import { deviceOptionLabel } from '@/lib/stops';
  */
 export function Detect() {
   const set = useConfig((s) => s.set);
+  /**
+   * Subscribed to, not just written: after a candidate is pressed the list gave no sign which one
+   * had been chosen — the Hardware select that reflects it is off screen in a long list, so both a
+   * sighted and a screen-reader user could sit on an unchanged button wondering. Raised by Codex on
+   * #168.
+   */
+  const selectedDeviceId = useConfig((s) => s.deviceId);
   const headingId = useId();
   const [state, setState] = useState<'idle' | 'reading' | 'unavailable' | 'done'>('idle');
   const [result, setResult] = useState<Detection | null>(null);
@@ -60,7 +67,7 @@ export function Detect() {
         /* Not an error. A browser that exposes no WebGPU adapter is a browser doing what it was
            configured to do, and the honest response is to name the picker rather than to report a
            failure the reader cannot act on. */
-        <p className="mt-2 text-xs text-[var(--color-text-muted)]">
+        <p aria-live="polite" className="mt-2 text-xs text-[var(--color-text-muted)]">
           This browser exposes no graphics adapter to the page — Safari without the flag, or a
           hardened browser. Pick your hardware above instead; nothing else on this page depends on
           it.
@@ -139,7 +146,16 @@ export function Detect() {
                   /* A confirmation, and the only place detection ever writes to the store. The
                        reader picks; nothing here is applied on their behalf. */
                   onClick={() => set('deviceId', device.id)}
-                  className="inline-flex min-h-11 items-center rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-text)] hover:border-[var(--color-accent-dim)]"
+                  /* Which one was chosen, in the accessibility tree and not only in a border. The
+                     Hardware select that otherwise reflects it is off screen in a seventeen-row
+                     list, so pressing a button left both a sighted and a screen-reader user on an
+                     unchanged control with no sign anything had happened. Raised by Codex on #168. */
+                  aria-pressed={device.id === selectedDeviceId}
+                  className={`inline-flex min-h-11 items-center rounded-md border px-3 py-1.5 text-xs text-[var(--color-text)] hover:border-[var(--color-accent-dim)] ${
+                    device.id === selectedDeviceId
+                      ? 'border-[var(--color-accent)]'
+                      : 'border-[var(--color-border)]'
+                  }`}
                 >
                   {deviceOptionLabel(device)}
                 </button>

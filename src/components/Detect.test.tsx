@@ -43,7 +43,11 @@ describe('when the browser exposes nothing', () => {
     render(<Detect />);
     await user.click(button());
 
-    expect(await screen.findByText(/exposes no graphics adapter/i)).toBeInTheDocument();
+    const said = await screen.findByText(/exposes no graphics adapter/i);
+    expect(said).toBeInTheDocument();
+    // Announced too: this path inserts only a paragraph, and there is not even a new focusable
+    // control to meet by tabbing, so without a live region a screen-reader user learns nothing.
+    expect(said.getAttribute('aria-live')).toBe('polite');
     expect(screen.queryByRole('heading')).not.toBeInTheDocument();
   });
 
@@ -72,6 +76,22 @@ describe('when the signals narrow to a shortlist', () => {
     // reader's behalf. A wrong guess silently applied is invented data wearing the chassis of a
     // measurement.
     expect(useConfig.getState().deviceId).toBe(DEFAULT_CONFIG.deviceId);
+  });
+
+  it('says which candidate was chosen, once one is', async () => {
+    // The Hardware select that otherwise reflects the choice is off screen in a long list, so
+    // pressing a button left the reader on an unchanged control with no sign anything happened.
+    const user = userEvent.setup();
+    stubAdapter({ vendor: 'intel', architecture: 'xe-2hpg' });
+    render(<Detect />);
+    await user.click(button());
+
+    const panel = await screen.findByRole('region', { name: /which of these is yours/i });
+    const choices = within(panel).getAllByRole('button');
+    expect(choices.every((b) => b.getAttribute('aria-pressed') === 'false')).toBe(true);
+
+    await user.click(choices[0]);
+    expect(choices[0].getAttribute('aria-pressed')).toBe('true');
   });
 
   it('sets the hardware only when a candidate is pressed', async () => {

@@ -288,22 +288,26 @@ export function detect(signals: DetectionSignals, devices: readonly DeviceSpec[]
   }
 
   /**
-   * The one limit worth reading, as a floor.
+   * **`maxBufferSize` is read but never pruned on, and dropping that prune was the second review's
+   * correction.**
    *
-   * `maxBufferSize` is the largest single allocation the driver will hand out, and drivers cap it
-   * well under total memory — so a device whose capacity is *below* it is impossible, and a device
-   * above it is merely not ruled out. That asymmetry is the whole value: it prunes downward and
-   * promises nothing upward.
+   * It looked like a sound floor: the largest single allocation the driver will hand out, capped
+   * well under total memory, so a device below it is impossible. But it is a *validation* ceiling
+   * on a buffer descriptor rather than a promise that such a buffer can be allocated — WebGPU
+   * checks a request against it and can still fail with an out-of-memory error. So a limit above a
+   * device's real capacity is not a contradiction, and pruning on it removed the reader's actual
+   * machine.
+   *
+   * That is the one failure this module cannot accept: a shortlist without the right answer in it
+   * leaves the confirmation step with nothing to confirm. It is reported as evidence, where the
+   * reader can weigh it, and narrows nothing.
    */
   if (signals.maxBufferBytes !== undefined && signals.maxBufferBytes > 0) {
-    const floorGiB = signals.maxBufferBytes / GIB;
-    if (prune((d) => d.capacityBytes / GIB >= floorGiB) === 'narrowed') {
-      evidence.push(
-        `The adapter will allocate a single ${floorGiB.toFixed(1)} GiB buffer, so the machine has ` +
-          `at least that much — which rules out the smaller rows. It is an allocation ceiling ` +
-          `rather than a capacity, so it says nothing about how much more there is.`
-      );
-    }
+    evidence.push(
+      `The adapter accepts a single buffer of up to ${(signals.maxBufferBytes / GIB).toFixed(1)} ` +
+        `GiB. That is a validation limit rather than a promise the memory exists, so it is not ` +
+        `used to rule any machine out — but a very small figure is a hint that the machine is too.`
+    );
   }
 
   /**

@@ -142,18 +142,18 @@ describe('what each signal is worth is stated, and it is less than it looks', ()
     expect(askAbout).toBe('memory');
   });
 
-  it('treats the buffer limit as a floor, pruning downward only', () => {
-    // `maxBufferSize` is the largest single allocation a driver will hand out, capped well under
-    // VRAM — so a device below it is impossible and a device above it is merely not ruled out.
-    const withFloor = ids({ adapterVendor: 'nvidia', maxBufferBytes: 20 * GIB });
-    const without = ids({ adapterVendor: 'nvidia' });
+  it('reports the buffer limit as evidence and rules nothing out on it', () => {
+    /**
+     * **This was a prune and should not have been**, which the second review round corrected.
+     * `maxBufferSize` is a *validation* ceiling on a buffer descriptor rather than a promise the
+     * memory exists — WebGPU checks a request against it and can still fail with an out-of-memory
+     * error — so a limit above a device's real capacity is not a contradiction, and pruning on it
+     * removed the reader's actual machine. That is the one failure this module cannot accept.
+     */
+    const withLimit = detect({ adapterVendor: 'nvidia', maxBufferBytes: 20 * GIB }, DEVICES);
 
-    expect(withFloor.length).toBeLessThan(without.length);
-    for (const id of withFloor) {
-      expect(DEVICES.find((d) => d.id === id)!.capacityBytes / GIB).toBeGreaterThanOrEqual(20);
-    }
-    // Every survivor was in the unfiltered list: this prunes, it never adds.
-    for (const id of withFloor) expect(without).toContain(id);
+    expect(withLimit.candidates.map((d) => d.id)).toEqual(ids({ adapterVendor: 'nvidia' }));
+    expect(withLimit.evidence.join(' ')).toMatch(/validation limit rather than a promise/i);
   });
 
   it('reads a capped deviceMemory as evidence of a small machine and nothing else', () => {
