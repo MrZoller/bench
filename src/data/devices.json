@@ -3,6 +3,8 @@
 
   "$comment-compute": "Three vendors state compute in three different units, so each row's tflops is a derivation and the derivation is the same for every row of that vendor. NVIDIA: a consumer card publishes one 'AI TOPS' headline, and it is sparse *and* quoted at the lowest precision that generation's tensor cores reach — so dense fp16 is one halving for the sparsity plus one for every precision step above it. Blackwell headlines sparse FP4, three halvings away, hence an eighth: 3352 -> 419 on a 5090, 1801 -> 225 on a 5080, 759 -> 95 on a 5060 Ti. Ada headlines sparse FP8, two halvings, hence a quarter: 1321 -> 330 on a 4090, 353 -> 88 on a 4060 Ti. Consumer Ampere has neither FP4 nor FP8 units and publishes no such headline; its dense fp16 tensor rate is 4x the FP32 shader rate (35.58 -> 142 on a 3090, 12.74 -> 51 on a 3060). The datacenter parts are transcribed rather than derived, because their datasheets state dense tensor rates directly and that shader multiple is GA10x's rather than GA100's: A100 states 312 fp16 against 19.5 FP32, which is 16x. AMD Radeon: the FP16 *matrix* rate of the AI accelerators, not the packed-vector figure published beside it — the two differ by 2x on RDNA 4. Intel: Intel publishes a peak INT8 figure and no FP16 one, and XMX runs INT8 at twice FP16 (4096 against 2048 ops per Xe-core per clock), so fp16 on the Arc rows is exactly half the stated TOPS. Apple: FP32 at 2x, from the per-GPU-core rate of that generation.",
 
+  "$comment-cpu-compute": "The cpu-ram rows carry a *theoretical vector peak*, on the same doctrine as bandwidth: cores x base clock x two FMA pipelines x fp32 lanes x 2, with the gap between that ceiling and what a runtime achieves owned by runtimes.ts's computeEfficiency rather than pre-discounted into the row. Every row states its core count, base clock and FMA width in its note, and data/catalog.test.ts recomputes the figure from those three. Four things the formula turns on. Base clock, not boost — a boost figure is not sustainable across every core at once, and this is the conservative end of a range the efficiency constant is fitted against. Two FMA pipelines is the x86 server norm and the only per-core variable left, so a part with one would have to say so. **fp32 lanes, not fp16** — the register width is what varies, and 512 bits is 16 fp32 lanes for 64 flops per clock against 256 bits' 8 lanes for 32. AVX512-FP16 would double that again and is deliberately not counted: llama.cpp does not target the extension, and its GGUF kernels accumulate in fp32 whatever the checkpoint stores. And **Zen 4 is double-pumped**: it decodes 512-bit AVX-512 onto 256-bit datapaths in two passes, so the EPYC 9654 and Threadripper 7995WX rows compute at the 256-bit rate while stating the 512-bit width their ISA advertises. Zen 5 and Granite Rapids are full width. This basis replaced five figures that were each conservative by a different, unstated factor — catalogued over computed peak ran 0.41 to 1.12 across the five, a 2.7x spread — which meant the CPU rows could not be ranked against each other, on a surface whose whole purpose is ranking hardware. See #90.",
+
   "$comment-apple-ceiling": "allocatableGiB on the Apple rows is what Metal reports as its recommended working set — two thirds of RAM at 32 GiB and below, three quarters above it — because that is the figure llama.cpp warns against exceeding, and it is the default a user has before touching anything. maxAllocatableGiB is capacity minus max(8 GiB, 1/16 of RAM). Those two rules *cross over* below 32 GiB: on a 24 GiB machine the recommendation and the reserve both land on 16 GiB, and on a 16 GiB machine the reserve would put the ceiling below the default. Those rows therefore state no raiseable ceiling at all rather than one that promises less than what the machine already offers — the sysctl still exists, there is simply no figure above the default this size of machine survives.",
 
   "$comment-order": "Row order is display order, and nothing in the app sorts these rows: catalog.ts maps this array straight through, the Hardware picker renders DEVICES unsorted, and the Matrix renders it filtered to shipping. The sequence below is therefore curated, and these are its rules — nothing stated them until #79, which is how three rows came to break them without anything noticing. Rows are grouped by `class`, in the order the UI shows the bands: `discrete-gpu`, then `unified-soc`, then `cpu-ram`. Within a class a vendor's rows are contiguous; the order of the vendors themselves is editorial and claims nothing. Within a vendor a product line is contiguous and separated from the next by a blank line — GeForce, then RTX PRO, then the datacenter parts; Radeon then Instinct; Arc then Arc Pro; Apple's Ultra, then Max, then Pro, then Air — and inside a line the newest generation leads, with the largest or fastest bin first within a generation. Where a line is not a tiered ladder at all (the datacenter run is four generations of five unrelated products, so no ladder exists to descend) the rows run newest-released first, which is why that block reads B200, H200, L40S, H100, A100. Status is not an ordering key: a pre-release row sorts on its release date like any other, so the rumoured M5 Ultra leads the Apple run rather than sitting behind the machines it supersedes. Position then follows a fact that does not change when the machine ships, and the marker in the option label is what says the specs are not final (#69). data/catalog.test.ts enforces the first two levels, which are properties of fields every row carries. The sequence inside a product line is not machine-checked: no field encodes a line or a tier, and the only way to check it would be to add a rank to every row — which is this order restated rather than derived, and would pass by construction. The blank lines are the record of it, and they survive prettier.",
@@ -687,10 +689,11 @@
       "capacityGiB": 1536,
       "allocatableGiB": 1450,
       "bandwidthGBs": 576,
-      "tflops": { "fp16": 9 },
+      "tflops": { "fp16": 22.1 },
       "tdpWatts": 500,
       "releasedAt": "2024-10-10",
-      "source": "https://www.amd.com/en/products/processors/server/epyc/9005-series/amd-epyc-9755.html"
+      "source": "https://www.amd.com/en/products/processors/server/epyc/9005-series/amd-epyc-9755.html",
+      "note": "128 cores at 2.70 GHz with two 512-bit FMA pipelines, which is 22.1 TFLOPS on the vector peak this catalog states for every cpu-ram row. Zen 5 widened the floating-point datapath to a full 512 bits, so this part does twice the work per clock per core that the two Zen 4 rows below do — which is most of the gap between them, not the extra 32 cores."
     },
     {
       "id": "epyc-9654",
@@ -701,11 +704,11 @@
       "capacityGiB": 768,
       "allocatableGiB": 720,
       "bandwidthGBs": 460.8,
-      "tflops": { "fp16": 6 },
+      "tflops": { "fp16": 7.37 },
       "tdpWatts": 360,
       "releasedAt": "2022-11-10",
       "source": "https://www.amd.com/en/products/processors/server/epyc/9004-series/amd-epyc-9654.html",
-      "note": "Anchors the low end of the roofline: ~6 tok/s on DeepSeek-671B Q8. CPU cores cannot saturate 12 channels of DDR5, so achieved bandwidth sits near half of nominal."
+      "note": "Anchors the low end of the roofline: ~6 tok/s on DeepSeek-671B Q8. CPU cores cannot saturate 12 channels of DDR5, so achieved bandwidth sits near half of nominal. 96 cores at 2.40 GHz with two 512-bit FMA pipelines, double-pumped — Zen 4 decodes a 512-bit op onto 256-bit datapaths in two passes, so the vector peak is 7.37 TFLOPS rather than the 14.7 the register width suggests. The anchor above is unaffected either way: decode on this rig is bandwidth-bound and reads no compute figure at all."
     },
 
     {
@@ -717,11 +720,12 @@
       "capacityGiB": 512,
       "allocatableGiB": 480,
       "bandwidthGBs": 332.8,
-      "tflops": { "fp16": 5 },
+      "tflops": { "fp16": 7.68 },
       "tdpWatts": 350,
       "msrpUsd": 9999,
       "releasedAt": "2023-10-19",
-      "source": "https://www.amd.com/en/products/processors/workstations/ryzen-threadripper.html"
+      "source": "https://www.amd.com/en/products/processors/workstations/ryzen-threadripper.html",
+      "note": "96 cores at 2.50 GHz with two 512-bit FMA pipelines, double-pumped as on the EPYC 9654 and for the same reason, both being Zen 4: 7.68 TFLOPS on the vector peak. Slightly above the 9654 on compute and well below it on bandwidth — eight channels against twelve — which is the trade this row exists to show, since a workstation part is the machine most readers here can actually buy."
     },
 
     {
@@ -733,11 +737,11 @@
       "capacityGiB": 1536,
       "allocatableGiB": 1450,
       "bandwidthGBs": 844.8,
-      "tflops": { "fp16": 8 },
+      "tflops": { "fp16": 16.4 },
       "tdpWatts": 500,
       "releasedAt": "2024-09-24",
       "source": "https://www.intel.com/content/www/us/en/products/sku/240777/intel-xeon-6980p-processor-504m-cache-2-00-ghz/specifications.html",
-      "note": "Twelve channels of MRDIMM-8800 is 844.8 GB/s exactly, which is more than any EPYC row here and the reason high-bandwidth CPU inference is not an AMD-only technique. Capacity assumes one 128 GB MRDIMM per channel. Compute deliberately excludes AMX: its tile rate is roughly an order of magnitude higher, nothing catalogued here reaches it for a GGUF today, and folding it in would report a CPU's time to first token as better than a 4090's. **The 8 TFLOPS is not a computed vector peak, and this note used to claim it was.** 128 cores at 2.0 GHz with two 512-bit FMA pipelines is 16.4 TFLOPS fp32, or 32.8 with AVX512-FP16 — both well above this figure. It is carried on the same conservative basis as the four other `cpu-ram` rows, which is what keeps this row comparable with them and with the EPYC 9654 calibration anchor; that basis is not reproducible from a stated formula on any of the five (catalogued/fp32-peak runs 0.41 to 1.12 across them), and correcting one row alone would make it the odd one out rather than the right one. Deriving all five on one declared basis is filed separately — see #90."
+      "note": "Twelve channels of MRDIMM-8800 is 844.8 GB/s exactly, which is more than any EPYC row here and the reason high-bandwidth CPU inference is not an AMD-only technique. Capacity assumes one 128 GB MRDIMM per channel. 128 cores at 2.00 GHz with two 512-bit FMA pipelines, which is 16.4 TFLOPS on the vector peak. Two things it deliberately is not. Not AMX: the tile rate is roughly an order of magnitude higher, nothing catalogued here reaches it for a GGUF today, and folding it in would report a CPU's time to first token as better than a 4090's. And not the AVX512-FP16 rate of 32.8, which would be the figure if the multiply-accumulate ran in half precision — llama.cpp does not use that ISA extension, and its GGUF kernels accumulate in fp32 lanes whatever the checkpoint is stored as, so the fp32 lane count is the honest ceiling. That factor of two was the open question in #90 and it resolves against the wider figure."
     },
 
     {
@@ -749,9 +753,9 @@
       "capacityGiB": 128,
       "allocatableGiB": 112,
       "bandwidthGBs": 96,
-      "tflops": { "fp16": 2 },
+      "tflops": { "fp16": 1.02 },
       "source": "https://www.intel.com/content/www/us/en/support/articles/000005505/memory-and-storage.html",
-      "note": "The floor. Included so the comparison against every other row is visible: a large model here is measured in seconds per token, not tokens per second."
+      "note": "The floor. Included so the comparison against every other row is visible: a large model here is measured in seconds per token, not tokens per second. Modelled as 8 cores at 4.00 GHz with two 256-bit FMA pipelines, which is 1.02 TFLOPS on the vector peak. AVX2 rather than AVX-512, because that is the width a generic desktop row can promise: Intel has fused AVX-512 off its consumer parts since Alder Lake while Ryzen carries it, so assuming the wider unit would describe one vendor's machines and overstate the other's by two. Performance cores only, for the same reason — a hybrid part's efficiency cores are a count this row cannot state."
     }
   ]
 }
