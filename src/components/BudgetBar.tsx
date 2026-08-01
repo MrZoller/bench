@@ -198,10 +198,13 @@ export function BudgetBar({
     ? canOffload
       ? // Each subject carries its own tail: "and neither can be offloaded" counts the pair
         // "cache and overhead", which the elsewhere-branch does not name — shared, it dangled
-        // there (#128). And the elsewhere figure is cache *plus activations*, so the sentence
-        // says "cache and workspace" rather than under-naming the quantity it prints.
+        // there (#128). Two words in the elsewhere sentence are load-bearing: "the card holding
+        // the most cache", because the engine's *busiest* device is busiest by combined load and
+        // in the pinned Gemma split is the card being drawn, not this one; and "overhead",
+        // because the floor is cache plus `activationBytes` — the very quantity the segment
+        // above labels Overhead — so calling it workspace under-names it.
         floorIsElsewhere
-        ? ` — the busiest card needs ${gibLabel(floorBytes)} of cache and workspace, which cannot be offloaded, so spilling every weight would still leave it over`
+        ? ` — the card holding the most cache needs ${gibLabel(floorBytes)} of cache and overhead, which cannot be offloaded, so spilling every weight would still leave it over`
         : ` — the cache and overhead alone need ${gibLabel(floorBytes)}, and neither can be offloaded, so spilling every weight would still leave it over`
       : ' — and this memory is the machine’s own, so there is nowhere faster to spill to'
     : placement.offloadFraction > 0
