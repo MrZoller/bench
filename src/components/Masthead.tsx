@@ -3,6 +3,7 @@ import { useConfig, type Config } from '@/store/config';
 import { configToShareSearch } from '@/store/url';
 import { CATALOG_GENERATED_AT } from '@/data/catalog';
 import { colors, space, withAlpha } from '@/design/tokens';
+import { useDevicePixelRatio } from './useDevicePixelRatio';
 
 /**
  * The masthead.
@@ -114,6 +115,9 @@ export function Masthead() {
   // the Envelope uses, and for the same reason: the bitmap is stretched until something else
   // happens to trigger a redraw otherwise.
   const [resizeTick, setResizeTick] = useState(0);
+  // A DPR-only change alters no CSS box, so the ResizeObserver above never fires for it — the
+  // same staleness the Envelope had, on the page's other canvas (#129).
+  const dpr = useDevicePixelRatio();
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || typeof ResizeObserver === 'undefined') return;
@@ -153,7 +157,6 @@ export function Masthead() {
     if (!ctx) return;
 
     // Draw at device resolution so the lattice stays crisp on a retina display.
-    const dpr = window.devicePixelRatio || 1;
     const { width, height } = canvas.getBoundingClientRect();
     // A zero-sized box would give a zero-sized bitmap, which reads back as "never painted" rather
     // than as "not laid out yet". The ResizeObserver brings us straight back when it has a size.
@@ -194,7 +197,7 @@ export function Masthead() {
     };
     frame = requestAnimationFrame(step);
     return () => cancelAnimationFrame(frame);
-  }, [resizeTick]);
+  }, [resizeTick, dpr]);
 
   return (
     <header className="relative isolate border-b border-[var(--color-border)]">
