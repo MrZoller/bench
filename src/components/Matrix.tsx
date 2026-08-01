@@ -826,13 +826,20 @@ export function Matrix({ config }: { config: Config }) {
         </p>
       </fieldset>
 
-      {/* `scroll-pl-36` is the left edge's counterpart to the cells' `scroll-mb-*` (#123): the
-          model column is sticky and opaque, so the browser's minimal focus-reveal — which aligns
-          an off-screen-left cell with the scrollport's content edge — parked the cell and its
-          focus ring underneath it, invisible at every further ArrowLeft. Scroll padding moves the
-          reveal target past the column; 36 is the column's own `max-w-[9rem]`, so the two lengths
-          scale together. */}
-      <div className="mt-4 overflow-x-auto scroll-pl-36">
+      {/* The scroll padding is the left edge's counterpart to the cells' `scroll-mb-*` (#123):
+          the model column is sticky and opaque, so the browser's minimal focus-reveal — which
+          aligns an off-screen-left cell with the scrollport's content edge — parked the cell and
+          its focus ring underneath it, invisible at every further ArrowLeft. Scroll padding
+          moves the reveal target past the column, and its length is the max of the column's own
+          two bounds rather than a copy of either: the `max-w-[9rem]` cap that sizes it today,
+          and `headerBand.lean`, the `minWidth` that wins over the cap the day a longer device
+          label widens the lean past it (raised in review on #149 — a static 9rem stops short
+          exactly then, and a bare lean stops 3px short today). `matrix-grid.spec.ts` measures
+          the real geometry, which is what catches a bound this expression does not carry. */}
+      <div
+        className="mt-4 overflow-x-auto"
+        style={{ scrollPaddingLeft: `max(9rem, ${headerBand.lean})` }}
+      >
         {/* `role="grid"` rather than the native table role, because the cells are widgets a
             keyboard drives rather than data a reader browses — which is the distinction the two
             roles exist to draw, and what tells a screen reader to hand the arrow keys over. */}
