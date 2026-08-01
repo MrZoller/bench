@@ -343,7 +343,17 @@ export function StopSlider<T extends number | string>({
         step={1}
         value={index}
         onChange={(e) => onChange(effective[Number(e.target.value)])}
-        onPointerDown={() => setDragStops(stops)}
+        // Captured explicitly, so the release reaches this handler wherever the pointer is when
+        // it lets go — a mouse released past the panel edge otherwise delivers `pointerup` to
+        // the element under it, leaving the frozen list (and its obsolete injected stop) armed
+        // for the next keyboard press (raised in review on #134). `lostpointercapture` is the
+        // one signal fired on every way a capture ends, release and cancel alike; the pair
+        // below stays for jsdom, which implements neither capture nor its loss.
+        onPointerDown={(e) => {
+          e.currentTarget.setPointerCapture?.(e.pointerId);
+          setDragStops(stops);
+        }}
+        onLostPointerCapture={() => setDragStops(null)}
         onPointerUp={() => setDragStops(null)}
         onPointerCancel={() => setDragStops(null)}
         aria-valuetext={format(value)}
