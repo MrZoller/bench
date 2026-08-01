@@ -135,7 +135,26 @@ function capacityReading(
 
 function decodeReading(evaluation: Evaluation): Reading {
   const { shown, word, tone } = classifyDecode(evaluation.decode.perUserTokensPerSec);
-  const { kvBound, offloadPenalty } = evaluation.decode;
+  const { kvSeconds, offloadPenalty, weightSeconds } = evaluation.decode;
+
+  /**
+   * The step's three time terms, attributed to the strict maximum — the same rule
+   * `prefillReading` already applies to its three.
+   *
+   * The KV axis learned the half of this first: `kvBound` is the engine's comparison of cache
+   * time against weight time, and testing the spill's *existence* before it meant a 0.08%
+   * offload blamed the host bus while the cache cost six times as much. The spill axis kept the
+   * existence test (#122): any configuration a hair past the ceiling was told the bus "sets the
+   * pace", when on PCIe 4.0 that claim only becomes true past roughly a 4% spill.
+   *
+   * Deliberately not `kvBound` for the cache branch (raised in review on #145): that flag
+   * compares KV against the weight terms' *sum*, so a step of 7.8ms KV, 4.6ms bus and 3.3ms
+   * resident reads had `kvBound` false — and the pairwise bus test then named the bus while KV
+   * was the largest single cost. Three terms, one max, from the engine's own seconds.
+   */
+  const busSeconds = offloadPenalty?.busSeconds ?? 0;
+  const residentSeconds = weightSeconds - busSeconds;
+  const largest = Math.max(kvSeconds, busSeconds, residentSeconds);
 
   return {
     key: 'decode',
@@ -144,15 +163,14 @@ function decodeReading(evaluation: Evaluation): Reading {
     unit: 'tok/s per user',
     tone,
     verdict: word,
-    // `kvBound` is the engine's own comparison of weight seconds against cache seconds, so it
-    // outranks the mere *existence* of a spill. Testing the spill first meant a 0.08% offload
-    // blamed the host bus while the cache was costing six times as much time — sending someone
-    // to fix the wrong thing, which is the error this whole tile exists to avoid.
-    detail: kvBound
-      ? 'KV traffic now costs more time per step than the weights — at this context the cache, not the model, sets the speed.'
-      : offloadPenalty
-        ? `Weights crossing the host bus set the pace — ${percent(offloadPenalty.fraction)} of them spill every token.`
-        : 'Bound by weight bandwidth. Lower quantization or faster memory is what moves this.',
+    detail:
+      largest === kvSeconds
+        ? 'KV traffic is the largest cost in the step — at this context the cache, not the model, sets the speed.'
+        : largest === busSeconds && offloadPenalty !== undefined
+          ? `Weights crossing the host bus set the pace — ${percent(offloadPenalty.fraction)} of them spill every token.`
+          : offloadPenalty !== undefined
+            ? `Bound by weight bandwidth — the resident reads still cost more per step than the ${percent(offloadPenalty.fraction)} of weights crossing the host bus.`
+            : 'Bound by weight bandwidth. Lower quantization or faster memory is what moves this.',
   };
 }
 
