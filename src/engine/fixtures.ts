@@ -273,7 +273,10 @@ export const MAC_STUDIO_M3_ULTRA_256: DeviceSpec = {
   // still has to run. 16 GiB reserved here, matching the catalog row.
   maxAllocatableBytes: 240 * GIB,
   bandwidthBytesPerSec: 819 * GB,
-  flops: { fp16: 54 * TFLOP },
+  // The 60-core bin's rate (60 x M3's 0.675/core): the $5,599 machine this row prices is the
+  // 60-core one — Apple sells it with 256 GB, and the price ladder has no room for the chip
+  // upgrade. 54 here paired the larger bin's compute with the smaller bin's price (#117).
+  flops: { fp16: 40.5 * TFLOP },
   tdpWatts: 270,
   msrpUsd: 5599,
   source: 'https://www.apple.com/mac-studio/specs/',
