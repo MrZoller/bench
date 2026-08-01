@@ -770,6 +770,18 @@ export function Matrix({ config }: { config: Config }) {
           Rows are capped at each model’s own context limit, so a model that stops short of{' '}
           {tokens(config.contextTokens)} is scored at whatever it does accept.
         </p>
+        {/* The membership and the order, on the channel sighted readers scan (#135). #79 put both
+            facts in the sr-only caption and the visual channel got neither — the inversion of how
+            this usually breaks. The absence clause is the load-bearing half: on a grid whose whole
+            point is refusals with reasons, the one refusal it cannot explain is a missing row, and
+            without the sentence a reader cannot tell "was not asked" from "does not run". The
+            criterion is `SEEDS`' own docblock, compressed — if that rule changes, both change. */}
+        <p className="basis-full text-sm text-[var(--color-text-faint)]">
+          The {models.length} models are a curated set, not a top-N chart: each row answers a
+          hardware question no other row does, or is the current head of a family already here, with
+          every figure derived from its repo on Hugging Face. Rows run most-downloaded first — and a
+          model that is absent was never seeded, not found unable to run.
+        </p>
       </header>
 
       {/* One filter row above the grid, as the dataviz guidance puts it.
@@ -832,9 +844,10 @@ export function Matrix({ config }: { config: Config }) {
                 This is also the whole of the band channel for a reader who cannot see the gap, which
                 is why it is one sentence with the mark rather than prose somewhere else. */}
             Columns run left to right in {bands.labels.length} bands — {bands.labels.join(', ')} —
-            with a gap between them, and rows run most-downloaded first. This grid is a single tab
-            stop: use the arrow keys to move between cells, Home and End for the ends of a row, and
-            Control with Home or End for the ends of the grid.
+            with a gap between them, and rows run most-downloaded first from a curated seed list — a
+            model that is absent was never seeded, not found unable to run. This grid is a single
+            tab stop: use the arrow keys to move between cells, Home and End for the ends of a row,
+            and Control with Home or End for the ends of the grid.
           </caption>
           <thead>
             <tr>
