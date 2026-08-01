@@ -1,6 +1,7 @@
 import type { ModelSpec, QuantSpec, Rig, RuntimeSpec, UsageSpec } from '@/engine/types';
 import type { Placement } from '@/engine/placement';
 import { effectiveDeviceCount, effectivePromptTokens } from '@/engine/placement';
+import { hasSlidingLayers } from '@/engine/kv';
 import { substitutionFor } from '@/data/runtimes';
 
 /**
@@ -116,6 +117,34 @@ export function artifactFor(model: ModelSpec, quantId: string): string | undefin
   return (model.nativeQuant ?? 'bf16') === quantId ? model.id : undefined;
 }
 
+/**
+ * The commit every figure on the page was derived from.
+ *
+ * `build-catalog.ts` records `revision` on each row precisely so a suspicious number is
+ * reproducible, and a command naming only the repo id resolves the *mutable default branch* — so
+ * after an upstream push the copied command loads a checkpoint the displayed memory and speed
+ * figures do not describe (raised by Codex on #164). vLLM takes `--revision`, which accepts a
+ * commit id; MLX's server does not, and that is stated in its notes rather than papered over.
+ */
+export function revisionOf(model: ModelSpec): string | undefined {
+  return model.revision;
+}
+
+/**
+ * A scenario whose window has no room left to answer in.
+ *
+ * The measurement form refuses rather than manufacturing a token: the prompt slider goes up to the
+ * whole context, and a `--output-len 1` beside `--max-model-len <context>` is a command that
+ * exceeds its own stated limit.
+ */
+function noRoomToAnswer(contextTokens: number): string {
+  return (
+    `The prompt fills the whole ${contextTokens.toLocaleString('en-US')}-token window, so there is ` +
+    `no room left to generate into and nothing to measure. Lower the prompt length above and the ` +
+    `benchmark command comes back.`
+  );
+}
+
 /** The sentence a refused artifact gets, naming what would have to exist. */
 function noArtifact(model: ModelSpec, quant: QuantSpec, launcher: string): string {
   const native = model.nativeQuant ?? 'bf16';
@@ -178,10 +207,24 @@ function gpuLayers(input: LaunchInput): number {
  * Emitted only when the counts really differ, so the flag never appears saying "split this evenly",
  * which is what llama.cpp would have done unaided — and that gate reads the resident counts too,
  * since a packing that assigns equal counts of *unequal* layers is exactly where the flag is needed.
+ *
+ * **And never on a hybrid model, which is the case the flag looked most useful for** (raised by
+ * Codex on #164, P1). `-ts` partitions llama.cpp's ordered `-ngl` suffix into contiguous device
+ * ranges; `layerSplitBins` assigns *individual* layers by greedy combined load, so a share can be a
+ * non-contiguous mixture of full-attention and sliding layers. On a model where those cache ~128x
+ * differently, equal counts do not reproduce equal loads — llama.cpp would hand a card a different
+ * set of expensive layers than `planPlacement` priced, and the fit the panel reported would not be
+ * the fit the command produces. A count is a faithful description of the packing only where the
+ * layers are interchangeable, so that is the only place it is emitted.
+ *
+ * What remains is still worth having: a uniform model over a device count that does not divide it
+ * (48 layers over 5 cards is 10,10,10,9,9) is both uneven and exactly expressible, and llama.cpp's
+ * memory-proportional default gets it wrong.
  */
 function tensorSplit(input: LaunchInput): string | undefined {
   const { parallelism, shares } = input.placement.assignment;
   if (parallelism !== 'layer' || effectiveDeviceCount(input.rig) <= 1) return undefined;
+  if (hasSlidingLayers(input.model)) return undefined;
 
   const counts = shares.flatMap((s) =>
     Array.from({ length: s.deviceCount }, () => s.residentLayers)
@@ -193,9 +236,21 @@ function tensorSplit(input: LaunchInput): string | undefined {
   return counts.join(',');
 }
 
-/** The generation the scenario leaves room for: the window minus the prompt that fills it. */
-function generationTokens(usage: UsageSpec): number {
-  return Math.max(1, usage.contextTokens - effectivePromptTokens(usage));
+/**
+ * The generation the scenario leaves room for — or nothing, when it leaves none.
+ *
+ * The window minus the prompt **and the resident prefix**, both of which occupy it. The first
+ * version subtracted only the prompt and floored at 1 (raised by Codex on #164): a prompt slider at
+ * the full window then produced `--input-len <context> --output-len 1 --max-model-len <context>`, a
+ * command that exceeds its own stated limit, and a 47,616-token prefix under a 16,384-token prompt
+ * in a 65,536-token window was handed another 49,152 tokens of output it has nowhere to put.
+ *
+ * `undefined` rather than a manufactured token: a scenario with no room to answer is one the
+ * measurement form has to refuse, not one it can round into existence.
+ */
+function generationTokens(usage: UsageSpec): number | undefined {
+  const room = usage.contextTokens - effectivePromptTokens(usage) - (usage.cachedPrefixTokens ?? 0);
+  return room > 0 ? room : undefined;
 }
 
 /** A shell command written one flag per line, which is how anyone would paste it back. */
@@ -283,11 +338,25 @@ function placementRefusal(input: LaunchInput): string | undefined {
   const { placement } = input;
   if (placement.unsupported !== undefined) return placement.unsupported;
   if (placement.impossible) {
-    return (
-      `This configuration does not run on ${input.rig.device.name}: the cache and activations ` +
-      `alone are over the ceiling, so no flag rescues it. Lower the context or the concurrency ` +
-      `and the commands come back.`
-    );
+    /**
+     * **Two different failures wear one flag, and the first draft named only the first** (raised by
+     * Codex on #164). `impossible` is set either when the cache and activations alone are over the
+     * ceiling — where lowering context or concurrency really does help — *or*, on a rig with
+     * nowhere to spill, whenever anything is over at all, which on unified memory and CPU RAM
+     * includes an oversized checkpoint whose cache is nowhere near the limit. Telling that reader
+     * to lower the context is advice that will not work at any context.
+     *
+     * `floorBytesPerDevice` is the quantity that splits them: it is the cache plus activations,
+     * carried on `Placement` precisely so a sentence and its predicate read one value.
+     */
+    const machine = input.rig.device.name;
+    return placement.floorBytesPerDevice > placement.allocatableBytesPerDevice
+      ? `This configuration does not run on ${machine}: the cache and activations alone are over ` +
+          `the ceiling, so no flag rescues it. Lower the context or the concurrency and the ` +
+          `commands come back.`
+      : `This configuration does not run on ${machine}: the weights are over the ceiling and ` +
+          `there is nowhere slower to spill them to. Lowering the context will not help — a ` +
+          `narrower format or a smaller model is what changes the answer.`;
   }
   return undefined;
 }
@@ -417,20 +486,23 @@ function llamaBench(input: LaunchInput): Pair {
       ok: false,
       reason: `llama-bench measures; it does not serve. The llama-server command above is the serving form of this same placement.`,
     },
-    measure: {
-      ok: true,
-      text: shell('llama-bench', [
-        `-m ${ggufPlaceholder(model, quant)}`,
-        `-p ${prompt}`,
-        `-n ${gen}`,
-        prefix > 0 ? `-d ${prefix}` : undefined,
-        `-ngl ${ngl}`,
-        `-ctk ${kv} -ctv ${kv}`,
-        split === undefined ? undefined : `-ts ${split}`,
-        `-o md`,
-      ]),
-      notes,
-    },
+    measure:
+      gen === undefined
+        ? { ok: false, reason: noRoomToAnswer(usage.contextTokens) }
+        : {
+            ok: true,
+            text: shell('llama-bench', [
+              `-m ${ggufPlaceholder(model, quant)}`,
+              `-p ${prompt}`,
+              `-n ${gen}`,
+              prefix > 0 ? `-d ${prefix}` : undefined,
+              `-ngl ${ngl}`,
+              `-ctk ${kv} -ctv ${kv}`,
+              split === undefined ? undefined : `-ts ${split}`,
+              `-o md`,
+            ]),
+            notes,
+          },
   };
 }
 
@@ -450,18 +522,25 @@ function ollama(input: LaunchInput): Pair {
       `this surface cannot be told. Ollama decides it. Use llama-server if you need to pin it.`,
     `num_ctx is per request here, unlike llama-server's -c, which is the whole cache across slots.`,
     `FROM takes a path on your own disk, absolute or relative to the Modelfile.`,
+    `Written to ${tag}.Modelfile rather than to Modelfile, under set -C, so this cannot overwrite ` +
+      `one you already have.`,
   ];
 
   return {
     serve: {
       ok: true,
       text: [
-        `cat > Modelfile <<'EOF'`,
+        // A bench-specific filename, never the bare `Modelfile` this first wrote to. `cat >`
+        // truncates unconditionally, and the directory an Ollama user runs this from is exactly the
+        // one likely to already hold a Modelfile of their own — a copy-pasteable block that
+        // silently destroys their file (raised by Codex on #164). `set -C` refuses to clobber even
+        // this name, so the worst case is an error rather than a lost file.
+        `(set -C; cat > ${tag}.Modelfile) <<'EOF'`,
         `FROM ${ggufPlaceholder(model, quant)}`,
         `PARAMETER num_ctx ${usage.contextTokens}`,
         `EOF`,
         ``,
-        `ollama create ${tag} -f Modelfile`,
+        `ollama create ${tag} -f ${tag}.Modelfile`,
         `ollama run ${tag}`,
       ].join('\n'),
       notes,
@@ -487,6 +566,7 @@ function vllm(input: LaunchInput): Pair {
   const kv = VLLM_KV_DTYPE[usage.kvPrecision];
   const prompt = effectivePromptTokens(usage);
   const gen = generationTokens(usage);
+  const revision = revisionOf(model);
 
   /**
    * `--gpu-memory-utilization` is emitted rather than left default, and the reason is that the two
@@ -497,6 +577,13 @@ function vllm(input: LaunchInput): Pair {
   const notes = [
     `--gpu-memory-utilization is stated rather than left to vLLM's default, which is 0.92 — the ` +
       `figures above are budgeted at 0.9, and this is what makes the command match them.`,
+    ...(revision === undefined
+      ? []
+      : [
+          `--revision pins ${revision.slice(0, 10)}, the commit this model's parameter counts and ` +
+            `attention shape were read from. Without it vLLM resolves the repo's default branch, ` +
+            `which can move.`,
+        ]),
     `--max-model-len is one sequence's window; --max-num-seqs is how many of them vLLM will hold ` +
       `at once. Together they are the cache the panel above sized.`,
   ];
@@ -513,6 +600,7 @@ function vllm(input: LaunchInput): Pair {
     serve: {
       ok: true,
       text: shell(`vllm serve ${repo}`, [
+        revision === undefined ? undefined : `--revision ${revision}`,
         `--max-model-len ${usage.contextTokens}`,
         tp > 1 ? `--tensor-parallel-size ${tp}` : undefined,
         kv === undefined ? undefined : `--kv-cache-dtype ${kv}`,
@@ -521,23 +609,42 @@ function vllm(input: LaunchInput): Pair {
       ]),
       notes,
     },
-    measure: {
-      ok: true,
-      text: shell(`vllm bench latency`, [
-        `--model ${repo}`,
-        `--input-len ${prompt}`,
-        `--output-len ${gen}`,
-        `--max-model-len ${usage.contextTokens}`,
-        tp > 1 ? `--tensor-parallel-size ${tp}` : undefined,
-        kv === undefined ? undefined : `--kv-cache-dtype ${kv}`,
-        `--gpu-memory-utilization 0.9`,
-      ]),
-      notes: [
-        `vllm bench latency times one batch offline, at this scenario's own prompt and generation ` +
-          `lengths — which is what makes the result comparable with the figures above.`,
-        `Needs the bench extra: pip install vllm[bench].`,
-      ],
-    },
+    measure:
+      gen === undefined
+        ? {
+            ok: false,
+            reason: noRoomToAnswer(usage.contextTokens),
+          }
+        : {
+            ok: true,
+            text: shell(`vllm bench latency`, [
+              `--model ${repo}`,
+              revision === undefined ? undefined : `--revision ${revision}`,
+              `--input-len ${prompt}`,
+              `--output-len ${gen}`,
+              // The configured user count, not the client's own default of 8. Without it the
+              // benchmark times a different batch from the one the panel priced, which makes the
+              // number unusable for the thing a measurement is for (raised by Codex on #164).
+              `--batch-size ${usage.concurrency}`,
+              `--max-model-len ${usage.contextTokens}`,
+              tp > 1 ? `--tensor-parallel-size ${tp}` : undefined,
+              kv === undefined ? undefined : `--kv-cache-dtype ${kv}`,
+              `--gpu-memory-utilization 0.9`,
+            ]),
+            notes: [
+              `vllm bench latency times one batch offline, at this scenario's own prompt, ` +
+                `generation length and user count — which is what makes the result comparable ` +
+                `with the figures above rather than with the client's defaults of 32, 128 and 8.`,
+              ...(revision === undefined
+                ? []
+                : [
+                    `--revision pins the commit the catalog derived this model's shape from, so ` +
+                      `the command cannot quietly load a newer checkpoint than the figures ` +
+                      `describe.`,
+                  ]),
+              `Needs the bench extra: pip install vllm[bench].`,
+            ],
+          },
   };
 }
 
@@ -576,42 +683,74 @@ function mlx(input: LaunchInput): Pair {
   const quantizedCache = usage.kvPrecision !== 'fp16';
 
   return {
-    serve: {
-      ok: true,
-      text: shell(`mlx_lm.server`, [`--model ${repo}`, `--max-tokens ${gen}`]),
-      notes: [
-        ...(quantizedCache
-          ? [
-              `The figures above are priced with an 8-bit cache, and mlx_lm.server has no KV ` +
-                `quantization flag — --kv-bits is on mlx_lm.generate, not the server. This command ` +
-                `therefore runs an fp16 cache and needs roughly twice the cache memory shown.`,
-            ]
-          : []),
-        `MLX reads this repo directly; no conversion step, because BF16 is the one format the ` +
-          `catalog and MLX agree on.`,
-      ],
-    },
-    measure: {
-      ok: true,
-      text: shell(`python -c "print('word ' * ${prompt})" | mlx_lm.generate`, [
-        `--model ${repo}`,
-        `--prompt -`,
-        `--max-tokens ${gen}`,
-        ...(quantizedCache ? [`--kv-bits 8`, `--kv-group-size 64`] : []),
-      ]),
-      notes: [
-        `mlx_lm.generate prints prompt and generation tokens/sec, which are the two figures above.`,
-        `The prompt is piped rather than quoted because its *length* is what is being measured — ` +
-          `${fmt(prompt)} tokens. "word " is roughly one token each, so treat the count as ` +
-          `approximate and read the tokens-per-second the tool reports back.`,
-        ...(quantizedCache
-          ? [
-              `--kv-bits 8 is the precision the figures above assume, and unlike the server, ` +
-                `mlx_lm.generate takes it.`,
-            ]
-          : []),
-      ],
-    },
+    /**
+     * **A refusal rather than a warning, when the cache precision cannot be reproduced** (raised by
+     * Codex on #164, P1). The first version emitted the server command with a loud note saying the
+     * cache would be fp16 — but a long-context configuration that fits *because* an 8-bit cache
+     * halves it will OOM when run at fp16, and a note beside a copy button does not stop that. The
+     * command is not a command for the placement the panel priced, so there is no command.
+     *
+     * The measurement form survives, because `mlx_lm.generate` does take `--kv-bits`.
+     */
+    serve: quantizedCache
+      ? {
+          ok: false,
+          reason:
+            `The figures above are priced with an 8-bit cache, and mlx_lm.server has no flag for ` +
+            `it — --kv-bits is on mlx_lm.generate, not the server. A served command would run an ` +
+            `fp16 cache needing roughly twice the memory shown, which is a different placement ` +
+            `from the one above. Select an FP16 cache to get a serving command, or use the ` +
+            `measurement command below, which does take the precision.`,
+        }
+      : {
+          ok: true,
+          text: shell(`mlx_lm.server`, [
+            `--model ${repo}`,
+            ...(gen === undefined ? [] : [`--max-tokens ${gen}`]),
+          ]),
+          notes: [
+            `MLX reads this repo directly; no conversion step, because BF16 is the one format the ` +
+              `catalog and MLX agree on.`,
+            // No `--revision` on this server, so the pin the vLLM command gets is unavailable here.
+            ...(revisionOf(model) === undefined
+              ? []
+              : [
+                  `mlx_lm.server takes no revision flag, so this resolves the repo's default ` +
+                    `branch. The figures above were derived from ${revisionOf(model)!.slice(0, 10)}.`,
+                ]),
+          ],
+        },
+    measure:
+      gen === undefined
+        ? { ok: false, reason: noRoomToAnswer(usage.contextTokens) }
+        : {
+            ok: true,
+            text: shell(`python -c "print('word ' * ${prompt})" | mlx_lm.generate`, [
+              `--model ${repo}`,
+              `--prompt -`,
+              `--max-tokens ${gen}`,
+              // `--quantized-kv-start` defaults to 5,000 on the CLI and the engine prices every token at
+              // the selected precision, so a run finishing under that threshold would benchmark an
+              // entirely fp16 cache against a Q8 prediction (raised by Codex on #164). Zero is what makes
+              // the measured cache the priced one.
+              ...(quantizedCache
+                ? [`--kv-bits 8`, `--kv-group-size 64`, `--quantized-kv-start 0`]
+                : []),
+            ]),
+            notes: [
+              `mlx_lm.generate prints prompt and generation tokens/sec, which are the two figures above.`,
+              `The prompt is piped rather than quoted because its *length* is what is being measured — ` +
+                `${fmt(prompt)} tokens. "word " is roughly one token each, so treat the count as ` +
+                `approximate and read the tokens-per-second the tool reports back.`,
+              ...(quantizedCache
+                ? [
+                    `--kv-bits 8 is the precision the figures above assume, and unlike the server, ` +
+                      `mlx_lm.generate takes it. --quantized-kv-start 0 is what makes it apply from the ` +
+                      `first token: the CLI default is 5,000, and the engine prices every token at 8 bits.`,
+                  ]
+                : []),
+            ],
+          },
   };
 }
 
