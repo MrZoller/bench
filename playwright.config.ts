@@ -50,7 +50,7 @@ export default defineConfig({
       // The touch specs assert the coarse-pointer branch, which a mouse run cannot reach. Without
       // this they ran here too and failed on the branch they are not about — `testMatch` on a
       // sibling project narrows what *it* takes, not what everyone else leaves alone.
-      testIgnore: /(touch-targets|reflow)\.spec\.ts/,
+      testIgnore: /(touch-targets|matrix-touch|reflow)\.spec\.ts/,
     },
     {
       /**
@@ -90,7 +90,7 @@ export default defineConfig({
        */
       name: 'touch',
       use: { ...devices['Pixel 5'] },
-      testMatch: /touch-targets\.spec\.ts/,
+      testMatch: /(touch-targets|matrix-touch)\.spec\.ts/,
     },
     {
       /**

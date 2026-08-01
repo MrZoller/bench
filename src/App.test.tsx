@@ -1476,6 +1476,27 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
    */
   const readout = () => line().querySelector('[data-readout="full"]')!.textContent;
   const briefReadout = () => line().querySelector('[data-readout="brief"]')!.textContent;
+
+  /**
+   * A tap, with the focus the browser interposes — which is the whole of what makes this test real.
+   *
+   * Tapping a button focuses it, so `onFocus` fires *before* `click` and the readout is already this
+   * cell's by the time the handler runs. Written as `pointerDown` then `click`, these tests passed
+   * against a guard that compared the live readout target and therefore never fired — the first tap
+   * committed, and so did a tap on a different cell. Raised in review on #102, and the shape is the
+   * repo's own: an event sequence the real browser produces and the fixture did not.
+   */
+  const tap = (cell: HTMLElement) => {
+    fireEvent.pointerDown(cell, { pointerType: 'touch' });
+    // `act`, so React has *committed* the focus before the click — which is the half that makes this
+    // bite. Without it the state update is still queued when `click` runs and the handler reads the
+    // previous render's target, which is the value the fix stores deliberately: the test would pass
+    // against the defect for the same reason the defect was invisible.
+    act(() => {
+      cell.focus();
+    });
+    fireEvent.click(cell);
+  };
   const cells = () => [...matrix().querySelectorAll<HTMLButtonElement>('td button')];
   const legend = () => [...matrix().querySelectorAll<HTMLElement>(':scope > div')].at(-1)!;
 
@@ -1555,15 +1576,13 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
     const before = useConfig.getState().deviceId;
     const cell = cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('RTX 3060'))!;
 
-    fireEvent.pointerDown(cell, { pointerType: 'touch' });
-    fireEvent.click(cell);
+    tap(cell);
 
     // Inspected, not committed.
     expect(readout()).toContain('RTX 3060');
     expect(useConfig.getState().deviceId).toBe(before);
 
-    fireEvent.pointerDown(cell, { pointerType: 'touch' });
-    fireEvent.click(cell);
+    tap(cell);
 
     expect(useConfig.getState().deviceId).toBe('rtx-3060-12gb');
   });
@@ -1599,10 +1618,8 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
       cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('DGX Spark'))!,
     ];
 
-    fireEvent.pointerDown(first, { pointerType: 'touch' });
-    fireEvent.click(first);
-    fireEvent.pointerDown(second, { pointerType: 'touch' });
-    fireEvent.click(second);
+    tap(first);
+    tap(second);
 
     // Comparing two cells is the thing #71 said a touch reader could not do, and the second tap
     // going to a *different* cell is what makes it possible without committing to either.

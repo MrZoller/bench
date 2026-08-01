@@ -396,6 +396,24 @@ export function Matrix({ config }: { config: Config }) {
    */
   const lastPointerType = useRef<string>('');
 
+  /**
+   * What the line was showing when this gesture *started*, which is the only moment that answers the
+   * question (raised in review on #102).
+   *
+   * The first draft compared against the live readout target inside `onClick`, and a browser makes
+   * that comparison always true: tapping a button focuses it, `onFocus` fires before `click`, and by
+   * the time the handler runs the readout is already this cell's — so the guard was skipped, the
+   * first tap committed, and tapping a *different* cell committed it immediately too. The unit test
+   * could not see it because `fireEvent.pointerDown` plus `fireEvent.click` does not reproduce the
+   * intervening focus, which is the same class of gap as the `scrollIntoView` on a `display: contents`
+   * anchor that jsdom could not see either.
+   *
+   * `pointerdown` lands before focus moves, so the value read there is the state the reader was
+   * looking at when they reached for the cell. Compared against that, "have I already inspected this
+   * one" is the question the gesture is actually asking.
+   */
+  const inspectedBefore = useRef<Readout | null>(null);
+
   const rowCount = cells.length;
   const colCount = devices.length;
   // Clamped on read rather than reset in an effect: the grid's size follows the catalog and the
@@ -986,6 +1004,8 @@ export function Matrix({ config }: { config: Config }) {
                        */
                       onPointerDown={(event) => {
                         lastPointerType.current = event.pointerType;
+                        // Before the browser's own focus moves the line — see `inspectedBefore`.
+                        inspectedBefore.current = target;
                       }}
                       onClick={() => {
                         // So the tab stop follows the reader: leaving the grid and coming back
@@ -1003,9 +1023,10 @@ export function Matrix({ config }: { config: Config }) {
                          * later — the two-state rule the readout already documents, met from a
                          * direction it had not been.
                          */
+                        const before = inspectedBefore.current;
                         if (
                           lastPointerType.current === 'touch' &&
-                          !(target?.kind === 'cell' && target.row === r && target.col === c)
+                          !(before?.kind === 'cell' && before.row === r && before.col === c)
                         ) {
                           setHovered(null);
                           setFocused({ kind: 'cell', row: r, col: c });
