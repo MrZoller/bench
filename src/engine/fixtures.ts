@@ -7,6 +7,12 @@ import { GB, GIB, TFLOP } from './types';
  * Every architecture figure here was read from the model's own `config.json` on Hugging Face
  * (URLs in each `source`), not recalled. The generated catalog will supersede these for the
  * app; they stay because tests need fixtures that don't move when the catalog refreshes.
+ *
+ * **The freeze is the model fixtures' rationale, not the device fixtures'.** Only the model
+ * catalog refreshes; `devices.json` is curated, so a device fixture diverging from its catalog
+ * row means one of the two hand-verified copies is wrong — twice now it was the fixture, kept
+ * on a figure the catalog had corrected (#116). `fixtures.test.ts` holds the physics fields of
+ * every fixture device equal to the row sharing its id.
  */
 
 /** Alternating sliding/full attention, starting with sliding — gpt-oss's pattern. */
@@ -226,7 +232,11 @@ export const RTX_4090: DeviceSpec = {
   capacityBytes: 24 * GIB,
   allocatableBytes: 23 * GIB,
   bandwidthBytesPerSec: 1008 * GB,
-  flops: { fp16: 165.2 * TFLOP, fp8: 330.3 * TFLOP },
+  // Ada's published dense rates: sparse FP8 headline 1321, two halvings — 661 fp8/int8, 330
+  // fp16. The first version of this row halved once more (165.2/330.3, no int8) — the exact
+  // curator error devices.json's $comment-compute warns about — so every 4090 prefill figure
+  // read 2x slow, and int8 fell through the fp8 fallback (#116).
+  flops: { fp16: 330 * TFLOP, fp8: 661 * TFLOP, int8: 661 * TFLOP },
   interconnect: 'PCIe 4.0 x16',
   hostLinkBytesPerSec: 31.5 * GB,
   tdpWatts: 450,
@@ -341,8 +351,12 @@ export const EPYC_9654: DeviceSpec = {
   capacityBytes: 768 * GIB,
   allocatableBytes: 720 * GIB,
   bandwidthBytesPerSec: 460.8 * GB,
-  // CPU inference realises a small fraction of nominal vector throughput on GEMM.
-  flops: { fp16: 6 * TFLOP },
+  // The theoretical vector peak: 96 cores x 2.40 GHz x two double-pumped 512-bit FMA pipes.
+  // The old 6 TFLOP figure baked a "realises a small fraction on GEMM" discount into the spec —
+  // the double-discount #90 identified and #111 removed from every cpu-ram row, since the
+  // runtime's computeEfficiency owns that discount (#116). Decode on this rig is
+  // bandwidth-bound and reads no compute figure, so the anchor is unaffected by construction.
+  flops: { fp16: 7.37 * TFLOP },
   tdpWatts: 360,
   source: 'https://www.amd.com/en/products/processors/server/epyc/9004-series/amd-epyc-9654.html',
 };
