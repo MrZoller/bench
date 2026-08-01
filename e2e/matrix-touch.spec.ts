@@ -72,6 +72,22 @@ test('the second tap on the same cell loads it', async ({ page }) => {
   await expect(page).toHaveURL(/[?&]d=/);
 });
 
+test('the keyboard still activates after a tap', async ({ page }) => {
+  /*
+   * The snapshot is consumed on every click, and this is why (found in review). Held, it would still
+   * describe the tap when a later keyboard `click` arrived with no `pointerdown` of its own — so
+   * Enter would be read as that tap still in progress and refuse to activate, for ever, since
+   * nothing else would clear it. A touch device with a keyboard is an ordinary tablet.
+   */
+  const before = scenario(page);
+  await cells(page).nth(5).tap();
+
+  await cells(page).nth(9).focus();
+  await page.keyboard.press('Enter');
+
+  expect(scenario(page), 'Enter after a tap did not load the cell').not.toBe(before);
+});
+
 test('a tap on a different cell moves the line rather than committing', async ({ page }) => {
   const before = scenario(page);
   const [first, second] = [cells(page).nth(5), cells(page).nth(9)];

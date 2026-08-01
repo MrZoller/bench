@@ -1523,19 +1523,25 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
     const full = readout()!;
     const brief = briefReadout()!;
 
-    // The figure is the payload and survives; the preamble is what goes.
+    /*
+     * The model goes and the machine stays, which is "drop what is sticky, keep what scrolls": the
+     * row heading is `sticky left-0` and on screen at every scroll position, while the column
+     * headings sit at the top of a 35-row grid. Dropping both left a reader in a lower row with
+     * `69% of the ceiling free` and nothing anywhere saying which machine (found in review).
+     */
     expect(full).toMatch(/^Qwen3 8B on GeForce RTX 5090/);
     expect(brief).not.toContain('Qwen3 8B');
-    expect(brief).not.toContain('GeForce RTX 5090');
+    expect(brief).toContain('RTX 5090');
     // The figure itself, which is the payload both forms carry.
     expect(brief).toContain('69% of the ceiling free');
     expect(full).toContain('69% of the ceiling free');
     /*
      * Materially shorter, which is the property the reservation depends on — the geometry itself is
-     * `e2e/reflow.spec.ts`, since jsdom reports every height as 0. Not "half", which this clears at
-     * 34 against 64 on the default scenario and would not clear on a cell whose figure is long.
+     * `e2e/reflow.spec.ts`, since jsdom reports every height as 0. The margin is smaller than it was
+     * when this dropped the device too, and deliberately: the sentence has to fit *and* say which
+     * machine, and the browser check is what holds the first of those.
      */
-    expect(brief.length).toBeLessThan(full.length * 0.6);
+    expect(brief.length).toBeLessThan(full.length * 0.8);
   });
 
   it('keeps the stand-in qualifier in the narrow form, since no axis carries it', async () => {
@@ -1566,12 +1572,14 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
    * touch reader could not compare two cells. Unlike the Envelope and the budget bar, this panel has
    * no table behind a disclosure to fall back to: it *is* the table, and its cells show colour.
    *
-   * Keyed on `pointerType` rather than on a media query, which is #43's lesson pointed the useful
-   * way: `any-pointer: coarse` is true of every touchscreen laptop, so a query would make a *mouse*
-   * click take two clicks on a hybrid. These drive both pointers against the same markup, which is
-   * the assertion a media query could not support.
+   * **The rule is a state, not a gesture: you may commit to a cell whose figures you have already
+   * been shown.** Keying on `pointerType === 'touch'` was the first draft and assumed `pen` hovers,
+   * which a direct-contact stylus does not — so a pen tap fell straight through to activation exactly
+   * as the unfixed touch path did. Reading the readout's target at `pointerdown` answers every input
+   * from one comparison instead: a mouse has hovered, a hovering pen has hovered, a finger has not,
+   * and the keyboard has no `pointerdown` at all.
    */
-  it('fills the line on the first tap and loads the cell on the second', async () => {
+  it('fills the line on the first tap and loads the cell on the second', () => {
     render(<App />);
     const before = useConfig.getState().deviceId;
     const cell = cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('RTX 3060'))!;
@@ -1587,30 +1595,77 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
     expect(useConfig.getState().deviceId).toBe('rtx-3060-12gb');
   });
 
-  it('loads a cell on a single click from a mouse, on the same markup', async () => {
+  it('loads a cell on a single click from a mouse, on the same markup', () => {
     render(<App />);
     const cell = cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('RTX 3060'))!;
 
-    // The hybrid case: a media query would have made this two clicks on any touchscreen laptop.
+    // A mouse arrives before it clicks, which is what makes one click enough — and the reason this
+    // needs no pointer-type test: the hover *is* the inspection.
+    fireEvent.mouseEnter(cell);
     fireEvent.pointerDown(cell, { pointerType: 'mouse' });
     fireEvent.click(cell);
 
     expect(useConfig.getState().deviceId).toBe('rtx-3060-12gb');
   });
 
-  it('treats a stylus as a pointer that hovers, not as a finger', async () => {
+  it('asks a contact-only stylus for a second tap, since it never hovered', () => {
+    render(<App />);
+    const before = useConfig.getState().deviceId;
+    const cell = cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('RTX 3060'))!;
+
+    /*
+     * A direct-contact stylus reports `pen` and cannot show the readout before it lands, so the
+     * first draft's `pointerType === 'touch'` test let it through and it committed on contact — the
+     * unfixed touch path, one pointer type over. Nothing here mentions `pen`: it inspects first
+     * because it has not hovered, which is the same reason a finger does.
+     */
+    fireEvent.pointerDown(cell, { pointerType: 'pen' });
+    act(() => {
+      cell.focus();
+    });
+    fireEvent.click(cell);
+
+    expect(readout()).toContain('RTX 3060');
+    expect(useConfig.getState().deviceId).toBe(before);
+  });
+
+  it('loads a cell from the keyboard, with no pointer gesture in front of it', () => {
     render(<App />);
     const cell = cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('RTX 3060'))!;
 
-    // `pen` is precise and hovers, so the readout has already filled by the time it lands — a second
-    // tap would be a tax on a gesture that never had the problem.
-    fireEvent.pointerDown(cell, { pointerType: 'pen' });
+    // Enter on a focused cell fires `click` with no `pointerdown`, and focus has already filled the
+    // line — so there is nothing the gesture could have meant other than "load this".
+    act(() => {
+      cell.focus();
+    });
     fireEvent.click(cell);
 
     expect(useConfig.getState().deviceId).toBe('rtx-3060-12gb');
   });
 
-  it('moves the line to the next cell a finger taps rather than loading it', async () => {
+  it('lets the keyboard activate after a tap, rather than inheriting it', () => {
+    render(<App />);
+    const [tapped, typed] = [
+      cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('RTX 3060'))!,
+      cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('DGX Spark'))!,
+    ];
+
+    /*
+     * The snapshot is consumed on every click, and this is why. Held, it would still describe the
+     * tap when a later keyboard `click` arrived with no `pointerdown` of its own — so Enter would be
+     * read as that tap still in progress and refuse to activate, for ever, since nothing else would
+     * clear it. Found in review.
+     */
+    tap(tapped);
+    act(() => {
+      typed.focus();
+    });
+    fireEvent.click(typed);
+
+    expect(useConfig.getState().deviceId).toBe('dgx-spark');
+  });
+
+  it('moves the line to the next cell a finger taps rather than loading it', () => {
     render(<App />);
     const before = useConfig.getState().deviceId;
     const [first, second] = [

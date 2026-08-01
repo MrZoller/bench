@@ -369,50 +369,62 @@ export function Matrix({ config }: { config: Config }) {
   const cellRefs = useRef(new Map<string, HTMLButtonElement | null>());
 
   /**
-   * How the last gesture arrived, so a tap can inspect before it commits
+   * What the line was showing when the current pointer gesture *started* — or `null` when there is no
+   * pointer gesture, which is how the keyboard is told apart
    * ([#102](https://github.com/MrZoller/bench/issues/102)).
    *
    * The gap #71 left: on a touch-only device the only gesture a cell offers is a tap, and that tap
-   * *is* `onClick` — it rewrites five store keys and scrolls several sections away. So the readout
-   * either fills while navigation is already happening or never fills at all, and a touch reader
-   * cannot compare two cells, which is one of the three readers #71's rationale names. Every other
-   * channel this grid has is unavailable to them: there is no hover, the figures live in each cell's
-   * `aria-label`, and unlike the Envelope and the budget bar this panel has no table behind a
-   * disclosure to fall back to — it *is* the table, and its cells show colour.
+   * *is* `onClick` — five store keys rewritten and a scroll several sections away. So the readout
+   * either filled while navigation was already happening or never filled at all, and a touch reader
+   * could not compare two cells, which is one of the three readers #71's rationale names. Every other
+   * channel is unavailable to them: there is no hover, the figures live in each cell's `aria-label`,
+   * and unlike the Envelope and the budget bar this panel has no table behind a disclosure to fall
+   * back to — it *is* the table, and its cells show colour.
    *
-   * So the first tap on a cell fills the readout and the second loads it. Chosen over the issue's
-   * two other options for reasons that are about this grid rather than about taste: a long-press is
-   * undiscoverable and collides with the platform's own text-selection gesture, and a per-row
-   * inspect affordance costs grid width at 320px, which #34 and #64 spent two fixes reclaiming. A
-   * first tap that visibly does something is self-teaching, and the sentence it fills says what the
-   * second tap will do.
+   * **The rule is a state, not a gesture: you may commit to a cell whose figures you have already
+   * been shown.** Three drafts got here, and the two it replaced are worth keeping because each was
+   * a plausible thing to key on and each was wrong for its own reason.
    *
-   * **Keyed on the pointer that fired the event, not on a media query**, which is the `any-pointer`
-   * lesson (#43) pointed the useful way round. `pointer: coarse` describes the primary device and
-   * `any-pointer: coarse` is true of every touchscreen laptop — either would make a mouse click on a
-   * hybrid take two clicks. `pointerType` says what actually happened, so a mouse is one click and a
-   * finger is two, on the same machine, in the same session. A stylus counts as a mouse: `pen` is a
-   * precise pointer that hovers, so it fills the readout on approach like any other.
+   * Keying on `pointerType === 'touch'` was the first. It reads as the `any-pointer` lesson (#43)
+   * pointed the useful way — the event says what happened, where a media query only says what the
+   * device has — and it assumes `pen` hovers. Direct-contact styluses do not, so a pen tap fell
+   * straight through to activation exactly as the unfixed touch path did.
+   *
+   * Comparing against the *live* readout target was the second, and a browser makes that comparison
+   * always true: tapping a button focuses it, `onFocus` runs before `click`, so by the time the
+   * handler is reached the readout is already this cell's. The guard never fired.
+   *
+   * Asking at `pointerdown` answers both. It lands before focus moves, so the answer is about what
+   * the reader was looking at when they reached for the cell — and every input then falls out of one
+   * question rather than a list of pointer types. A mouse hovers, so one click commits. A hovering
+   * pen is a mouse. A finger and a contact-only pen are not, so the first tap inspects and the second
+   * commits. The keyboard has no `pointerdown` at all, which is the `null` case and always commits —
+   * focus has already filled the line, and Enter on a focused cell is not a gesture that could have
+   * meant anything else.
+   *
+   * The question is asked of {@link pointerOver} as well as of the readout state, because a mouse
+   * that arrives and clicks within one frame has fired `mouseenter` and not yet been rendered.
+   *
+   * **Consumed on every click**, which is the other half of the keyboard case: the ref would
+   * otherwise still hold the last tap's snapshot, so Enter after a tap would be read as that tap
+   * still in progress and refuse to activate — for ever, since nothing else would clear it.
    */
-  const lastPointerType = useRef<string>('');
+  const gesture = useRef<{ inspected: boolean } | null>(null);
 
   /**
-   * What the line was showing when this gesture *started*, which is the only moment that answers the
-   * question (raised in review on #102).
+   * The cell the pointer is physically inside, kept in a ref so `pointerdown` can read it *now*.
    *
-   * The first draft compared against the live readout target inside `onClick`, and a browser makes
-   * that comparison always true: tapping a button focuses it, `onFocus` fires before `click`, and by
-   * the time the handler runs the readout is already this cell's — so the guard was skipped, the
-   * first tap committed, and tapping a *different* cell committed it immediately too. The unit test
-   * could not see it because `fireEvent.pointerDown` plus `fireEvent.click` does not reproduce the
-   * intervening focus, which is the same class of gap as the `scrollIntoView` on a `display: contents`
-   * anchor that jsdom could not see either.
+   * The readout target is React state, and a mouse that arrives and clicks inside one frame fires
+   * `mouseenter` and `pointerdown` before the render that state produces — so reading the committed
+   * target at `pointerdown` said "not inspected" for an ordinary mouse click and turned it into two.
+   * Playwright's `click()` does exactly that and two browser specs caught it.
    *
-   * `pointerdown` lands before focus moves, so the value read there is the state the reader was
-   * looking at when they reached for the cell. Compared against that, "have I already inspected this
-   * one" is the question the gesture is actually asking.
+   * A ref updates synchronously, so this is the same question asked at the moment it is being asked.
+   * It does *not* leak into the touch path: the compatibility `mouseenter` a tap generates fires
+   * after that tap's `click`, so a first tap still finds the ref empty or pointing at the previous
+   * cell — which is the case a second tap on a *different* cell has to keep working.
    */
-  const inspectedBefore = useRef<Readout | null>(null);
+  const pointerOver = useRef<string>('');
 
   const rowCount = cells.length;
   const colCount = devices.length;
@@ -554,16 +566,25 @@ export function Matrix({ config }: { config: Config }) {
    * at this commit, and the readout means a render now happens on every pointer move across the grid
    * rather than only when the scenario changes.
    */
-  const sentences = useMemo(
-    () =>
-      cells.map((row) =>
-        row.map((cell) => ({
-          full: tooltip(cell, measure, quant.id, config.deviceCount),
-          brief: tooltip(cell, measure, quant.id, config.deviceCount, true),
-        }))
-      ),
-    [cells, measure, quant.id, config.deviceCount]
-  );
+  const sentences = useMemo(() => {
+    // The heading each column actually shows, which is what the narrow form names — one lookup
+    // rather than `headerColumns` again, since a second derivation of this list is how the readout
+    // and the header come to disagree about what a column is called.
+    const shown = new Map(headerColumns(devices).map((c) => [c.device.id, c.label]));
+    return cells.map((row) =>
+      row.map((cell) => ({
+        full: tooltip(cell, measure, quant.id, config.deviceCount),
+        brief: tooltip(
+          cell,
+          measure,
+          quant.id,
+          config.deviceCount,
+          true,
+          shown.get(cell.deviceId) ?? getDevice(cell.deviceId).name
+        ),
+      }))
+    );
+  }, [cells, devices, measure, quant.id, config.deviceCount]);
 
   /**
    * The sentence itself, derived at render rather than stored when the pointer arrives.
@@ -1002,10 +1023,13 @@ export function Matrix({ config }: { config: Config }) {
                        * the same square. The context and the single-device count matter for the
                        * same reason.
                        */
-                      onPointerDown={(event) => {
-                        lastPointerType.current = event.pointerType;
-                        // Before the browser's own focus moves the line — see `inspectedBefore`.
-                        inspectedBefore.current = target;
+                      // Before the browser's own focus moves the line — see `gesture`.
+                      onPointerDown={() => {
+                        gesture.current = {
+                          inspected:
+                            pointerOver.current === `${r}:${c}` ||
+                            (target?.kind === 'cell' && target.row === r && target.col === c),
+                        };
                       }}
                       onClick={() => {
                         // So the tab stop follows the reader: leaving the grid and coming back
@@ -1014,7 +1038,8 @@ export function Matrix({ config }: { config: Config }) {
                         // should resume from — it is inert, not absent.
                         setActive([r, c]);
                         /**
-                         * A finger inspects before it commits — see `lastPointerType`.
+                         * A pointer that has not been shown this cell's figures inspects first — see
+                         * `gesture`.
                          *
                          * Only when the readout is not already this cell's, so the second tap falls
                          * through and loads it. `focused` rather than `hovered` because a tap moves
@@ -1023,11 +1048,10 @@ export function Matrix({ config }: { config: Config }) {
                          * later — the two-state rule the readout already documents, met from a
                          * direction it had not been.
                          */
-                        const before = inspectedBefore.current;
-                        if (
-                          lastPointerType.current === 'touch' &&
-                          !(before?.kind === 'cell' && before.row === r && before.col === c)
-                        ) {
+                        // Consumed, so a keyboard activation cannot inherit the last tap's snapshot.
+                        const started = gesture.current;
+                        gesture.current = null;
+                        if (started !== null && !started.inspected) {
                           setHovered(null);
                           setFocused({ kind: 'cell', row: r, col: c });
                           return;
@@ -1090,8 +1114,14 @@ export function Matrix({ config }: { config: Config }) {
                         setHovered(null);
                       }}
                       onBlur={() => setFocused(null)}
-                      onMouseEnter={() => setHovered({ kind: 'cell', row: r, col: c })}
-                      onMouseLeave={() => setHovered(null)}
+                      onMouseEnter={() => {
+                        pointerOver.current = `${r}:${c}`;
+                        setHovered({ kind: 'cell', row: r, col: c });
+                      }}
+                      onMouseLeave={() => {
+                        if (pointerOver.current === `${r}:${c}`) pointerOver.current = '';
+                        setHovered(null);
+                      }}
                       /**
                        * How the pointer gets its claim *back*, which `onMouseEnter` alone cannot do
                        * (found in review).
@@ -1683,7 +1713,7 @@ function tooltip(
   selectedQuantId: string,
   selectedDeviceCount: number,
   /**
-   * Drop the "model on device at quant:" preamble and state the figure alone
+   * Name the machine and state the figure, dropping the model and the full device name
    * ([#102](https://github.com/MrZoller/bench/issues/102)).
    *
    * The narrow form, and the reason it exists is arithmetic rather than taste. The readout's
@@ -1693,15 +1723,23 @@ function tooltip(
    * 32px: the longest sentence needs **280px against 160px reserved**, and 240 against 160 at 390.
    * Above `sm` it fits at both root sizes with nothing to spare and nothing over.
    *
-   * The preamble is what makes it long, and at phone width it is also the part the reader already
-   * has: the model is the row heading they are pointing at and the device is the column heading, and
-   * since #102 the tapped cell carries a ring as well. What they cannot get anywhere else is the
-   * figure. So the sentence says as much as the width affords rather than the same thing badly.
+   * The preamble is what makes it long, and **half of it is a part the reader already has and half
+   * is not** — which the first draft of this got wrong by dropping both (found in review). The row
+   * heading is `sticky left-0`, so the model name is on screen at every scroll position. The column
+   * headings are not: they sit at the top of a 35-row grid, so a reader inspecting a cell in a lower
+   * row would have been shown `69% of the ceiling free` with nothing anywhere saying which machine.
+   *
+   * So the narrow form keeps the device and drops the model, which is exactly "drop what is sticky,
+   * keep what scrolls" — and keeps it under the *header's* own label rather than the catalog name,
+   * since that is the string the column shows and is as short as it can be while still naming its
+   * own column.
    *
    * Both forms are rendered and CSS picks one, because the choice is a *layout* question and this
    * component has no viewport to read. The paragraph is `aria-hidden`, so nothing hears both.
    */
-  brief = false
+  brief = false,
+  /** The column's own shortened heading, for the narrow form — see `headerColumns`. */
+  shortDevice = ''
 ): string {
   const model = getModel(cell.modelId).name;
   const device = getDevice(cell.deviceId).name;
@@ -1729,7 +1767,11 @@ function tooltip(
      * render, and both of the names in it are on the axes or in the Runtime picker at this width.
      * `evaluated` is exactly the split: false for a refusal that never consulted the arithmetic.
      */
-    if (brief) return cell.evaluated ? `${reason}${stop}` : 'The runtime does not drive this.';
+    if (brief) {
+      return cell.evaluated
+        ? `${shortDevice}: ${reason}${stop}`
+        : `${shortDevice}: the runtime does not drive this.`;
+    }
     return `${model} on ${rig}: ${reason}${stop}`;
   }
 
@@ -1750,5 +1792,5 @@ function tooltip(
   const at = cell.quantId === selectedQuantId ? '' : ` at ${getQuant(cell.quantId).label}`;
   // The stand-in stays in the brief form: it is the one part of the preamble the axes do not carry,
   // and a figure derived from a format the runtime cannot load has to say so at every width.
-  return brief ? `${detail}${at}.` : `${model} on ${rig}${at}: ${detail}.`;
+  return brief ? `${shortDevice}: ${detail}${at}.` : `${model} on ${rig}${at}: ${detail}.`;
 }
