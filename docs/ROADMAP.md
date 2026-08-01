@@ -157,12 +157,12 @@ The common thread: the moat today is correctness, and correctness is invisible t
 visitor — every alternative _looks_ the same at a glance. Each of these either makes the accuracy
 legible or removes the expertise the current entry point assumes.
 
-| Feature                                                         | Issue                                                | Why it is on the list                                                                                                                 |
-| --------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| Launch commands — emit the runnable command for the placement   | [#136](https://github.com/MrZoller/bench/issues/136) | The engine already computes the layer split; competitors never did, so they structurally cannot print one. Surface it, then format it |
-| Detect — one-click "what can my machine run"                    | [#137](https://github.com/MrZoller/bench/issues/137) | The 43-row picker assumes knowledge most visitors don't have. WebGPU narrows it to 2–4 candidates; a guess stays visibly a guess      |
-| Recommend — rank the catalog for a device + workload            | [#138](https://github.com/MrZoller/bench/issues/138) | The question people arrive with. The Matrix holds the answer as 1,470 cells; this returns the decision                                |
-| Calibrate — predicted-vs-measured, submitted via issue template | [#139](https://github.com/MrZoller/bench/issues/139) | Two anchors become a measured lattice, and a public "we said 44, users measured 41" record is the argument no competitor can copy     |
+| Feature                                                         | Issue                                                | Why it is on the list                                                                                                                                                                 |
+| --------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Launch commands — emit the runnable command for the placement   | [#136](https://github.com/MrZoller/bench/issues/136) | The engine already computes the layer split; competitors never did, so they structurally cannot print one. Surface it, then format it                                                 |
+| Detect — one-click "what can my machine run"                    | [#137](https://github.com/MrZoller/bench/issues/137) | The 43-row picker assumes knowledge most visitors don't have. WebGPU narrows it — sometimes to a handful, on a redacting browser only to a vendor — and a guess stays visibly a guess |
+| Recommend — rank the catalog for a device + workload            | [#138](https://github.com/MrZoller/bench/issues/138) | The question people arrive with. The Matrix holds the answer as 1,470 cells; this returns the decision                                                                                |
+| Calibrate — predicted-vs-measured, submitted via issue template | [#139](https://github.com/MrZoller/bench/issues/139) | Two anchors become a measured lattice, and a public "we said 44, users measured 41" record is the argument no competitor can copy                                                     |
 
 **The sequencing is part of the record.** Launch commands first — still the smallest lift, but not
 the pure formatter the first draft of this section claimed, and the two prerequisites are worth
@@ -178,9 +178,12 @@ user's business either way; for the artifact itself it is a research assignment 
 clothes, and naming the source checkpoint instead would be the substituted-format failure (#18) in
 copy-pasteable form. Calibrate still follows launch, and launching is necessary rather than
 sufficient: a server up is not a measurement, so the command family has to include the benchmark
-form — the scenario's prompt length, generation length and concurrency in `llama-bench`'s flags —
-before a submitted number describes the priced workload rather than the tool's defaults. That form
-is cheap once the assignment is surfaced, and it is the piece calibrate actually pastes back.
+form — the scenario's prompt length, generation length and concurrency in the flags of the selected
+runtime's own client — before a submitted number describes the priced workload rather than the
+tool's defaults. One client per runtime, because `llama-bench` loads GGUF and cannot measure a vLLM
+or MLX placement: each runtime's family carries its own, or calibration says out loud that it
+starts at llama.cpp. That form is cheap once the assignment is surfaced, and it is the piece
+calibrate actually pastes back.
 Detect and recommend ship together as one guided-mode project, because
 each is half of the three-click landing path — detect the machine, ask what the reader wants to do,
 answer. Calibrate last: it is the slow-burn moat, and it compounds from the day the other three
