@@ -20,24 +20,29 @@ import type { Placement } from './placement';
  */
 
 /**
- * Three grades and one non-grade.
+ * Three grades, and the reason there is no fourth.
  *
  * `good`, `tight` and `fail` are judgements — this setup does the thing well, marginally, or not at
- * all — and they are the vocabulary every surface renders with a reserved status colour. `unmeasured`
- * is the *absence* of a judgement: the configuration on screen does not exercise the archetype, so
- * nothing was measured and nothing is being claimed either way.
+ * all — and they are the vocabulary every surface renders with a reserved status colour.
  *
- * It exists because `fail` was doing both jobs, and the strongest negative in a vocabulary cannot
- * mean two things (#75). Multi-user serving at one concurrent user read `○ No` in critical red — the
- * same token as "Will not run" — on a Spark that would serve several users perfectly well, purely
- * because nobody had touched the slider. The row above it, `RAG / document Q&A — No — 31s to read a
- * 32K document`, is a real failure: measured, attributable, and fixable by changing hardware. The two
- * rendered identically.
+ * **There was an `unmeasured` arm and it is gone, root cause first**
+ * ([#96](https://github.com/MrZoller/bench/issues/96)). It was added because `fail` was doing two
+ * jobs: multi-user serving at one concurrent user read `○ No` in critical red — the same token as
+ * "Will not run" — on a Spark that would serve several users perfectly well, purely because nobody
+ * had touched the slider (#75). That diagnosis was right and the fix was one level too shallow. The
+ * real defect was that serving alone took its defining parameter from the slider instead of
+ * declaring it, so the row was answering "have you configured this yet" where the other six answer
+ * "can this machine do the job". Once it is graded at its own four users the question is always
+ * asked, the ungraded state has no trigger, and a vocabulary token nothing can emit is a claim the
+ * UI makes that is never true.
  *
- * The consequence a consumer has to decide deliberately: an ungraded row belongs in *neither* side
- * of a "N of M workloads" count, because it is not evidence in either direction. See `Workloads.tsx`.
+ * The arm's own history is the argument for removing it rather than keeping it unreachable: it
+ * immediately began hiding *proved* failures — 384 of 1,292 drivable combinations miss a tight bar
+ * at one user and no number of users recovers them (#94) — which is #75's defect pointing the other
+ * way. The invariant worth keeping from all of it: **a row is ungraded only when nothing about it
+ * has been measured**, and there is now no such row.
  */
-export type Fitness = 'good' | 'tight' | 'fail' | 'unmeasured';
+export type Fitness = 'good' | 'tight' | 'fail';
 
 /**
  * Room a workload needs for its answer, on top of its prompt.
@@ -286,7 +291,20 @@ export interface VerdictInputs {
      * every archetype that sends a standalone prompt, which is all of them but the agent — see
      * `Workload.prefixIsCached`.
      */
-    cachedPrefixTokens: number
+    cachedPrefixTokens: number,
+    /**
+     * How many sequences share the machine — the slider's, for the six archetypes that inherit it,
+     * and the tier's own for serving ([#96](https://github.com/MrZoller/bench/issues/96)).
+     *
+     * Serving is the one archetype whose *defining* parameter is this one, and taking it from the
+     * slider is what produced three separate defects at one root: a red `fail` for an unconfigured
+     * slider (#75), an ungraded state that then hid proved failures (#94), and a capacity check
+     * measured at a concurrency the grade was not about. A parameter here rather than a second
+     * `VerdictInputs` field because it belongs to the scenario being evaluated, and because an
+     * optional field fails open — a caller that omits it silently loses the guard, which is the
+     * shape this file's exemption lists are warned about.
+     */
+    concurrency: number
   ) => {
     placement: Placement;
     decode: DecodeEstimate;
@@ -314,14 +332,24 @@ export interface VerdictInputs {
 export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
   const { selectedPlacement, usage, maxContextTokens, runnableContextTokens, evaluateAt } = inputs;
 
-  // Nothing else is meaningful if it cannot load. Said once, rather than seven times. Every
-  // archetype evaluates at a context no smaller than the selected one, so nothing that fails
-  // here could succeed at its own scenario.
-  //
-  // `fail` for all seven, including serving at one user: a model that does not load has been
-  // measured against every archetype, and this is the one path that gives all seven the same
-  // sentence — which is what lets the panel say it once above the list instead of seven times. An
-  // ungraded row here would break that collapse and claim the question is still open when it is not.
+  /**
+   * Nothing else is meaningful if it cannot load. Said once, rather than seven times.
+   *
+   * **This used to be a corollary and is now a decision** (#96). Every archetype evaluates at a
+   * context no smaller than the selected one, so for six of them nothing that fails here could
+   * succeed at its own scenario — the refusal is arithmetic. Serving is no longer one of the six: it
+   * is graded at four users where the reader may have set 128, so a scenario refused at 128 users
+   * could well be servable at four, and this path refuses it anyway.
+   *
+   * Kept, for two reasons. The reader's own configuration not loading is the first thing they need
+   * to know, and seven rows disagreeing about it — six refusing, one saying "yes, at four users" —
+   * buries it under a row answering a question nobody asked yet. And this is the one path that gives
+   * all seven the same sentence, which is what lets the panel print it once above the list instead
+   * of seven times; a row with a reason of its own breaks that collapse.
+   *
+   * The cost is real and bounded: it is the only place a serving verdict still moves with the
+   * slider, and it moves to `fail` along with everything else rather than to something better.
+   */
   if (selectedPlacement.unsupported || selectedPlacement.impossible) {
     const reason =
       selectedPlacement.unsupported ?? 'The model does not fit and cannot spill to host RAM.';
@@ -409,13 +437,19 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
    * judged leniently.
    */
   const cache = new Map<string, ReturnType<typeof evaluateAt>>();
-  const evaluateOnce = (promptTokens: number, contextTokens: number, cachedPrefixTokens = 0) => {
+  const evaluateOnce = (
+    promptTokens: number,
+    contextTokens: number,
+    cachedPrefixTokens = 0,
+    concurrency = usage.concurrency
+  ) => {
     // The prefix is part of the key: the same prompt at the same context is a different pass
-    // depending on whether it arrives into an empty cache or a full one.
-    const key = `${promptTokens}:${contextTokens}:${cachedPrefixTokens}`;
+    // depending on whether it arrives into an empty cache or a full one. So is the concurrency,
+    // since serving asks the same question of the same prompt at two different user counts.
+    const key = `${promptTokens}:${contextTokens}:${cachedPrefixTokens}:${concurrency}`;
     const existing = cache.get(key);
     if (existing) return existing;
-    const fresh = evaluateAt(promptTokens, contextTokens, cachedPrefixTokens);
+    const fresh = evaluateAt(promptTokens, contextTokens, cachedPrefixTokens, concurrency);
     cache.set(key, fresh);
     return fresh;
   };
@@ -453,70 +487,63 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
 
   const rateOf = (id: string) => at(id).decode.perUserTokensPerSec;
   const ttftOf = (id: string) => at(id).prefill.ttftSeconds;
-  /** Headroom as planned for *this* archetype's context, never the slider's. */
-  const headroomOf = (id: string) => at(id).placement.headroomBytes;
 
   const chatTtft = ttftOf('chat');
   const completionTtft = ttftOf('completion');
   /**
-   * Read through `ttftOf` at each use rather than bound here, unlike its two neighbours.
+   * Serving, measured at **its own** concurrency rather than the slider's
+   * ([#96](https://github.com/MrZoller/bench/issues/96)).
    *
-   * Every serving predicate and every serving sentence is reached only after the user-count
-   * conjunct, so at the default concurrency of 1 the serving scenario is never evaluated at all —
-   * as it was not before this archetype gained a latency term. `evaluateOnce` memoises, so the
-   * repeated calls cost nothing; binding it here would add a whole `evaluateAt` to every render of
-   * the common case, to grade a bar that case never sees.
+   * This was the one archetype taking its defining parameter from outside itself, and the asymmetry
+   * produced three defects at one root before it was fixed at the root. At one user the row read
+   * `○ No` in critical red with a sentence telling the reader to move a slider (#75). The ungraded
+   * state added to fix that then hid *proved* failures — 384 of 1,292 drivable combinations miss a
+   * tight bar at one user and no number of users recovers them (#94). And `fits` read a capacity
+   * computed at the current concurrency, so a rig with room for one served turn and not two passed
+   * it, measured fast, and reported "Not measured" while two users deterministically fails.
    *
-   * That used to be two binary searches on top of a placement and both speed estimates. Since #17
-   * the callback runs only the placement and the estimates, so the saving is smaller — but an
-   * estimate is not free, and the reason to keep this lazy is unchanged.
+   * Every other archetype declares the prompt it sends and is graded at its own scenario whatever
+   * the sliders say; a completion popup sends 512 tokens on a machine set to 128K. Concurrency is
+   * that same kind of declaration for this one — it *is* the content of "multi-user" — so the tiers
+   * are graded at four users and two, exactly as `long-context` is graded at a full window and at
+   * the reduced one its tight tier admits. **A tier is graded at the scenario it recommends**, which
+   * is this file's oldest rule and the one all three defects were versions of breaking.
+   *
+   * **One evaluation per tier, and capacity comes out of that same evaluation** — which is this
+   * file's oldest rule and the thing the first draft of this fix broke. That draft asked capacity at
+   * the archetype's own 2.5K turn and asked rate and latency at `max(slider, 2.5K)` like every other
+   * archetype, on the reasoning that each half wanted a different scenario. Two scenarios in one
+   * grade is exactly the defect the long-context tiers were fixed for: at a 128K slider on a 5090 the
+   * capacity conjunct passed on a 2.5K placement while the rate and the wait came from a 128K one the
+   * engine had marked `impossible`, and the row read "Usable, but … the weights are spilling to host
+   * RAM" — a sentence about spill, for a placement whose whole meaning is that it cannot spill.
+   *
+   * So `holds` is the placement the figures beside it came from. The window is
+   * `max(slider, needs)`, like every other archetype: the reader's context is part of the question
+   * ("can it serve four people with the window I have set"), where the reader's *concurrency* is
+   * not, because concurrency is what this archetype declares. `evaluateOnce` memoises on all four
+   * inputs, so this is one placement and two estimates per tier — not a second `evaluateConfig`, and
+   * no binary search.
    */
-  const servingTtft = () => ttftOf('serving');
+  const servingAt = (users: number) => {
+    const contextTokens = Math.max(usage.contextTokens, needs('serving'));
+    const measured = evaluateOnce(workload('serving').typicalPromptTokens, contextTokens, 0, users);
+    return {
+      users,
+      contextTokens,
+      measured,
+      // `impossible` and `unsupported` are the two categorical refusals; anything else ran, with
+      // spill if it had to — the same reading `runnableContextTokens` gives, taken at this tier's
+      // user count and this tier's window instead of the slider's concurrency.
+      holds: !measured.placement.impossible && measured.placement.unsupported === undefined,
+    };
+  };
 
-  /**
-   * The one archetype whose defining parameter comes from the slider rather than from itself — and
-   * the scenario where that parameter says the question was never asked.
-   *
-   * Every other archetype declares the prompt it really sends, so it is graded at its own scenario
-   * whatever the sliders say. Concurrency is not declarable that way: it is the whole content of
-   * "multi-user", and one user is a scenario in which multi-user serving simply has not been tried.
-   * Graded, it read `○ No` in critical red with a sentence telling the reader to move a slider —
-   * the strongest negative in the vocabulary standing in for "you have not configured this yet",
-   * beside rows where it means "this machine cannot do it" (#75).
-   *
-   * The other three conjuncts are what keep the ungraded state from swallowing a real answer, and
-   * each is the same boundary a sentence below leads with. One expression, read by the tier and by
-   * its reason, because this file's history is a list of the times a condition and the sentence
-   * explaining it were written down twice.
-   *
-   * **`fits` is the capacity half**: a rig that cannot hold one 2K turn cannot hold two of them
-   * either, so that failure is measured at any concurrency and stays `fail`.
-   *
-   * **The rate and TTFT conjuncts are the other half, and the first version of this omitted them**
-   * (found in review on #94). At one user the serving scenario *is* measured — `at('serving')` reads
-   * `usage.concurrency`, so a 2K turn at a single user is a real evaluation — and if that measurement
-   * already misses the tight tier, more users cannot rescue it: per-user decode is non-increasing in
-   * concurrency because the weights are read once per step however many are waiting, and prefill work
-   * grows with it because one long prompt already saturates the units. Both directions are asserted
-   * over the catalog rather than argued: 1,292 drivable model/device/runtime/quant combinations, zero
-   * cases where per-user rate rose or TTFT fell as concurrency went 1 → 2 → 4 → 8.
-   *
-   * So the omission was not a corner: **384 of those 1,292 miss a tight bar at one user** — a 5090
-   * running Llama-3.1-70B at BF16 decodes 0.58 tok/s against a 5 tok/s bar, and 0.57 at two users —
-   * and every one of them read "Not measured" for a failure the engine had already proved. Hiding a
-   * definitive failure behind "you have not configured this yet" is the same class of defect as #75
-   * itself, pointing the other way.
-   *
-   * The cost is that serving is now evaluated at the default concurrency of 1, which the note on
-   * `servingTtft` above was written to avoid. That saving is not available any more: whether the
-   * question was asked cannot be answered without taking the measurement. `evaluateOnce` memoises,
-   * so it is one placement and two estimates added to a render that already runs six archetypes.
-   */
-  const servingNotTried =
-    fits('serving') &&
-    usage.concurrency < BARS.serving.tight.users &&
-    rateOf('serving') >= BARS.serving.tight.rate &&
-    servingTtft() <= BARS.serving.tight.ttft;
+  const servingGood = servingAt(BARS.serving.good.users);
+  const servingTight = servingAt(BARS.serving.tight.users);
+
+  /** How a tier's own user count reads in a sentence, since two of them are not plural-agnostic. */
+  const usersWord = (n: number) => `${n} ${n === 1 ? 'user' : 'users'}`;
 
   const ragPrefill = at('rag').prefill;
   const ragFits = fits('rag');
@@ -878,117 +905,84 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
       // comfortable, thirty is the edge of tolerable, and minutes is a broken deployment however
       // fast it decodes once it starts.
       //
-      // And at one user none of that is measured, which is a different statement from failing it.
-      // See `servingNotTried`.
-      unmeasured: servingNotTried,
+      // Each tier reads its own `servingAt`, so `usage.concurrency` appears nowhere below: the row
+      // answers "can this machine serve several people", which is a question about the machine.
       pass:
-        fits('serving') &&
-        usage.concurrency >= BARS.serving.good.users &&
-        rateOf('serving') >= BARS.serving.good.rate &&
-        headroomOf('serving') > 0 &&
-        servingTtft() <= BARS.serving.good.ttft,
+        servingGood.holds &&
+        servingGood.measured.decode.perUserTokensPerSec >= BARS.serving.good.rate &&
+        servingGood.measured.placement.headroomBytes > 0 &&
+        servingGood.measured.prefill.ttftSeconds <= BARS.serving.good.ttft,
       tight:
-        fits('serving') &&
-        usage.concurrency >= BARS.serving.tight.users &&
-        rateOf('serving') >= BARS.serving.tight.rate &&
-        servingTtft() <= BARS.serving.tight.ttft,
-      why: () =>
-        !fits('serving')
-          ? // `user`/`users` rather than a bare plural. This was "the one shortfall sentence
-            // reachable at a single user" until #94 — the two below are reachable there now, and
-            // they have a branch of their own for it, because the plural phrasing that suits four
-            // users misdescribes one. It read "a turn each for 1 users".
-            shortfall(
-              'serving',
-              `a turn each for ${usage.concurrency} ${usage.concurrency === 1 ? 'user' : 'users'}`
-            )
-          : servingNotTried
-            ? // States the absence before the instruction. The row's status word already says "Not
-              // measured"; a reason that opened on "Set concurrency…" was the only sentence in this
-              // file that named no measurement at all, which is exactly right for a row that has
-              // none — but it has to say so, because read on its own it is indistinguishable from
-              // advice attached to a failure.
-              `Not measured at ${usage.concurrency} ${usage.concurrency === 1 ? 'user' : 'users'} — set concurrency above ${BARS.serving.tight.users - 1} to see whether this holds several.`
-            : usage.concurrency < BARS.serving.tight.users
-              ? // Below the tier's own user count and *not* ungraded, which since #94 means one
-                // thing: the single-user measurement already missed a tight bar, and no number of
-                // users recovers it. So the sentence says which bar, at what the machine actually
-                // did, and why adding users is the wrong direction — rather than borrowing the
-                // plural copy below, which would read "0.6 tok/s each once 1 users share the
-                // device" and describe a shared deployment that is not what was measured.
-                rateOf('serving') < BARS.serving.tight.rate
-                ? // "every user added divides it further" was wrong, and wrong against the figures
-                  // in this file's own docblock (found in review). Decode is memory-bound, so a
-                  // dense model's weight read is shared across the batch and the tenth user is
-                  // nearly free — the 5090/DeepSeek case goes 0.8 to 0.6 tok/s from one user to
-                  // two, not to a half or a tenth. What justifies the grade is that the rate cannot
-                  // *rise*, which is a weaker claim than division and the only one the arithmetic
-                  // supports. The sentence says that instead.
-                  `${fmt(rateOf('serving'))} tok/s for a single served turn, under the ${BARS.serving.tight.rate} tok/s a shared deployment needs — and sharing the device between more users cannot raise it.`
-                : `${secs(servingTtft())}s to a first token for one prompt, past the ${BARS.serving.tight.ttft}s bar — and each prompt added is read on top of it.`
-              : rateOf('serving') < BARS.serving.tight.rate
-                ? `${fmt(rateOf('serving'))} tok/s each once ${usage.concurrency} users share the device.`
-                : servingTtft() > BARS.serving.tight.ttft
-                  ? `${secs(servingTtft())}s before anyone sees a token — ${usage.concurrency} prompts have to be read first, and prefill does not batch the way decode does.`
-                  : // Four good-tier bars now, through the same builder as the other tiers rather
-                    // than the nested ternaries this used to hand-write. Those covered two causes in
-                    // three branches and could not have absorbed a fourth: spill had a branch of its
-                    // own above, which is why a spilling row never mentioned the user count, and the
-                    // pair that did name both had to re-state the rate in each. This is the file's
-                    // own lesson about hand-written copies of one sentence, applied to the tier that
-                    // still had them.
-                    (shortOfGood(
-                      // No internal "and", and no internal comma: `shortOfGood` joins its items with
-                      // commas and a final "and", so a bar carrying either of its own leaves the
-                      // reader unable to see where one item stops. Three of these can be live at
-                      // once.
-                      usage.concurrency < BARS.serving.good.users &&
-                        `it is measuring ${usage.concurrency} users against the ${BARS.serving.good.users} concurrent users a serving deployment is graded from`,
-                      rateOf('serving') < BARS.serving.good.rate &&
-                        `${fmt(rateOf('serving'))} tok/s each is under the ${BARS.serving.good.rate} tok/s a served user expects`,
-                      // Spill can hold serving back while every printed figure looks healthy: the
-                      // rate is fine, the fit is fine, and the reason said so.
-                      headroomOf('serving') <= 0 &&
-                        'the weights are spilling to host RAM so every additional user makes that worse rather than simply not fitting',
-                      servingTtft() > BARS.serving.good.ttft &&
-                        `${secs(servingTtft())}s to first token across ${usage.concurrency} queued prompts is longer than a served user waits`
-                    ) ??
-                    `${usage.concurrency} users at ${fmt(rateOf('serving'))} tok/s each, ${fmt(at('serving').decode.aggregateTokensPerSec)} aggregate, ${secs(servingTtft())}s to first token.`),
+        servingTight.holds &&
+        servingTight.measured.decode.perUserTokensPerSec >= BARS.serving.tight.rate &&
+        servingTight.measured.prefill.ttftSeconds <= BARS.serving.tight.ttft,
+      why: () => {
+        const good = servingGood.measured;
+        const tight = servingTight.measured;
+        /*
+         * The failing sentences read the *tight* tier, because that is the tier that was missed —
+         * quoting the four-user figures to a rig that cannot hold two would describe a scenario it
+         * never reaches, which is the long-context defect one archetype over. The `good`-tier
+         * shortfalls below read the four-user measurement for the same reason pointed the other way.
+         */
+        if (!servingTight.holds) {
+          /**
+           * **Not `shortfall()`, and that is the second thing the first draft got wrong.**
+           *
+           * That helper prints `runnableContextTokens`, which the caller computes at the *slider's*
+           * concurrency — so on the two catalog combinations #96 was filed about it produced a
+           * sentence disproving its own verdict: "Only 3.2K of context fits — a turn each for 2 users
+           * needs 2.5K with room to answer in", where 3.2K is the one-user figure and 3.2K is more
+           * than 2.5K. The right figure is the runnable context at two users, which this layer has no
+           * way to compute — it would be a second binary search, per tier.
+           *
+           * So the sentence quotes what the refusing placement itself reports: bytes wanted against
+           * bytes available, on the device, at this tier's user count. Nothing is re-derived and
+           * nothing comes from a different scenario.
+           */
+          const { usedBytesPerDevice, allocatableBytesPerDevice } = servingTight.measured.placement;
+          return `${usersWord(BARS.serving.tight.users)} each holding ${ctx(servingTight.contextTokens)} of context need ${gib(usedBytesPerDevice)} against the ${gib(allocatableBytesPerDevice)} this machine can allocate.`;
+        }
+        if (tight.decode.perUserTokensPerSec < BARS.serving.tight.rate) {
+          return `${fmt(tight.decode.perUserTokensPerSec)} tok/s each at ${usersWord(BARS.serving.tight.users)}, under the ${BARS.serving.tight.rate} tok/s a shared deployment needs — and sharing the device further cannot raise it.`;
+        }
+        if (tight.prefill.ttftSeconds > BARS.serving.tight.ttft) {
+          return `${secs(tight.prefill.ttftSeconds)}s before either of ${usersWord(BARS.serving.tight.users)} sees a token, past the ${BARS.serving.tight.ttft}s bar — and each prompt added is read on top of it.`;
+        }
+        // Four good-tier bars, through the same builder as the other tiers rather than the nested
+        // ternaries this used to hand-write. Those covered two causes in three branches and could
+        // not have absorbed a fourth: spill had a branch of its own, which is why a spilling row
+        // never mentioned the user count.
+        return (
+          shortOfGood(
+            // No internal "and", and no internal comma: `shortOfGood` joins its items with commas
+            // and a final "and", so a bar carrying either of its own leaves the reader unable to
+            // see where one item stops. Three of these can be live at once.
+            !servingGood.holds &&
+              `it holds a turn each for ${usersWord(BARS.serving.tight.users)} but not for the ${BARS.serving.good.users} a serving deployment is graded at`,
+            good.decode.perUserTokensPerSec < BARS.serving.good.rate &&
+              `${fmt(good.decode.perUserTokensPerSec)} tok/s each at ${usersWord(BARS.serving.good.users)} is under the ${BARS.serving.good.rate} tok/s a served user expects`,
+            // Spill can hold serving back while every printed figure looks healthy: the rate is
+            // fine, the fit is fine, and the reason said so.
+            good.placement.headroomBytes <= 0 &&
+              'the weights are spilling to host RAM so every additional user makes that worse rather than simply not fitting',
+            good.prefill.ttftSeconds > BARS.serving.good.ttft &&
+              `${secs(good.prefill.ttftSeconds)}s to first token across ${usersWord(BARS.serving.good.users)} of queued prompts is longer than a served user waits`
+          ) ??
+          `${usersWord(BARS.serving.good.users)} at ${fmt(good.decode.perUserTokensPerSec)} tok/s each, ${fmt(good.decode.aggregateTokensPerSec)} aggregate, ${secs(good.prefill.ttftSeconds)}s to first token.`
+        );
+      },
     }),
   ];
 }
 
 function judge(
   id: string,
-  {
-    pass,
-    tight,
-    unmeasured,
-    why,
-  }: {
-    pass: boolean;
-    tight: boolean;
-    /**
-     * The scenario does not exercise this archetype, so it is not graded at all. Optional, and
-     * declared by exactly one tier — see `serving`.
-     */
-    unmeasured?: boolean;
-    why: () => string;
-  }
+  { pass, tight, why }: { pass: boolean; tight: boolean; why: () => string }
 ): WorkloadVerdict {
   return {
     workload: workload(id),
-    /**
-     * Ungraded wins over graded, and the order is the claim rather than a convenience: a scenario
-     * that was never tried cannot be a pass. For the one tier that declares it the two are disjoint
-     * by construction — serving is unmeasured below two users and cannot reach `tight` below two —
-     * so this only decides what happens if a later tier makes them overlap.
-     *
-     * What a tier must *not* do is declare `unmeasured` for a scenario that already answers the
-     * question. Serving guards its flag with `fits('serving')` for that reason: a rig with nowhere
-     * to put one 2K turn has nowhere to put four of them, and that failure is measured.
-     */
-    fitness: unmeasured ? 'unmeasured' : pass ? 'good' : tight ? 'tight' : 'fail',
+    fitness: pass ? 'good' : tight ? 'tight' : 'fail',
     reason: why(),
   };
 }
@@ -1037,6 +1031,20 @@ function secs(value: number): string {
  * the 32K document". Exact multiples read as whole units; anything else keeps a decimal, floored,
  * so a shortfall always looks like one.
  */
+/**
+ * Bytes as GiB, rounded *up* on a requirement and printed to a tenth below 10.
+ *
+ * The direction follows the bound, like `secs` and unlike `ctx`: a figure printed as what a
+ * configuration needs must never round down into looking affordable. Both sides of the serving
+ * capacity sentence use it, so the shortfall cannot be an artefact of two roundings.
+ */
+function gib(bytes: number): string {
+  const value = bytes / 1024 ** 3;
+  if (!Number.isFinite(value)) return '—';
+  if (value >= 10) return `${Math.ceil(value)} GiB`;
+  return `${(Math.ceil(value * 10) / 10).toFixed(1)} GiB`;
+}
+
 function ctx(tokens: number): string {
   const unit = tokens >= 1e6 ? 1e6 : 1024;
   const suffix = unit === 1e6 ? 'M' : 'K';

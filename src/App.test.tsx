@@ -760,47 +760,42 @@ describe('the workload strip keeps up with the scenario', () => {
       .trim();
 
   /**
-   * The headline counts what was graded, on both sides of the fraction (#75).
+   * The headline counts what was graded, on both sides of the fraction — and since #96 that is
+   * every row.
    *
    * This is the number the panel is read by, and at the setting every visitor arrives on it was
-   * wrong: multi-user serving is not measured at one concurrent user, and `usable` subtracted the
-   * ungraded row exactly as it subtracted a failing one. gpt-oss-120b on a Spark read "5 of 7
-   * workloads" while the seventh row said, in critical red, that the reader should move a slider.
+   * wrong twice in a row. First it read "5 of 7 workloads" on a Spark that would serve several
+   * users perfectly well, because `usable` subtracted an *ungraded* serving row exactly as it
+   * subtracted a failing one (#75). Then, with the row out of both sides, it read "5 of 6" beside
+   * seven visible rows — coverage claimed through the denominator instead of the numerator (#94).
    *
-   * Asserted here rather than in the engine suite because the count is this component's arithmetic —
-   * `judgeWorkloads` returns seven verdicts either way. The pinned pair is the issue's own
-   * measurement of the default scenario; the row count beside it is what says the denominator moved
-   * for the stated reason rather than because the engine regraded something.
+   * Grading serving at its own four users removed the state both fixes were working around, so the
+   * denominator is the list again. Asserted here rather than in the engine suite because the count
+   * is this component's arithmetic: `judgeWorkloads` returns seven verdicts either way.
    */
-  it('leaves an ungraded workload out of both sides of the headline', () => {
+  it('counts every row, on both sides of the headline', () => {
     render(<App />);
 
-    const ungraded = rows().filter((text) => text.includes('Not measured'));
-    const serving = rows().find((text) => text.includes('Multi-user serving'))!;
-
-    // The default scenario — gpt-oss-120b on a Spark at one user — has exactly one ungraded row.
-    expect(ungraded).toHaveLength(1);
-    expect(serving).toContain('Not measured');
-    // Neutral, not the strongest negative in the vocabulary: `fail` renders "No".
-    expect(serving).not.toMatch(/\bNo\b/);
-
-    /**
-     * **The denominator has to name itself while it is short of the list** (found in review on #94).
-     *
-     * Dropping the ungraded row from both sides is right — it is not evidence in either direction —
-     * but the fraction it leaves is read as a headline, and "5 of 6 workloads" beside seven visible
-     * rows claims the panel covered all of them. That is the same false implication the omission
-     * exists to prevent, arriving through the total instead of through the numerator. It is most
-     * visible one step from here: a rig that clears every graded bar renders "6 of 6", which reads as
-     * a clean sweep of a list whose seventh row says it was never measured.
-     */
-    expect(headline()).toBe('5 of 6 measured workloads');
-    expect(headline()).not.toMatch(/of 7 workloads/);
-    // The qualifier is what stops the fraction claiming coverage it does not have.
-    expect(headline()).not.toBe('5 of 6 workloads');
+    // The default scenario — gpt-oss-120b on a Spark at one user — grades all seven now. The row
+    // that used to be ungraded is the assertion: "Not measured" was a status word this panel could
+    // render, and there is no longer a state that produces it.
+    expect(rows().filter((text) => text.includes('Not measured'))).toHaveLength(0);
+    expect(headline()).toMatch(/of 7 workloads$/);
+    // And the qualifier goes with the shortfall: once the denominator is the whole list there is
+    // nothing to disclose, and "of 7 measured workloads" would imply some other total exists.
+    expect(headline()).not.toMatch(/measured/);
   });
 
-  it('does not paint an ungraded row in the colour that means "will not run"', () => {
+  /**
+   * The row that used to carry the ungraded state, checked for what it says now.
+   *
+   * `--color-critical` is this panel's "No" and Telemetry's "Will not run", and #75 was that word
+   * appearing for "you have not configured this yet". The fix then was a fourth, recessive state;
+   * the fix now is that the question is always answered, so the row wears a real grade at the
+   * setting every visitor arrives on — and the neighbouring row it was confused with, RAG at 31s to
+   * read a 32K document, still means the thing `fail` means.
+   */
+  it('gives multi-user serving a real grade at the setting readers arrive on', () => {
     render(<App />);
 
     const serving = within(strip())
@@ -808,37 +803,47 @@ describe('the workload strip keeps up with the scenario', () => {
       .find((li) => li.textContent?.includes('Multi-user serving'))!;
     const status = serving.children[0] as HTMLElement;
 
-    // `--color-critical` is this panel's "No" and Telemetry's "Will not run". Wearing it for "you
-    // have not configured this yet" made the strongest negative in the vocabulary mean two things —
-    // and the row it sat next to, RAG at 31s to read a 32K document, means the other one. An
-    // ungraded row is not on that scale at all, so it takes recessive ink instead.
-    expect(status.textContent).toContain('Not measured');
-    expect(status.style.color).toBe('var(--color-text-faint)');
-    expect(status.style.color).not.toBe('var(--color-critical)');
-  });
-
-  it('counts every row again as soon as they are all graded', () => {
-    render(<App />);
-
-    // Two users is enough to put serving back on the scale, and nothing else can go ungraded — so
-    // the denominator returns to seven. The precondition for the case above: this asserts the
-    // denominator tracks the grading rather than simply being one smaller.
-    act(() => useConfig.getState().set('concurrency', 2));
-
-    expect(rows().filter((text) => text.includes('Not measured'))).toHaveLength(0);
-    expect(headline()).toMatch(/of 7 workloads$/);
-    // And the qualifier goes away with the shortfall: once the denominator is the whole list there
-    // is nothing to disclose, and "of 7 measured workloads" would imply some other total exists.
-    expect(headline()).not.toMatch(/measured/);
+    expect(status.textContent).toMatch(/Yes|Tight|No/);
+    expect(status.textContent).not.toContain('Not measured');
+    // A status hue, because the row is on the scale — the recessive ink was for a row that was not.
+    expect(status.style.color).not.toBe('var(--color-text-faint)');
+    // And the sentence names the archetype's own users rather than the slider's one.
+    expect(serving.textContent).toMatch(/4 users at /);
+    expect(serving.textContent).not.toMatch(/set concurrency/i);
   });
 
   /**
-   * And the collapse for a configuration that cannot run must not lose the ungraded row's sentence.
+   * The serving row does not move with the slider, on the rendered surface.
    *
-   * The strip says one shared reason above the list and blanks the rows' own — which is right when
-   * all seven say the same thing, and would delete the only sentence explaining an ungraded row. The
-   * refusal path grades all seven `fail`, so the two states cannot meet; this is the assertion that
-   * keeps it that way.
+   * The engine suite asserts the verdict; this asserts what a reader sees, because the defect was
+   * always a rendered one — a row that changed from `○ No` to `● Yes` when nobody had touched the
+   * hardware. Deliberately *not* the headline: six archetypes are still graded at the reader's
+   * concurrency and legitimately move with it, batch most obviously, since its aggregate is summed
+   * across workers. A test asserting the whole panel is slider-independent would be asserting
+   * something false.
+   */
+  it('leaves the serving row alone when the reader moves the concurrency slider', () => {
+    render(<App />);
+    const servingRow = () =>
+      within(strip())
+        .getAllByRole('listitem')
+        .find((li) => li.textContent?.includes('Multi-user serving'))!.textContent;
+
+    const before = servingRow();
+    expect(before).toMatch(/4 users at /);
+
+    for (const concurrency of [2, 4, 8]) {
+      act(() => useConfig.getState().set('concurrency', concurrency));
+      expect(servingRow(), `the serving row changed at ${concurrency} users`).toBe(before);
+    }
+  });
+
+  /**
+   * And the collapse for a configuration that cannot run has to keep working.
+   *
+   * The strip says one shared reason above the list and blanks the rows' own, which is right only
+   * when all seven genuinely say the same thing. That is the refusal path, which grades all seven
+   * `fail`; nothing else in the panel may reach it.
    */
   it('still collapses seven identical reasons into one when nothing runs', async () => {
     const user = userEvent.setup();

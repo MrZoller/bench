@@ -24,7 +24,7 @@ import {
 import { getQuant } from '@/data/quants';
 // The monotonicity sweep is about the *model*, not about a rig, so it runs the shipped catalog
 // rather than fixtures — a claim checked only on the hardware it was derived from is not checked.
-import { DEVICES, MODELS } from '@/data/catalog';
+import { DEVICES, MODELS, getDevice } from '@/data/catalog';
 import { RUNTIMES, runtimeDrives } from '@/data/runtimes';
 
 /** Resident, with room to spare — these tests are about rate and latency, not capacity. */
@@ -44,6 +44,33 @@ const RESIDENT: Placement = {
   offloadFraction: 0,
   impossible: false,
 };
+
+/** The same rig, asked for more than it can hold: cache and activations alone are over the ceiling. */
+const OVER: Placement = {
+  ...RESIDENT,
+  fits: false,
+  headroomBytes: -1,
+  utilization: 1.4,
+  impossible: true,
+};
+
+/**
+ * A stub engine that refuses what it says it cannot hold.
+ *
+ * `evaluateAt: () => ({ placement: RESIDENT, ...STUB_SPEED })` describes a machine that reports a
+ * runnable ceiling and then returns a resident placement for any request above it — which no engine
+ * does, and which mattered the moment a capacity check stopped reading `runnableContextTokens`
+ * (#96). Serving's fit is now the placement at its own turn and its own tier's user count, so a stub
+ * that always fits reports a rig holding four served turns while its inputs say it holds none.
+ *
+ * Given the same ceiling the caller declares, this refuses above it exactly as `planPlacement` would,
+ * which makes the two halves of the fixture agree instead of merely coexisting.
+ */
+const stubEngine =
+  (runnableContextTokens: number) => (_promptTokens: number, contextTokens: number) => ({
+    placement: contextTokens > runnableContextTokens ? OVER : RESIDENT,
+    ...STUB_SPEED,
+  });
 
 /**
  * The verdict layer turns a number into a decision, so what these tests guard is the *shape* of
@@ -75,11 +102,11 @@ function judge(model: Parameters<typeof evaluate>[0]['model'], quantId: string, 
     maxContextTokens: evaluation.maxContextTokens,
     runnableContextTokens: evaluation.runnableContextTokens,
     // Each archetype is graded at its own scenario, decode included.
-    evaluateAt: (promptTokens, contextTokens, cachedPrefixTokens) => {
+    evaluateAt: (promptTokens, contextTokens, cachedPrefixTokens, concurrency) => {
       const e = evaluate({
         model,
         quant: getQuant(quantId),
-        usage: { ...usage, promptTokens, contextTokens, cachedPrefixTokens },
+        usage: { ...usage, promptTokens, contextTokens, cachedPrefixTokens, concurrency },
         rig: { device: rig.device, count: rig.count ?? 1 },
         runtime: rig.runtime ?? LLAMA_CPP,
       });
@@ -99,18 +126,19 @@ interface VerdictRig {
 }
 
 /**
- * The three grades as an order — and an ungraded row is not in it.
+ * The three grades as an order.
  *
- * Every "A never outranks B" assertion below is a question about two *graded* rows. `unmeasured` is
- * the absence of a grade rather than a fourth rung (#75), so it has no rank, and a lookup table with
- * a number for it would have silently sorted an ungraded row above or below a real failure. Four
- * copies of `{ good: 2, tight: 1, fail: 0 }` are one function now, and it throws rather than
- * returning `undefined` — an `undefined` on either side of `toBeLessThanOrEqual` passes.
+ * Four copies of `{ good: 2, tight: 1, fail: 0 }` are one function, and it throws on anything it
+ * does not know rather than returning `undefined` — an `undefined` on either side of
+ * `toBeLessThanOrEqual` passes, which is how a fourth grade would slip past every ordering
+ * assertion in this file. That guard was written for the `unmeasured` arm and outlives it (#96):
+ * `Record<Fitness, …>` makes the coverage a compile-time claim and this keeps the runtime one.
  */
-const RANK: Record<Exclude<Fitness, 'unmeasured'>, number> = { good: 2, tight: 1, fail: 0 };
+const RANK: Record<Fitness, number> = { good: 2, tight: 1, fail: 0 };
 const rankOf = (fitness: Fitness) => {
-  if (fitness === 'unmeasured') throw new Error('an ungraded verdict has no rank to compare');
-  return RANK[fitness];
+  const rank = RANK[fitness];
+  if (rank === undefined) throw new Error(`no rank for the grade "${fitness}"`);
+  return rank;
 };
 
 describe('workload verdicts', () => {
@@ -253,64 +281,198 @@ describe('workload verdicts', () => {
     );
   });
 
-  it('asks for concurrency before judging multi-user serving', () => {
+  it('does not ask the reader for concurrency before judging multi-user serving', () => {
+    // It used to: at one user this row printed "set concurrency above 1 to see whether this holds
+    // several", which is an instruction rather than a verdict and the only sentence in the file
+    // naming no measurement. Since #96 the row is graded at its own four users, so the question is
+    // always answered and the instruction has nothing to attach to.
     const verdicts = judge(LLAMA_31_8B, 'q4_k_m', { device: RTX_5090, concurrency: 1 });
-    expect(verdicts.get('serving')?.reason).toMatch(/concurrency above 1/i);
+    const serving = verdicts.get('serving')!;
+    expect(serving.reason).not.toMatch(/concurrency/i);
+    expect(serving.fitness).toBe('good');
   });
 });
 
 /**
- * A workload that was not evaluated is not a workload that failed (#75).
+ * Serving answers the archetype's own question, at the archetype's own concurrency
+ * ([#96](https://github.com/MrZoller/bench/issues/96)).
  *
- * Serving is the one archetype whose defining parameter comes from the slider: every other one
- * declares the prompt it really sends and is graded at its own scenario, but concurrency *is* the
- * content of "multi-user", and at one user the question has not been asked. It was answered `fail`
- * anyway — the same state, and in the UI the same `--color-critical`, as "31s to read a 32K document
- * before answering", which is a measured, attributable, hardware-fixable refusal.
+ * This is the third and last fix at one root. Serving was the only archetype taking its defining
+ * parameter from the slider rather than declaring it, and that asymmetry produced a red `fail` for
+ * an unconfigured slider (#75), an ungraded fourth state that then hid proved failures (#94), and a
+ * capacity check taken at a concurrency the grade was not about. Grading each tier at its own user
+ * count — four and two, exactly as `long-context` grades at a full window and at the reduced one its
+ * tight tier admits — removes all three and the fourth state with them.
+ *
+ * The invariant that survives all of it, and the one worth keeping green: **a row is ungraded only
+ * when nothing about it has been measured**, and since every archetype now declares its own
+ * scenario there is no such row. `Fitness` has three arms.
  */
-describe('an archetype the scenario never exercises is not graded', () => {
-  it('leaves multi-user serving ungraded at one user, on a machine that would serve several', () => {
-    // An 8B at Q4_K_M on a 5090 serves four users comfortably — see the `concurrency: 4` case
-    // below, which is the same rig with the slider moved. Nothing about the machine changed
-    // between them, so `fail` at one user was reporting the reader's slider position as a hardware
-    // limit.
-    const verdicts = judge(LLAMA_31_8B, 'q4_k_m', { device: RTX_5090, concurrency: 1 });
-    const serving = verdicts.get('serving')!;
+describe('serving is graded at its own concurrency, not the slider’s', () => {
+  /**
+   * The defect at the root, stated as an identity rather than as a grade.
+   *
+   * Nothing about the machine changes when the reader drags a slider, so nothing about "can this
+   * machine serve several people" may change either. That one assertion covers #75 (which was this
+   * row reading `fail` at one user and `good` at four), #94's ungraded state, and the capacity
+   * symptom below — all three were the verdict moving when only the slider had.
+   */
+  it('returns the same verdict at every concurrency, because the machine is the same', () => {
+    const at = (concurrency: number) =>
+      judge(LLAMA_31_8B, 'q4_k_m', {
+        device: RTX_5090,
+        concurrency,
+        // A turn-sized window, so the reader's own scenario still loads at 128 users and the
+        // panel-wide refusal below is not what this is measuring.
+        contextTokens: 2048,
+      }).get('serving')!;
+    const one = at(1);
 
-    expect(serving.fitness).toBe('unmeasured');
-    expect(serving.fitness).not.toBe('fail');
-    // Still says what to do about it, and now says what it is first.
-    expect(serving.reason).toMatch(/^Not measured at 1 user\b/);
-    expect(serving.reason).toMatch(/concurrency above 1/i);
-  });
-
-  it('grades it the moment the scenario has several users in it', () => {
-    // The precondition for the case above: this is not a row that is ungraded for ever, and the
-    // fourth state is not a way of never answering the question.
-    const serving = judge(LLAMA_31_8B, 'q4_k_m', { device: RTX_5090, concurrency: 4 }).get(
-      'serving'
-    )!;
-
-    expect(serving.fitness).not.toBe('unmeasured');
-    expect(serving.fitness).toBe('good');
+    // The precondition: a rig this row has something positive to say about, so "identical" is not
+    // being satisfied by seven copies of one refusal.
+    expect(one.fitness).toBe('good');
+    // Up to 32, which is where this rig stops loading the reader's own scenario at all. Past that
+    // the panel refuses every row together and serving goes with them — the sibling test below.
+    for (const concurrency of [2, 3, 4, 8, 32]) {
+      const other = at(concurrency);
+      expect(other.fitness, `serving changed grade at ${concurrency} users`).toBe(one.fitness);
+      expect(other.reason, `serving changed its reason at ${concurrency} users`).toBe(one.reason);
+    }
   });
 
   /**
-   * **The other half of "never exercised": a one-user measurement that already settles it** (found in
-   * review on #94).
+   * The one thing that still moves it, named so the identity above is not read as absolute.
    *
-   * The first version of this state asked only whether the turn *fits*, on the argument that a rig
-   * which cannot hold one 2K turn cannot hold two. True, and incomplete — the same reasoning covers
-   * the rate and the wait. `at('serving')` reads `usage.concurrency`, so at one user the 2K turn is
-   * genuinely evaluated, and if that evaluation misses a tight bar then no number of users recovers
-   * it: per-user decode is non-increasing in concurrency and prefill work grows with it (asserted
-   * over the catalog in the test below). Marking it "Not measured" claimed the question had not been
-   * asked when the engine had already answered it, and dropped the row out of both sides of the
-   * workload count.
+   * `judgeWorkloads` refuses all seven rows when the *selected* placement cannot load — one sentence
+   * above the list rather than seven identical ones — and that is a fact about the reader's own
+   * scenario, so it does depend on the slider.
    *
-   * Both bars, because they are separate branches and a fix for one would leave the other reporting
-   * "Not measured" for a failure it had measured. This is not a corner: 384 of the 1,292 drivable
-   * combinations in the catalog miss a tight bar at one user.
+   * Serving is refused with the rest, and since #96 that is a decision rather than a corollary: it is
+   * graded at four users, so a scenario refused at 128 could well be servable. It joins the collapse
+   * because the reader's own configuration not loading is the first thing they need to know, and
+   * because a row with a reason of its own is what the collapse cannot survive. The argument is at
+   * the refusal in `verdict.ts`; this is the assertion that keeps the behaviour with it.
+   */
+  it('is refused with every other row when the reader’s own scenario cannot load', () => {
+    const crowded = judge(LLAMA_31_8B, 'q4_k_m', {
+      device: RTX_5090,
+      concurrency: 128,
+      contextTokens: 131072,
+    });
+
+    for (const verdict of crowded.values()) expect(verdict.fitness).toBe('fail');
+    expect(new Set([...crowded.values()].map((v) => v.reason)).size).toBe(1);
+  });
+
+  it('names its own four users in the sentence, and never the slider’s count', () => {
+    const serving = judge(LLAMA_31_8B, 'q4_k_m', { device: RTX_5090, concurrency: 1 }).get(
+      'serving'
+    )!;
+
+    // The scenario the grade came from, named — this file's rule that a sentence naming a scenario
+    // has to name the one the estimate was called with.
+    expect(serving.reason).toMatch(new RegExp(`\\b${WORKLOAD_BARS.serving.good.users} users\\b`));
+    // And the two sentences the old slider-driven version produced, neither of which can be true of
+    // a row that is never graded at the reader's setting.
+    expect(serving.reason).not.toMatch(/Not measured/i);
+    expect(serving.reason).not.toMatch(/set concurrency/i);
+  });
+
+  it('grades every archetype, at every concurrency', () => {
+    // The invariant #96 leaves behind. `Fitness` is three arms and `judge` cannot emit a fourth, so
+    // this is the runtime half of a claim the compiler already makes — worth having because the way
+    // it broke before was a *value*, not a type: a row carrying a grade nothing had measured.
+    for (const concurrency of [1, 2, 4, 128]) {
+      const verdicts = judge(LLAMA_31_8B, 'q4_k_m', { device: RTX_5090, concurrency });
+      expect(verdicts.size).toBe(7);
+      for (const verdict of verdicts.values()) {
+        expect(['good', 'tight', 'fail']).toContain(verdict.fitness);
+        expect(verdict.reason.length).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  /**
+   * **The capacity symptom, which is what could not be patched onto #94** — its second finding, and
+   * the narrowest of the three: `fits('serving')` read a runnable context computed at the *current*
+   * concurrency, so a rig with room for one served turn and not two passed it, measured fast at one
+   * user, and reported "Not measured" while two users deterministically fails on capacity.
+   *
+   * Two of 2,278 drivable combinations were affected and both are this machine: a 24 GiB Mac mini
+   * runs Llama-3.1-8B at BF16 with 3,364 tokens of runnable context at one user and 1,680 at two,
+   * against the 2,560 one served turn needs. Graded at the tight tier's own two users, the capacity
+   * failure is the answer.
+   */
+  it('measures capacity at the tier’s users, not the reader’s', () => {
+    const serving = judge(LLAMA_31_8B, 'bf16', {
+      device: getDevice('mac-mini-m4-pro-24'),
+      concurrency: 1,
+      // The reader's own window is small enough to load, so the panel-wide refusal is not what
+      // produces this verdict — the point is that one served turn fits here and two do not.
+      contextTokens: 2048,
+    }).get('serving')!;
+
+    expect(serving.fitness).toBe('fail');
+    /*
+     * The whole sentence, not a substring, and that is the lesson from the draft this replaced: it
+     * matched `/a turn each for 2 users/` and `/needs 2.5K/` and was green on a sentence that
+     * disproved its own verdict — "Only 3.2K of context fits … needs 2.5K", where the 3.2K was the
+     * one-user runnable context and 3.2K is more than 2.5K. Two true substrings, one false claim.
+     * Both figures here come from the placement that actually refused, at two users.
+     */
+    expect(serving.reason).toBe(
+      '2 users each holding 2.5K of context need 17 GiB against the 16 GiB this machine can allocate.'
+    );
+  });
+
+  /**
+   * And the two figures in that sentence have to make its verdict true, on every rig that reaches it
+   * — which is the property the substring version could not see.
+   */
+  it('never states a serving shortfall whose own figures say it fits', () => {
+    let reached = 0;
+    for (const device of DEVICES) {
+      // Two sizes, because an 8B at a 2.5K turn fits nearly everywhere and only one catalogued rig
+      // reaches this sentence on it — a sweep that hits one case is a spot check wearing a loop.
+      for (const [model, quantId] of [
+        [LLAMA_31_8B, 'q4_k_m'],
+        [LLAMA_31_8B, 'bf16'],
+        [DEEPSEEK_V3, 'q4_k_m'],
+      ] as const) {
+        // A turn-sized window, so the panel-wide refusal is not what most of these rigs return —
+        // that path grades all seven `fail` with one shared sentence and never reaches this one.
+        const serving = judge(model, quantId, {
+          device,
+          concurrency: 1,
+          contextTokens: 2048,
+        }).get('serving')!;
+        const stated = /need ([\d.]+) GiB against the ([\d.]+) GiB/.exec(serving.reason);
+        if (!stated) continue;
+        reached++;
+        expect(
+          Number(stated[1]),
+          `${device.id}/${model.id}/${quantId} reports a shortfall of ${stated[1]} against ${stated[2]}`
+        ).toBeGreaterThan(Number(stated[2]));
+      }
+    }
+    /*
+     * One is a real floor here, not a weak one, and the number is the issue's own measurement: the
+     * band this sentence lives in is a rig whose *own* scenario loads while two served turns do not,
+     * and #96 swept the catalog and found it on **2 of 2,278** drivable combinations. Anything
+     * smaller than the band and the sweep is vacuous; anything larger and it would be describing a
+     * different defect. What the loop buys over a single case is that it fails if the band moves.
+     */
+    expect(
+      reached,
+      'no rig reached the serving capacity sentence, so this proves nothing'
+    ).toBeGreaterThan(0);
+  });
+
+  /**
+   * **A measured failure is a failure**, which is #94's first finding and the reason the ungraded
+   * state could not simply be widened. 384 of 1,292 drivable combinations miss a tight bar at what
+   * used to be "not measured", and no number of users recovers them — see the monotonicity sweep
+   * below, which is the premise that makes the tight tier's two users enough.
    */
   it.each([
     {
@@ -319,26 +481,51 @@ describe('an archetype the scenario never exercises is not graded', () => {
       quant: 'bf16',
       device: RTX_5090,
       // 671B of BF16 weights against a 31 GiB ceiling: almost everything streams over the host bus.
-      says: /0\.8 tok\/s for a single served turn, under the 5 tok\/s/,
+      says: /tok\/s each at 2 users, under the 5 tok\/s/,
     },
     {
       bar: 'TTFT',
       model: LLAMA_31_8B,
       quant: 'bf16',
       device: EPYC_9654,
-      // Fits and decodes fine; a 2K prompt on CPU is what takes too long.
-      says: /42s to a first token for one prompt, past the 30s bar/,
+      // Fits and decodes fine; the 2K prompts on CPU are what take too long.
+      says: /before either of 2 users sees a token, past the 30s bar/,
     },
-  ])('grades a one-user measurement that already misses the tight $bar bar', (c) => {
+  ])('fails on a $bar the tight tier misses at its own two users', (c) => {
     const serving = judge(c.model, c.quant, { device: c.device, concurrency: 1 }).get('serving')!;
 
-    expect(serving.fitness, 'a measured, unrecoverable failure is not "not measured"').toBe('fail');
-    // Names the bar it missed and what was actually measured, in the singular — the plural copy for
-    // a shared deployment would read "each once 1 users share the device" and describe a scenario
-    // that did not happen.
+    expect(serving.fitness).toBe('fail');
     expect(serving.reason).toMatch(c.says);
     expect(serving.reason).not.toMatch(/Not measured/);
-    expect(serving.reason).not.toMatch(/\b1 users\b/);
+  });
+
+  /**
+   * The tiers are graded at *different* user counts, and this is what pins the pair apart.
+   *
+   * Grading both at four would make `BARS.serving.tight.users` decoration; grading both at two would
+   * let "Multi-user serving — Yes" be earned by a two-user measurement and delete the only
+   * enforcement of the good tier's own bar. The recorder below reads the concurrency each evaluation
+   * was actually asked for, so this cannot be satisfied by a sentence that merely mentions them.
+   */
+  it('asks the engine for four users and for two, and for nothing else on this row', () => {
+    const asked: number[] = [];
+    judgeWorkloads({
+      selectedPlacement: RESIDENT,
+      usage: { contextTokens: 4096, concurrency: 9, promptTokens: 512, kvPrecision: 'fp16' },
+      maxContextTokens: 200_000,
+      runnableContextTokens: 200_000,
+      evaluateAt: (_prompt, _context, _prefix, concurrency) => {
+        asked.push(concurrency);
+        return { placement: RESIDENT, ...STUB_SPEED };
+      },
+    });
+
+    // Serving's two, and the slider's for the six archetypes that inherit it. Nine appears because
+    // those six still read the scenario the reader configured; four and two appear because this one
+    // does not.
+    expect(new Set(asked)).toEqual(
+      new Set([9, WORKLOAD_BARS.serving.good.users, WORKLOAD_BARS.serving.tight.users])
+    );
   });
 
   /**
@@ -410,90 +597,6 @@ describe('an archetype the scenario never exercises is not graded', () => {
     // false for every combination and it reported monotonicity over zero cases.
     expect(checked, 'the sweep matched no combinations, so it proves nothing').toBeGreaterThan(500);
     expect(reversals.slice(0, 8), `${reversals.length} reversals`).toEqual([]);
-  });
-
-  /**
-   * The boundary, recorded rather than left to be rediscovered: **two users is a measurement, and a
-   * partial measurement is graded with a caveat, not left ungraded.**
-   *
-   * `BARS.serving.tight.users` is 2 and `BARS.serving.good.users` is 4, so at two or three users
-   * serving is `tight` on the strength of the user count alone — every other bar (fit, rate, TTFT,
-   * headroom) is inside `good` on this rig, which is `good` outright at four. Raised in review as the
-   * same shape of complaint as #75 one rung up: a grade reporting the reader's slider position.
-   *
-   * It is deliberately not changed, and the difference from the defect is the whole reason the fourth
-   * state exists. At one user *nothing about multi-user serving happens* — there is no second cache,
-   * no queue, no contention — so there is no measurement to grade, and `fail` claimed a refusal that
-   * never took place and subtracted the row from a "N of M" count. At two there is: two caches, a
-   * batched prefill, a shared device. That measurement is what `tight` reports, the row stays in both
-   * sides of the count as usable, and the sentence names exactly the gap between what the scenario
-   * exercised and what the archetype is graded from — which is a caveat a reader can act on by moving
-   * the slider, not a claim about the hardware.
-   *
-   * The two alternatives were both weighed and both are larger than this issue. Promoting it to
-   * `good` would delete the only enforcement of `BARS.serving.good.users` and let "Multi-user
-   * serving — Yes" be earned by a two-user measurement. Grading it at the archetype's own four users
-   * regardless of the slider — the issue's own listed alternative — is the coherent end state, since
-   * that is how the other six archetypes work, but it also removes the state this test file was just
-   * extended for and belongs to its own issue.
-   */
-  it.each([2, 3])(
-    'grades a partial exercise rather than leaving it ungraded, at %s users',
-    (concurrency) => {
-      const serving = judge(LLAMA_31_8B, 'q4_k_m', { device: RTX_5090, concurrency }).get(
-        'serving'
-      )!;
-
-      expect(serving.fitness).not.toBe('unmeasured');
-      expect(serving.fitness).toBe('tight');
-      // And the sentence says what was measured against what, rather than only naming the slider.
-      expect(serving.reason).toMatch(
-        new RegExp(`measuring ${concurrency} users against the ${WORKLOAD_BARS.serving.good.users}`)
-      );
-      // `tight` is usable, so unlike the ungraded row this one is counted on both sides of the panel's
-      // headline — see the `counts every row again as soon as they are all graded` case in App.test.
-      expect(rankOf(serving.fitness)).toBeGreaterThan(rankOf('fail'));
-    }
-  );
-
-  it('is the only archetype that can go ungraded', () => {
-    // Every other row is graded at its own declared prompt, so the slider cannot leave one of them
-    // unanswered. A second ungraded archetype means an archetype stopped declaring its scenario.
-    for (const concurrency of [1, 2, 8, 128]) {
-      const verdicts = judge(LLAMA_31_8B, 'q4_k_m', { device: RTX_5090, concurrency });
-      const ungraded = [...verdicts.values()]
-        .filter((v) => v.fitness === 'unmeasured')
-        .map((v) => v.workload.id);
-
-      expect(ungraded).toEqual(concurrency === 1 ? ['serving'] : []);
-    }
-  });
-
-  /**
-   * The ungraded state must not swallow an answer the scenario already gives.
-   *
-   * A rig with nowhere to put one 2K turn has nowhere to put two of them, so serving is refused at
-   * any concurrency and that refusal is measured — which is why `servingNotTried` is guarded by the
-   * fit and why the shortfall branch is first. Reversing the two would report "not measured" for a
-   * machine that cannot serve one user, at every concurrency the UI can produce.
-   */
-  it('still fails serving at one user when its own turn has nowhere to live', () => {
-    const verdicts = new Map(
-      judgeWorkloads({
-        selectedPlacement: RESIDENT,
-        usage: { contextTokens: 512, concurrency: 1, promptTokens: 512, kvPrecision: 'fp16' },
-        maxContextTokens: 600,
-        runnableContextTokens: 600, // Short of the 2.5K one served turn needs.
-        evaluateAt: () => ({ placement: RESIDENT, ...STUB_SPEED }),
-      }).map((v) => [v.workload.id, v])
-    );
-    const serving = verdicts.get('serving')!;
-
-    expect(serving.fitness).toBe('fail');
-    expect(serving.reason).toMatch(/needs 2\.5K with room to answer in/);
-    // "a turn each for 1 users" — the one shortfall sentence reachable at a single user, and the
-    // only place in the file that had to agree with itself about the plural.
-    expect(serving.reason).toMatch(/for 1 user\b/);
   });
 
   /**
@@ -720,11 +823,32 @@ describe('a verdict never contradicts the numbers behind it', () => {
       }).map((v) => [v.workload.id, v])
     ).get('serving')!;
 
-  it('names the four-user bar when only the user count holds serving back', () => {
-    const verdict = serving(3, RESIDENT);
+  /**
+   * The good tier's user count can still hold a row back — but on **capacity**, not on the slider.
+   *
+   * Before #96 this test drove the row to three users and read the sentence about being measured
+   * against four. That branch is gone with the slider dependency: the tiers are graded at their own
+   * counts, so the only way the four-user bar bites now is a machine that holds two served turns and
+   * not four. Which is a fact about the machine, and therefore a thing this row is allowed to say.
+   */
+  it('names the four-user bar when the rig holds two served turns and not four', () => {
+    const verdict = new Map(
+      judgeWorkloads({
+        selectedPlacement: RESIDENT,
+        usage: { contextTokens: 8192, concurrency: 1, promptTokens: 2048, kvPrecision: 'fp16' },
+        maxContextTokens: 200_000,
+        runnableContextTokens: 200_000,
+        // Holds the tight tier's two and refuses the good tier's four, which is exactly the shape
+        // `runnableContextTokens` could not express: it is one number and this is two answers.
+        evaluateAt: (_prompt, _context, _prefix, concurrency) => ({
+          ...stub(40, 0.2),
+          placement: concurrency >= WORKLOAD_BARS.serving.good.users ? OVER : RESIDENT,
+        }),
+      }).map((v) => [v.workload.id, v])
+    ).get('serving')!;
 
     expect(verdict.fitness).toBe('tight');
-    expect(verdict.reason).toMatch(/4 concurrent users/);
+    expect(verdict.reason).toMatch(/holds a turn each for 2 users but not for the 4/);
   });
 
   it('names the rate when only the rate holds serving back', () => {
@@ -807,12 +931,19 @@ describe('a shortfall always reads as a shortfall', () => {
       usage: { contextTokens: 512, concurrency: 1, promptTokens: 512, kvPrecision: 'fp16' },
       maxContextTokens: 600,
       runnableContextTokens: 600,
-      evaluateAt: () => ({ placement: RESIDENT, ...STUB_SPEED }),
+      evaluateAt: stubEngine(600),
     });
 
     for (const v of verdicts) {
       expect(v.fitness).toBe('fail');
-      expect(v.reason).toMatch(/needs .* with room to answer in/);
+      // Serving states its shortfall in bytes at its own tier's user count rather than in context
+      // against `runnableContextTokens`, because that figure is taken at the slider's concurrency
+      // and this row is not graded there (#96). Same claim, different quantity.
+      const states =
+        v.workload.id === 'serving'
+          ? /need .* GiB against the .* GiB this machine can allocate/
+          : /needs .* with room to answer in/;
+      expect(v.reason, `${v.workload.id} does not state what it needs`).toMatch(states);
     }
   });
 });
@@ -1002,7 +1133,11 @@ describe('no archetype escapes its own scenario', () => {
         usage: { contextTokens: 512, concurrency, promptTokens: 512, kvPrecision: 'fp16' },
         maxContextTokens: runnableContextTokens,
         runnableContextTokens,
-        evaluateAt: () => stub(200),
+        // Refuses above the declared ceiling, like the engine: serving's capacity is now the
+        // placement at its own turn rather than `runnableContextTokens`, so a stub that fits
+        // everything would exempt the one archetype this sweep was extended to cover (#96).
+        evaluateAt: (_prompt, contextTokens) =>
+          contextTokens > runnableContextTokens ? { ...stub(200), placement: OVER } : stub(200),
       }).map((v) => [v.workload.id, v])
     );
 
@@ -1301,7 +1436,7 @@ describe('a tier is graded on the measurement it recommends', () => {
     const serving = judgedAt(400_000, 8, () => stub(40, 165)).verdicts.get('serving')!;
 
     expect(serving.fitness).toBe('fail');
-    expect(serving.reason).toMatch(/165s before anyone sees a token/);
+    expect(serving.reason).toMatch(/165s before either of 2 users sees a token/);
   });
 
   it('keeps serving good when the queue is short as well as the rate', () => {
@@ -1336,7 +1471,7 @@ describe('a tier is graded on the measurement it recommends', () => {
     const serving = verdicts.get('serving')!;
 
     expect(serving.fitness).toBe('fail');
-    expect(serving.reason).toMatch(/before anyone sees a token/);
+    expect(serving.reason).toMatch(/before either of 2 users sees a token/);
   });
 
   it('withdraws the agent from a machine that only holds its session', () => {
