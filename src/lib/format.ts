@@ -14,11 +14,22 @@ import { GIB } from '@/engine/types';
  * then printed "600 s", 999,500 failed `>= 1e6` and printed "1000K" (#126).
  */
 
-/** Memory, in GiB, with precision that falls away as the number grows. */
+/**
+ * Memory, in GiB, with precision that falls away as the number grows.
+ *
+ * Zero stays reserved for zero, the doctrine `percent` states below — so a positive quantity
+ * under half a tenth reports as an upper bound rather than rounding to "0.0" (#119). Without the
+ * floor, an over-budget verdict could quantify itself as nothing: a URL-borne context can land
+ * used arbitrarily close above the ceiling, and the banner read "Over the ceiling by 0.0 GiB —
+ * <1% of weights would spill", with the sibling clause applying the floor to the same kind of
+ * tiny quantity one formatter over. Exact zero keeps its own spelling, so "0" and "<0.1" still
+ * read as the different claims they are.
+ */
 export function gib(bytes: number): string {
   if (!Number.isFinite(bytes)) return '—';
   const value = bytes / GIB;
   if (value === 0) return '0';
+  if (value > 0 && value < 0.05) return '<0.1';
   // Round-then-test at the decimal branch's own granularity: 9.97 would print "10.0" astride
   // the cutoff, while 9.7 still keeps its tenth.
   if (Math.round(value * 10) >= 100) return Math.round(value).toString();
