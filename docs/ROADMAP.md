@@ -157,6 +157,9 @@ The common thread: the moat today is correctness, and correctness is invisible t
 visitor — every alternative _looks_ the same at a glance. Each of these either makes the accuracy
 legible or removes the expertise the current entry point assumes.
 
+**Launch commands shipped first, as sequenced.** What it settled is below, under **Launch
+commands**; the other three are still as described here.
+
 | Feature                                                         | Issue                                                | Why it is on the list                                                                                                                                                                 |
 | --------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Launch commands — emit the runnable command for the placement   | [#136](https://github.com/MrZoller/bench/issues/136) | The engine already computes the layer split; competitors never did, so they structurally cannot print one. Surface it, then format it                                                 |
@@ -188,6 +191,80 @@ Detect and recommend ship together as one guided-mode project, because
 each is half of the three-click landing path — detect the machine, ask what the reader wants to do,
 answer. Calibrate last: it is the slow-burn moat, and it compounds from the day the other three
 make submitting easy.
+
+### Launch commands, and what building them settled
+
+**The artifact question resolved to the restrictive option, and the rule is smaller and better than
+either arm the issue offered.** #136's first decision was an artifact resolver against "restrict to
+selections with a known native artifact", and the answer turned out to be a one-line predicate: the
+catalog can name **exactly one checkpoint per model — its own repo, at its own checkpoint format**.
+`nativeQuant` is `quantization_config.quant_method` as the generator read it, and its absence means
+the repo ships unquantized, which is the `bf16` row. So `artifactFor(model, quant)` is
+`(model.nativeQuant ?? 'bf16') === quant.id ? model.id : undefined`, which covers all 35 rows rather
+than the 9 the issue estimated — every model is nameable at exactly one format.
+
+Everything else is a _conversion somebody else published_: a Q4_K_M GGUF, an AWQ pack, an
+`mlx-community` port, in repos this catalog has never seen. A resolver for those is a new curation
+surface with a freshness problem and no derivation behind it, which is the one thing this project
+does not do. So vLLM and MLX refuse for a non-native selection and say what would have to exist.
+**llama.cpp is unaffected and that is not a loophole**: `-m` takes a path on the reader's own disk,
+which is the one case the roadmap already called an honest placeholder, so the GGUF family emits for
+every selection while naming no checkpoint at all.
+
+An unrecognised `quant_method` makes every format on that model unnameable rather than making the
+wrong one nameable, which is the direction the whole module fails in.
+
+**Four flags were not what a from-memory implementation would have written, and each was found by
+reading upstream rather than recalling it.** This is the "a command is a claim, and flags drift"
+trap paying out immediately rather than in six months:
+
+- **llama.cpp's `-ngl` counts the output tensor.** `n_gpu_layers` defaults to `n_layer_all + 1` and
+  `i_gpu_start = max(n_layer_all + 1 - ngl, 0)`, so a fully-resident 48-layer model wants `-ngl 49`
+  and `-ngl 48` leaves the output tensor on the host.
+- **`-c` is the whole cache, divided among the slots.** `n_ctx_seq` is `n_ctx / n_seq_max` unless the
+  KV buffer is unified, and passing `-np` explicitly is what turns unification off — so eight users
+  at 64K is `-c 524288`. Passing the per-user figure gives each slot an eighth of it.
+- **Ollama's Modelfile has no `num_gpu` parameter.** The documented list is `num_ctx`, `num_predict`
+  and the sampler knobs. So the layer split this whole feature exists to print is the one thing that
+  surface cannot be told, and the template says so rather than inventing a line. The issue's own
+  sketch said "the `Modelfile`/`num_gpu`/`num_ctx` equivalents".
+- **`mlx_lm.server` has no KV quantization flag.** `--kv-bits` is `mlx_lm.generate`'s. An
+  8-bit-cache scenario therefore cannot be _served_ at the precision it was priced at, and the note
+  says the served cache is fp16 and roughly twice the size shown.
+
+**The trap #136 names most sharply was reached from the far side, by the one flag the feature
+exists for.** `-ngl` was right from the start — it reads `assignment.residentLayers` and never a
+fraction — and `-ts` was wrong, which nothing in the issue's framing predicts because `-ts` is not a
+flag the issue mentions. It is the payoff of surfacing the assignment: llama.cpp's default split is
+proportional to device _memory_, so on identical cards it is an equal number of layers, which is the
+wrong split for a model whose layers cache different amounts.
+
+The defect is that **`-ts` does not distribute the model — it distributes the `-ngl` window.**
+llama.cpp puts the last `ngl` layers on GPUs and splits _those_ by these proportions, so the two
+flags are read together, and the first version gave them counts from two different scopes: resident
+for `-ngl`, assigned for `-ts`. llama.cpp then re-derives a per-device split that is neither.
+gpt-oss-120b at Q8_0, 128K over 8 users on four 4090s packs 9,9,9,9 layers and keeps 3,3,4,4 of them
+resident — so the emitted pair asked llama.cpp to spread fourteen layers _evenly_ over cards bench
+had sized for three and four. That is an OOM on load, in copy-pasteable form, which is exactly what
+the issue's `-ngl` trap warns about, one flag over.
+
+Two things about how it was caught are worth keeping. **The "only when uneven" gate was wrong in the
+same way and hid it**: reading assigned counts, it suppressed the flag entirely on that rig, so the
+one case that mattered emitted nothing at all — equal counts of _unequal_ layers is precisely where
+the split is needed. And **the test suite had a spilled case and a sharded case and never their
+product**, which is where the defect lived; the issue's own verification note asks for "a spilled
+one, a sharded one" and the conjunction is what was missing. Both are now one test, mutation-checked.
+
+**And `llama-bench -d` answers #139's sharpest trap for free.** It runs the test at a stated context
+depth, which is exactly the resident-prefix state `estimatePrefill` charges an agent turn against —
+so the measurement form reproduces the priced workload rather than a standalone prompt. That was the
+piece calibrate was said to need before it could ask anyone for numbers, and it exists.
+
+One thing to watch that is not a bug yet: **`RuntimeSpec.preallocFraction` is 0.9 and vLLM's own
+`gpu_memory_utilization` default has moved to 0.92.** The emitter states `--gpu-memory-utilization
+0.9` rather than leaving it out, so the command reproduces what the panel priced — but the catalog
+figure and upstream's default are no longer the same number, and whether the engine should follow is
+a separate question from whether the command should state it.
 
 Deliberately absent, and not forgotten: cloud pricing stays out of scope per the settled decision
 below, and fine-tuning memory (LoRA/QLoRA) is a second engine rather than a feature — real demand,

@@ -10,6 +10,7 @@ import { effectiveActiveParams } from '@/engine/weights';
 import { BudgetBar } from './BudgetBar';
 import { Telemetry } from './Telemetry';
 import { Workloads } from './Workloads';
+import { Launch } from './Launch';
 import { Envelope } from './Envelope';
 import { DETAIL_ANCHOR_ID, Matrix } from './Matrix';
 import { Segmented, Select, StopSlider } from './Controls';
@@ -618,6 +619,11 @@ export function Bench() {
         tunableCeiling={raisingCeilingWouldHelp(device, evaluation.placement.usedBytesPerDevice)}
       />
       <Workloads evaluation={evaluation} config={config} />
+      {/* After the grades and before the two grids, which is the reader's own sequence: what fits,
+          how it grades, how to run it — and only then the fields that ask about other machines.
+          It takes the placement rather than the whole evaluation because that is all it formats;
+          nothing in the launch panel re-derives a figure. */}
+      <Launch config={config} placement={evaluation.placement} />
       <Envelope config={config} />
       <Matrix config={config} />
 
