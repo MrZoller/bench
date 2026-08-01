@@ -645,14 +645,14 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
           : rateOf('chat') < BARS.chat.tight.rate
             ? `${fmt(rateOf('chat'))} tok/s reads slower than most people do.`
             : chatTtft > BARS.chat.tight.ttft
-              ? `A ${secs(chatTtft)}s wait on a short message breaks the back-and-forth.`
+              ? `A ${wait(chatTtft)} wait on a short message breaks the back-and-forth.`
               : (shortOfGood(
                   rateOf('chat') < BARS.chat.good.rate &&
                     `${fmt(rateOf('chat'))} tok/s is under the ${BARS.chat.good.rate} tok/s that keeps pace with reading`,
                   chatTtft > BARS.chat.good.ttft &&
-                    `${secs(chatTtft)}s to first token is over the ${BARS.chat.good.ttft}s a conversation wants`
+                    `${wait(chatTtft)} to first token is over the ${BARS.chat.good.ttft}s a conversation wants`
                 ) ??
-                `${fmt(rateOf('chat'))} tok/s, ${secs(chatTtft)}s to first token on a short message.`),
+                `${fmt(rateOf('chat'))} tok/s, ${wait(chatTtft)} to first token on a short message.`),
     }),
     judge('completion', {
       // A suggestion that arrives after you have typed the next line is worse than none.
@@ -668,7 +668,7 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
         !fits('completion')
           ? shortfall('completion', 'one suggestion')
           : completionTtft > BARS.completion.tight.ttft
-            ? `${secs(completionTtft)}s to first token — the suggestion arrives after you have moved on.`
+            ? `${wait(completionTtft)} to first token — the suggestion arrives after you have moved on.`
             : rateOf('completion') < BARS.completion.tight.rate
               ? `${fmt(rateOf('completion'))} tok/s is too slow to finish a line while you pause.`
               : // Both good-tier bars, through one builder. The throughput case had its own
@@ -686,9 +686,9 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
                   // for that reason. Chat's 2s and rag's 5s are far enough from their measurements
                   // to state plainly, and do.
                   completionTtft > BARS.completion.good.ttft &&
-                    `${secs(completionTtft)}s to first token is past what an inline suggestion can absorb`
+                    `${wait(completionTtft)} to first token is past what an inline suggestion can absorb`
                 ) ??
-                `${secs(completionTtft)}s to first token stays inside the window where a suggestion helps.`),
+                `${wait(completionTtft)} to first token stays inside the window where a suggestion helps.`),
     }),
     judge('agent', {
       // Agents need all three: speed, headroom, and a prompt pass that does not stall each turn.
@@ -735,7 +735,7 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
             runnableContextTokens < BARS.agent.tight.session
             ? `${ctx(runnableContextTokens)} of context holds a turn but not a session — an agent needs ${ctx(BARS.agent.tight.session)} to keep its history across steps.`
             : agentTtft > BARS.agent.tight.ttft
-              ? `${secs(agentTtft)}s to read a 16K turn against the ${ctx(agentPrefix)} already in the cache makes every step a wait.`
+              ? `${wait(agentTtft)} to read a 16K turn against the ${ctx(agentPrefix)} already in the cache makes every step a wait.`
               : agentRate < BARS.agent.tight.rate
                 ? `${fmt(agentRate)} tok/s once a ${ctx(agentSession)} session is in the cache makes a multi-step run take minutes per step.`
                 : // All three good-tier bars. The capacity one is the easiest to hit and was the
@@ -747,13 +747,13 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
                     agentRate < BARS.agent.good.rate &&
                       `${fmt(agentRate)} tok/s with a ${ctx(agentSession)} session in the cache is under the ${BARS.agent.good.rate} tok/s that keeps a step brisk`,
                     agentTtft > BARS.agent.good.ttft &&
-                      `${secs(agentTtft)}s to read a 16K turn against the ${ctx(agentPrefix)} already in the cache is longer than a brisk step allows`
+                      `${wait(agentTtft)} to read a 16K turn against the ${ctx(agentPrefix)} already in the cache is longer than a brisk step allows`
                   ) ??
                   // Capacity and rate are stated as separate clauses on purpose. "49 tok/s over
                   // 128K of context" reads as a rate that holds at 128K, which is the claim this
                   // tier was making and could not support; the rate belongs to the session it was
                   // measured at, and that session is named next to it.
-                  `Holds ${ctx(runnableContextTokens)}; ${fmt(agentRate)} tok/s and ${secs(agentTtft)}s per turn with a ${ctx(agentSession)} session in the cache.`),
+                  `Holds ${ctx(runnableContextTokens)}; ${fmt(agentRate)} tok/s and ${wait(agentTtft)} per turn with a ${ctx(agentSession)} session in the cache.`),
     }),
     judge('rag', {
       // The answer is short; the prompt is not. This lives or dies on prefill — but speed is
@@ -776,22 +776,22 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
         !ragFits
           ? shortfall('rag', 'the 32K document this assumes')
           : ragPrefill.ttftSeconds > BARS.rag.tight.ttft
-            ? `${secs(ragPrefill.ttftSeconds)}s to read a 32K document before answering.`
+            ? `${wait(ragPrefill.ttftSeconds)} to read a 32K document before answering.`
             : rateOf('rag') < BARS.rag.tight.rate
-              ? `Reads the document in ${secs(ragPrefill.ttftSeconds)}s, then answers at ${fmt(rateOf('rag'))} tok/s — minutes for a short reply.`
+              ? `Reads the document in ${wait(ragPrefill.ttftSeconds)}, then answers at ${fmt(rateOf('rag'))} tok/s — minutes for a short reply.`
               : // Tight on the answer alone, or on the read alone. The first had its own branch —
                 // the prompt figure by itself reads as a pass — and the second had none, so a
                 // twelve-second read of a 32K document was reported as though it were quick.
                 (shortOfGood(
                   ragPrefill.ttftSeconds > BARS.rag.good.ttft &&
-                    `${secs(ragPrefill.ttftSeconds)}s to read the document is over the ${BARS.rag.good.ttft}s bar`,
+                    `${wait(ragPrefill.ttftSeconds)} to read the document is over the ${BARS.rag.good.ttft}s bar`,
                   rateOf('rag') < BARS.rag.good.rate &&
                     `it answers at only ${fmt(rateOf('rag'))} tok/s`
                 ) ??
                 // `fmt`, not `Math.round`: a rate fails by being too small, so rounding one up in
                 // a sentence about how fast this reads is the same flattery the formatters exist
                 // to prevent — 999.6 tok/s printed as "1000" beside its own unrounded wait.
-                `${fmt(ragPerDocumentTokensPerSec)} tok/s through a document — ${secs(ragPrefill.ttftSeconds)}s for a 32K one.`),
+                `${fmt(ragPerDocumentTokensPerSec)} tok/s through a document — ${wait(ragPrefill.ttftSeconds)} for a 32K one.`),
     }),
     judge('long-context', {
       // Offload-aware: the resident figure is zero for any spilled configuration, which would
@@ -834,7 +834,7 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
         runnableContextTokens < LONG_CONTEXT_TIGHT_NEEDS
           ? `Only ${ctx(runnableContextTokens)} of context fits — these jobs assume a 128K window, and even the reduced bar needs ${ctx(LONG_CONTEXT_TIGHT_NEEDS)} with room to answer in.`
           : longMeasured.prefill.ttftSeconds > BARS['long-context'].tight.ttft
-            ? `Holds ${ctx(runnableContextTokens)}, but takes ${secs(longMeasured.prefill.ttftSeconds)}s to read ${ctx(longPrompt)} of it before saying anything.`
+            ? `Holds ${ctx(runnableContextTokens)}, but takes ${wait(longMeasured.prefill.ttftSeconds)} to read ${ctx(longPrompt)} of it before saying anything.`
             : longMeasured.decode.perUserTokensPerSec < BARS['long-context'].tight.rate
               ? `Holds ${ctx(runnableContextTokens)} and answers at ${fmt(longMeasured.decode.perUserTokensPerSec)} tok/s — the window fits, the work does not.`
               : // Every good-tier bar this misses, through the same builder as the other tiers.
@@ -854,17 +854,17 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
                   // would be the same positive-language-on-a-downgrade this whole helper exists
                   // to remove. The measurement is printed instead, which is not an opinion.
                   !holdsFullWindow &&
-                    `it holds ${ctx(runnableContextTokens)}, short of the ${ctx(BARS['long-context'].good.prompt + RESPONSE_ALLOWANCE)} a full window needs with room to answer in — it reads the ${ctx(longPrompt)} it can hold in ${secs(longMeasured.prefill.ttftSeconds)}s`,
+                    `it holds ${ctx(runnableContextTokens)}, short of the ${ctx(BARS['long-context'].good.prompt + RESPONSE_ALLOWANCE)} a full window needs with room to answer in — it reads the ${ctx(longPrompt)} it can hold in ${wait(longMeasured.prefill.ttftSeconds)}`,
                   holdsFullWindow &&
                     longMeasured.prefill.ttftSeconds > BARS['long-context'].good.ttft &&
-                    `${secs(longMeasured.prefill.ttftSeconds)}s to read ${ctx(longPrompt)} is a long wait before it says anything`,
+                    `${wait(longMeasured.prefill.ttftSeconds)} to read ${ctx(longPrompt)} is a long wait before it says anything`,
                   holdsFullWindow &&
                     longMeasured.decode.perUserTokensPerSec < BARS['long-context'].good.rate &&
                     `it answers at ${fmt(longMeasured.decode.perUserTokensPerSec)} tok/s`
                 ) ??
                 (runnableContextTokens > maxContextTokens
-                  ? `Reaches ${ctx(runnableContextTokens)}, though only with weights offloaded — ${secs(longMeasured.prefill.ttftSeconds)}s to read ${ctx(longPrompt)}.`
-                  : `Holds ${ctx(runnableContextTokens)} at this concurrency, ${secs(longMeasured.prefill.ttftSeconds)}s to read ${ctx(longPrompt)}.`)),
+                  ? `Reaches ${ctx(runnableContextTokens)}, though only with weights offloaded — ${wait(longMeasured.prefill.ttftSeconds)} to read ${ctx(longPrompt)}.`
+                  : `Holds ${ctx(runnableContextTokens)} at this concurrency, ${wait(longMeasured.prefill.ttftSeconds)} to read ${ctx(longPrompt)}.`)),
     }),
     judge('batch', {
       // No latency budget at all — but the request still has to fit, and the throughput has to
@@ -976,7 +976,7 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
           return `${fmt(tight.decode.perUserTokensPerSec)} tok/s each at ${usersWord(BARS.serving.tight.users)}, under the ${BARS.serving.tight.rate} tok/s a shared deployment needs — and sharing the device further cannot raise it.`;
         }
         if (tight.prefill.ttftSeconds > BARS.serving.tight.ttft) {
-          return `${secs(tight.prefill.ttftSeconds)}s before either of ${usersWord(BARS.serving.tight.users)} sees a token, past the ${BARS.serving.tight.ttft}s bar — and each prompt added is read on top of it.`;
+          return `${wait(tight.prefill.ttftSeconds)} before either of ${usersWord(BARS.serving.tight.users)} sees a token, past the ${BARS.serving.tight.ttft}s bar — and each prompt added is read on top of it.`;
         }
         // Four good-tier bars, through the same builder as the other tiers rather than the nested
         // ternaries this used to hand-write. Those covered two causes in three branches and could
@@ -1034,9 +1034,9 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
               'it uses every allocatable byte at four users, so there is nothing left for a fifth',
             servingGood.holds &&
               good.prefill.ttftSeconds > BARS.serving.good.ttft &&
-              `${secs(good.prefill.ttftSeconds)}s to first token across ${usersWord(BARS.serving.good.users)} of queued prompts is longer than a served user waits`
+              `${wait(good.prefill.ttftSeconds)} to first token across ${usersWord(BARS.serving.good.users)} of queued prompts is longer than a served user waits`
           ) ??
-          `${usersWord(BARS.serving.good.users)} at ${servingRates(BARS.serving.good.users, good.decode.perUserTokensPerSec)}, ${secs(good.prefill.ttftSeconds)}s to first token.`
+          `${usersWord(BARS.serving.good.users)} at ${servingRates(BARS.serving.good.users, good.decode.perUserTokensPerSec)}, ${wait(good.prefill.ttftSeconds)} to first token.`
         );
       },
     }),
@@ -1088,6 +1088,29 @@ function secs(value: number): string {
   if (value >= 10) return Math.ceil(value).toString();
   if (value > 0 && value < 0.1) return '<0.1';
   return (Math.ceil(value * 10) / 10).toFixed(1);
+}
+
+/**
+ * A latency composed into a sentence, with the unit switch every sibling panel already makes
+ * (#125).
+ *
+ * The visual panels format this quantity class through `format.ts`'s `seconds()`, which turns
+ * to minutes at ten of them; these sentences composed `secs(x)` with a literal "s" and never
+ * switched, so a long-context wait printed "8068s" two panels under a tile that would say
+ * "134 min" about the same kind of figure. Nobody reads "8068s" as a duration without doing
+ * arithmetic — while the bar it missed survives unit conversion untouched, so the sentences
+ * quoting a bar keep quoting it in seconds.
+ *
+ * The direction still follows the bound, which is what kept this from simply being `seconds()`:
+ * a failing latency must never round down, so the minutes are ceiled where `seconds()` rounds —
+ * 8068s is "135 min", not 134 — and the cutoff is round-then-tested at the branch's own
+ * granularity with the same ceiling (#126's rule), so 599.3 is already "10 min" rather than a
+ * "600s" astride the switch.
+ */
+function wait(value: number): string {
+  if (!Number.isFinite(value)) return '—';
+  if (Math.ceil(value) >= 600) return `${Math.ceil(value / 60)} min`;
+  return `${secs(value)}s`;
 }
 
 /**
