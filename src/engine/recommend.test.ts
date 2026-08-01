@@ -293,11 +293,26 @@ describe('"nothing" is a wrong answer when something runs', () => {
     ).toBeGreaterThan(0);
     expect(list.fallback).toBeDefined();
 
-    // By decode rate, per FALLBACK_RULE — deliberately not `ranked[0]`, which is the *largest*
-    // thing that loads. A 671B decoding at 0.3 tok/s is not more useful than an 8B at 40 that
-    // merely missed a threshold, and the two picks answer different questions.
-    const fastest = Math.max(...list.ranked.map((c) => c.tokensPerSec));
-    expect(list.fallback!.tokensPerSec).toBe(fastest);
+    /**
+     * By decode rate, per `FALLBACK_RULE` — deliberately not `ranked[0]`, which is the *largest*
+     * thing that loads. A 671B decoding at 0.3 tok/s is not more useful than an 8B at 40 that
+     * merely missed a threshold, and the two picks answer different questions.
+     *
+     * **And it is drawn from every loadable configuration, not from `ranked`**, which the first
+     * version asserted and which was the defect: `bestQuant` reduces each model × runtime pair to
+     * its widest best-grading format, so the fastest member of `ranked` is the fastest survivor of
+     * a pruning that ranked on *width*. The fastest thing that loads is routinely a narrower quant
+     * of a pairing whose widest one won that reduction.
+     */
+    const fastestRanked = Math.max(...list.ranked.map((c) => c.tokensPerSec));
+    expect(list.fallback!.tokensPerSec).toBeGreaterThanOrEqual(fastestRanked);
+
+    // The evidence half, which is what makes the assertion above more than `>=` on itself: on this
+    // machine the fallback really is a configuration the ranked list does not contain.
+    expect(
+      list.fallback!.tokensPerSec,
+      'the fallback is the fastest of the pruned list, so the fix is untested here'
+    ).toBeGreaterThan(fastestRanked);
   });
 
   it('does not offer a fallback when something already clears', () => {

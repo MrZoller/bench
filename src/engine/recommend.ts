@@ -4,6 +4,7 @@ import { maxContextThatFits } from './placement';
 import {
   judgeWorkloads,
   RESPONSE_ALLOWANCE,
+  WORKLOAD_BARS,
   WORKLOADS,
   type Fitness,
   type Workload,
@@ -180,6 +181,16 @@ export function recommend(inputs: RecommendInputs): Shortlist {
   if (workload === undefined) throw new Error(`Unknown workload: ${inputs.workloadId}`);
 
   const candidates: Candidate[] = [];
+  /**
+   * Every loadable configuration, not one per pairing.
+   *
+   * `bestQuant` reduces each model × runtime pair to its widest best-grading format, which is right
+   * for the *ranked* list and wrong for the fallback: `FALLBACK_RULE` promises the fastest thing
+   * that loads, and the fastest thing is routinely a narrower quant of a pairing whose widest one
+   * won the reduction. Searching the reduced list found the fastest survivor of a pruning that
+   * ranked on width — a different claim from the one printed. Raised by Codex on #167.
+   */
+  let fastest: Candidate | undefined;
   let pairsConsidered = 0;
 
   for (const model of inputs.models) {
@@ -201,7 +212,11 @@ export function recommend(inputs: RecommendInputs): Shortlist {
       if (quants.length === 0) continue;
       pairsConsidered += 1;
 
-      const chosen = bestQuant(model, runtime, quants, workload, inputs);
+      const chosen = bestQuant(model, runtime, quants, workload, inputs, (candidate) => {
+        if (fastest === undefined || candidate.tokensPerSec > fastest.tokensPerSec) {
+          fastest = candidate;
+        }
+      });
       if (chosen !== undefined) candidates.push(chosen);
     }
   }
@@ -212,14 +227,7 @@ export function recommend(inputs: RecommendInputs): Shortlist {
    * By decode rate, per `FALLBACK_RULE`, and only when nothing cleared. `ranked[0]` would be the
    * largest thing that loads, which is the wrong answer to the question this field asks.
    */
-  const fallback =
-    best === undefined
-      ? ranked.reduce<Candidate | undefined>(
-          (fastest, c) =>
-            fastest === undefined || c.tokensPerSec > fastest.tokensPerSec ? c : fastest,
-          undefined
-        )
-      : undefined;
+  const fallback = best === undefined ? fastest : undefined;
 
   const headline = best ?? fallback;
   const seen = new Set(headline === undefined ? [] : [headline.model.id]);
@@ -246,19 +254,25 @@ export function recommend(inputs: RecommendInputs): Shortlist {
  * `undefined` when no format loads at all: a model this machine cannot run under this runtime is
  * absent from the shortlist rather than present as a refusal, because the shortlist is a list of
  * answers and the Matrix is where the refusals are already legible.
+ *
+ * **The early break costs the fallback nothing**, because `onLoadable` sees every format that
+ * loads before the walk stops — including the narrower, faster ones the reduction discards.
  */
 function bestQuant(
   model: ModelSpec,
   runtime: RuntimeSpec,
   quants: readonly QuantSpec[],
   workload: Workload,
-  inputs: RecommendInputs
+  inputs: RecommendInputs,
+  /** Called for every format that loads, so the fallback can see what the reduction discards. */
+  onLoadable: (candidate: Candidate) => void
 ): Candidate | undefined {
   let best: Candidate | undefined;
 
   for (const quant of quants) {
     const candidate = grade(model, quant, runtime, workload, inputs);
     if (candidate === undefined) continue;
+    onLoadable(candidate);
     if (best === undefined || compare(candidate, best) < 0) best = candidate;
     if (candidate.fitness === 'good') break;
   }
@@ -305,6 +319,31 @@ function grade(
   if (selected.placement.unsupported !== undefined || selected.placement.impossible)
     return undefined;
 
+  /**
+   * The largest working set this archetype can be *graded* at, which is not always the one it is
+   * measured at.
+   *
+   * The agent tiers recommend a machine for a 32K or 64K session while the turn itself is ~16.5K,
+   * and long-context's tiers state their own prompts. So a candidate whose turn keeps every weight
+   * resident can spill at the session the verdict is actually about — and the row would then omit
+   * the host-RAM qualifier on a configuration that only runs by spilling. The spill is taken at the
+   * widest of the two, which errs towards showing the caveat. Raised by Codex on #167.
+   */
+  const bars = WORKLOAD_BARS[workload.id as keyof typeof WORKLOAD_BARS] as
+    { good?: { session?: number; prompt?: number } } | undefined;
+  const gradedContext = Math.min(
+    model.maxContext,
+    Math.max(
+      usage.contextTokens,
+      bars?.good?.session ?? 0,
+      (bars?.good?.prompt ?? 0) + RESPONSE_ALLOWANCE
+    )
+  );
+  const graded =
+    gradedContext > usage.contextTokens
+      ? estimateScenario({ ...scenario, usage: { ...usage, contextTokens: gradedContext } })
+      : selected;
+
   const verdicts = judgeWorkloads({
     selectedPlacement: selected.placement,
     usage,
@@ -330,7 +369,8 @@ function grade(
     reason: verdict.reason,
     tokensPerSec: selected.decode.perUserTokensPerSec,
     ttftSeconds: selected.prefill.ttftSeconds,
-    offloadFraction: selected.placement.offloadFraction,
+    // From the widest scenario this archetype is graded at, not from the turn — see `gradedContext`.
+    offloadFraction: Math.max(selected.placement.offloadFraction, graded.placement.offloadFraction),
   };
 }
 

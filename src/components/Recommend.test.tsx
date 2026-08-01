@@ -51,7 +51,9 @@ describe('the shortlist', () => {
     // All three axes the sweep fixes, named: the machine, the cache and the user count. The last
     // is why this list has three assertions and not two — hardcoding concurrency let this panel and
     // the verdict strip grade the same configuration's batch row differently on one page.
-    expect(within(panel()).getByText(/cache at one user/)).toBeInTheDocument();
+    // Runtime-neutral wording: the sweep crosses runtimes and they name the same precision
+    // differently — vLLM's one-byte cache is FP8, not integer Q8.
+    expect(within(panel()).getByText(/16-bit cache at one user/)).toBeInTheDocument();
     expect(
       within(panel()).getByText(/each graded at the prompt its own workload sends/)
     ).toBeInTheDocument();
@@ -120,6 +122,30 @@ describe('a row loads the configuration it names', () => {
       expect(label, `quant ${quantId} was coerced away`).toContain(getQuant(quantId).label);
       expect(['llama.cpp', 'vllm', 'mlx']).toContain(runtimeId);
     }
+  });
+});
+
+describe('a row loads the scenario it was graded at', () => {
+  it('carries the workload’s own context and prompt, not the sliders’', async () => {
+    /**
+     * The row's caption promises "its own numbers", and every candidate is graded at the scenario
+     * its workload really sends. Spreading `config` kept whatever the sliders held, so clicking a
+     * row scrolled to a budget bar describing a different job — and where the preserved context
+     * made the candidate impossible, the workload the reader had just chosen from read `No`.
+     */
+    const user = userEvent.setup();
+    useConfig.getState().replace({ ...DEFAULT_CONFIG, contextTokens: 131072, promptTokens: 65536 });
+    render(<Recommend />);
+
+    await user.click(
+      within(panel()).getAllByRole('button', { name: /load this into the bench/i })[0]
+    );
+
+    const { contextTokens, promptTokens } = useConfig.getState();
+    // The default archetype is chat, which sends 1,024 tokens.
+    expect(promptTokens).toBe(1024);
+    expect(contextTokens).toBeLessThan(131072);
+    expect(contextTokens).toBeGreaterThanOrEqual(promptTokens);
   });
 });
 

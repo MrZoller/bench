@@ -6,7 +6,7 @@ import {
   recommend,
   type Candidate,
 } from '@/engine/recommend';
-import { WORKLOADS, type Fitness } from '@/engine/verdict';
+import { RESPONSE_ALLOWANCE, WORKLOADS, type Fitness } from '@/engine/verdict';
 import { MODELS, useConfig, type Config } from '@/store/config';
 import { getDevice } from '@/data/catalog';
 import { QUANTS } from '@/data/quants';
@@ -103,11 +103,26 @@ export function Recommend() {
    * coercion.
    */
   const load = (candidate: Candidate) => {
+    /**
+     * **The archetype's own context and prompt travel with the row** (raised by Codex on #167).
+     *
+     * Every candidate is graded at the scenario its workload really sends, and the row's caption
+     * promises "its own numbers" — but spreading `config` kept whatever the sliders happened to
+     * hold, so clicking a row scrolled to a budget bar and a verdict strip describing a different
+     * job. Worse where the preserved context makes the candidate impossible: the workload the
+     * reader just chose from would then read `No` on the strip below.
+     */
+    const contextTokens = Math.min(
+      candidate.model.maxContext,
+      shortlist.workload.typicalPromptTokens + RESPONSE_ALLOWANCE
+    );
     replace({
       ...config,
       modelId: candidate.model.id,
       quantId: candidate.quant.id,
       runtimeId: candidate.runtime.id,
+      contextTokens,
+      promptTokens: Math.min(contextTokens, shortlist.workload.typicalPromptTokens),
     } as Partial<Config>);
     // Optional on the method as well as the element, and the motion preference read here rather
     // than left to CSS — both for the reasons the Matrix's own cell handler records at length.
@@ -172,7 +187,11 @@ export function Recommend() {
         <p>
           Swept {shortlist.pairsConsidered} model and runtime pairings on{' '}
           {config.deviceCount > 1 ? `${config.deviceCount}x ` : ''}
-          {device.name} with a {kvLabel(RUNTIMES[0], config.kvPrecision)} cache at{' '}
+          {/* Runtime-neutral, because the sweep crosses runtimes and they name the same precision
+              differently — vLLM's one-byte cache is FP8, not integer Q8, which `kvLabels` exists to
+              say. Printing one runtime's label over a list containing the other misstates an axis
+              the ranking used. Raised by Codex on #167. */}
+          {device.name} with a {config.kvPrecision === 'fp16' ? '16-bit' : '8-bit'} cache at{' '}
           {config.concurrency === 1 ? 'one user' : `${config.concurrency} users`}, each graded at
           the prompt its own workload sends. Change the hardware, the cache or the user count above
           and the list moves.
