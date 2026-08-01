@@ -4969,7 +4969,7 @@ describe('the controls that drive every figure explain what they are', () => {
 
       const region = detail();
       expect(region).not.toBeNull();
-      expect(region!.querySelector('strong')?.textContent).toMatch(/80-core GPU/);
+      expect(region!.querySelector('strong')?.textContent).toMatch(/60-core GPU/);
       expect(region!.querySelector('code')?.textContent).toBe('iogpu.wired_limit_mb');
       // Verbatim apart from the marks: the note is provenance, and losing a clause of it in a
       // renderer would be worse than printing the asterisks.

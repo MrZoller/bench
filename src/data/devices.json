@@ -499,7 +499,7 @@
       "msrpUsd": 9499,
       "releasedAt": "2025-03-12",
       "source": "https://www.apple.com/mac-studio/specs/",
-      "note": "The allocation ceiling reserves 32 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives. This is the 80-core GPU, which 512 GiB requires \u2014 stated for the same reason as the 256 GiB row."
+      "note": "The allocation ceiling reserves 32 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives. This is the 80-core GPU, and here capacity really does identify the bin: Apple gates the 512 GB option behind the larger chip, and the $9,499 decomposes as the $3,999 base plus the ~$1,500 chip and $4,000 memory upgrades \u2014 price and compute describe one machine. Stated anyway, because capacity-implies-the-bin is the reasoning that was wrong on the 96 and 256 GiB rows."
     },
     {
       "id": "mac-studio-m3-ultra-256",
@@ -512,12 +512,12 @@
       "allocatableTunable": true,
       "maxAllocatableGiB": 240,
       "bandwidthGBs": 819,
-      "tflops": { "fp16": 54 },
+      "tflops": { "fp16": 40.5 },
       "tdpWatts": 270,
       "msrpUsd": 5599,
       "releasedAt": "2025-03-12",
       "source": "https://www.apple.com/mac-studio/specs/",
-      "note": "The allocation ceiling reserves 16 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives. This is the 80-core GPU. 256 GiB requires it, so capacity identifies the bin here \u2014 stated anyway, because capacity-implies-the-bin is the reasoning that was wrong on the three rows where it does not."
+      "note": "The allocation ceiling reserves 16 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives. **The compute is the 60-core GPU's, because the price is the 60-core machine's** \u2014 the MacBook Air row's convention. This row once claimed 256 GiB requires the 80-core part; it does not: Apple sells the 28-core CPU / 60-core machine with 256 GB at retail, and $5,599 is exactly the $3,999 base plus the memory upgrade, with no room for the ~$1,500 chip. The 80-core machine at this capacity is about $7,099."
     },
     {
       "id": "mac-studio-m3-ultra-96",
@@ -530,12 +530,12 @@
       "allocatableTunable": true,
       "maxAllocatableGiB": 88,
       "bandwidthGBs": 819,
-      "tflops": { "fp16": 54 },
+      "tflops": { "fp16": 40.5 },
       "tdpWatts": 270,
       "msrpUsd": 3999,
       "releasedAt": "2025-03-12",
       "source": "https://www.apple.com/mac-studio/specs/",
-      "note": "The allocation ceiling reserves 8 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives. **This row is the 80-core GPU, and it is stated because 96 GiB does not imply it \u2014 the ambiguous end of the M3 Ultra line.** Apple's base Mac Studio M3 Ultra pairs 96 GiB with a 60-core GPU and sells the larger bin as an upgrade at the same capacity, so unlike the 256 and 512 GiB rows, which require the larger part, capacity does not identify this one. At 54 TFLOPS fp16 this is the larger bin; the base machine is 60/80 of it, about 40.7, so reading this row for one overstates prefill by a third."
+      "note": "The allocation ceiling reserves 8 GiB for macOS. `iogpu.wired_limit_mb` accepts a value up to physical memory, but what actually loads is bounded by what the OS, the window server and the inference process's own unwired allocations still need — so 100% of RAM is what the sysctl parses, not what the machine survives. **The compute is the 60-core GPU's, because the price is the 60-core machine's** \u2014 the MacBook Air row's convention, at the ambiguous end of the M3 Ultra line. Apple's $3,999 base pairs 96 GiB with the 60-core part and sells the 80-core as a ~$1,500 upgrade at the same capacity, so capacity does not identify the bin; this row carried the larger bin's 54 TFLOPS over the base machine's price, overstating prefill by a third for the buyer at that price."
     },
     {
       "id": "mac-studio-m2-ultra-192",
