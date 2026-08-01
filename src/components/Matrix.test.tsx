@@ -1524,11 +1524,18 @@ describe('the comparison grid is one tab stop, not four hundred', () => {
 
     // The grid has to be in this page, or the count is of a page without the problem on it.
     expect(cellsOf(container).length).toBeGreaterThan(300);
-    /* 26 as it stands, one of which is the grid. 1,495 if every cell were in the sequence again —
-       26 − 1 + 1,470 — which is what replacing the roving `tabIndex` with `tabIndex={0}` reports.
+    /* 32 as it stands, one of which is the grid. 1,501 if every cell were in the sequence again —
+       32 − 1 + 1,470 — which is what replacing the roving `tabIndex` with `tabIndex={0}` reports.
        The subtrahend is the *shipping* device count times the model count, which is what this grid
        renders; it read 714 until #77 doubled the model list, and a counterfactual quoting the wrong
        grid is a wrong expected value for whoever reinjects the defect.
+
+       It read 26 until #136 added the launch panel, which is six stops — a copy button and a
+       provenance link for each of the three launchers a llama.cpp scenario has. Six at once against
+       a comment predicting "two to five a PR" is the largest single addition this budget has taken,
+       and it leaves eight of the forty. Worth knowing before the next panel: what would have to give
+       is the per-launcher provenance link, and it is there because a template whose flags nobody can
+       re-check is the "flags drift" trap #136 names.
 
        Forty, the same ceiling `e2e/matrix-grid.spec.ts` uses, because the two count one sequence and
        a bound that fires in one channel and not the other is a bug report about the wrong file. Loose
