@@ -655,6 +655,14 @@ reading the test that guards them.
   reasoning that a comment describing the old layout is how the next reader concludes the fix was a
   mistake.
 
+  **And the spec did not assert the property this paragraph credited it with.** It measured
+  `panel.top < 2 x viewport` — the panel _starts_ inside two screens — which stays green with the last
+  three sliders below the fold, and below the fold is precisely where growth above Usage would put
+  them one control at a time. A one-sided bound on a box whose height is the subject is the same shape
+  as the `getClientRects().length === 1` note below: an assertion that cannot fail for the reason it
+  was written. It reads the panel's bottom edge now, at 1,401px against the 1,688px bar, so the margin
+  is 287px of measurement rather than of slack.
+
 - **A focus indicator is a mark of its own, never a colour swap and never a channel a resting state
   already uses** ([#67](https://github.com/MrZoller/bench/issues/67)). The four primary selects —
   Model, Hardware, Quantization, Runtime — removed the outline and replaced it with a 1px border
@@ -788,9 +796,19 @@ reading the test that guards them.
 
 - **Reflow tests measure the panel; the page is a different question.** The Matrix readout was moved to
   be the panel's last child so its height could not push the legend, and the commit claimed "nothing
-  follows it". `Bench.tsx` renders the Usage section immediately after `<Matrix>`, so a height change
-  still moved that panel: the claim was verified inside the component and written about the document.
-  Assert against the following _section_, not the following sibling.
+  follows it". At the time `Bench.tsx` rendered the Usage section immediately after `<Matrix>`, so a
+  height change still moved that panel: the claim was verified inside the component and written about
+  the document.
+
+  **The obvious repair — assert against the following section — is the one the current spec
+  deliberately rejects**, and the reason is that #66 moved Usage above the figures. What follows
+  `<Matrix>` now is the MoE aside, which is conditional, so there is no stable next section to measure
+  against and a spec naming one would go quiet on the scenarios where the aside does not render. The
+  canary in `e2e/matrix-readout.spec.ts` is therefore the two quantities that cannot stop being
+  downstream of the readout: the **Matrix section's own height**, which is where the growth would be,
+  and the **document's height**, which is everything below it whatever that turns out to be. The
+  general lesson survives the move — measure past the boundary the claim is about — but "the following
+  section" was a fact about one layout, not the rule.
 
 - **A locator re-resolves, so an interaction that renames its target invalidates it.** A disclosure
   toggle's accessible name _is_ its label, and clicking it turns "Show the full hardware note" into
@@ -942,15 +960,32 @@ ceiling)` keeps an over-budget stack on screen, which is right and stays. What i
   includes the non-language towers a token never touches, and on a dense one it is not a per-token
   basis at all. `activeDenseParams`
   is the always-active dense part and excludes the routed experts. `effectiveActiveParams(model, b)`
-  is `activeDenseParams + expertParams * expertFraction(model, b)`, and it is the only one `speed.ts`
-  divides by. The Bench's aside says a token "routes through" a figure and then attributes the decode
-  rate to it, so it must print the third; it printed the first, was "corrected" to the second, and
-  both were caught in review. The first was wrong by ~7% on the multimodal MoEs (Mistral Small 4 at
-  6.524B against a 6.096B basis); the second was wrong by a factor of three on _every_ MoE (Kimi K2 at
-  10.6B where a token traverses ~31.7B). Trading a small error for a large one in the other direction.
+  is `activeDenseParams + expertParams * expertFraction(model, b)`, and it is the physical count — the
+  one the Bench's aside has to print, since that sentence says a token "routes through" a figure and
+  then attributes the decode rate to it. It printed the first, was "corrected" to the second, and both
+  were caught in review.
+
+  **`speed.ts` divides by neither, and that is worth stating precisely because the aside sounds like
+  it does.** `estimateDecode` reads `activeWeightBytes(model, quant, batch)`, which prices the dense
+  and expert halves at their own widths rather than blending them — the correction recorded under
+  **Engine** above, and about a factor of two on an expert-only scheme like MXFP4, where the dense
+  tensors stay BF16. `effectiveActiveParams` is the parameter count behind that byte figure, not the
+  divisor itself.
+
+  **The two errors are per-model, and neither generalises.** Written as invariants they would be
+  false in both directions:
+
+  - Published against physical, at batch 1: they are **identical** on every text-only MoE in the
+    catalog, so the gap opens only where non-language towers sit inside `activeParams` — and there it
+    runs in _both_ directions. Mistral Small 4 publishes 6.524B against a 6.096B basis (7.0% high);
+    Command A+ publishes 24.403B against 24.981B (2.3% _low_).
+  - Dense against physical: `activeDenseParams` is low on every MoE, by a ratio that spans the
+    catalog — 1.91x on GLM-4.7-Flash, 2.99x on Kimi K2 (10.6B where a token traverses 31.75B), and
+    8.65x on Mixtral, whose dense stack is tiny beside eight experts. "A factor of three" is Kimi's
+    number and nobody else's.
 
   **A test for this has to pick a multimodal MoE, and that is the whole trick.** On a text-only MoE the
-  published and physical bases coincide _exactly_ — gpt-oss-20b is 3.61B either way, as are
+  published and physical bases coincide _exactly_ — gpt-oss-20b is 3.614B either way, as are
   Qwen3-30B-A3B, Mixtral and GLM-4.7-Flash — so a test written against one passes whichever figure the
   component prints. The gap only opens where non-language towers sit inside `activeParams`, which today
   is Command A+ and Mistral Small 4. `App.test.tsx` selects on that gap rather than on "is an MoE".
@@ -1216,8 +1251,15 @@ ceiling)` keeps an over-budget stack on screen, which is right and stays. What i
 
 ## Open questions
 
-Correctness follow-ups live in [issues #12–#20](https://github.com/MrZoller/bench/issues). This
-section is for the questions those issues cannot settle.
+Correctness follow-ups live in
+[the repository's open issues](https://github.com/MrZoller/bench/issues) — #12–#20 from the first
+pass, and #90, #96, #97, #101, #102 and #103 from the July sweep, tabulated with their measurements
+immediately below. This section is for the questions those issues cannot settle.
+
+The pointer is written as "the open issues" rather than as a range on purpose: it named #12–#20 while
+six newer correctness issues sat in the table underneath it, so a maintainer following the sentence
+would have walked past exactly the deferred work this section exists to preserve. A range goes stale
+silently every time the set grows.
 
 ### Filed out of the July 2026 sweep, with their measurements
 

@@ -63,7 +63,11 @@ const memoryBar = (page: Page) => budget(page).getByRole('img', { name: /allocat
 const boxOf = async (locator: Locator) => {
   const box = await locator.evaluate((el) => {
     const rect = el.getBoundingClientRect();
-    return { top: rect.top + window.scrollY, height: rect.height };
+    return {
+      top: rect.top + window.scrollY,
+      bottom: rect.bottom + window.scrollY,
+      height: rect.height,
+    };
   });
   expect(box.height, 'measured an element with no box').toBeGreaterThan(0);
   return box;
@@ -138,7 +142,19 @@ test('the controls are in the first two screens on a phone, not the last', async
   expect(documentHeight, 'the page fits a phone, so this proves nothing').toBeGreaterThan(
     PHONE.height * 3
   );
-  expect(panel.top, 'the Usage panel is past the second screen').toBeLessThan(PHONE.height * 2);
+  /**
+   * The panel's *bottom*, and the difference from its top is the whole assertion.
+   *
+   * `panel.top < 2 x height` says only that the panel begins inside two screens, and stays green with
+   * the last three sliders below the fold — which is both the property the title claims and the exact
+   * shape of the regression this test exists to catch, since anything added above Usage pushes it down
+   * a control at a time. Measured: the panel ends at 1,401px against the 1,688px bar, so there is 287px
+   * of real margin rather than slack.
+   */
+  expect(panel.top, 'the Usage panel starts past the second screen').toBeLessThan(PHONE.height * 2);
+  expect(panel.bottom, 'the last Usage control is past the second screen').toBeLessThan(
+    PHONE.height * 2
+  );
   expect(bar.top, 'the memory bar is above the controls that size it').toBeGreaterThan(panel.top);
 });
 
