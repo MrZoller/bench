@@ -65,6 +65,9 @@ const prediction = (over: Partial<Prediction> = {}): Prediction => ({
   runtimeId: 'llama.cpp',
   quantLabel: 'Q4_K_M',
   modelName: 'Llama 3.1 8B Instruct',
+  totalParams: 8.03e9,
+  deviceClass: 'discrete-gpu',
+  deviceVendor: 'NVIDIA',
   kvType: 'f16',
   gpuLayers: 33,
   // The scenario's whole window, which is what `estimateDecode` charges every step against.
@@ -342,6 +345,57 @@ describe('what the second review round found', () => {
     expect(compare(parseLlamaBench(mixed), prediction())[0].mismatch).toMatch(
       /f16\/q4_0 cache where the figures above assume f16/
     );
+  });
+});
+
+describe('what the third review round found', () => {
+  it('identifies the model by its parameter count, not by its name', () => {
+    /**
+     * The name check catches a cross-family paste and misses Qwen3 8B against Qwen3 32B — llama.cpp
+     * writes an architecture where the catalog writes a product, so the two never agree past the
+     * first word. Both formats print a parameter count, which is the same quantity on both sides.
+     */
+    const bigger = parseLlamaBench(
+      `| qwen3 32B Q4_K - Medium | 18.5 GiB | 32.76 B | CUDA | 65 | pp2048 | 3000.0 ± 1.0 |`
+    );
+    expect(bigger[0].params).toBeCloseTo(32.76e9, -8);
+    expect(compare(bigger, prediction())[0].mismatch).toMatch(
+      /32.8B model where the figures above are for 8.0B/
+    );
+  });
+
+  it('marks a Metal run against a device that is not Apple', () => {
+    // Checked only where the backend *contradicts* the device: a vendor-to-backend table would be
+    // inventing data, and llama.cpp's names vary by build. Metal is Apple's alone.
+    const metal = parseLlamaBench(
+      `| llama 8B Q4_K - Medium | 4.58 GiB | 8.03 B | Metal | 33 | pp2048 | 900.0 ± 1.0 |`
+    );
+    expect(compare(metal, prediction())[0].mismatch).toMatch(/run on Metal/);
+  });
+
+  it('marks a CPU run against a graphics card', () => {
+    const cpu = parseLlamaBench(
+      `| llama 8B Q4_K - Medium | 4.58 GiB | 8.03 B | CPU | 0 | pp2048 | 40.0 ± 1.0 |`
+    );
+    expect(compare(cpu, prediction())[0].mismatch).toMatch(
+      /run on the CPU where the figures above are for a graphics card/
+    );
+  });
+
+  it('refuses to compare against a configuration that cannot run', () => {
+    // `impossible` means the cache and activations alone are over the ceiling, so the rates beside
+    // it describe a machine that cannot load the model — any measurement pasted against them was
+    // necessarily taken on something else, and the panel was producing a percentage anyway.
+    const [pair] = compare(parseLlamaBench(JSON_OUTPUT), prediction({ impossible: true }));
+    expect(pair.mismatch).toMatch(/cannot run at all/);
+    expect(hasSubmittablePair([pair])).toBe(false);
+  });
+
+  it('makes no claim about the length when the window leaves no room to generate', () => {
+    // The first version floored the expectation at one token, so a prompt filling the window
+    // rejected every normal decode row against a length nothing can satisfy.
+    const [, decode] = compare(parseLlamaBench(JSON_OUTPUT), prediction({ generationTokens: 0 }));
+    expect(decode.mismatch).toBeUndefined();
   });
 });
 

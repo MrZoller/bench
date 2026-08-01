@@ -81,7 +81,13 @@ export function Calibrate({ evaluation }: { evaluation: Evaluation }) {
       prefillTokensPerSec: evaluation.prefill.prefillTokensPerSec,
       decodeTokensPerSec: evaluation.decode.perUserTokensPerSec,
       promptTokens,
-      generationTokens: Math.max(1, config.contextTokens - promptTokens),
+      /**
+       * The room the window actually leaves, and **zero is a real answer**. The first version
+       * floored it at 1, so a scenario whose prompt fills the window expected one generated token
+       * and marked every normal decode row as the wrong length — a fabricated expectation nothing
+       * can satisfy. Undefined instead, which `compare` reads as "no claim about the length".
+       */
+      generationTokens: config.contextTokens - promptTokens,
       /**
        * The whole window, because that is what `estimateDecode` charges every step's cache read at
        * — not the prompt, which was the first version's answer. In the default 8K-prompt/32K-context
@@ -105,6 +111,10 @@ export function Calibrate({ evaluation }: { evaluation: Evaluation }) {
       runtimeId: config.runtimeId,
       quantLabel: getQuant(config.quantId).label,
       modelName: model.name,
+      totalParams: model.totalParams,
+      deviceClass: device.class,
+      deviceVendor: device.vendor,
+      ...(evaluation.placement.impossible ? { impossible: true as const } : {}),
       kvType: LLAMA_KV_TYPES[config.kvPrecision],
       /**
        * Stated only when the placement is fully resident, where "every layer" is unambiguous.
@@ -124,7 +134,16 @@ export function Calibrate({ evaluation }: { evaluation: Evaluation }) {
           ? { gpuLayers: model.layers }
           : {}),
     });
-  }, [pasted, config, evaluation, model.layers, model.name, device.class]);
+  }, [
+    pasted,
+    config,
+    evaluation,
+    model.layers,
+    model.name,
+    model.totalParams,
+    device.class,
+    device.vendor,
+  ]);
 
   const href = useMemo(
     () =>

@@ -59,6 +59,18 @@ export interface Measurement {
   kvTypes?: { k: string; v: string };
   /** However the format names the checkpoint — `model_type`, or the markdown table's first column. */
   modelLabel?: string;
+  /**
+   * Parameters, as the tool counts them — `model_n_params` in JSON, the `params` column in
+   * markdown.
+   *
+   * **The load-bearing model check, and much better than the name.** Comparing labels catches a
+   * DeepSeek paste against a Llama prediction and misses Qwen3 8B against Qwen3 32B, because
+   * llama.cpp writes an architecture where the catalog writes a product — the two never agree past
+   * the first word. A parameter count is the same quantity in both, derived rather than named.
+   */
+  params?: number;
+  /** `CUDA`, `Metal`, `CPU`… — which silicon actually ran it. */
+  backend?: string;
 }
 
 /**
@@ -132,6 +144,14 @@ function parseJson(text: string): readonly Measurement[] | undefined {
         ? { kvTypes: { k: row.type_k, v: row.type_v } }
         : {}),
       ...(typeof row.model_type === 'string' ? { modelLabel: row.model_type } : {}),
+      ...(numberOf(row.model_n_params) === undefined
+        ? {}
+        : { params: numberOf(row.model_n_params)! }),
+      ...(typeof row.backend === 'string'
+        ? { backend: row.backend }
+        : typeof row.backends === 'string'
+          ? { backend: row.backends }
+          : {}),
     });
   }
   return rows;
@@ -193,10 +213,20 @@ function parseMarkdown(text: string): readonly Measurement[] {
      */
     const nglCell = cells[cells.indexOf(testCell) - 1];
     const ngl = nglCell !== undefined && /^\d+$/.test(nglCell) ? Number(nglCell) : undefined;
+    /**
+     * The `params` and `backend` columns, found by shape rather than by index — `8.03 B` and a bare
+     * alphabetic word are each distinctive enough, where a position would break on the next column
+     * added. `params` is what actually identifies the model; see `Measurement.params`.
+     */
+    const paramCell = cells.find((c) => /^[\d.]+\s*B$/i.test(c));
+    const params = paramCell === undefined ? undefined : Number.parseFloat(paramCell) * 1e9;
+    const backend = cells.find((c) => /^[A-Za-z]+(\/[A-Za-z]+)*$/.test(c) && c !== testCell);
     rows.push({
       kind: test[1].toLowerCase() === 'pp' ? 'prefill' : 'decode',
       ...(modelLabel === undefined ? {} : { modelLabel }),
       ...(ngl === undefined ? {} : { gpuLayers: ngl }),
+      ...(params === undefined || !Number.isFinite(params) ? {} : { params }),
+      ...(backend === undefined ? {} : { backend }),
       tokens: Number.parseInt(test[2], 10),
       ...(depth !== undefined && depth > 0 ? { depthTokens: depth } : {}),
       tokensPerSec: rate,
@@ -253,6 +283,20 @@ export interface Prediction {
    * data point entering the record under a name that will never be questioned.
    */
   modelName: string;
+  /**
+   * And its parameter count, which is what actually distinguishes two models.
+   *
+   * The name check catches a cross-family paste and misses Qwen3 8B against Qwen3 32B, because
+   * llama.cpp writes an architecture where the catalog writes a product — they never agree past
+   * the first word. Both formats print a parameter count, so this is the same quantity on both
+   * sides rather than two spellings of a name.
+   */
+  totalParams: number;
+  /** Which silicon the figures assume, so a Metal paste against an NVIDIA row can be caught. */
+  deviceClass: 'discrete-gpu' | 'unified-soc' | 'cpu-ram';
+  deviceVendor: string;
+  /** True when the engine says this configuration does not run at all. */
+  impossible?: boolean;
   /** Cache precision the figures were priced at — llama.cpp's `-ctk`/`-ctv` names. */
   kvType: string;
   /**
@@ -350,6 +394,57 @@ function describeMismatch(
   prediction: Prediction
 ): string | undefined {
   const reasons: string[] = [];
+
+  /**
+   * **A configuration the engine refuses has no prediction to check against.**
+   *
+   * `impossible` means the cache and activations alone are over the ceiling, so the rates beside it
+   * describe a machine that cannot load the model — and any measurement pasted against them was
+   * necessarily taken on something else. Comparing at all was the defect: the panel produced a
+   * percentage and offered to submit it.
+   */
+  if (prediction.impossible === true) {
+    reasons.push(
+      `compared against a configuration this machine cannot run at all, so the predicted rates ` +
+        `beside it describe nothing that could have produced this measurement`
+    );
+  }
+
+  /**
+   * The parameter count, which is what distinguishes two models of one family.
+   *
+   * Ten percent, because the two sides count slightly differently — llama.cpp reports what is in
+   * the GGUF and the catalog reports the safetensors index — and because a wrong model is wrong by
+   * far more than that: 8B against 32B is a factor of four.
+   */
+  if (
+    measurement.params !== undefined &&
+    prediction.totalParams > 0 &&
+    Math.abs(measurement.params / prediction.totalParams - 1) > 0.1
+  ) {
+    reasons.push(
+      `run on a ${(measurement.params / 1e9).toFixed(1)}B model where the figures above are for ` +
+        `${(prediction.totalParams / 1e9).toFixed(1)}B`
+    );
+  }
+
+  /**
+   * The backend, checked only where it *contradicts* the device rather than against a full mapping.
+   *
+   * A vendor-to-backend table would be inventing data — llama.cpp's backend names vary by build,
+   * and ROCm, SYCL, Vulkan and BLAS all appear. Two contradictions need no table: Metal is Apple's
+   * alone, and a CPU-only run cannot have produced a discrete GPU's figures.
+   */
+  const backend = measurement.backend?.toUpperCase();
+  if (backend !== undefined) {
+    if (backend.includes('METAL') && prediction.deviceVendor !== 'Apple') {
+      reasons.push(
+        `run on Metal, which is Apple silicon, where the figures above are for a ${prediction.deviceVendor} device`
+      );
+    } else if (backend === 'CPU' && prediction.deviceClass === 'discrete-gpu') {
+      reasons.push(`run on the CPU where the figures above are for a graphics card`);
+    }
+  }
 
   /**
    * **The scope #139 states outright, checked rather than assumed.** `llama-bench` loads GGUF, so
@@ -455,7 +550,9 @@ function describeMismatch(
    * typed their own will land near rather than on. Ten percent is close enough that the quadratic
    * term has not moved much and far enough that `pp512` against 16,384 is caught.
    */
-  if (Math.abs(measurement.tokens / Math.max(expectedTokens, 1) - 1) > 0.1) {
+  // Zero means the caller makes no claim about the length — a window whose prompt fills it leaves
+  // no generation to expect, and fabricating one rejects every normal decode row.
+  if (expectedTokens > 0 && Math.abs(measurement.tokens / expectedTokens - 1) > 0.1) {
     reasons.push(
       `run at ${measurement.tokens.toLocaleString('en-US')} tokens where the prediction is for ` +
         `${expectedTokens.toLocaleString('en-US')}`
