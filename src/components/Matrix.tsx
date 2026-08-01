@@ -1914,8 +1914,16 @@ function tooltip(
    * (#127): `planPlacement` sizes the spill with no host-RAM input, so "runs only by spilling
    * 99% of its weights to host RAM" was promising a load the engine never checked — on the one
    * surface read as a shortlist. The constant rides verbatim as its own sentence, after the
-   * period the composition already writes; the narrow form stays bare on its character budget,
-   * and the legend's keyed line is the qualifier channel that is on screen at every width.
+   * period the composition already writes.
+   *
+   * The narrow readout stays bare, and the decision is measured rather than aesthetic (argued
+   * in review, both ways): its sentence — "spills 66% to host RAM" — states the spill and makes
+   * no load claim, the tooltip and aria-label carry the full constant at every width, and
+   * qualifying the visual narrow line costs a reservation nobody should pay. Measured at 200%
+   * text on a 320px viewport, where the rem floor doubles while the line width halves: the full
+   * constant needs a 10rem floor and the inline-clause register still needs 7.5rem — 120px of
+   * permanently reserved blank space on a phone, against 80px today. The legend's keyed line
+   * and the caption remain the panel-level channels.
    */
   const unchecked =
     measure === 'fit' && cell.offloadFraction > 0 && !narrow ? ` ${HOST_RAM_UNCHECKED}` : '';
