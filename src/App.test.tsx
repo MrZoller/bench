@@ -1525,9 +1525,313 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
    * found the wrong element could not pass for the wrong reason either way.
    */
   const line = () => matrix().querySelector<HTMLElement>(':scope > p')!;
-  const readout = () => line().textContent;
+  /**
+   * The wide form, which is what every assertion below is about.
+   *
+   * The line holds two sentences since #102 — the full one and a preamble-less one for widths where
+   * the reservation cannot hold the wrapping — and CSS shows one. jsdom resolves no media query, so
+   * it renders both and `textContent` returns them concatenated; `data-readout` is the seam that
+   * lets this ask for the one it means. The narrow form has its own tests below.
+   */
+  const readout = () => line().querySelector('[data-readout="full"]')!.textContent;
+  const briefReadout = () => line().querySelector('[data-readout="brief"]')!.textContent;
+
+  /**
+   * A tap, with the focus the browser interposes — which is the whole of what makes this test real.
+   *
+   * Tapping a button focuses it, so `onFocus` fires *before* `click` and the readout is already this
+   * cell's by the time the handler runs. Written as `pointerDown` then `click`, these tests passed
+   * against a guard that compared the live readout target and therefore never fired — the first tap
+   * committed, and so did a tap on a different cell. Raised in review on #102, and the shape is the
+   * repo's own: an event sequence the real browser produces and the fixture did not.
+   */
+  const tap = (cell: HTMLElement) => {
+    // `pointerenter` with a button already down, which is what a finger arriving *is* — and the
+    // reason the readout's hover record does not pick it up. A mouse arrives with `buttons: 0`.
+    fireEvent.pointerEnter(cell, { pointerType: 'touch', buttons: 1, pointerId: 7 });
+    fireEvent.pointerDown(cell, { pointerType: 'touch', pointerId: 7 });
+    // `act`, so React has *committed* the focus before the click — which is the half that makes this
+    // bite. Without it the state update is still queued when `click` runs and the handler reads the
+    // previous render's target, which is the value the fix stores deliberately: the test would pass
+    // against the defect for the same reason the defect was invisible.
+    act(() => {
+      cell.focus();
+    });
+    // `detail: 1`, because a pointer-generated click carries a count and a keyboard one does not —
+    // which is how the handler tells them apart. A bare `fireEvent.click` is `detail: 0` and would
+    // be read as Enter.
+    fireEvent.click(cell, { detail: 1 });
+  };
   const cells = () => [...matrix().querySelectorAll<HTMLButtonElement>('td button')];
   const legend = () => [...matrix().querySelectorAll<HTMLElement>(':scope > div')].at(-1)!;
+
+  /**
+   * The narrow form, and the two halves of [#102](https://github.com/MrZoller/bench/issues/102) it
+   * belongs to.
+   *
+   * The readout's reservation is in `rem`, so at a 32px root it doubles — and the glyphs double with
+   * it, so the same sentence wraps into roughly twice as many lines each twice as tall. Reserved
+   * height grows linearly and required height closer to quadratically, so the line escaped its box:
+   * measured at 320px with the browser default at 32px, the longest sentence needs **280px against
+   * 160px reserved**, and 240 against 160 at 390. Above `sm` it fits at both root sizes.
+   *
+   * What makes it long is the preamble, and at phone width the preamble is the part the reader
+   * already has — the model is the row heading and the device the column heading. So the narrow form
+   * states the figure alone. `e2e/reflow.spec.ts` measures that it now fits; these pin what it says.
+   */
+  it('states the figure alone at a width the preamble does not fit', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const cell = cells()[0];
+    await user.hover(cell);
+
+    const full = readout()!;
+    const brief = briefReadout()!;
+
+    /*
+     * The model goes and the machine stays, which is "drop what is sticky, keep what scrolls": the
+     * row heading is `sticky left-0` and on screen at every scroll position, while the column
+     * headings sit at the top of a 35-row grid. Dropping both left a reader in a lower row with
+     * `69% of the ceiling free` and nothing anywhere saying which machine (found in review).
+     */
+    expect(full).toMatch(/^Qwen3 8B on GeForce RTX 5090/);
+    expect(brief).not.toContain('Qwen3 8B');
+    expect(brief).toContain('RTX 5090');
+    // The figure itself, which is the payload both forms carry.
+    expect(brief).toContain('69% of the ceiling free');
+    expect(full).toContain('69% of the ceiling free');
+    /*
+     * Materially shorter, which is the property the reservation depends on — the geometry itself is
+     * `e2e/reflow.spec.ts`, since jsdom reports every height as 0. The margin is smaller than it was
+     * when this dropped the device too, and deliberately: the sentence has to fit *and* say which
+     * machine, and the browser check is what holds the first of those.
+     */
+    expect(brief.length).toBeLessThan(full.length * 0.8);
+  });
+
+  it('keeps the stand-in qualifier in the narrow form, since no axis carries it', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    // MXFP4 is expert-only, so a dense row is scored at a substitute — the one part of the preamble
+    // that is not on an axis, and the one a figure derived from it has to keep at every width.
+    await user.hover(cells()[0]);
+
+    expect(readout()).toMatch(/at Q4_K_M/);
+    expect(briefReadout()).toMatch(/at Q4_K_M/);
+  });
+
+  it('gives a screen reader the full sentence at every width', () => {
+    render(<App />);
+    // The accessible name is the one channel with no axis headings beside it, so the preamble the
+    // readout may drop is exactly what a screen-reader user has instead of them. Never abbreviated.
+    const label = cells()[0].getAttribute('aria-label') ?? '';
+    expect(label).toMatch(/^Qwen3 8B on GeForce RTX 5090/);
+  });
+
+  /**
+   * Inspection separated from activation, for the reader who has only a tap.
+   *
+   * #71 left this open and named it: on a touch-only device the only gesture a cell offers is a tap,
+   * and that tap *is* `onClick` — five store keys rewritten and a scroll several sections away. So
+   * the readout either filled while navigation was already happening or never filled at all, and a
+   * touch reader could not compare two cells. Unlike the Envelope and the budget bar, this panel has
+   * no table behind a disclosure to fall back to: it *is* the table, and its cells show colour.
+   *
+   * **The rule is a state, not a gesture: you may commit to a cell whose figures you have already
+   * been shown.** Keying on `pointerType === 'touch'` was the first draft and assumed `pen` hovers,
+   * which a direct-contact stylus does not — so a pen tap fell straight through to activation exactly
+   * as the unfixed touch path did. Reading the readout's target at `pointerdown` answers every input
+   * from one comparison instead: a mouse has hovered, a hovering pen has hovered, a finger has not,
+   * and the keyboard has no `pointerdown` at all.
+   */
+  it('fills the line on the first tap and loads the cell on the second', () => {
+    render(<App />);
+    const before = useConfig.getState().deviceId;
+    const cell = cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('RTX 3060'))!;
+
+    tap(cell);
+
+    // Inspected, not committed.
+    expect(readout()).toContain('RTX 3060');
+    expect(useConfig.getState().deviceId).toBe(before);
+
+    tap(cell);
+
+    expect(useConfig.getState().deviceId).toBe('rtx-3060-12gb');
+  });
+
+  it('loads a cell on a single click from a mouse, on the same markup', () => {
+    render(<App />);
+    const cell = cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('RTX 3060'))!;
+
+    // A mouse arrives before it clicks, which is what makes one click enough — and the reason this
+    // needs no pointer-type test: the hover *is* the inspection.
+    fireEvent.pointerEnter(cell, { pointerType: 'mouse', buttons: 0, pointerId: 1 });
+    fireEvent.mouseEnter(cell);
+    fireEvent.pointerDown(cell, { pointerType: 'mouse', pointerId: 1 });
+    fireEvent.click(cell, { detail: 1 });
+
+    expect(useConfig.getState().deviceId).toBe('rtx-3060-12gb');
+  });
+
+  it('asks a contact-only stylus for a second tap, since it never hovered', () => {
+    render(<App />);
+    const before = useConfig.getState().deviceId;
+    const cell = cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('RTX 3060'))!;
+
+    /*
+     * A direct-contact stylus reports `pen` and cannot show the readout before it lands, so the
+     * first draft's `pointerType === 'touch'` test let it through and it committed on contact — the
+     * unfixed touch path, one pointer type over. Nothing here mentions `pen`: it inspects first
+     * because it has not hovered, which is the same reason a finger does.
+     */
+    // The contact itself generates the enter, with the button already down — which is exactly why
+    // it is not a hover, and why inferring provenance from the *reading* gesture's pointer type took
+    // this for a mouse and committed on contact.
+    fireEvent.pointerEnter(cell, { pointerType: 'pen', buttons: 1, pointerId: 3 });
+    fireEvent.pointerDown(cell, { pointerType: 'pen', pointerId: 3 });
+    act(() => {
+      cell.focus();
+    });
+    fireEvent.click(cell, { detail: 1 });
+
+    expect(readout()).toContain('RTX 3060');
+    expect(useConfig.getState().deviceId).toBe(before);
+  });
+
+  it('keeps one click for a mouse that has not moved since the keyboard did', () => {
+    render(<App />);
+    const [under, elsewhere] = [
+      cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('RTX 3060'))!,
+      cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('DGX Spark'))!,
+    ];
+
+    /*
+     * The mouse rests on one cell while the keyboard arrows to another — and a stationary mouse
+     * emits no further `mouseenter`, so the record of where it is has to survive the focus move.
+     * Expiring it there was the previous round's fix for a returning *tap* and it broke this: an
+     * ordinary click needed two after any keyboard use. Provenance at `pointerdown` answers both,
+     * which is why nothing expires here now (found in review).
+     */
+    fireEvent.pointerEnter(under, { pointerType: 'mouse', buttons: 0, pointerId: 1 });
+    fireEvent.mouseEnter(under);
+    // The premise: the hover really did register, or this measures a mouse that never arrived.
+    expect(readout(), 'the mouse hover did not reach the readout').toContain('RTX 3060');
+    act(() => {
+      elsewhere.focus();
+    });
+    // And the keyboard really did take the line, which is the state the record has to survive.
+    expect(readout(), 'the keyboard did not take the readout').toContain('DGX Spark');
+
+    fireEvent.pointerDown(under, { pointerType: 'mouse', pointerId: 1 });
+    fireEvent.click(under, { detail: 1 });
+
+    expect(useConfig.getState().deviceId).toBe('rtx-3060-12gb');
+  });
+
+  it('does not let a finger inherit a mouse’s hover on a hybrid', () => {
+    render(<App />);
+    const before = useConfig.getState().deviceId;
+    const [hovered, focusedElsewhere] = [
+      cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('RTX 3060'))!,
+      cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('DGX Spark'))!,
+    ];
+
+    /*
+     * A mouse hovers one cell, the keyboard moves the readout to another, and a finger then lands on
+     * the hovered one. Without an identity on the record the finger inherits the mouse's hover and
+     * commits on its first tap, while the line still describes the cell the keyboard is on — which is
+     * the whole gesture broken on any laptop with a touchscreen (found in review).
+     */
+    fireEvent.pointerEnter(hovered, { pointerType: 'mouse', buttons: 0, pointerId: 1 });
+    act(() => {
+      focusedElsewhere.focus();
+    });
+
+    fireEvent.pointerEnter(hovered, { pointerType: 'touch', buttons: 1, pointerId: 9 });
+    fireEvent.pointerDown(hovered, { pointerType: 'touch', pointerId: 9 });
+    act(() => {
+      hovered.focus();
+    });
+    fireEvent.click(hovered, { detail: 1 });
+
+    expect(useConfig.getState().deviceId, 'the finger committed on its first tap').toBe(before);
+    expect(readout()).toContain('RTX 3060');
+  });
+
+  it('names the runtime when a narrow readout reports a refusal', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    // MLX is Apple-only, so most columns are struck and every cell in them is a refusal.
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+
+    const refused = cells().find((c) =>
+      /does not (run|support)/i.test(c.getAttribute('aria-label') ?? '')
+    )!;
+    expect(refused, 'no refused cell under MLX, so this has no subject').toBeDefined();
+    await user.hover(refused);
+
+    /*
+     * The machine comes from the column heading and the runtime does not — the Runtime picker is
+     * above the grid and off screen for a lower row, so eliding it left "the runtime does not drive
+     * this", which is the one fact the axes cannot supply (found in review).
+     */
+    expect(briefReadout()).toContain('MLX (Apple)');
+    expect(briefReadout()).not.toMatch(/^the runtime/i);
+  });
+
+  it('loads a cell from the keyboard, with no pointer gesture in front of it', () => {
+    render(<App />);
+    const cell = cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('RTX 3060'))!;
+
+    // Enter on a focused cell fires `click` with no `pointerdown`, and focus has already filled the
+    // line — so there is nothing the gesture could have meant other than "load this".
+    act(() => {
+      cell.focus();
+    });
+    fireEvent.click(cell);
+
+    expect(useConfig.getState().deviceId).toBe('rtx-3060-12gb');
+  });
+
+  it('lets the keyboard activate after a tap, rather than inheriting it', () => {
+    render(<App />);
+    const [tapped, typed] = [
+      cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('RTX 3060'))!,
+      cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('DGX Spark'))!,
+    ];
+
+    /*
+     * The snapshot is consumed on every click, and this is why. Held, it would still describe the
+     * tap when a later keyboard `click` arrived with no `pointerdown` of its own — so Enter would be
+     * read as that tap still in progress and refuse to activate, for ever, since nothing else would
+     * clear it. Found in review.
+     */
+    tap(tapped);
+    act(() => {
+      typed.focus();
+    });
+    fireEvent.click(typed);
+
+    expect(useConfig.getState().deviceId).toBe('dgx-spark');
+  });
+
+  it('moves the line to the next cell a finger taps rather than loading it', () => {
+    render(<App />);
+    const before = useConfig.getState().deviceId;
+    const [first, second] = [
+      cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('RTX 3060'))!,
+      cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('DGX Spark'))!,
+    ];
+
+    tap(first);
+    tap(second);
+
+    // Comparing two cells is the thing #71 said a touch reader could not do, and the second tap
+    // going to a *different* cell is what makes it possible without committing to either.
+    expect(readout()).toContain('DGX Spark');
+    expect(useConfig.getState().deviceId).toBe(before);
+  });
 
   it('reserves the line before anything is pointed at', () => {
     render(<App />);
