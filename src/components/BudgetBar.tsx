@@ -413,47 +413,47 @@ export function BudgetBar({
         {showTable ? 'Hide' : 'Show'} figures as a table
       </DisclosureToggle>
 
-      {showTable && (
-        <table id={tableId} className="mt-3 w-full text-left text-sm">
-          <caption className="sr-only">Memory budget breakdown per device</caption>
-          <thead>
-            <tr className="text-[var(--color-text-faint)]">
-              <th scope="col" className="py-1 font-normal">
-                Component
-              </th>
-              <th scope="col" className="py-1 text-right font-normal">
-                Size
-              </th>
-              <th scope="col" className="py-1 text-right font-normal">
-                Share of ceiling
-              </th>
-              <th scope="col" className="py-1 font-normal">
-                What it is
-              </th>
-            </tr>
-          </thead>
-          <tbody className="text-[var(--color-text-muted)]">
-            {segments.map((segment) => (
-              <tr key={segment.key} className="border-t border-[var(--color-border)]">
-                <th scope="row" className="py-1 font-normal text-[var(--color-text)]">
-                  {segment.label}
-                </th>
-                <td className="tabular py-1 text-right">{gibLabel(segment.bytes)}</td>
-                <td className="tabular py-1 text-right">{shareOfCeiling(segment.bytes)}</td>
-                <td className="py-1 pl-4">{segment.hint}</td>
-              </tr>
-            ))}
-            <tr className="border-t border-[var(--color-border)]">
+      {/* `hidden` rather than unmounted, so the toggle's `aria-controls` resolves in both
+          states — see the contract on `DisclosureToggle.controls` (#131). */}
+      <table hidden={!showTable} id={tableId} className="mt-3 w-full text-left text-sm">
+        <caption className="sr-only">Memory budget breakdown per device</caption>
+        <thead>
+          <tr className="text-[var(--color-text-faint)]">
+            <th scope="col" className="py-1 font-normal">
+              Component
+            </th>
+            <th scope="col" className="py-1 text-right font-normal">
+              Size
+            </th>
+            <th scope="col" className="py-1 text-right font-normal">
+              Share of ceiling
+            </th>
+            <th scope="col" className="py-1 font-normal">
+              What it is
+            </th>
+          </tr>
+        </thead>
+        <tbody className="text-[var(--color-text-muted)]">
+          {segments.map((segment) => (
+            <tr key={segment.key} className="border-t border-[var(--color-border)]">
               <th scope="row" className="py-1 font-normal text-[var(--color-text)]">
-                Allocatable ceiling
+                {segment.label}
               </th>
-              <td className="tabular py-1 text-right">{gibLabel(ceiling)}</td>
-              <td className="tabular py-1 text-right">100%</td>
-              <td className="py-1 pl-4">What the runtime can actually hand the model.</td>
+              <td className="tabular py-1 text-right">{gibLabel(segment.bytes)}</td>
+              <td className="tabular py-1 text-right">{shareOfCeiling(segment.bytes)}</td>
+              <td className="py-1 pl-4">{segment.hint}</td>
             </tr>
-          </tbody>
-        </table>
-      )}
+          ))}
+          <tr className="border-t border-[var(--color-border)]">
+            <th scope="row" className="py-1 font-normal text-[var(--color-text)]">
+              Allocatable ceiling
+            </th>
+            <td className="tabular py-1 text-right">{gibLabel(ceiling)}</td>
+            <td className="tabular py-1 text-right">100%</td>
+            <td className="py-1 pl-4">What the runtime can actually hand the model.</td>
+          </tr>
+        </tbody>
+      </table>
     </section>
   );
 }

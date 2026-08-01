@@ -43,7 +43,16 @@ export function DisclosureToggle({
 }: {
   expanded: boolean;
   onToggle: () => void;
-  /** The id of the region this reveals, where one exists to point at. */
+  /**
+   * The id of the region this reveals, where one exists to point at.
+   *
+   * **The region must be in the DOM in both states** — callers toggle `hidden` rather than
+   * unmounting, because this attribute renders unconditionally and a collapsed disclosure
+   * pointing at an id that does not exist is an ARIA reference-integrity violation (#131): a
+   * screen reader's "jump to controlled region" resolves to nothing, and axe flags it. A hidden
+   * region satisfies the reference — it exists, it is merely not shown — and costs no layout,
+   * which was the reason the two call sites that unmounted gave for unmounting.
+   */
   controls?: string;
   children: ReactNode;
 }) {
@@ -53,7 +62,12 @@ export function DisclosureToggle({
       onClick={onToggle}
       aria-expanded={expanded}
       aria-controls={controls}
-      className="mt-4 inline-flex items-center text-xs text-[var(--color-accent)] underline underline-offset-2 [@media(any-pointer:coarse)]:min-h-11"
+      /* `self-start`, because two of this component's parents are flex columns. `inline-flex`
+         shrink-wraps in block context, but a flex item is blockified and `align-items: stretch`
+         widened the picker-note toggle to the full column — 426px of target for 158px of text,
+         all of it activatable (#132). The docblock above reasons about this box as the line box,
+         and `self-start` is what makes that true in every parent. */
+      className="mt-4 inline-flex items-center self-start text-xs text-[var(--color-accent)] underline underline-offset-2 [@media(any-pointer:coarse)]:min-h-11"
     >
       {children}
     </button>
