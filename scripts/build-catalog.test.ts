@@ -1273,16 +1273,16 @@ describe('a written refusal expires rather than standing for ever', () => {
     old: { cause: 'engine', checkedAt: '2024-01-01', why: 'hybrid: 8 of 32 layers attend' },
     recent: { cause: 'engine', checkedAt: '2026-07-01', why: 'sparse-attention indexer' },
     export: { cause: 'repo', checkedAt: '2024-01-01', why: 'int4 export: counts group scales' },
-    settled: { cause: 'catalog', checkedAt: '2019-01-01', why: 'same shape as a seeded row' },
+    settled: { cause: 'size', checkedAt: '2019-01-01', why: 'sub-2B: fits everywhere' },
   } as const;
   const NOW = new Date('2026-08-01T00:00:00Z');
 
   it('re-asks what a capability or a re-upload could have changed, and nothing else', () => {
     const stale = staleRefusals({ refusals: REFUSALS, now: NOW });
 
-    // The two whose answer lives outside this repo, oldest first — and *not* the `catalog` one,
-    // which is seven years old and still exactly as true as the day it was written, because nothing
-    // a publisher does can make "this row answers no new question" false.
+    // The two that age at the default window, oldest first — and *not* the `size` one, which is
+    // seven years old and still as true as the day it was written, because its assumption is a fact
+    // about `devices.json` that the suite asserts outright rather than dates.
     expect(stale.map((entry) => entry.id)).toEqual(['old', 'export']);
     expect(stale[0].monthsOld).toBeGreaterThan(30);
   });
@@ -1332,10 +1332,22 @@ describe('a written refusal expires rather than standing for ever', () => {
     // at the day it was written, the mechanism produces an empty list — so every assertion above
     // would be vacuous if it used `NOT_SEEDED`, and a future date is what will exercise it.
     expect(staleRefusals({ refusals: NOT_SEEDED, now: new Date('2026-08-01') })).toEqual([]);
-    // And that it is a window rather than a switch that is off: six months on, it fires.
+    // And that it is a window rather than a switch that is off: six months on the 37 that age at
+    // the short window fire, and eighteen months on the 14 deferrals join them.
+    const atSix = staleRefusals({ refusals: NOT_SEEDED, now: new Date('2027-06-01') });
+    expect(atSix.length).toBeGreaterThan(30);
+    expect(new Set(atSix.map((e) => e.refusal.cause))).toEqual(new Set(['engine', 'repo']));
+
+    const atEighteen = staleRefusals({ refusals: NOT_SEEDED, now: new Date('2028-06-01') });
+    expect(new Set(atEighteen.map((e) => e.refusal.cause))).toEqual(
+      new Set(['engine', 'repo', 'catalog'])
+    );
+    // `size` never joins, at any distance, because its assumption is asserted rather than dated.
     expect(
-      staleRefusals({ refusals: NOT_SEEDED, now: new Date('2027-06-01') }).length
-    ).toBeGreaterThan(30);
+      staleRefusals({ refusals: NOT_SEEDED, now: new Date('2099-01-01') }).some(
+        (e) => e.refusal.cause === 'size'
+      )
+    ).toBe(false);
   });
 });
 

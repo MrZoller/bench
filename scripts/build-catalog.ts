@@ -2290,6 +2290,32 @@ export function unseededCandidates(options: {
 export const REFUSAL_MONTHS = 6;
 
 /**
+ * How long each cause stays trusted, and the one that never expires.
+ *
+ * `engine` and `repo` age at {@link REFUSAL_MONTHS}: what would change them is outside this
+ * repository and nothing here can detect it, so the calendar is the only trigger available.
+ *
+ * **`catalog` ages too, at twice the window, and the first draft had it never ageing** (found in
+ * review). The argument was that `supersededBy` catches the assumption breaking — and it catches
+ * only half of it. A deferral says "that row already answers this", which stops being true if the
+ * row is *removed* (the id check sees that) or if its architecture changes **in place** under the
+ * same id, which is precisely what the weekly refresh exists to pick up and what no id check can
+ * see. Twelve months rather than six because a shape changing under a stable id is rarer than a
+ * capability arriving, and because the id check already covers the common case.
+ *
+ * `size` is the one that genuinely does not age, and it earns that: its assumption is a fact about
+ * `devices.json` — every catalogued machine holds a 2B model comfortably — which is local, complete,
+ * and asserted in `build-catalog.test.ts` against the smallest allocatable ceiling in the file. A
+ * smaller machine arriving fails the suite the day it is added, which is strictly better than a date.
+ */
+const CAUSE_MONTHS: Record<Refusal['cause'], number | null> = {
+  engine: REFUSAL_MONTHS,
+  repo: REFUSAL_MONTHS,
+  catalog: REFUSAL_MONTHS * 2,
+  size: null,
+};
+
+/**
  * Refusals old enough to be worth asking again, oldest first.
  *
  * The other half of the report. `unseededCandidates` answers "what is the field downloading that
@@ -2297,14 +2323,12 @@ export const REFUSAL_MONTHS = 6;
  * have changed", and they need different actions from whoever reads them — a new candidate needs a
  * decision, a stale refusal needs a re-check. Printed as two sections for that reason.
  *
- * `catalog` and `size` refusals are excluded by construction rather than by date: nothing about the
- * repository can make "a seeded row already answers this" or "every catalogued device holds it"
- * false, so ageing them would list twenty rows every six months whose answer is unchanged and
- * unchangeable from outside. What *can* falsify one is a change in this catalog, and that is checked
- * where it happens — `build-catalog.test.ts` fails the moment a `supersededBy` target stops being
- * seeded or a device smaller than the `size` assumption is added. **Written positively — the two
- * causes that age are named rather than the ones that do not** — so a cause added later has to be
- * classified deliberately instead of ageing by default or never ageing by default.
+ * Each cause has its own window — see {@link CAUSE_MONTHS}, which is where the argument for each one
+ * lives. `size` is the only cause that never ages, because its assumption is fully local and fully
+ * asserted; everything else gets a date as well as whatever mechanical check it has, because a
+ * mechanical check covers what it covers. **Written as a lookup keyed on the cause** rather than as
+ * a list of exclusions, so a cause added later has to be classified deliberately instead of
+ * inheriting a default in either direction.
  *
  * Pure and separated from the clock for the same reason `unseededCandidates` is separated from the
  * fetch: what it decides is which names land in front of a human, and a function that reads
@@ -2315,36 +2339,40 @@ export function staleRefusals(options: {
   now: Date;
   months?: number;
 }): { id: string; refusal: Refusal; monthsOld: number }[] {
-  const { refusals, now, months = REFUSAL_MONTHS } = options;
+  const { refusals, now, months } = options;
   /** An average month, since the comparison is "about six months" and not a calendar boundary. */
   const MONTH_MS = (1000 * 60 * 60 * 24 * 365.25) / 12;
 
-  return Object.entries(refusals)
-    .filter(([, refusal]) => refusal.cause === 'engine' || refusal.cause === 'repo')
-    .map(([id, refusal]) => {
-      const checked = Date.parse(refusal.checkedAt);
-      /**
-       * An unparseable date is stale, not fresh, and the direction is the whole of this line.
-       *
-       * The alternative fails open: a typo in one entry would exempt that entry from re-checking for
-       * ever, silently, and the entries most likely to be hand-edited are the ones somebody is
-       * halfway through revisiting. This repo has shipped three variants of a filter that reported
-       * compliance over nothing; the guard is to make the unreadable case the loud one.
-       */
-      /**
-       * Unreadable *or* in the future is infinitely stale, and the second half was a fail-open the
-       * first draft shipped (found in review). A mistyped year — `2096` for `2026` — parses cleanly
-       * and yields a large negative age, which filters the entry out for seventy years: the exact
-       * permanence this whole mechanism exists to remove, reintroduced by a typo and silent. A date
-       * this table cannot have been checked on is a date it was not checked on.
-       */
-      if (!Number.isFinite(checked) || checked > now.getTime()) {
-        return { id, refusal, monthsOld: Number.POSITIVE_INFINITY };
-      }
-      return { id, refusal, monthsOld: (now.getTime() - checked) / MONTH_MS };
-    })
-    .filter((entry) => entry.monthsOld >= months)
-    .sort((a, b) => b.monthsOld - a.monthsOld);
+  return (
+    Object.entries(refusals)
+      .filter(([, refusal]) => CAUSE_MONTHS[refusal.cause] !== null)
+      .map(([id, refusal]) => {
+        const checked = Date.parse(refusal.checkedAt);
+        /**
+         * An unparseable date is stale, not fresh, and the direction is the whole of this line.
+         *
+         * The alternative fails open: a typo in one entry would exempt that entry from re-checking for
+         * ever, silently, and the entries most likely to be hand-edited are the ones somebody is
+         * halfway through revisiting. This repo has shipped three variants of a filter that reported
+         * compliance over nothing; the guard is to make the unreadable case the loud one.
+         */
+        /**
+         * Unreadable *or* in the future is infinitely stale, and the second half was a fail-open the
+         * first draft shipped (found in review). A mistyped year — `2096` for `2026` — parses cleanly
+         * and yields a large negative age, which filters the entry out for seventy years: the exact
+         * permanence this whole mechanism exists to remove, reintroduced by a typo and silent. A date
+         * this table cannot have been checked on is a date it was not checked on.
+         */
+        if (!Number.isFinite(checked) || checked > now.getTime()) {
+          return { id, refusal, monthsOld: Number.POSITIVE_INFINITY };
+        }
+        return { id, refusal, monthsOld: (now.getTime() - checked) / MONTH_MS };
+      })
+      // The caller's window overrides, so a test can drive any cause at any age; otherwise each cause
+      // ages at its own. `!` is safe because the filter above dropped every `null`.
+      .filter((entry) => entry.monthsOld >= (months ?? CAUSE_MONTHS[entry.refusal.cause]!))
+      .sort((a, b) => b.monthsOld - a.monthsOld)
+  );
 }
 
 /** Every repo id the catalog already speaks for, mirrors and canonical repos alike. */
@@ -2655,6 +2683,18 @@ async function main() {
       `\n${failures.length} seed(s) failed — refusing to overwrite the catalog with a partial ` +
         'list. Fix the failures, or pass --allow-partial to write anyway.'
     );
+    /**
+     * The refusals still get re-asked on the way out (found in review on #103).
+     *
+     * `catalog-refresh.yml` runs this without `--allow-partial` by design, so one gated repo or one
+     * 503 among thirty-five seeds takes this exit — and everything after it, including a report that
+     * reads a local table and a clock and needs no network at all, went unwritten for that week. The
+     * same fail-open the candidate report's own catch path had to learn: the section going missing is
+     * indistinguishable from it having nothing to say.
+     *
+     * Before the exit rather than in a `finally`, so the ordering is visible where the exit is.
+     */
+    await reportStaleRefusals();
     process.exit(1);
   }
   if (failures.length > 0) {
