@@ -1466,9 +1466,149 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
    * found the wrong element could not pass for the wrong reason either way.
    */
   const line = () => matrix().querySelector<HTMLElement>(':scope > p')!;
-  const readout = () => line().textContent;
+  /**
+   * The wide form, which is what every assertion below is about.
+   *
+   * The line holds two sentences since #102 — the full one and a preamble-less one for widths where
+   * the reservation cannot hold the wrapping — and CSS shows one. jsdom resolves no media query, so
+   * it renders both and `textContent` returns them concatenated; `data-readout` is the seam that
+   * lets this ask for the one it means. The narrow form has its own tests below.
+   */
+  const readout = () => line().querySelector('[data-readout="full"]')!.textContent;
+  const briefReadout = () => line().querySelector('[data-readout="brief"]')!.textContent;
   const cells = () => [...matrix().querySelectorAll<HTMLButtonElement>('td button')];
   const legend = () => [...matrix().querySelectorAll<HTMLElement>(':scope > div')].at(-1)!;
+
+  /**
+   * The narrow form, and the two halves of [#102](https://github.com/MrZoller/bench/issues/102) it
+   * belongs to.
+   *
+   * The readout's reservation is in `rem`, so at a 32px root it doubles — and the glyphs double with
+   * it, so the same sentence wraps into roughly twice as many lines each twice as tall. Reserved
+   * height grows linearly and required height closer to quadratically, so the line escaped its box:
+   * measured at 320px with the browser default at 32px, the longest sentence needs **280px against
+   * 160px reserved**, and 240 against 160 at 390. Above `sm` it fits at both root sizes.
+   *
+   * What makes it long is the preamble, and at phone width the preamble is the part the reader
+   * already has — the model is the row heading and the device the column heading. So the narrow form
+   * states the figure alone. `e2e/reflow.spec.ts` measures that it now fits; these pin what it says.
+   */
+  it('states the figure alone at a width the preamble does not fit', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const cell = cells()[0];
+    await user.hover(cell);
+
+    const full = readout()!;
+    const brief = briefReadout()!;
+
+    // The figure is the payload and survives; the preamble is what goes.
+    expect(full).toMatch(/^Qwen3 8B on GeForce RTX 5090/);
+    expect(brief).not.toContain('Qwen3 8B');
+    expect(brief).not.toContain('GeForce RTX 5090');
+    // The figure itself, which is the payload both forms carry.
+    expect(brief).toContain('69% of the ceiling free');
+    expect(full).toContain('69% of the ceiling free');
+    /*
+     * Materially shorter, which is the property the reservation depends on — the geometry itself is
+     * `e2e/reflow.spec.ts`, since jsdom reports every height as 0. Not "half", which this clears at
+     * 34 against 64 on the default scenario and would not clear on a cell whose figure is long.
+     */
+    expect(brief.length).toBeLessThan(full.length * 0.6);
+  });
+
+  it('keeps the stand-in qualifier in the narrow form, since no axis carries it', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    // MXFP4 is expert-only, so a dense row is scored at a substitute — the one part of the preamble
+    // that is not on an axis, and the one a figure derived from it has to keep at every width.
+    await user.hover(cells()[0]);
+
+    expect(readout()).toMatch(/at Q4_K_M/);
+    expect(briefReadout()).toMatch(/at Q4_K_M/);
+  });
+
+  it('gives a screen reader the full sentence at every width', () => {
+    render(<App />);
+    // The accessible name is the one channel with no axis headings beside it, so the preamble the
+    // readout may drop is exactly what a screen-reader user has instead of them. Never abbreviated.
+    const label = cells()[0].getAttribute('aria-label') ?? '';
+    expect(label).toMatch(/^Qwen3 8B on GeForce RTX 5090/);
+  });
+
+  /**
+   * Inspection separated from activation, for the reader who has only a tap.
+   *
+   * #71 left this open and named it: on a touch-only device the only gesture a cell offers is a tap,
+   * and that tap *is* `onClick` — five store keys rewritten and a scroll several sections away. So
+   * the readout either filled while navigation was already happening or never filled at all, and a
+   * touch reader could not compare two cells. Unlike the Envelope and the budget bar, this panel has
+   * no table behind a disclosure to fall back to: it *is* the table, and its cells show colour.
+   *
+   * Keyed on `pointerType` rather than on a media query, which is #43's lesson pointed the useful
+   * way: `any-pointer: coarse` is true of every touchscreen laptop, so a query would make a *mouse*
+   * click take two clicks on a hybrid. These drive both pointers against the same markup, which is
+   * the assertion a media query could not support.
+   */
+  it('fills the line on the first tap and loads the cell on the second', async () => {
+    render(<App />);
+    const before = useConfig.getState().deviceId;
+    const cell = cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('RTX 3060'))!;
+
+    fireEvent.pointerDown(cell, { pointerType: 'touch' });
+    fireEvent.click(cell);
+
+    // Inspected, not committed.
+    expect(readout()).toContain('RTX 3060');
+    expect(useConfig.getState().deviceId).toBe(before);
+
+    fireEvent.pointerDown(cell, { pointerType: 'touch' });
+    fireEvent.click(cell);
+
+    expect(useConfig.getState().deviceId).toBe('rtx-3060-12gb');
+  });
+
+  it('loads a cell on a single click from a mouse, on the same markup', async () => {
+    render(<App />);
+    const cell = cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('RTX 3060'))!;
+
+    // The hybrid case: a media query would have made this two clicks on any touchscreen laptop.
+    fireEvent.pointerDown(cell, { pointerType: 'mouse' });
+    fireEvent.click(cell);
+
+    expect(useConfig.getState().deviceId).toBe('rtx-3060-12gb');
+  });
+
+  it('treats a stylus as a pointer that hovers, not as a finger', async () => {
+    render(<App />);
+    const cell = cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('RTX 3060'))!;
+
+    // `pen` is precise and hovers, so the readout has already filled by the time it lands — a second
+    // tap would be a tax on a gesture that never had the problem.
+    fireEvent.pointerDown(cell, { pointerType: 'pen' });
+    fireEvent.click(cell);
+
+    expect(useConfig.getState().deviceId).toBe('rtx-3060-12gb');
+  });
+
+  it('moves the line to the next cell a finger taps rather than loading it', async () => {
+    render(<App />);
+    const before = useConfig.getState().deviceId;
+    const [first, second] = [
+      cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('RTX 3060'))!,
+      cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('DGX Spark'))!,
+    ];
+
+    fireEvent.pointerDown(first, { pointerType: 'touch' });
+    fireEvent.click(first);
+    fireEvent.pointerDown(second, { pointerType: 'touch' });
+    fireEvent.click(second);
+
+    // Comparing two cells is the thing #71 said a touch reader could not do, and the second tap
+    // going to a *different* cell is what makes it possible without committing to either.
+    expect(readout()).toContain('DGX Spark');
+    expect(useConfig.getState().deviceId).toBe(before);
+  });
 
   it('reserves the line before anything is pointed at', () => {
     render(<App />);

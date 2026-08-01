@@ -262,7 +262,16 @@ for (const width of [320, 640]) {
  * 80px at 320 and 40px at 640 come from the widest sentence today. #78 lengthened device names in
  * this same sweep ("MacBook Pro M1 Max (64 GB, 32-core GPU)"), and a length derived from text that
  * grows is the header band's #44 defect — so a longer name added later has to break a test rather
- * than the layout. Every cell, not a sample, because the longest sentence is the point.
+ * than the layout.
+ *
+ * **The measurement is the *natural* height, with the floor lifted, and the earlier version of this
+ * could not fail** (raised in review on #108). `getBoundingClientRect().height` on a box with a
+ * `min-height` already includes the floor, so every sentence that fits one line reported exactly the
+ * reservation and satisfied `<= reserved` — including a run with the reservation deleted, where the
+ * heights would simply have been smaller. `ROADMAP.md` credited this sweep with being the evidence
+ * that the sentences differ in height, which is the one thing it was not measuring. Lifting
+ * `min-height` and re-measuring is what asks the question, and the spread assertion below is the
+ * evidence half stated outright rather than implied.
  */
 for (const { width, reserved } of [
   { width: 320, reserved: 80 },
@@ -277,15 +286,35 @@ for (const { width, reserved } of [
     const count = await cells.count();
     expect(count, 'no cells, so this sweeps nothing').toBeGreaterThan(100);
 
+    const natural = async () =>
+      readout(page).evaluate((el) => {
+        const floor = el.style.minHeight;
+        el.style.minHeight = '0px';
+        const height = el.getBoundingClientRect().height;
+        el.style.minHeight = floor;
+        return height;
+      });
+
     let tallest = { height: 0, text: '' };
+    const heights = new Set<number>();
     for (let i = 0; i < count; i += 7) {
       await cells.nth(i).focus();
-      const height = (await boxOf(readout(page))).height;
+      const height = await natural();
+      heights.add(height);
       if (height > tallest.height)
         tallest = { height, text: (await readout(page).textContent()) ?? '' };
     }
 
     expect(tallest.height, 'nothing was measured').toBeGreaterThan(0);
+    /*
+     * The evidence half: the sentences really do differ in height, so the bound above is a bound on
+     * something. With the floor still applied they were all identical by construction, which is what
+     * made the old version of this test unfalsifiable.
+     */
+    expect(
+      heights.size,
+      'every sentence renders the same height, so the reservation is what is being measured'
+    ).toBeGreaterThan(1);
     expect(
       tallest.height,
       `"${tallest.text}" renders ${tallest.height}px against ${reserved}px reserved — raise the reservation for this breakpoint`

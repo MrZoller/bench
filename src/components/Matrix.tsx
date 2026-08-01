@@ -368,6 +368,34 @@ export function Matrix({ config }: { config: Config }) {
   const [active, setActive] = useState<[row: number, col: number]>([0, 0]);
   const cellRefs = useRef(new Map<string, HTMLButtonElement | null>());
 
+  /**
+   * How the last gesture arrived, so a tap can inspect before it commits
+   * ([#102](https://github.com/MrZoller/bench/issues/102)).
+   *
+   * The gap #71 left: on a touch-only device the only gesture a cell offers is a tap, and that tap
+   * *is* `onClick` — it rewrites five store keys and scrolls several sections away. So the readout
+   * either fills while navigation is already happening or never fills at all, and a touch reader
+   * cannot compare two cells, which is one of the three readers #71's rationale names. Every other
+   * channel this grid has is unavailable to them: there is no hover, the figures live in each cell's
+   * `aria-label`, and unlike the Envelope and the budget bar this panel has no table behind a
+   * disclosure to fall back to — it *is* the table, and its cells show colour.
+   *
+   * So the first tap on a cell fills the readout and the second loads it. Chosen over the issue's
+   * two other options for reasons that are about this grid rather than about taste: a long-press is
+   * undiscoverable and collides with the platform's own text-selection gesture, and a per-row
+   * inspect affordance costs grid width at 320px, which #34 and #64 spent two fixes reclaiming. A
+   * first tap that visibly does something is self-teaching, and the sentence it fills says what the
+   * second tap will do.
+   *
+   * **Keyed on the pointer that fired the event, not on a media query**, which is the `any-pointer`
+   * lesson (#43) pointed the useful way round. `pointer: coarse` describes the primary device and
+   * `any-pointer: coarse` is true of every touchscreen laptop — either would make a mouse click on a
+   * hybrid take two clicks. `pointerType` says what actually happened, so a mouse is one click and a
+   * finger is two, on the same machine, in the same session. A stylus counts as a mouse: `pen` is a
+   * precise pointer that hovers, so it fills the readout on approach like any other.
+   */
+  const lastPointerType = useRef<string>('');
+
   const rowCount = cells.length;
   const colCount = devices.length;
   // Clamped on read rather than reset in an effect: the grid's size follows the catalog and the
@@ -510,7 +538,12 @@ export function Matrix({ config }: { config: Config }) {
    */
   const sentences = useMemo(
     () =>
-      cells.map((row) => row.map((cell) => tooltip(cell, measure, quant.id, config.deviceCount))),
+      cells.map((row) =>
+        row.map((cell) => ({
+          full: tooltip(cell, measure, quant.id, config.deviceCount),
+          brief: tooltip(cell, measure, quant.id, config.deviceCount, true),
+        }))
+      ),
     [cells, measure, quant.id, config.deviceCount]
   );
 
@@ -529,11 +562,23 @@ export function Matrix({ config }: { config: Config }) {
    * assumption that `headerBand.columns` and `devices` are still in the same order.
    */
   const target = hovered ?? focused;
+  /**
+   * Two strings rather than one, and CSS decides which is shown — see `tooltip`'s `brief`.
+   *
+   * A heading readout is already short and is the same either way: a device or model name is what
+   * the truncated heading was hiding, so there is no preamble to drop.
+   */
   const readout = (() => {
-    if (!target) return '';
-    if (target.kind === 'column') return columnReadout(getDevice(target.deviceId));
-    if (target.kind === 'row') return rowReadout(getModel(target.modelId));
-    return sentences[target.row]?.[target.col] ?? '';
+    if (!target) return { full: '', brief: '' };
+    if (target.kind === 'column') {
+      const said = columnReadout(getDevice(target.deviceId));
+      return { full: said, brief: said };
+    }
+    if (target.kind === 'row') {
+      const said = rowReadout(getModel(target.modelId));
+      return { full: said, brief: said };
+    }
+    return sentences[target.row]?.[target.col] ?? { full: '', brief: '' };
   })();
 
   /**
@@ -939,12 +984,33 @@ export function Matrix({ config }: { config: Config }) {
                        * the same square. The context and the single-device count matter for the
                        * same reason.
                        */
+                      onPointerDown={(event) => {
+                        lastPointerType.current = event.pointerType;
+                      }}
                       onClick={() => {
                         // So the tab stop follows the reader: leaving the grid and coming back
                         // returns to the cell they last used, not to the top-left corner. Done
                         // before the guard below, because a closed cell is still where the keyboard
                         // should resume from — it is inert, not absent.
                         setActive([r, c]);
+                        /**
+                         * A finger inspects before it commits — see `lastPointerType`.
+                         *
+                         * Only when the readout is not already this cell's, so the second tap falls
+                         * through and loads it. `focused` rather than `hovered` because a tap moves
+                         * focus too and `onFocus` clears the pointer's claim, so writing the hover
+                         * channel here would be overwritten by the browser's own focus a moment
+                         * later — the two-state rule the readout already documents, met from a
+                         * direction it had not been.
+                         */
+                        if (
+                          lastPointerType.current === 'touch' &&
+                          !(target?.kind === 'cell' && target.row === r && target.col === c)
+                        ) {
+                          setHovered(null);
+                          setFocused({ kind: 'cell', row: r, col: c });
+                          return;
+                        }
                         // A closed column has no scenario to load. Argued at `aria-disabled` below;
                         // the short version is that adopting this pair sets the Bench to a
                         // configuration it can only blank, several sections above where the click
@@ -1035,8 +1101,11 @@ export function Matrix({ config }: { config: Config }) {
                        * tall — a reader hovering the top of it on a laptop can have the readout below
                        * the fold. What made it a defect was being alone, not being present.
                        */
-                      title={sentences[r][c]}
-                      aria-label={sentences[r][c]}
+                      title={sentences[r][c].full}
+                      // The full form always, at every width: the accessible name is the one channel
+                      // with no axis headings beside it, so the preamble the readout can drop below
+                      // `sm` is exactly what a screen-reader user has instead of them.
+                      aria-label={sentences[r][c].full}
                       aria-current={isCurrent(cell) ? 'true' : undefined}
                       /**
                        * A square with nothing drawn in it is not a control.
@@ -1443,7 +1512,20 @@ export function Matrix({ config }: { config: Config }) {
         aria-hidden="true"
         className="tabular pointer-events-none sticky bottom-0 -mx-[min(1.25rem,5vw)] mt-3 min-h-[5rem] bg-[var(--color-surface)] px-[min(1.25rem,5vw)] text-sm text-[var(--color-text)] sm:min-h-[2.5rem] lg:min-h-[1.25rem]"
       >
-        {readout}
+        {/*
+          Both forms in the DOM, one displayed. See `tooltip`'s `brief` for the arithmetic.
+
+          `data-readout` carries no style and exists so a spec can find each form without naming the
+          utility that hides it — the same reason `data-band-start` exists on the class-band columns.
+          It also gives jsdom, which resolves no media query and therefore renders both, a way to ask
+          about one: without it the unit suite reads the two sentences concatenated.
+        */}
+        <span data-readout="brief" className="sm:hidden">
+          {readout.brief}
+        </span>
+        <span data-readout="full" className="hidden sm:inline">
+          {readout.full}
+        </span>
       </p>
     </section>
   );
@@ -1578,7 +1660,27 @@ function tooltip(
   cell: MatrixCell,
   measure: MatrixMeasure,
   selectedQuantId: string,
-  selectedDeviceCount: number
+  selectedDeviceCount: number,
+  /**
+   * Drop the "model on device at quant:" preamble and state the figure alone
+   * ([#102](https://github.com/MrZoller/bench/issues/102)).
+   *
+   * The narrow form, and the reason it exists is arithmetic rather than taste. The readout's
+   * reservation is in `rem`, so at a 32px root it doubles — and the glyphs double with it, so the
+   * same sentence wraps into roughly twice as many lines each twice as tall. Reserved height grows
+   * linearly, required height closer to quadratically. Measured at 320px with the browser default at
+   * 32px: the longest sentence needs **280px against 160px reserved**, and 240 against 160 at 390.
+   * Above `sm` it fits at both root sizes with nothing to spare and nothing over.
+   *
+   * The preamble is what makes it long, and at phone width it is also the part the reader already
+   * has: the model is the row heading they are pointing at and the device is the column heading, and
+   * since #102 the tapped cell carries a ring as well. What they cannot get anywhere else is the
+   * figure. So the sentence says as much as the width affords rather than the same thing badly.
+   *
+   * Both forms are rendered and CSS picks one, because the choice is a *layout* question and this
+   * component has no viewport to read. The paragraph is `aria-hidden`, so nothing hears both.
+   */
+  brief = false
 ): string {
   const model = getModel(cell.modelId).name;
   const device = getDevice(cell.deviceId).name;
@@ -1596,18 +1698,36 @@ function tooltip(
      * the grid at `text-sm`.
      */
     const reason = cell.blockedBy ?? 'does not run';
-    return `${model} on ${rig}: ${reason}${reason.endsWith('.') ? '' : '.'}`;
+    const stop = reason.endsWith('.') ? '' : '.';
+    /**
+     * The narrow form of a refusal is not the same string with the preamble removed.
+     *
+     * `blockedBy` is two unlike things — this grid's own short verdicts ("Does not fit"), which are
+     * already phrases, and every categorical refusal `planPlacement` writes, which are whole
+     * sentences naming the runtime *and* the machine. The second is the longest thing this line can
+     * render, and both of the names in it are on the axes or in the Runtime picker at this width.
+     * `evaluated` is exactly the split: false for a refusal that never consulted the arithmetic.
+     */
+    if (brief) return cell.evaluated ? `${reason}${stop}` : 'The runtime does not drive this.';
+    return `${model} on ${rig}: ${reason}${stop}`;
   }
 
   const detail =
     measure === 'fit'
       ? cell.offloadFraction > 0
-        ? `runs only by spilling ${percent(cell.offloadFraction)} of its weights to host RAM`
+        ? // The other long one, and the narrow form says the same fact in a third of the characters.
+          // "of its weights" and "runs only by" are the sentence around the figure, and the figure is
+          // what a reader who cannot hover tapped the cell for.
+          brief
+          ? `spills ${percent(cell.offloadFraction)} to host RAM`
+          : `runs only by spilling ${percent(cell.offloadFraction)} of its weights to host RAM`
         : `${percent(Math.max(0, 1 - cell.utilization))} of the ceiling free`
       : measure === 'decode'
         ? `${rate(cell.tokensPerSec)} tok/s per user`
         : `${seconds(cell.ttftSeconds)} to first token`;
 
   const at = cell.quantId === selectedQuantId ? '' : ` at ${getQuant(cell.quantId).label}`;
-  return `${model} on ${rig}${at}: ${detail}.`;
+  // The stand-in stays in the brief form: it is the one part of the preamble the axes do not carry,
+  // and a figure derived from a format the runtime cannot load has to say so at every width.
+  return brief ? `${detail}${at}.` : `${model} on ${rig}${at}: ${detail}.`;
 }

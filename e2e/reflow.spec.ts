@@ -478,4 +478,105 @@ test.describe('at 200% text size', () => {
       .locator('p', { hasText: /combinations run/ });
     await expect(parent).not.toHaveCSS('white-space', 'nowrap');
   });
+  /**
+   * The Matrix readout, filled, at 200% — the case neither suite covered
+   * ([#102](https://github.com/MrZoller/bench/issues/102)).
+   *
+   * `min-h` is `5rem` below `sm`, `2.5rem` at `sm` and `1.25rem` at `lg`, measured against the
+   * widest sentence at a 16px root. At a 32px root the reservation doubles — and so do the glyphs, so
+   * the same sentence wraps into roughly twice as many lines each twice as tall. **Reserved height
+   * scales linearly and required height closer to quadratically**, which is the whole defect.
+   *
+   * It survived because each suite covered one axis: `reflow.spec.ts` runs a 32px root at 320px and
+   * never filled the readout, and `matrix-readout.spec.ts` fills it at the default text size. This is
+   * both at once, in the project whose browser default is 32px rather than an author-set root — per
+   * this file's own lesson, since `rem` in a media query resolves against the browser default and the
+   * breakpoints have to move with the text.
+   *
+   * Measured before the fix, on the longest sentence the grid can produce: **280px needed against
+   * 160px reserved at 320px**, and 240 against 160 at 390. Both fixed by the narrow form of the
+   * sentence, which drops the preamble the axes already carry.
+   *
+   * The assertion is the *natural* height against the reservation rather than the rendered height
+   * against it: the rendered height already includes the `min-height`, so comparing the two is true
+   * of every sentence that fits on one line and is the shape that let this ship. Lifting the floor
+   * and re-measuring is what asks the question.
+   */
+  for (const width of [320, 390]) {
+    test(`the filled readout stays inside its reservation at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto('/');
+
+      const matrix = page.getByRole('region', { name: /every model on every machine/i });
+      const cells = matrix.locator('table[role="grid"] td button');
+      await expect(cells.first()).toBeVisible();
+      const readout = matrix.locator(':scope > p');
+
+      const reserved = await readout.evaluate((el) => el.getBoundingClientRect().height);
+      // The reservation itself, so a run against a panel that had stopped reserving anything cannot
+      // pass by having nothing to overflow.
+      expect(reserved, 'the readout reserves no height at all').toBeGreaterThan(0);
+
+      /*
+       * The cells whose sentence is longest, ranked before any of them is focused.
+       *
+       * Which cell overflows moves with the catalog, the runtime and the measure — the pre-fix worst
+       * case was a spilling row, neither the first cell nor the last — so a fixed sample would be a
+       * claim about the cells that happened to be picked. Focusing all 1,470 and waiting a frame each
+       * is the honest sweep and costs 25 seconds a viewport, which is most of this suite.
+       *
+       * So the ranking is done first, off each cell's `title` — the same sentence, already in the DOM
+       * for every cell without focusing anything. The key is the part *after* the colon, because that
+       * is the detail, and the narrow form the reservation has to hold is the detail plus at most a
+       * stand-in qualifier. Ranking on the whole title would sort by model and device name, which is
+       * exactly the half the narrow form drops.
+       */
+      const worst = await page.evaluate(async (sample: number) => {
+        const p = document.querySelector('section p.sticky') as HTMLElement;
+        const detail = (button: HTMLElement) => {
+          const said = button.getAttribute('title') ?? '';
+          return said.slice(said.indexOf(': ') + 1);
+        };
+        const buttons = [...document.querySelectorAll<HTMLElement>('table[role="grid"] td button')]
+          .sort((a, b) => detail(b).length - detail(a).length)
+          .slice(0, sample);
+
+        let tallest = { natural: 0, text: '', checked: 0 };
+        for (const button of buttons) {
+          button.focus();
+          // A frame, so React has rendered the sentence this focus asked for.
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+          const floor = p.style.minHeight;
+          p.style.minHeight = '0px';
+          const natural = p.getBoundingClientRect().height;
+          p.style.minHeight = floor;
+          tallest.checked++;
+          if (natural > tallest.natural) {
+            tallest = {
+              ...tallest,
+              natural,
+              text: (p.textContent ?? '').trim().slice(0, 80),
+            };
+          }
+        }
+        return tallest;
+      }, 25);
+
+      // The sample really was taken, so a selector that stopped matching cannot report a clean run
+      // over nothing — the failure this repo has shipped three variants of.
+      expect(worst.checked, 'no cell was measured').toBe(25);
+
+      // The premise: something was actually rendered into the line. Without it a readout that had
+      // stopped filling would report a natural height of zero and pass every bound below.
+      expect(worst.natural, 'nothing filled the readout, so nothing was measured').toBeGreaterThan(
+        0
+      );
+      expect(worst.text.length, 'the readout filled with an empty sentence').toBeGreaterThan(10);
+
+      expect(
+        worst.natural,
+        `the tallest readout needs ${Math.round(worst.natural)}px against ${Math.round(reserved)}px reserved: "${worst.text}"`
+      ).toBeLessThanOrEqual(reserved);
+    });
+  }
 });
