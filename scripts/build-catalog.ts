@@ -1380,19 +1380,24 @@ export function deriveLayerWindows(
    * Qwen2's convention states the split outright: `max_window_layers` names where it falls,
    * with the window applied to only part of the stack. Which side slides is exactly the thing
    * the config docstring and the modeling code are easy to get backwards, so this refuses
-   * rather than deriving; equal-to-layers is the one value every reading agrees on (uniformly
-   * sliding) and falls through. Today's Qwen seeds ship `use_sliding_window: false` and return
-   * above — the guard that saved them was the vendor's default, now also this script's.
+   * rather than deriving — for *every* value of the key, equality included. The first draft
+   * exempted `max_window_layers === layers` as "the one value every reading agrees on", and
+   * review caught the error in that sentence: under the `layer_idx >= max_window_layers`
+   * reading, equality means zero sliding layers, so the exemption could derive an entirely
+   * full-attention stack as entirely sliding — the largest possible understatement, through the
+   * clause claiming direction-independence. Today's Qwen seeds ship `use_sliding_window: false`
+   * and return above — the guard that saved them was the vendor's default, now also this
+   * script's.
    */
   const maxWindowLayers = num(config, 'max_window_layers');
-  if (maxWindowLayers !== undefined && maxWindowLayers !== layers) {
+  if (maxWindowLayers !== undefined) {
     throw new DerivationError(
       `${id}: states max_window_layers ${maxWindowLayers} for ${layers} layers with the window ` +
-        'on — a partial sliding stack whose direction this script has no verified reading of. ' +
-        `Deriving all ${layers} layers as sliding understates KV without bound as context ` +
-        'grows, since the full-attention layers are exactly the ones whose cache keeps growing. ' +
-        'Read the split out of the modeling code and give it a derivation before seeding this ' +
-        'shape.'
+        'on — a split whose direction this script has no verified reading of, including at ' +
+        'equality, where the two readings disagree about every layer at once. Deriving all ' +
+        `${layers} layers as sliding understates KV without bound as context grows, since the ` +
+        'full-attention layers are exactly the ones whose cache keeps growing. Read the split ' +
+        'out of the modeling code and give it a derivation before seeding this shape.'
     );
   }
 

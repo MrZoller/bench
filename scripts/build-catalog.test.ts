@@ -611,11 +611,13 @@ describe('the attention shapes the shipped catalog is built from', () => {
     expect(() => deriveLayerWindows('Qwen/qwen2-shaped', QWEN2_SPLIT, 40)).toThrow(
       /states max_window_layers 28 for 40 layers with the window on/
     );
-    // Equal to the layer count is the one value every reading of the key agrees on — uniformly
-    // sliding — so it derives rather than refusing.
-    expect(
-      deriveLayerWindows('Qwen/qwen2-uniform', { ...QWEN2_SPLIT, max_window_layers: 40 }, 40)
-    ).toEqual(Array.from({ length: 40 }, () => 32768));
+    // Equality refuses too (raised in review on #154): the first draft exempted it as the value
+    // every reading agrees on, and it is the opposite — under `layer_idx >= max_window_layers`
+    // it means zero sliding layers, so the exemption could derive an entirely full-attention
+    // stack as entirely sliding.
+    expect(() =>
+      deriveLayerWindows('Qwen/qwen2-equal', { ...QWEN2_SPLIT, max_window_layers: 40 }, 40)
+    ).toThrow(/including at equality/);
   });
 
   it('refuses a bare Gemma 2 window beside a hybrid cache nothing explains', () => {
