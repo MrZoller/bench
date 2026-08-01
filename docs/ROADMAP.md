@@ -171,11 +171,17 @@ then discards it: its bins keep byte loads rather than layer counts, and only th
 onto `Placement` — so the split has to be surfaced before a formatter can read it, an engine change
 that records what is already computed rather than new modelling. And a command may only name a
 checkpoint that exists: the catalog carries the source repo id and no per-quant artifact, so a
-non-native selection (Q4_K_M under llama.cpp, AWQ under vLLM) needs an artifact resolver or an
-honest placeholder — naming the source checkpoint beside the quant's figures would be the
-substituted-format failure (#18) in copy-pasteable form. Calibrate still follows launch, because it
-cannot honestly ask anyone for measurements until running the priced scenario is a paste rather
-than a research project. Detect and recommend ship together as one guided-mode project, because
+runnable command for a non-native selection (Q4_K_M under llama.cpp, AWQ under vLLM) needs an
+artifact resolver, or the feature is restricted to selections with a known artifact — which of
+those is #136's first decision. A placeholder is honest only for the local file path, which is the
+user's business either way; for the artifact itself it is a research assignment wearing a command's
+clothes, and naming the source checkpoint instead would be the substituted-format failure (#18) in
+copy-pasteable form. Calibrate still follows launch, and launching is necessary rather than
+sufficient: a server up is not a measurement, so the command family has to include the benchmark
+form — the scenario's prompt length, generation length and concurrency in `llama-bench`'s flags —
+before a submitted number describes the priced workload rather than the tool's defaults. That form
+is cheap once the assignment is surfaced, and it is the piece calibrate actually pastes back.
+Detect and recommend ship together as one guided-mode project, because
 each is half of the three-click landing path — detect the machine, ask what the reader wants to do,
 answer. Calibrate last: it is the slow-burn moat, and it compounds from the day the other three
 make submitting easy.
