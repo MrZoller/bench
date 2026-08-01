@@ -995,16 +995,33 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
              * Spill can hold serving back while every printed figure looks healthy: the rate is
              * fine, the fit is fine, and the reason said so.
              *
-             * **Gated on the placement actually offloading**, which is not the same test as negative
-             * headroom — this file's own note says so about `impossible`, and this clause was the
-             * counter-example. When the four-user tier is over a unified-memory machine's capacity
-             * the placement is `impossible` *because* it cannot offload, and its headroom is
-             * negative, so an ungated clause told the reader the weights were spilling to host RAM
-             * on the one class of machine where nothing can. The clause above already says four
-             * users do not fit; this one is about the case where they do, slowly.
+             * **Gated on the four-user placement being a placement at all**, which took two rounds to
+             * state correctly. `offloadFraction > 0` alone is not it: `planPlacement` computes the
+             * spilled fraction *before* it decides `impossible` from the non-offloadable floor, so a
+             * discrete GPU whose cache and activations alone are over its ceiling carries a positive
+             * fraction on a configuration that cannot run — and the sentence then contrasts spilling
+             * with "simply not fitting" for a workload that is, exactly, not fitting. On a
+             * unified-memory machine the same clause fired with a zero fraction and negative headroom.
+             * `holds` is the one predicate that excludes both, and the clause above already says four
+             * users do not fit.
              */
-            good.placement.offloadFraction > 0 &&
+            servingGood.holds &&
+              good.placement.offloadFraction > 0 &&
               'the weights are spilling to host RAM so every additional user makes that worse rather than simply not fitting',
+            /*
+             * And the exactly-full case, which had no sentence at all.
+             *
+             * `pass` requires `headroomBytes > 0`, so a resident placement using precisely its
+             * allocatable memory is downgraded to `tight` — deliberately, since a rig with no spare
+             * byte cannot take the next user — while every other good-tier bar passes and nothing
+             * spills. `shortOfGood` then had no live item and fell through to the *positive* fallback:
+             * a `tight` row printing three healthy figures and no reason, which is the defect the
+             * builder exists to prevent, reachable through the one branch it did not cover.
+             */
+            servingGood.holds &&
+              good.placement.offloadFraction === 0 &&
+              good.placement.headroomBytes <= 0 &&
+              'it uses every allocatable byte at four users, so there is nothing left for a fifth',
             good.prefill.ttftSeconds > BARS.serving.good.ttft &&
               `${secs(good.prefill.ttftSeconds)}s to first token across ${usersWord(BARS.serving.good.users)} of queued prompts is longer than a served user waits`
           ) ??

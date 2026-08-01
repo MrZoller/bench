@@ -499,6 +499,59 @@ describe('serving is graded at its own concurrency, not the slider’s', () => {
     expect(serving.reason).not.toMatch(/spilling to host RAM/);
   });
 
+  it('never tells a discrete GPU its weights are spilling when four users cannot run', () => {
+    /*
+     * The same defect one class of machine over, and the reason `offloadFraction > 0` was not the
+     * fix (found in review, second round). `planPlacement` computes the spilled fraction *before*
+     * deciding `impossible` from the non-offloadable floor, so a card whose cache and activations
+     * alone are over its ceiling carries a positive fraction on a configuration that cannot run —
+     * and the sentence contrasted spilling with "simply not fitting" for a workload that is, exactly,
+     * not fitting.
+     */
+    const overOnFloor: Placement = { ...OVER, offloadFraction: 0.4 };
+    const serving = new Map(
+      judgeWorkloads({
+        selectedPlacement: RESIDENT,
+        usage: { contextTokens: 2048, concurrency: 1, promptTokens: 2048, kvPrecision: 'fp16' },
+        maxContextTokens: 200_000,
+        runnableContextTokens: 200_000,
+        evaluateAt: (_prompt, _context, _prefix, concurrency) => ({
+          ...STUB_SPEED,
+          placement: concurrency >= WORKLOAD_BARS.serving.good.users ? overOnFloor : RESIDENT,
+        }),
+      }).map((v) => [v.workload.id, v])
+    ).get('serving')!;
+
+    expect(serving.fitness).toBe('tight');
+    expect(serving.reason).toMatch(/holds a turn each for 2 users but not for the 4/);
+    expect(serving.reason).not.toMatch(/spilling to host RAM/);
+  });
+
+  it('says why a rig with no spare byte is only tight', () => {
+    /*
+     * `pass` requires `headroomBytes > 0`, so a resident placement using precisely its allocatable
+     * memory is downgraded — deliberately, since a rig with nothing left cannot take the next user.
+     * Every other good-tier bar passed and nothing spilled, so `shortOfGood` had no live item and
+     * fell through to the *positive* fallback: a `tight` row printing three healthy figures and no
+     * reason, which is the defect that builder exists to prevent, through the one branch it did not
+     * cover (found in review).
+     */
+    const exactlyFull: Placement = { ...RESIDENT, headroomBytes: 0, utilization: 1 };
+    const serving = new Map(
+      judgeWorkloads({
+        selectedPlacement: RESIDENT,
+        usage: { contextTokens: 2048, concurrency: 1, promptTokens: 2048, kvPrecision: 'fp16' },
+        maxContextTokens: 200_000,
+        runnableContextTokens: 200_000,
+        evaluateAt: () => ({ ...STUB_SPEED, placement: exactlyFull }),
+      }).map((v) => [v.workload.id, v])
+    ).get('serving')!;
+
+    expect(serving.fitness).toBe('tight');
+    expect(serving.reason).toMatch(/^Usable, but /);
+    expect(serving.reason).toMatch(/every allocatable byte at four users/);
+  });
+
   /**
    * The other half of the capacity sentence, which the catalog sweep above cannot reach.
    *
