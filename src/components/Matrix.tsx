@@ -798,9 +798,9 @@ export function Matrix({ config }: { config: Config }) {
         <p className="basis-full text-sm text-[var(--color-text-faint)]">
           The {models.length} models are a curated set, not a top-N chart — picked to cover distinct
           size classes, attention families and active-parameter ratios, and to keep each
-          family&rsquo;s current head present — with figures derived from each model&rsquo;s own
-          Hugging Face repo, a handful of stated overrides aside. Rows run most-downloaded first,
-          and a missing model is one the list does not carry, not one found unable to run.
+          family&rsquo;s current head present — with figures derived from Hugging Face, a handful of
+          stated overrides aside. Rows run most-downloaded first, and a missing model is one the
+          list does not carry, not one found unable to run.
         </p>
       </header>
 
