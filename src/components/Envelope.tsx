@@ -431,7 +431,7 @@ export function Envelope({ config }: { config: Config }) {
    * The header counts them and the field no longer draws them, so this is what makes the count
    * locatable without putting the verdict back on the fill — see `frontier`.
    */
-  const comfortableEdge = frontier(grid);
+  const comfortableEdge = frontier(grid, contextLabels);
 
   return (
     <section aria-labelledby={headingId} className="panel p-[min(1.25rem,5vw)]">
@@ -955,7 +955,7 @@ function describe(
       .filter(Boolean)
       .join(' ');
   }
-  const edge = frontier(grid);
+  const edge = frontier(grid, contextLabels);
   return [
     `${here}${comfortable} of ${total} combinations of context and concurrency are comfortable.`,
     edge && `${edge} stays comfortable.`,
@@ -984,12 +984,21 @@ function describe(
  * `undefined` when no cell in the fewest-users row is comfortable, which includes the whole grid
  * being closed. Both callers are already inside a "some cell is comfortable" branch, and a row-0 miss
  * with comfort further up is not a frontier this phrase could state honestly.
+ *
+ * The column is named by its **axis label**, not by `tokens()` on the raw count (#120) — the same
+ * repair the ring clause already carries, missed here: a hand-edited `?ctx=131073` beside 131,072
+ * makes `uniqueLabels` print both headers as exact counts, and this phrase then said "up to 128K"
+ * — a label matching no column on the axis, ambiguous between the two it sits astride, in the
+ * legend's Comfortable line and the canvas description both. `tokens()` stays only as the fallback
+ * for a column the axis does not hold, mirroring the ring clause's own.
  */
-function frontier(grid: EnvelopeGrid): string | undefined {
+function frontier(grid: EnvelopeGrid, contextLabels: readonly string[]): string | undefined {
   const widest = grid.cells[0]?.filter((c) => c.state === 'comfortable').at(-1);
   if (!widest) return undefined;
   const users = grid.concurrencies[0];
-  return `At ${users} ${users === 1 ? 'user' : 'users'}, up to ${tokens(widest.contextTokens)} of context`;
+  const index = grid.contexts.indexOf(widest.contextTokens);
+  const label = index >= 0 ? contextLabels[index] : tokens(widest.contextTokens);
+  return `At ${users} ${users === 1 ? 'user' : 'users'}, up to ${label} of context`;
 }
 
 /** What a cell says in the table: its state, why, and what it costs. */

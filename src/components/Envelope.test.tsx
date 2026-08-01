@@ -696,3 +696,42 @@ describe('a flat measure is a state, not a dead end', () => {
     expect(within(field()).getByText(/the ramp runs between/i)).toBeInTheDocument();
   });
 });
+
+/**
+ * The frontier names a column by its axis label, not by tokens() on the raw count (#120).
+ *
+ * A hand-edited ?ctx=131073 sits beside 131,072 on the axis, so uniqueLabels prints both headers
+ * as exact counts — and the frontier phrase, formatting independently, said "up to 128K of
+ * context": a label matching no column on the axis, ambiguous between the two it sits astride, in
+ * the legend's Comfortable line and the canvas description both. The ring clause was fixed for
+ * exactly this and the frontier was missed — the review-names-a-subset shape.
+ */
+describe('the comfortable frontier speaks the axis’s own label', () => {
+  afterEach(cleanup);
+
+  it('names the colliding column by its exact count, as the axis does', () => {
+    // The issue's verified scenario: the 1-user comfortable frontier is the 131,073 cell.
+    render(
+      <Envelope
+        config={{
+          ...DEFAULT_CONFIG,
+          modelId: 'zai-org/GLM-4.7-Flash',
+          quantId: 'mxfp4',
+          runtimeId: 'llama.cpp',
+          deviceId: 'rtx-5090',
+          contextTokens: 131073,
+          concurrency: 1,
+          promptTokens: 8192,
+          kvPrecision: 'fp16',
+        }}
+      />
+    );
+
+    // Both surfaces that state the frontier: the legend line and the canvas description.
+    expect(within(field()).getByText(/up to 131,073 of context/)).toBeInTheDocument();
+    expect(
+      within(field()).getByRole('img', { name: /up to 131,073 of context stays comfortable/i })
+    ).toBeInTheDocument();
+    expect(within(field()).queryByText(/up to 128K of context/)).not.toBeInTheDocument();
+  });
+});

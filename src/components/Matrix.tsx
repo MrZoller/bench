@@ -466,7 +466,15 @@ export function Matrix({ config }: { config: Config }) {
     setActive([row, col]);
     // Focus moved here rather than in an effect keyed on `active`, which would pull focus into
     // the grid on first render and on every unrelated re-render that reset it.
-    cellRefs.current.get(`${row}:${col}`)?.focus();
+    const cell = cellRefs.current.get(`${row}:${col}`);
+    // `preventScroll`, because the browser's own focus-reveal ignores the container's
+    // `scroll-padding-left` in Chromium — measured, not assumed: with the padding declared, a
+    // leftward walk still parked cells 26px under the sticky model column (#123). The reveal
+    // itself lives in the cell's `onFocus`, which this focus() fires, so every path focus can
+    // arrive by — this handler, or Tab into a grid a pointer has scrolled — goes through the
+    // one `scrollIntoView` that honours the padding and the cells' `scroll-mb-*` alike. The
+    // browser half is `e2e/matrix-grid.spec.ts`; jsdom has no `scrollIntoView` at all.
+    cell?.focus({ preventScroll: true });
   }, []);
 
   const onCellKeyDown = useCallback(
@@ -787,6 +795,25 @@ export function Matrix({ config }: { config: Config }) {
           Rows are capped at each model’s own context limit, so a model that stops short of{' '}
           {tokens(config.contextTokens)} is scored at whatever it does accept.
         </p>
+        {/* The membership and the order, on the channel sighted readers scan (#135). #79 put both
+            facts in the sr-only caption and the visual channel got neither — the inversion of how
+            this usually breaks. The absence clause is the load-bearing half: on a grid whose whole
+            point is refusals with reasons, the one refusal it cannot explain is a missing row, and
+            without the sentence a reader cannot tell "was not asked" from "does not run".
+
+            Three softenings, each a review catch on the first draft (#155): the criterion reads
+            as curation guidance rather than a per-row guarantee (a family's superseded sibling
+            can outlive the rule that admitted it); "derived" carries a stated-overrides aside
+            (six rows carry a human-typed totalParams, documented per row); and absence says what
+            the list does not carry rather than asserting seed status, since a seed that failed a
+            partial generation is also absent and the weekly report owns naming why. */}
+        <p className="basis-full text-sm text-[var(--color-text-faint)]">
+          The {models.length} models are a curated set, not a top-N chart — picked to cover distinct
+          size classes, attention families and active-parameter ratios, and to keep each
+          family&rsquo;s current head present — with figures derived from Hugging Face, a handful of
+          stated overrides aside. Rows run most-downloaded first, and a missing model is one the
+          list does not carry, not one found unable to run.
+        </p>
       </header>
 
       {/* One filter row above the grid, as the dataviz guidance puts it.
@@ -822,7 +849,20 @@ export function Matrix({ config }: { config: Config }) {
         </p>
       </fieldset>
 
-      <div className="mt-4 overflow-x-auto">
+      {/* The scroll padding is the left edge's counterpart to the cells' `scroll-mb-*` (#123):
+          the model column is sticky and opaque, so the browser's minimal focus-reveal — which
+          aligns an off-screen-left cell with the scrollport's content edge — parked the cell and
+          its focus ring underneath it, invisible at every further ArrowLeft. Scroll padding
+          moves the reveal target past the column, and its length is the max of the column's own
+          two bounds rather than a copy of either: the `max-w-[9rem]` cap that sizes it today,
+          and `headerBand.lean`, the `minWidth` that wins over the cap the day a longer device
+          label widens the lean past it (raised in review on #149 — a static 9rem stops short
+          exactly then, and a bare lean stops 3px short today). `matrix-grid.spec.ts` measures
+          the real geometry, which is what catches a bound this expression does not carry. */}
+      <div
+        className="mt-4 overflow-x-auto"
+        style={{ scrollPaddingLeft: `max(9rem, ${headerBand.lean})` }}
+      >
         {/* `role="grid"` rather than the native table role, because the cells are widgets a
             keyboard drives rather than data a reader browses — which is the distinction the two
             roles exist to draw, and what tells a screen reader to hand the arrow keys over. */}
@@ -853,9 +893,10 @@ export function Matrix({ config }: { config: Config }) {
                 This is also the whole of the band channel for a reader who cannot see the gap, which
                 is why it is one sentence with the mark rather than prose somewhere else. */}
             Columns run left to right in {bands.labels.length} bands — {bands.labels.join(', ')} —
-            with a gap between them, and rows run most-downloaded first. This grid is a single tab
-            stop: use the arrow keys to move between cells, Home and End for the ends of a row, and
-            Control with Home or End for the ends of the grid.
+            with a gap between them, and rows run most-downloaded first from a curated seed list — a
+            missing model is one the list does not carry, not one found unable to run. This grid is
+            a single tab stop: use the arrow keys to move between cells, Home and End for the ends
+            of a row, and Control with Home or End for the ends of the grid.
           </caption>
           <thead>
             <tr>
@@ -1152,8 +1193,17 @@ export function Matrix({ config }: { config: Config }) {
                        * stopped moving never reports leaving. Both halves of that are what keep the
                        * line agreeing with the visible ring — see the two states above.
                        */
-                      onFocus={() => {
+                      onFocus={(event) => {
                         setFocused({ kind: 'cell', row: r, col: c });
+                        // The reveal rides `onFocus` rather than only `focusCell`, so it covers
+                        // every path focus can arrive by — Tab into a grid a pointer has scrolled
+                        // rightward is the one `focusCell` never sees (raised in review on #123).
+                        // Idempotent when `focusCell` triggered it, a no-op when the cell is
+                        // already visible, and optional-chained for jsdom.
+                        event.currentTarget.scrollIntoView?.({
+                          block: 'nearest',
+                          inline: 'nearest',
+                        });
                         // And the pointer's claim expires here, because a resting pointer fires no
                         // `mouseleave` of its own — argued at the two states above. Without this the
                         // line prints one cell while the ring is drawn on another, indefinitely.

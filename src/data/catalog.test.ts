@@ -1248,7 +1248,7 @@ describe('the catalog refuses a ceiling it cannot justify', () => {
     allocatableTunable: true,
     maxAllocatableGiB: 88,
     bandwidthGBs: 819,
-    tflops: { fp16: 54 },
+    tflops: { fp16: 40.5 },
     source: 'https://www.apple.com/mac-studio/specs/',
   };
 

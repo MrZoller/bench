@@ -1076,6 +1076,41 @@ describe('the slider never displays a value the engine is not using', () => {
     );
   });
 
+  /**
+   * The other direction of the same invariant (#134): the stop lists fold the stored value in so
+   * an off-stop URL value displays truthfully, but the fold is keyed on the stored value — so
+   * the injected stop vanished the moment a drag moved off it, and the input's `max` and
+   * index-to-value mapping changed under the held pointer. Opened at `?u=3`, the first notch of
+   * a drag snapped the thumb back and remapped the next pixel of movement against the new scale.
+   */
+  it('keeps one scale under the pointer while an off-stop value is dragged away from', () => {
+    render(<App />);
+
+    // A URL-borne off-stop value: 3 is not among the fixed concurrency stops.
+    act(() => {
+      useConfig.getState().set('concurrency', 3);
+    });
+    const slider = screen.getByLabelText('Concurrent users');
+    // Nine stops while 3 is selected — the eight fixed ones plus the injection.
+    expect(slider).toHaveAttribute('max', '8');
+    expect(slider).toHaveValue('2');
+
+    // A drag starts on the injected stop and moves one notch right.
+    fireEvent.pointerDown(slider);
+    fireEvent.change(slider, { target: { value: '3' } });
+    expect(useConfig.getState().concurrency).toBe(4);
+
+    // Mid-drag the scale must not collapse: same max, thumb exactly where the pointer put it.
+    expect(slider).toHaveAttribute('max', '8');
+    expect(slider).toHaveValue('3');
+
+    // Released, the injection expires while nothing is being dragged against it.
+    fireEvent.pointerUp(slider);
+    expect(slider).toHaveAttribute('max', '7');
+    expect(slider).toHaveValue('2');
+    expect(useConfig.getState().concurrency).toBe(4);
+  });
+
   it('does not offer NVFP4 on NVIDIA cards without FP4 tensor cores', async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -5169,7 +5204,7 @@ describe('the controls that drive every figure explain what they are', () => {
 
       const region = detail();
       expect(region).not.toBeNull();
-      expect(region!.querySelector('strong')?.textContent).toMatch(/80-core GPU/);
+      expect(region!.querySelector('strong')?.textContent).toMatch(/60-core GPU/);
       expect(region!.querySelector('code')?.textContent).toBe('iogpu.wired_limit_mb');
       // Verbatim apart from the marks: the note is provenance, and losing a clause of it in a
       // renderer would be worse than printing the asterisks.
@@ -5652,5 +5687,25 @@ describe('the catalog shows the order it is listed in', () => {
     // And the row axis, which is the one fact the Matrix cannot state anywhere else: its row headings
     // are name-only, so 35 rows appeared in an order with no stated basis.
     expect(caption).toMatch(/rows run most-downloaded first/i);
+  });
+
+  /**
+   * The other channel (#135). #79 gave the sort and the membership to the sr-only caption, and the
+   * visual channel got neither — a sighted reader scanning 35 rows could not tell top-N from
+   * curation, and so could not tell whether a missing model was refused or simply never asked.
+   * That last misreading is the harmful one on a grid whose whole point is refusals with reasons.
+   */
+  it('states how a model earns a row, and what absence means, on both channels', () => {
+    render(<App />);
+
+    const statements = screen.getAllByText(/not one found unable to run/i);
+    // One in the sr-only caption, one where sighted readers scan — parity, not a swap: the
+    // original defect was one channel getting less than the other, in either direction.
+    expect(statements.some((el) => el.closest('caption') !== null)).toBe(true);
+    const visible = statements.find((el) => el.closest('caption') === null);
+    expect(visible).toBeDefined();
+    // The visible sentence carries all three facts: the criterion, the sort, the absence rule.
+    expect(visible!.textContent).toMatch(/curated set, not a top-N/i);
+    expect(visible!.textContent).toMatch(/most-downloaded first/i);
   });
 });

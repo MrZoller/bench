@@ -55,6 +55,26 @@ describe('multiples', () => {
   });
 });
 
+/**
+ * The mirror of `percent`'s floor, on the memory axis (#119). `gib` reserved '0' for exact zero
+ * and then floored nothing, so any positive quantity under 0.05 GiB rendered "0.0" — and every
+ * sentence whose subject is *how far over* a nonzero state is could quantify that state as
+ * nothing: "Over the ceiling by 0.0 GiB", "0.0 GiB offloaded" beside "Spilling to RAM".
+ */
+describe('memory never reports a real quantity as none', () => {
+  it('floors a positive sliver to an upper bound', () => {
+    // The filed instance: 11.0001 GiB used against an 11.0000 GiB ceiling — over by ~0.1 MiB.
+    expect(gib(0.0001 * 2 ** 30)).toBe('<0.1');
+    expect(gib(0.049 * 2 ** 30)).toBe('<0.1');
+  });
+
+  it('keeps zero for actual zero, and normal rounding above the floor', () => {
+    expect(gib(0)).toBe('0');
+    expect(gib(0.05 * 2 ** 30)).toBe('0.1');
+    expect(gib(1.44 * 2 ** 30)).toBe('1.4');
+  });
+});
+
 describe('non-finite input', () => {
   it.each([
     ['gib', gib],

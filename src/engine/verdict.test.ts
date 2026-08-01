@@ -1596,6 +1596,23 @@ describe('a tier is graded on the measurement it recommends', () => {
     expect(serving.reason).toMatch(/165s before either of 2 users sees a token/);
   });
 
+  it('says a long wait in minutes, ceiled, like every panel beside it', () => {
+    // 8068s is two and a quarter hours, and it printed as "8068s" two panels under a tile that
+    // says "134 min" about the same kind of figure (#125). The sentence switches units at the
+    // same cutoff seconds() uses — and ceils, because a failing latency never rounds down: 135,
+    // not the 134 the rounding panels show. The bar it missed stays quoted in seconds.
+    const long = judgedAt(400_000, 1, () => stub(60, 8068)).verdicts.get('long-context')!;
+    expect(long.reason).toMatch(/135 min to read/);
+    expect(long.reason).not.toMatch(/8068/);
+
+    // The near side of the switch, at the ceiling's own granularity: 598.9 ceils to 599 and
+    // stays in seconds; 599.3 ceils across the cutoff and is already minutes.
+    const near = judgedAt(400_000, 1, () => stub(60, 598.9)).verdicts.get('long-context')!;
+    expect(near.reason).toMatch(/599s to read/);
+    const across = judgedAt(400_000, 1, () => stub(60, 599.3)).verdicts.get('long-context')!;
+    expect(across.reason).toMatch(/10 min to read/);
+  });
+
   it('keeps serving good when the queue is short as well as the rate', () => {
     // The mirror of the case above, so the new bar cannot be satisfied by failing everything.
     const serving = judgedAt(400_000, 8, () => stub(40, 2)).verdicts.get('serving')!;
@@ -1638,7 +1655,8 @@ describe('a tier is graded on the measurement it recommends', () => {
    */
   it('withdraws serving from a machine whose users wait minutes for a first token', () => {
     // Llama 3.1 8B Q4_K_M on an EPYC 9654, four users: it fits and decodes ~40 tok/s each, and
-    // the four 2K prompts take about 165 seconds before anyone sees a token.
+    // the four 2K prompts take about 134 seconds before anyone sees a token. (165 before #116
+    // corrected the EPYC fixture's compute from the double-discounted 6 TFLOPS to the 7.37 peak.)
     const verdicts = judge(LLAMA_31_8B, 'q4_k_m', { device: EPYC_9654, concurrency: 4 });
     const serving = verdicts.get('serving')!;
 
