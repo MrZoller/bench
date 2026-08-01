@@ -2785,6 +2785,26 @@ describe('the decode tile blames the term that sets the pace', () => {
     ).toBeInTheDocument();
   });
 
+  it('does not blame the bus while the cache is the largest cost in the step', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Raised in review on #145: `kvBound` compares KV against the weight terms' *sum*, so at
+    // ~7.8ms KV, ~4.6ms bus and ~3.3ms resident reads it is false — and a pairwise bus test
+    // then named the bus while KV was the largest single term. The strict three-way max names
+    // the cache.
+    await user.selectOptions(screen.getByLabelText('Model'), 'Qwen/Qwen3-30B-A3B');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-4090');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
+    act(() => {
+      useConfig.getState().set('contextTokens', 32768);
+      useConfig.getState().set('concurrency', 2);
+    });
+
+    expect(screen.queryByText(/host bus set the pace/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/KV traffic is the largest cost in the step/i)).toBeInTheDocument();
+  });
+
   it('still blames the bus once its time outweighs the resident reads', async () => {
     const user = userEvent.setup();
     render(<App />);
