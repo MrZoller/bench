@@ -74,10 +74,13 @@ test('the whole page is a short keyboard walk, grid included', async ({ page }) 
   // before the roving tabindex landed, which the 80-press ceiling never reaches — so that regression
   // reports Infinity.
   //
-  // The nine is where this figure and `App.test.tsx`'s diverge, and the divergence is the point of
-  // running both. A radio group offers Tab only its checked member, so the three KV options are one
-  // stop here and three in a `querySelectorAll` of tabbable elements: 23 in the browser against 25
-  // in jsdom, on the same markup. Compare a new measurement against the number from the same channel.
+  // Where this figure and `App.test.tsx`'s 26 diverge, and the divergence is the point of running
+  // both. Three apart, from two unrelated causes: a radio group offers Tab only its checked member,
+  // so the three KV options are one stop here and three in a `querySelectorAll`, and the masthead's
+  // copy-link button is a real stop this walk excludes because it sits outside `<main>`. The comment
+  // here read "23 against 25 in jsdom" and attributed the whole gap to the radios, which was one
+  // short and pointed at the wrong mechanism for the missing one. Compare a new measurement against
+  // the number from the same channel, and against a stated reason for the difference.
   expect(stops).toBeLessThan(40);
   expect(stops, 'the walk never entered or never left <main>').toBeGreaterThan(0);
 });

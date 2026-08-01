@@ -3766,8 +3766,11 @@ describe('the comparison grid is one tab stop, not four hundred', () => {
 
     // The grid has to be in this page, or the count is of a page without the problem on it.
     expect(cellsOf(container).length).toBeGreaterThan(300);
-    /* 26 as it stands, one of which is the grid. 739 if every cell were in the sequence again —
-       26 − 1 + 714 — which is what replacing the roving `tabIndex` with `tabIndex={0}` reports.
+    /* 26 as it stands, one of which is the grid. 1,495 if every cell were in the sequence again —
+       26 − 1 + 1,470 — which is what replacing the roving `tabIndex` with `tabIndex={0}` reports.
+       The subtrahend is the *shipping* device count times the model count, which is what this grid
+       renders; it read 714 until #77 doubled the model list, and a counterfactual quoting the wrong
+       grid is a wrong expected value for whoever reinjects the defect.
 
        Forty, the same ceiling `e2e/matrix-grid.spec.ts` uses, because the two count one sequence and
        a bound that fires in one channel and not the other is a bug report about the wrong file. Loose
@@ -4910,32 +4913,56 @@ describe('a picker states its caveats where the choice is made', () => {
  * The per-token figure in the Bench's aside, which claims to be what sets the speed (#77 review).
  *
  * Three quantities are in play and they differ by enough to matter on the models this catalog exists
- * for. `activeParams` is the *published* convention — it excludes the input embedding unconditionally
- * and, on a multimodal model, includes the non-language towers a token never touches.
- * `activeDenseParams` is the always-active dense part and excludes the routed experts. Only
- * `effectiveActiveParams(model, 1)` is what `speed.ts` divides by.
+ * for. `activeParams` is the *published* convention: `publishedActiveParams` returns `totalParams`
+ * outright on a dense model and only on an MoE rebuilds an embedding-subtracted dense residual with
+ * the routed share added back. It disagrees with the physical count wherever the two **exclude
+ * different things**, which is three cases and not one: a non-language tower, an untied input
+ * embedding on a dense row, and — the one two drafts of this missed — a **tied** input embedding on
+ * an MoE, which the published figure subtracts unconditionally and `activeDenseParams` correctly
+ * keeps, a tied table being the output projection. Command A+ is that case, and it is why its
+ * published figure is 0.578B *low* where Mistral Small 4's is 7% high: the omitted 1.074B table
+ * outweighs the included 0.495B tower. `activeDenseParams` is the always-active dense part and
+ * excludes the routed experts. `effectiveActiveParams(model, 1)` is the physical count, and the one
+ * this sentence has to print.
+ *
+ * `speed.ts` divides by neither, which is worth saying here because the aside sounds as though it
+ * does: `estimateDecode` reads `activeWeightBytes`, which prices the dense and expert halves at
+ * their own widths — about a factor of two on an expert-only scheme like MXFP4, where the dense
+ * tensors stay BF16. `effectiveActiveParams` is the parameter count behind that byte figure.
  *
  * Both wrong answers shipped briefly during #77 and each was caught by review rather than by a test:
- * `activeParams` overstated the multimodal MoEs (Mistral Small 4 at 6.524B against a 6.096B basis),
- * and the correction to `activeDenseParams` understated every MoE far more badly in the other
- * direction (Kimi K2 at 10.6B where a token traverses about 31.7B). So this pins the sentence to the
+ * `activeParams` overstated Mistral Small 4 (6.524B against a 6.096B basis),
+ * and the correction to `activeDenseParams` understated every MoE in the other direction, by a
+ * ratio that spans the catalog rather than one factor (Kimi K2 at 10.6B where a token traverses
+ * 31.75B, but 1.91x on GLM-4.7-Flash and 8.65x on Mixtral). So this pins the sentence to the
  * engine's own expression, and asserts the two near neighbours are *not* what it prints — a test that
  * only checked the value against `effectiveActiveParams` would have passed on a dense model either
  * way, since all three coincide there.
  */
 describe('the aside prints the basis the speed is actually computed from', () => {
   /**
-   * A *multimodal* MoE, chosen so all three figures differ. On a text-only MoE the published and
-   * physical bases coincide exactly — gpt-oss-20b is 3.61B on both — so a test written against one
-   * would pass whichever of the two the component printed, and the overstatement half of this would
-   * go uncovered. The gap only opens where non-language towers sit inside `activeParams`.
+   * An MoE whose published and physical bases actually differ, selected on the gap itself.
+   *
+   * On an *untied text-only* MoE the two coincide exactly — gpt-oss-20b is 3.61B on both — so a test
+   * written against one passes whichever the component prints and the overstatement half goes
+   * uncovered. What opens the gap is either a non-language tower inside `activeParams` or a **tied**
+   * embedding, which the MoE branch of `publishedActiveParams` subtracts and the physical basis
+   * keeps.
+   *
+   * The rows that satisfy it today are the two multimodal MoEs, and this deliberately does not say
+   * "find a multimodal MoE": a tied text-only one would discriminate just as well with no tower
+   * involved, and a selector naming the *cause* would reject it. The gap is the rule; which rows have
+   * it is this week's catalog.
    */
   const moe = MODELS.find(
     (m) => m.expertParams > 0 && Math.abs(effectiveActiveParams(m, 1) - m.activeParams) > 1e8
   )!;
 
   it('quotes the decode basis at one sequence, not the published or the dense figure', () => {
-    expect(moe, 'no multimodal MoE in the catalog, so this test has no subject').toBeDefined();
+    expect(
+      moe,
+      'no MoE in the catalog whose published and physical bases differ, so this has no subject'
+    ).toBeDefined();
 
     const basis = effectiveActiveParams(moe, 1);
     // The premise: on an MoE the three figures genuinely differ, or none of this discriminates.

@@ -660,11 +660,20 @@ export function Bench() {
             {/* `effectiveActiveParams(model, 1)` — the engine's own decode basis, at one sequence.
 
                 This sentence claims what a token physically reads and then attributes the speed to
-                it, so it has to print the quantity `speed.ts` divides by. `activeParams` is not that:
-                `docs/ROADMAP.md` records it as excluding the input embedding "unconditionally, and
-                that is the *published* convention, not the physical one", which "is the wrong basis
-                for decode". Visible on the multimodal MoEs this PR seeds, whose non-language towers
-                sit inside it — Mistral Small 4 printed 6.524B against a 6.096B basis.
+                it, so it has to print the physical count. `activeParams` is not that: it is the
+                *published* convention, and `publishedActiveParams` is not one rule — it returns
+                `totalParams` outright on a dense model and only on an MoE rebuilds an
+                embedding-subtracted dense residual with the routed share added back. It therefore
+                disagrees with the physical count wherever the two exclude different things: a
+                non-language tower, an untied input embedding on a dense row, or a *tied* one on an
+                MoE, which the published branch subtracts and the physical basis keeps. Mistral Small
+                4 printed 6.524B against a 6.096B basis; Command A+ is the third case and runs the
+                other way, 0.578B low.
+
+                `speed.ts` divides by neither — `estimateDecode` reads `activeWeightBytes`, which
+                prices the dense and expert halves at their own widths. This is the parameter count
+                behind that byte figure, which is what makes it the honest thing to print beside a
+                sentence about what a token routes through.
 
                 **`activeDenseParams` alone was the wrong correction, and review caught it before it
                 shipped.** That field is only the always-active dense part: `effectiveActiveParams`
