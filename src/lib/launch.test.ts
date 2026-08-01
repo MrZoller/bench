@@ -203,18 +203,20 @@ describe('llama.cpp: one catalog row, three launchers', () => {
      */
     it('proportions the resident layers, not the assigned ones, on a rig that spills', () => {
       /**
-       * gpt-oss-120b at Q8_0, 128K over 8 users, four 4090s — chosen because it fails the old
-       * implementation *twice*. The packing assigns 9,9,9,9, so the "only when uneven" gate read
-       * against assigned counts suppresses `-ts` altogether; and the cards keep 3,3,4,4 of those
-       * resident, so the counts that were being suppressed were also the wrong ones. Equal counts
-       * of unequal layers is exactly the case the flag exists for.
+       * Llama 3.1 8B at BF16, 128K over 8 users, five 5090s: the packing assigns 7,7,6,6,6 layers
+       * and keeps 5,5,6,6,6 of them resident.
+       *
+       * A **uniform** model, and that is now load-bearing rather than incidental — see the hybrid
+       * test below. It is also the harder case for the flag to get right: the two counts differ
+       * only on the cards that spill, so an implementation reading assigned counts looks correct on
+       * three of the five entries.
        */
       const spilled = input(
-        GPT_OSS_120B,
-        getQuant('q8_0'),
+        LLAMA_31_8B,
+        getQuant('bf16'),
         LLAMA_CPP,
-        RTX_4090,
-        4,
+        RTX_5090,
+        5,
         usage({ contextTokens: 131072, concurrency: 8 })
       );
 
@@ -224,16 +226,14 @@ describe('llama.cpp: one catalog row, three launchers', () => {
         (s) => Array(s.deviceCount).fill(s.residentLayers) as number[]
       );
 
-      // The premises, asserted rather than assumed. Without all three the assertion below is
-      // satisfied by the implementation it was written to reject.
+      // The premises, asserted rather than assumed. Without them the assertion below is satisfied
+      // by the implementation it was written to reject.
       expect(spilled.placement.offloadFraction, 'nothing spilled').toBeGreaterThan(0);
-      expect(new Set(assigned).size, 'the assigned counts differ, so the old gate would fire').toBe(
-        1
-      );
-      expect(new Set(resident).size, 'the resident counts are even too').toBeGreaterThan(1);
+      expect(resident.join(','), 'resident equals assigned').not.toBe(assigned.join(','));
 
       const served = text(commands(spilled)['llama-server'].serve);
       expect(served).toContain(`-ts ${resident.join(',')}`);
+      expect(served).not.toContain(`-ts ${assigned.join(',')}`);
 
       // And the two flags have to agree, which is the property that makes the pair safe: `-ts`
       // proportions the window `-ngl` opens, so the proportions must sum to it.
@@ -241,40 +241,73 @@ describe('llama.cpp: one catalog row, three launchers', () => {
       expect(served).toContain(`-ngl ${spilled.placement.assignment.residentLayers}`);
     });
 
+    /**
+     * **A count is a faithful description of the packing only where the layers are
+     * interchangeable** (raised by Codex on #164, P1), and this was the case the flag looked most
+     * useful for.
+     *
+     * `-ts` partitions llama.cpp's ordered `-ngl` suffix into contiguous device ranges, while
+     * `layerSplitBins` assigns *individual* layers by greedy combined load — so a share can be a
+     * non-contiguous mixture of full-attention and sliding layers. On Gemma at 128K a full layer
+     * caches ~128x a sliding one, so equal counts do not reproduce equal loads: llama.cpp would
+     * hand a card a different set of expensive layers than `planPlacement` priced, and the fit the
+     * panel reported would not be the fit the command produces.
+     */
+    it('emits nothing for a hybrid model, whose counts do not describe its packing', () => {
+      const gemma = input(
+        GEMMA_3_12B,
+        getQuant('q4_k_m'),
+        LLAMA_CPP,
+        RTX_5090,
+        5,
+        usage({ contextTokens: 131072, concurrency: 8 })
+      );
+
+      // The premise: the packing really is lopsided here, which is what made the flag tempting.
+      const counts = gemma.placement.assignment.shares.map((s) => s.layers);
+      expect(Math.max(...counts) - Math.min(...counts), 'the split is even').toBeGreaterThan(1);
+
+      const emitted = commands(gemma)['llama-server'].serve;
+      expect(text(emitted)).not.toContain('-ts');
+      if (!emitted.ok) throw new Error('unreachable');
+      expect(emitted.notes.join(' ')).not.toMatch(/-ts/);
+    });
+
     it('gives the benchmark client the same split as the server', () => {
       // A sharded measurement run at llama.cpp's default even split times a different placement
       // than the serving command reproduces, which makes the number unusable for calibration —
       // the one thing the measurement form exists for.
-      const gemma = input(
-        GEMMA_3_12B,
+      const dense = input(
+        LLAMA_31_8B,
         getQuant('q4_k_m'),
         LLAMA_CPP,
         RTX_5090,
         5,
-        usage({ contextTokens: 131072, concurrency: 8 })
+        usage({ contextTokens: 32768 })
       );
-      const counts = gemma.placement.assignment.shares.map((s) => s.residentLayers);
+      const counts = dense.placement.assignment.shares.map((s) => s.residentLayers);
 
       expect(new Set(counts).size, 'the split is even, so this proves nothing').toBeGreaterThan(1);
-      expect(text(commands(gemma)['llama-bench'].measure)).toContain(`-ts ${counts.join(',')}`);
+      expect(text(commands(dense)['llama-bench'].measure)).toContain(`-ts ${counts.join(',')}`);
+      expect(text(commands(dense)['llama-server'].serve)).toContain(`-ts ${counts.join(',')}`);
     });
 
-    it('emits the layer counts a hybrid model actually produced', () => {
-      // Gemma at 128K over five cards: the balanced split is wildly uneven in layer counts,
-      // because one full-attention layer caches ~128x a sliding one. llama.cpp's default splits by
-      // device memory, which on identical cards is even — the wrong answer for this model.
-      const gemma = input(
-        GEMMA_3_12B,
+    it('emits the layer counts an indivisible split actually produced', () => {
+      // 32 layers over five cards is 7,7,6,6,6 — uneven, exactly expressible, and not what
+      // llama.cpp's memory-proportional default would do on identical cards.
+      const dense = input(
+        LLAMA_31_8B,
         getQuant('q4_k_m'),
         LLAMA_CPP,
         RTX_5090,
         5,
-        usage({ contextTokens: 131072, concurrency: 8 })
+        usage({ contextTokens: 32768 })
       );
-      const served = text(commands(gemma)['llama-server'].serve);
-      const counts = gemma.placement.assignment.shares.map((s) => s.layers);
+      const served = text(commands(dense)['llama-server'].serve);
+      const counts = dense.placement.assignment.shares.map((s) => s.residentLayers);
 
       expect(new Set(counts).size, 'the split is even, so this proves nothing').toBeGreaterThan(1);
+      expect(counts.reduce((a, b) => a + b, 0)).toBe(LLAMA_31_8B.layers);
       expect(served).toContain(`-ts ${counts.join(',')}`);
     });
 
@@ -476,9 +509,14 @@ describe('MLX', () => {
     expect(served).toContain(`--model ${LLAMA_31_8B.id}`);
   });
 
-  it('admits the server cannot be told the cache precision the figures assume', () => {
-    // `--kv-bits` is on mlx_lm.generate and not on the server — checked against its argument list.
-    // So an 8-bit-cache scenario cannot be *served* at the precision it was priced at.
+  it('refuses to serve at a cache precision the server cannot be told', () => {
+    /**
+     * A refusal rather than a warning, and the change came from review (#164, P1). `--kv-bits` is
+     * on `mlx_lm.generate` and not on the server — checked against its argument list — so the
+     * served command necessarily runs an fp16 cache. A long-context configuration that fits
+     * *because* 8 bits halves the cache will OOM at fp16, and a note beside a copy button does not
+     * stop that: the command is not a command for the placement the panel priced.
+     */
     const q8 = input(
       LLAMA_31_8B,
       getQuant('bf16'),
@@ -487,13 +525,13 @@ describe('MLX', () => {
       1,
       usage({ kvPrecision: 'q8' })
     );
-    const served = commands(q8).mlx.serve;
-    if (!served.ok) throw new Error('unreachable');
 
-    expect(served.text).not.toContain('--kv-bits');
-    expect(served.notes.join(' ')).toMatch(/no KV quantization flag/i);
-    // And the client, which does take it, does.
-    expect(text(commands(q8).mlx.measure)).toContain('--kv-bits 8');
+    expect(reason(commands(q8).mlx.serve)).toMatch(/no flag for it/i);
+    // And the measurement form survives, because the client does take the precision — with the
+    // threshold set to zero, or the CLI's own default of 5,000 would benchmark an fp16 cache.
+    const measured = text(commands(q8).mlx.measure);
+    expect(measured).toContain('--kv-bits 8');
+    expect(measured).toContain('--quantized-kv-start 0');
   });
 });
 
@@ -531,6 +569,121 @@ describe('a placement the engine refused produces no commands at all', () => {
   it('emits nothing for a runtime with no launcher registered', () => {
     const unknown: RuntimeSpec = { ...LLAMA_CPP, id: 'not-a-runtime' };
     expect(launchCommands(input(LLAMA_31_8B, getQuant('q4_k_m'), unknown))).toEqual([]);
+  });
+});
+
+describe('what review found, kept as tests', () => {
+  it('refuses the measurement form when the prompt leaves no room to answer', () => {
+    // The prompt slider goes up to the whole context, and the first version floored generation at
+    // one token — emitting `--input-len <ctx> --output-len 1 --max-model-len <ctx>`, a command that
+    // exceeds its own stated limit. A scenario with no room to answer has nothing to measure.
+    const full = input(
+      LLAMA_31_8B,
+      getQuant('q4_k_m'),
+      LLAMA_CPP,
+      RTX_5090,
+      1,
+      usage({ contextTokens: 8192, promptTokens: 8192 })
+    );
+
+    expect(reason(commands(full)['llama-bench'].measure)).toMatch(/no room left to generate/i);
+  });
+
+  it('counts the resident prefix as occupying the window too', () => {
+    // 47,616 of prefix under a 16,384 prompt in a 65,536 window leaves 7,536 — not the 49,152 a
+    // prompt-only subtraction produced.
+    const agentish = input(
+      LLAMA_31_8B,
+      getQuant('q4_k_m'),
+      LLAMA_CPP,
+      RTX_5090,
+      1,
+      usage({ contextTokens: 65536, promptTokens: 16384, cachedPrefixTokens: 47616 })
+    );
+
+    expect(text(commands(agentish)['llama-bench'].measure)).toContain('-n 1536');
+  });
+
+  it('names the right cause when weights alone are over a rig that cannot spill', () => {
+    /**
+     * `impossible` covers two failures and the first draft named only one. On unified memory
+     * anything over budget is impossible, including an oversized checkpoint whose *cache* is
+     * nowhere near the ceiling — and telling that reader to lower the context is advice that will
+     * not work at any context.
+     */
+    const oversized = input(
+      GPT_OSS_120B,
+      getQuant('bf16'),
+      MLX,
+      MAC_STUDIO_M3_ULTRA_256,
+      1,
+      usage({ contextTokens: 4096 })
+    );
+
+    expect(oversized.placement.impossible).toBe(true);
+    expect(oversized.placement.floorBytesPerDevice).toBeLessThan(
+      oversized.placement.allocatableBytesPerDevice
+    );
+    const refused = reason(commands(oversized).mlx.serve);
+    expect(refused).toMatch(/weights are over the ceiling/i);
+    expect(refused).toMatch(/Lowering the context will not help/i);
+    expect(refused).not.toMatch(/cache and activations alone/i);
+  });
+
+  it('still blames the cache when the cache really is what is over', () => {
+    // The other arm, so the split above is a split rather than a rewording.
+    const cacheBound = input(
+      DEEPSEEK_V3,
+      getQuant('q4_k_m'),
+      LLAMA_CPP,
+      RTX_4090,
+      1,
+      usage({ contextTokens: 131072, concurrency: 64 })
+    );
+
+    expect(cacheBound.placement.floorBytesPerDevice).toBeGreaterThan(
+      cacheBound.placement.allocatableBytesPerDevice
+    );
+    expect(reason(commands(cacheBound)['llama-server'].serve)).toMatch(/cache and activations/i);
+  });
+
+  it('never writes to a bare Modelfile, which is the reader’s own', () => {
+    // `cat >` truncates unconditionally, and the directory an Ollama user runs this from is exactly
+    // the one likely to already hold a Modelfile of their own.
+    const emitted = commands(input(LLAMA_31_8B, getQuant('q4_k_m'), LLAMA_CPP)).ollama.serve;
+    const written = text(emitted);
+
+    expect(written).not.toMatch(/cat > Modelfile/);
+    expect(written).toMatch(/set -C/);
+    expect(written).toMatch(/bench-[a-z0-9-]+\.Modelfile/);
+  });
+
+  it('pins the commit the catalog derived the model from, where the runtime can', () => {
+    // Naming only the repo id resolves the mutable default branch, so after an upstream push the
+    // command loads a checkpoint the displayed figures do not describe.
+    const withRevision = { ...DEEPSEEK_V3, revision: 'abc1234567deadbeef' };
+    const pinned = input(withRevision, getQuant('fp8'), VLLM, RTX_5090, 8);
+
+    expect(text(commands(pinned).vllm.serve)).toContain('--revision abc1234567deadbeef');
+    expect(text(commands(pinned).vllm.measure)).toContain('--revision abc1234567deadbeef');
+  });
+
+  it('says so rather than pinning, on a runtime with no revision flag', () => {
+    // mlx_lm.server takes no revision, so the honest form is to name the commit the figures came
+    // from instead of emitting a flag that does not parse.
+    const withRevision = { ...LLAMA_31_8B, revision: 'abc1234567deadbeef' };
+    const emitted = commands(input(withRevision, getQuant('bf16'), MLX, MAC_STUDIO_M3_ULTRA_256))
+      .mlx.serve;
+
+    expect(text(emitted)).not.toContain('--revision');
+    if (!emitted.ok) throw new Error('unreachable');
+    expect(emitted.notes.join(' ')).toMatch(/takes no revision flag/i);
+    expect(emitted.notes.join(' ')).toMatch(/abc1234567/);
+  });
+
+  it('measures vLLM at the configured user count, not the client’s default of 8', () => {
+    const many = input(DEEPSEEK_V3, getQuant('fp8'), VLLM, RTX_5090, 8, usage({ concurrency: 16 }));
+    expect(text(commands(many).vllm.measure)).toContain('--batch-size 16');
   });
 });
 
