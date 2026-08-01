@@ -808,3 +808,212 @@ describe('a scenario narrowed to one cell holds its whole working set', () => {
     expect(narrowed.cachedPrefixTokens).toBeUndefined();
   });
 });
+
+/**
+ * The assignment `planPlacement` packs, now kept rather than discarded (#136).
+ *
+ * Nothing here is new modelling: every figure comes from the same bins the byte totals already
+ * came from. What the tests are for is the *reading* of those figures, because the one number the
+ * launch emitter takes from this — `residentLayers`, which becomes llama.cpp's `-ngl` — is a layer
+ * count derived from bytes, and this engine has already shipped one defect (#14) that was a ratio
+ * from one scope applied to a quantity from another. The difference now is that the wrong answer
+ * would be pasted into a shell rather than printed on a panel.
+ */
+describe('the layer assignment survives the packing', () => {
+  const gemma = (count: number, runtime = LLAMA_CPP) =>
+    planPlacement(
+      GEMMA_3_12B,
+      getQuant('q4_k_m'),
+      { contextTokens: 131072, concurrency: 8, kvPrecision: 'fp16' },
+      { device: RTX_5090, count },
+      runtime
+    );
+
+  it('hands out every layer exactly once under a layer split', () => {
+    for (const count of [1, 2, 3, 4, 5, 8]) {
+      const { shares } = gemma(count).assignment;
+      const handed = shares.reduce((sum, s) => sum + s.deviceCount * s.layers, 0);
+
+      expect(handed, `${count} cards`).toBe(GEMMA_3_12B.layers);
+    }
+  });
+
+  it('gives a tensor-parallel rank every layer, because it holds a slice of each', () => {
+    // The distinction `Assignment.parallelism` exists for. Four vLLM ranks each hold a quarter of
+    // every tensor, so a rank's layer count is the model's and its *bytes* are the quarter — where
+    // four llama.cpp cards each hold a quarter of the layers whole.
+    const tp = planPlacement(
+      GEMMA_3_12B,
+      getQuant('bf16'),
+      { contextTokens: 8192, concurrency: 1, kvPrecision: 'fp16' },
+      { device: RTX_5090, count: 4 },
+      VLLM
+    ).assignment;
+
+    expect(tp.parallelism).toBe('tensor');
+    expect(tp.shares).toHaveLength(1);
+    expect(tp.shares[0].deviceCount).toBe(4);
+    expect(tp.shares[0].layers).toBe(GEMMA_3_12B.layers);
+  });
+
+  /**
+   * **The counts are wildly uneven on a hybrid model, and that is the finding rather than a
+   * tolerance to widen.** My first version of this test asserted they land within one of each
+   * other and failed by 19.
+   *
+   * The packing balances the *combined* per-layer cost, and at 128K over 8 users one of Gemma's
+   * full-attention layers caches ~128x what a sliding one does — so a card that lands one full
+   * layer is full, and a card holding only sliding layers takes twenty of them to reach the same
+   * load. That is the whole reason `DeviceShare.layers` is counted during the walk rather than
+   * recovered as `layers / deviceCount` afterwards: the even-split figure is not merely imprecise
+   * here, it is wrong by a factor of three on the same rig.
+   */
+  it('hands out layers by weight of cache, not in equal counts', () => {
+    const counts = gemma(5)
+      .assignment.shares.map((s) => s.layers)
+      .sort((a, b) => a - b);
+
+    expect(counts.reduce((a, b) => a + b, 0)).toBe(GEMMA_3_12B.layers);
+    // An even split would put every card within one of 48/5. The real assignment is not close.
+    expect(counts[counts.length - 1] - counts[0]).toBeGreaterThan(1);
+
+    // And the loads it balanced *are* close, which is what makes the count spread the right answer
+    // rather than a bad packing.
+    const loads = gemma(5)
+      .assignment.shares.map((s) => s.weightBytes + s.kvBytes)
+      .sort((a, b) => a - b);
+    expect(loads[loads.length - 1] / loads[0]).toBeLessThan(1.5);
+  });
+
+  describe('resident layers are what `-ngl` is', () => {
+    it('puts every layer on the device when nothing spills', () => {
+      const resident = planPlacement(
+        LLAMA_31_8B,
+        getQuant('q4_k_m'),
+        usage(4096),
+        { device: RTX_5090, count: 1 },
+        LLAMA_CPP
+      );
+
+      expect(resident.offloadFraction).toBe(0);
+      expect(resident.assignment.residentLayers).toBe(LLAMA_31_8B.layers);
+    });
+
+    it('drops below the layer count exactly when weights spill', () => {
+      // A 70B at Q4 is ~40 GiB against a 4090's 23 — comfortably a spill, and not an impossible
+      // one, so there is a real layer count to report rather than a refusal.
+      const spilled = planPlacement(
+        QWEN3_32B,
+        getQuant('bf16'),
+        usage(4096),
+        { device: RTX_4090, count: 1 },
+        LLAMA_CPP
+      );
+
+      expect(spilled.offloadFraction).toBeGreaterThan(0);
+      expect(spilled.assignment.residentLayers).toBeGreaterThan(0);
+      expect(spilled.assignment.residentLayers).toBeLessThan(QWEN3_32B.layers);
+    });
+
+    /**
+     * The property that makes the number safe to paste, and the one a rig-wide ratio breaks.
+     *
+     * Under an uneven layer split some cards are over their ceiling and some are not, so a device
+     * holding ten resident layers sits beside one holding nine of ten. Deriving each card's count
+     * from `offloadFraction` would charge the resident cards for the busy ones' overflow and
+     * under-report `-ngl` across the whole rig — the #14 shape, in a shell command.
+     */
+    it('never claims a card holds more resident layers than it was given', () => {
+      for (const count of [1, 2, 3, 4, 5, 8]) {
+        for (const share of gemma(count).assignment.shares) {
+          expect(share.residentLayers, `${count} cards`).toBeLessThanOrEqual(share.layers);
+          expect(share.residentLayers, `${count} cards`).toBeGreaterThanOrEqual(0);
+          expect(Number.isInteger(share.residentLayers), `${count} cards`).toBe(true);
+        }
+      }
+    });
+
+    it('leaves a card that is not over its ceiling holding all of its layers', () => {
+      // The direct statement of the above: with the ceiling set just under the heaviest bin, the
+      // cards below it must be untouched. A rig-wide fraction cannot express that.
+      const ceiling = gemma(5);
+      const heaviest = Math.max(...ceiling.assignment.shares.map((s) => s.weightBytes + s.kvBytes));
+      const lightest = Math.min(...ceiling.assignment.shares.map((s) => s.weightBytes + s.kvBytes));
+      expect(lightest, 'the split is even, so this proves nothing').toBeLessThan(heaviest);
+
+      const squeezed = planPlacement(
+        GEMMA_3_12B,
+        getQuant('q4_k_m'),
+        { contextTokens: 131072, concurrency: 8, kvPrecision: 'fp16' },
+        {
+          device: {
+            ...RTX_5090,
+            allocatableBytes: Math.floor(
+              (heaviest + lightest) / 2 + ceiling.activationBytesPerDevice
+            ),
+          },
+          count: 5,
+        },
+        LLAMA_CPP
+      );
+
+      const untouched = squeezed.assignment.shares.filter((s) => s.residentLayers === s.layers);
+      const spilling = squeezed.assignment.shares.filter((s) => s.residentLayers < s.layers);
+      expect(untouched.length, 'no card kept all its layers').toBeGreaterThan(0);
+      expect(spilling.length, 'no card spilled, so the squeeze did nothing').toBeGreaterThan(0);
+    });
+
+    it('sums across a layer split and does not multiply a tensor-parallel rig by its rank count', () => {
+      // The two arms of the one expression, and the reason they cannot be the same arm. Four cards
+      // under a layer split hold four different quarters, so the rig's resident count is the sum;
+      // four vLLM ranks hold slices of the same layers, so summing would report a rig running four
+      // times the model it has.
+      const split = gemma(4).assignment;
+      expect(split.residentLayers).toBe(
+        split.shares.reduce((sum, s) => sum + s.deviceCount * s.residentLayers, 0)
+      );
+      expect(split.residentLayers).toBeLessThanOrEqual(GEMMA_3_12B.layers);
+
+      const tp = planPlacement(
+        GEMMA_3_12B,
+        getQuant('bf16'),
+        { contextTokens: 8192, concurrency: 1, kvPrecision: 'fp16' },
+        { device: RTX_5090, count: 4 },
+        VLLM
+      ).assignment;
+      expect(tp.residentLayers).toBeLessThanOrEqual(GEMMA_3_12B.layers);
+    });
+
+    it('reports every layer resident on hardware with nowhere to spill from', () => {
+      // Unified memory has no faster tier, so `canOffload` is false and nothing is ever charged as
+      // spilled — which means a placement that does not fit still reports every layer resident.
+      // `impossible` is the field that says it will not run; this one describes a layout.
+      const mac = planPlacement(
+        GPT_OSS_120B,
+        getQuant('bf16'),
+        usage(4096),
+        { device: MAC_STUDIO_M3_ULTRA_256, count: 1 },
+        MLX
+      );
+
+      expect(mac.impossible).toBe(true);
+      expect(mac.offloadFraction).toBe(0);
+      expect(mac.assignment.residentLayers).toBe(GPT_OSS_120B.layers);
+    });
+  });
+
+  it('keeps the shares agreeing with the per-device figures the panels read', () => {
+    // The busiest bin is what `weightBytesPerDevice` and `kvBytesPerDevice` come from, so a share
+    // list that disagreed with them would be a second derivation of one quantity — which is the
+    // failure this file's own history is mostly made of.
+    for (const count of [1, 2, 5]) {
+      const p = gemma(count);
+      const busiest = p.assignment.shares.reduce((a, b) =>
+        b.weightBytes + b.kvBytes > a.weightBytes + a.kvBytes ? b : a
+      );
+
+      expect(busiest.weightBytes, `${count} cards`).toBeCloseTo(p.weightBytesPerDevice, 6);
+      expect(busiest.kvBytes, `${count} cards`).toBeCloseTo(p.kvBytesPerDevice, 6);
+    }
+  });
+});

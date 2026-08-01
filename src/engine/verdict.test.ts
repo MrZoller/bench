@@ -43,6 +43,14 @@ const RESIDENT: Placement = {
   floorBytesPerDevice: 2,
   offloadFraction: 0,
   impossible: false,
+  // Nothing in `verdict.ts` reads the assignment — it is the launch emitter's input (#136) — so
+  // this is the shape rather than a scenario, kept consistent with the bytes above so a future
+  // reader of these fixtures is not looking at a rig that contradicts itself.
+  assignment: {
+    parallelism: 'layer',
+    shares: [{ deviceCount: 1, layers: 1, residentLayers: 1, weightBytes: 1, kvBytes: 1 }],
+    residentLayers: 1,
+  },
 };
 
 /** The same rig, asked for more than it can hold: cache and activations alone are over the ceiling. */
