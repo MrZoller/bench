@@ -138,6 +138,13 @@ export interface DetectionSignals {
   deviceMemoryGiB?: number;
   /** `navigator.userAgentData.platform` or `navigator.platform`, however it spells itself. */
   platform?: string;
+  /**
+   * `navigator.maxTouchPoints`, which is what separates an iPad from a Mac.
+   *
+   * iPadOS Safari's desktop-class mode reports `MacIntel` with a genuine Apple adapter, so every
+   * other signal agrees with a Mac. This is the one a desktop Safari does not fake.
+   */
+  maxTouchPoints?: number;
 }
 
 export interface Detection {
@@ -161,6 +168,22 @@ export interface Detection {
    * present the survivors as though every signal agreed.
    */
   conflicted?: true;
+  /**
+   * Set when every signal declined to narrow, so the shortlist is the whole shipping catalog.
+   *
+   * The surface should say so rather than presenting forty-two rows as a shortlist — that is the
+   * picker with extra steps, and it makes detection look broken when it is being careful.
+   */
+  narrowedNothing?: true;
+  /**
+   * Set when the platform is one bench has no rows for at all — a phone, or an iPad in its
+   * desktop-class mode.
+   *
+   * A terminal state rather than a shortlist: the catalog is desktops, laptops and servers, so the
+   * honest answer is that there is nothing to offer. Without it an iPhone exposing WebGPU had the
+   * Apple rows narrowed *in* by its adapter and was asked which Mac it was.
+   */
+  unsupportedPlatform?: 'phone' | 'tablet';
 }
 
 /** Above this the list is not a shortlist and the reader is better served by a question. */
@@ -252,8 +275,42 @@ export function detect(signals: DetectionSignals, devices: readonly DeviceSpec[]
    * The non-macOS arm is unaffected and stays unconditional: no Apple silicon Mac reports a
    * non-macOS platform, so ruling the Apple rows out there needs no corroboration.
    */
+  /**
+   * **Only platform strings this actually recognises, and iPhones and iPads are not Macs.**
+   *
+   * Two more ways the platform misled, both raised on #168's second round. A hardened browser
+   * returning `Unknown` was classified as definitively non-macOS and pruned the Apple rows on the
+   * strength of a string nobody parsed. And iOS reports `iPhone`, while iPadOS Safari in its
+   * desktop-class mode reports `MacIntel` — so an iPhone with an Apple adapter had the Apple rows
+   * narrowed *in* by the vendor and then emptied by the platform, and the conflict guard put the
+   * Macs back.
+   *
+   * The catalog has no phone or tablet row, so the honest answer on either is that bench has
+   * nothing to offer — which is what the caller renders. Anything it does not recognise narrows
+   * nothing at all.
+   */
   const platform = signals.platform?.toLowerCase();
-  if (platform !== undefined && platform !== '') {
+  /**
+   * iPadOS Safari in its desktop-class mode reports `MacIntel` with a real Apple adapter, which is
+   * indistinguishable from a Mac by platform alone — `maxTouchPoints` is what separates them, and
+   * it is the one signal a desktop Safari does not fake.
+   */
+  const tablet = platform?.includes('mac') === true && (signals.maxTouchPoints ?? 0) > 1;
+  const phone = /iphone|ipod|android/.test(platform ?? '');
+  const handheld = phone || tablet;
+  const known = handheld || /mac|darwin|win|linux|cros|x11|freebsd/.test(platform ?? '');
+
+  if (handheld) {
+    evidence.push(
+      `The platform is ${phone ? 'a phone' : 'a tablet'}, which bench has no rows for — every ` +
+        `machine in the catalog is a desktop, a laptop or a server.`
+    );
+  } else if (platform !== undefined && platform !== '' && !known) {
+    evidence.push(
+      `The platform reports "${signals.platform}", which is not a name this recognises, so it ` +
+        `narrows nothing.`
+    );
+  } else if (platform !== undefined && platform !== '') {
     const mac = platform.includes('mac') || platform.includes('darwin');
     if (mac && vendor === undefined) {
       evidence.push(
@@ -338,10 +395,27 @@ export function detect(signals: DetectionSignals, devices: readonly DeviceSpec[]
     }
   }
 
+  /**
+   * Whether anything was narrowed at all.
+   *
+   * On a Mac whose adapter info is withheld, every safeguard above correctly declines to narrow —
+   * and the panel then offered "which of these is yours?" over the entire shipping catalog, which
+   * is the picker with extra steps. Saying so is a better answer than a list, and it stops
+   * detection looking broken at the moment it is being careful.
+   */
+  const narrowedNothing =
+    candidates.length === devices.filter((d) => d.status === 'shipping').length;
+
   return {
     candidates,
     evidence,
     ...(conflicted ? { conflicted: true as const } : {}),
+    ...(narrowedNothing ? { narrowedNothing: true as const } : {}),
+    ...(phone
+      ? { unsupportedPlatform: 'phone' as const }
+      : tablet
+        ? { unsupportedPlatform: 'tablet' as const }
+        : {}),
     askAbout:
       candidates.length <= SHORTLIST_LIMIT
         ? undefined
@@ -424,6 +498,7 @@ export async function readSignals(): Promise<DetectionSignals | undefined> {
       maxBufferBytes: adapter.limits?.maxBufferSize,
       deviceMemoryGiB: nav.deviceMemory,
       platform: nav.userAgentData?.platform ?? navigator.platform,
+      maxTouchPoints: navigator.maxTouchPoints,
     };
   } catch {
     // `requestAdapter` rejects rather than resolving to null in some embedded browsers. Same

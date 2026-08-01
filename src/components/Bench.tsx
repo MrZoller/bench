@@ -12,11 +12,8 @@ import { Telemetry } from './Telemetry';
 import { Workloads } from './Workloads';
 import { Launch } from './Launch';
 import { Calibrate } from './Calibrate';
-<<<<<<< HEAD
 import { Recommend } from './Recommend';
-=======
 import { Detect } from './Detect';
->>>>>>> 39fc36d (feat(detect): narrow the hardware picker to what the browser will admit)
 import { Envelope } from './Envelope';
 import { DETAIL_ANCHOR_ID, Matrix } from './Matrix';
 import { Segmented, Select, StopSlider } from './Controls';

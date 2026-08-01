@@ -123,45 +123,60 @@ export function Detect() {
             )}
           </ul>
 
-          {/**
-           * **The candidates are offered whether or not the list is short**, and the first version
-           * hid them past six — discarding the narrowing exactly where it was worth most (raised by
-           * Codex on #168). A vendor-only NVIDIA read leaves seventeen rows, and seventeen buttons
-           * is still far better than searching forty-three: the reader is told it is a long list and
-           * given it anyway, rather than sent back to the unfiltered picker.
-           */}
-          {result.askAbout !== undefined && (
+          {/* A platform the catalog has no row for, and a state where narrowing found nothing.
+              Both are terminal: offering "which of these is yours?" over forty-two rows is the
+              picker with extra steps, and asking an iPhone which Mac it is has no right answer at
+              all. Raised by Codex on #168. */}
+          {result.unsupportedPlatform !== undefined || result.narrowedNothing === true ? (
             <p className="text-xs leading-relaxed text-[var(--color-text-muted)]">
-              That still leaves {result.candidates.length} machines, which is more than a shortlist.{' '}
-              {result.askAbout === 'memory'
-                ? 'How much memory does it have? The memory is in every name below.'
-                : 'Everything below the vendor is a guess this browser will not let anyone make — but these are the rows it could be.'}
+              {result.unsupportedPlatform !== undefined
+                ? 'There is nothing here to pick — every machine in the catalog is a desktop, a laptop or a server. You can still browse them with the Hardware list above.'
+                : 'Nothing your browser said narrows the list, so this is the whole catalog. Use the Hardware list above; it is the same rows.'}
             </p>
-          )}
-          <ul className="flex list-none flex-wrap gap-2">
-            {result.candidates.map((device) => (
-              <li key={device.id}>
-                <button
-                  type="button"
-                  /* A confirmation, and the only place detection ever writes to the store. The
+          ) : (
+            <>
+              {/**
+               * **The candidates are offered whether or not the list is short**, and the first version
+               * hid them past six — discarding the narrowing exactly where it was worth most (raised by
+               * Codex on #168). A vendor-only NVIDIA read leaves seventeen rows, and seventeen buttons
+               * is still far better than searching forty-three: the reader is told it is a long list and
+               * given it anyway, rather than sent back to the unfiltered picker.
+               */}
+              {result.askAbout !== undefined && (
+                <p className="text-xs leading-relaxed text-[var(--color-text-muted)]">
+                  That still leaves {result.candidates.length} machines, which is more than a
+                  shortlist.{' '}
+                  {result.askAbout === 'memory'
+                    ? 'How much memory does it have? The memory is in every name below.'
+                    : 'Everything below the vendor is a guess this browser will not let anyone make — but these are the rows it could be.'}
+                </p>
+              )}
+              <ul className="flex list-none flex-wrap gap-2">
+                {result.candidates.map((device) => (
+                  <li key={device.id}>
+                    <button
+                      type="button"
+                      /* A confirmation, and the only place detection ever writes to the store. The
                        reader picks; nothing here is applied on their behalf. */
-                  onClick={() => set('deviceId', device.id)}
-                  /* Which one was chosen, in the accessibility tree and not only in a border. The
+                      onClick={() => set('deviceId', device.id)}
+                      /* Which one was chosen, in the accessibility tree and not only in a border. The
                      Hardware select that otherwise reflects it is off screen in a seventeen-row
                      list, so pressing a button left both a sighted and a screen-reader user on an
                      unchanged control with no sign anything had happened. Raised by Codex on #168. */
-                  aria-pressed={device.id === selectedDeviceId}
-                  className={`inline-flex min-h-11 items-center rounded-md border px-3 py-1.5 text-xs text-[var(--color-text)] hover:border-[var(--color-accent-dim)] ${
-                    device.id === selectedDeviceId
-                      ? 'border-[var(--color-accent)]'
-                      : 'border-[var(--color-border)]'
-                  }`}
-                >
-                  {deviceOptionLabel(device)}
-                </button>
-              </li>
-            ))}
-          </ul>
+                      aria-pressed={device.id === selectedDeviceId}
+                      className={`inline-flex min-h-11 items-center rounded-md border px-3 py-1.5 text-xs text-[var(--color-text)] hover:border-[var(--color-accent-dim)] ${
+                        device.id === selectedDeviceId
+                          ? 'border-[var(--color-accent)]'
+                          : 'border-[var(--color-border)]'
+                      }`}
+                    >
+                      {deviceOptionLabel(device)}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
         </section>
       )}
     </div>

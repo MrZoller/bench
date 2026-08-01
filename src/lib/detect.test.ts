@@ -256,13 +256,51 @@ describe('signals that contradict each other keep the machine in the list', () =
     expect(intelMac.evidence.join(' ')).not.toMatch(/so this is Apple silicon/i);
   });
 
-  it('keeps the Apple rows when the platform contradicts an Apple adapter', () => {
-    // The mirror case: an iPhone reporting WebGPU. Same rule, other direction.
+  it('tells a phone there is nothing here rather than asking which Mac it is', () => {
+    /**
+     * The mirror case, and it needed a different answer from the Intel Mac's. An iPhone exposing
+     * WebGPU has its Apple adapter narrow the list *to Macs*, and the conflict guard then put them
+     * back when the platform emptied it — so the panel asked an iPhone which Mac it was. The
+     * catalog has no phone row, so the honest answer is a terminal state.
+     */
     const phone = detect({ adapterVendor: 'apple', platform: 'iPhone' }, DEVICES);
 
-    expect(phone.candidates.length).toBeGreaterThan(0);
-    for (const device of phone.candidates) expect(device.vendor).toBe('Apple');
-    expect(phone.conflicted).toBe(true);
+    expect(phone.unsupportedPlatform).toBe('phone');
+    expect(phone.evidence.join(' ')).toMatch(/no rows for/i);
+  });
+
+  it('separates an iPad from a Mac by the one signal desktop Safari does not fake', () => {
+    // iPadOS Safari's desktop-class mode reports `MacIntel` with a genuine Apple adapter, so every
+    // other signal agrees with a Mac. `maxTouchPoints` is what does not.
+    const ipad = detect(
+      { adapterVendor: 'apple', platform: 'MacIntel', maxTouchPoints: 5 },
+      DEVICES
+    );
+    expect(ipad.unsupportedPlatform).toBe('tablet');
+
+    // And a real Mac, which reports zero, is unaffected.
+    const mac = detect(
+      { adapterVendor: 'apple', platform: 'MacIntel', maxTouchPoints: 0 },
+      DEVICES
+    );
+    expect(mac.unsupportedPlatform).toBeUndefined();
+    for (const device of mac.candidates) expect(device.vendor).toBe('Apple');
+  });
+
+  it('ignores a platform string it does not recognise', () => {
+    // A hardened browser returning `Unknown` was classified as definitively non-macOS and pruned
+    // the Apple rows on the strength of a string nobody parsed.
+    const hardened = detect({ platform: 'Unknown' }, DEVICES);
+
+    expect(hardened.candidates.map((d) => d.id)).toEqual(shipping.map((d) => d.id));
+    expect(hardened.evidence.join(' ')).toMatch(/not a name this recognises/i);
+  });
+
+  it('says so when nothing narrowed, rather than offering the whole catalog', () => {
+    // Every safeguard correctly declining to narrow left the panel asking "which of these is
+    // yours?" over forty-two rows, which is the picker with extra steps.
+    expect(detect({}, DEVICES).narrowedNothing).toBe(true);
+    expect(detect({ adapterVendor: 'nvidia' }, DEVICES).narrowedNothing).toBeUndefined();
   });
 
   it('never returns an empty shortlist, whatever the signals say', () => {
