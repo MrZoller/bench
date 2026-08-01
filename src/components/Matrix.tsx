@@ -413,17 +413,21 @@ export function Matrix({ config }: { config: Config }) {
   const gesture = useRef<{ inspected: boolean } | null>(null);
 
   /**
-   * The cell the pointer is physically inside, kept in a ref so `pointerdown` can read it *now*.
+   * The cell a **hovering** pointer is inside, kept in a ref so `pointerdown` can read it *now*.
    *
    * The readout target is React state, and a mouse that arrives and clicks inside one frame fires
-   * `mouseenter` and `pointerdown` before the render that state produces — so reading the committed
-   * target at `pointerdown` said "not inspected" for an ordinary mouse click and turned it into two.
-   * Playwright's `click()` does exactly that and two browser specs caught it.
+   * its enter and its `pointerdown` before the render that state produces — so reading the committed
+   * target turned an ordinary mouse click into two, which two browser specs caught immediately.
    *
-   * A ref updates synchronously, so this is the same question asked at the moment it is being asked.
-   * It does *not* leak into the touch path: the compatibility `mouseenter` a tap generates fires
-   * after that tap's `click`, so a first tap still finds the ref empty or pointing at the previous
-   * cell — which is the case a second tap on a *different* cell has to keep working.
+   * **Written only when the pointer entered without being pressed, which is what "hovered" means.**
+   * Three rounds of review went into that clause, each one narrowing where the provenance question
+   * gets asked, and the answer is: at the moment the record is written, never inferred afterwards.
+   * Keying on the *reading* gesture's `pointerType` was the last wrong version — it takes a
+   * contact-only stylus for a mouse, because the browser emits a compatibility enter as the pen
+   * touches down and that record then exists before `pointerdown` runs. `buttons` is the thing that
+   * actually differs: a mouse and a hovering pen arrive with none pressed, a finger and a
+   * contact-only pen arrive already in contact. So the record means "this pointer has been shown the
+   * figures", which is the rule, rather than "a pointer of a kind that usually can".
    */
   const pointerOver = useRef<string>('');
 
@@ -1021,59 +1025,17 @@ export function Matrix({ config }: { config: Config }) {
                        * same reason.
                        */
                       // Before the browser's own focus moves the line — see `gesture`.
-                      onPointerDown={(event) => {
+                      onPointerDown={() => {
                         gesture.current = {
                           inspected:
-                            /**
-                             * A hover record counts only for a gesture that could have made one.
-                             *
-                             * `pointerOver` is written by `mouseenter`, and a touch produces that
-                             * event *after* its own tap — so any record present when a finger lands
-                             * belongs to an earlier gesture, and trusting it made a returning tap
-                             * commit while the line described the cell the keyboard had moved to.
-                             * A mouse's record is the opposite: it is exactly the hover that makes
-                             * one click sufficient, and it survives keyboard focus moving away
-                             * because the pointer has not.
-                             *
-                             * This is not the `pointerType` test #102 removed. That one asked what
-                             * the *device* can do and got a contact-only stylus wrong. This asks
-                             * whether the gesture in progress could have produced the record it is
-                             * about to read — a question about provenance, which the event answers
-                             * exactly. A pen keeps its record for the same reason a mouse does, and
-                             * still inspects first when there is none.
-                             */
-                            (event.pointerType !== 'touch' &&
-                              pointerOver.current === `${r}:${c}`) ||
+                            // Read plainly: the record only exists if a pointer hovered this cell
+                            // without being pressed, which `pointerOver` enforces where it is
+                            // written. Nothing about the reading gesture needs asking.
+                            pointerOver.current === `${r}:${c}` ||
                             (target?.kind === 'cell' && target.row === r && target.col === c),
                         };
                       }}
-                      /**
-                       * A pointer sequence that never reaches `click` has to clear its own snapshot.
-                       *
-                       * `onClick` consumes it, and a gesture can end without one: `pointercancel`
-                       * when a touch turns into a scroll of the grid, or a release outside the button
-                       * after a drag. The snapshot would then survive to the next `click` — which,
-                       * from a keyboard, has no `pointerdown` of its own and would inherit
-                       * `inspected: false`, so the reader's first Enter would inspect instead of
-                       * loading. That is the stale-provenance defect one path over, and it is why
-                       * both exits are wired rather than the one the earlier fix needed
-                       * (found in review).
-                       *
-                       * **`pointerleave` only while the pointer is still down**, which the first
-                       * attempt at this missed and the browser suite caught immediately. A touch
-                       * pointer ceases to exist after `pointerup`, so it fires `pointerleave`
-                       * *before* `click` — clearing unconditionally therefore threw away every tap's
-                       * own snapshot and made the first tap commit, which is the whole defect back
-                       * again by way of its fix. `buttons` is non-zero only while the contact is
-                       * live, so it separates a drag off the cell from a completed tap.
-                       */
-                      onPointerCancel={() => {
-                        gesture.current = null;
-                      }}
-                      onPointerLeave={(event) => {
-                        if (event.buttons !== 0) gesture.current = null;
-                      }}
-                      onClick={() => {
+                      onClick={(event) => {
                         // So the tab stop follows the reader: leaving the grid and coming back
                         // returns to the cell they last used, not to the top-left corner. Done
                         // before the guard below, because a closed cell is still where the keyboard
@@ -1090,8 +1052,22 @@ export function Matrix({ config }: { config: Config }) {
                          * later — the two-state rule the readout already documents, met from a
                          * direction it had not been.
                          */
-                        // Consumed, so a keyboard activation cannot inherit the last tap's snapshot.
-                        const started = gesture.current;
+                        /**
+                         * A keyboard activation is identified positively, not by the absence of a
+                         * snapshot (found in review, twice).
+                         *
+                         * `click` from Enter or Space carries `detail === 0`; every pointer-generated
+                         * click carries a count. Inferring "keyboard" from `gesture.current === null`
+                         * meant any pointer sequence that ended without a click left a snapshot that
+                         * the next keypress inherited — and the exits are more numerous than they
+                         * look: `pointercancel` when a touch becomes a scroll, and a release outside
+                         * the cell, where implicit pointer capture delays `pointerleave` until after
+                         * `pointerup` so it arrives with `buttons === 0` and is indistinguishable
+                         * from a completed tap. Two rounds went into chasing those exits. Asking the
+                         * click what produced it ends the class: a stale snapshot cannot reach a
+                         * keyboard press, and a pointer press overwrites it at `pointerdown`.
+                         */
+                        const started = event.detail === 0 ? null : gesture.current;
                         gesture.current = null;
                         if (started !== null && !started.inspected) {
                           setHovered(null);
@@ -1166,14 +1142,17 @@ export function Matrix({ config }: { config: Config }) {
                          */
                       }}
                       onBlur={() => setFocused(null)}
-                      onMouseEnter={() => {
-                        pointerOver.current = `${r}:${c}`;
-                        setHovered({ kind: 'cell', row: r, col: c });
+                      // `pointerenter` rather than `mouseenter` for the record, because only the
+                      // pointer event carries `buttons` — see `pointerOver`. The readout state stays
+                      // on the mouse events, which are what the hover rule was written against.
+                      onPointerEnter={(event) => {
+                        if (event.buttons === 0) pointerOver.current = `${r}:${c}`;
                       }}
-                      onMouseLeave={() => {
+                      onPointerLeave={() => {
                         if (pointerOver.current === `${r}:${c}`) pointerOver.current = '';
-                        setHovered(null);
                       }}
+                      onMouseEnter={() => setHovered({ kind: 'cell', row: r, col: c })}
+                      onMouseLeave={() => setHovered(null)}
                       /**
                        * How the pointer gets its claim *back*, which `onMouseEnter` alone cannot do
                        * (found in review).
