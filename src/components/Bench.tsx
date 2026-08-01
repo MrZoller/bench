@@ -12,6 +12,7 @@ import { Telemetry } from './Telemetry';
 import { Workloads } from './Workloads';
 import { Launch } from './Launch';
 import { Calibrate } from './Calibrate';
+import { Recommend } from './Recommend';
 import { Envelope } from './Envelope';
 import { DETAIL_ANCHOR_ID, Matrix } from './Matrix';
 import { Segmented, Select, StopSlider } from './Controls';
@@ -620,6 +621,11 @@ export function Bench() {
         tunableCeiling={raisingCeilingWouldHelp(device, evaluation.placement.usedBytesPerDevice)}
       />
       <Workloads evaluation={evaluation} config={config} />
+      {/* Straight after the grades, which is where the question it answers actually arises: the
+          strip above says how this configuration does at seven jobs, and the next thing a reader
+          wants is what would do better. It comes before the three panels below because those are
+          all about the configuration you have, and this one is about the one you might want. */}
+      <Recommend />
       {/* After the grades and before the two grids, which is the reader's own sequence: what fits,
           how it grades, how to run it — and only then the fields that ask about other machines.
           It takes the placement rather than the whole evaluation because that is all it formats;
