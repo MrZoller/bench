@@ -735,10 +735,18 @@ describe('what review found, kept as tests', () => {
   });
 
   it('does not run a stale Modelfile after refusing to overwrite one', () => {
-    // `set -C` makes the redirection fail on the second run for the same model and quantization,
-    // and an unchained `ollama create` then builds and runs the previous num_ctx.
+    /**
+     * `set -C` makes the redirection fail on the second run for the same model and quantization,
+     * and an unchained `ollama create` then builds and runs the previous `num_ctx`.
+     *
+     * **`&&` alone was not enough**, which was this block's own previous fix: it chains create to
+     * run, but the heredoc above them is a separate command and a heredoc cannot be `&&`-chained to
+     * what follows it — so the refusal still fell through to a create against the old file. `set -e`
+     * aborts the block on any failure, which is the shell's answer to exactly this.
+     */
     const written = text(commands(input(LLAMA_31_8B, getQuant('q4_k_m'), LLAMA_CPP)).ollama.serve);
     expect(written).toMatch(/ollama create .+ && ollama run /);
+    expect(written.split('\n')[0]).toBe('set -e');
   });
 
   it('admits MLX cannot reproduce a multi-user measurement either', () => {
