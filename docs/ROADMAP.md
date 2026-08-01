@@ -1262,10 +1262,15 @@ ceiling)` keeps an over-budget stack on screen, which is right and stays. What i
   looks. Every text-only MoE: `publishedActiveParams` and `effectiveActiveParams(m, 1)` are the same
   expression there, so gpt-oss, the Qwen3 MoEs, Mixtral, GLM and the DeepSeek rows all reconcile
   exactly. Every tied text-only dense row, since a tied table is the output projection and is read in
-  full. What is left is Command A+ and Mistral Small 4 on the towers, the Gemma rows on the vision
-  encoder, and the untied dense rows on the embedding. Stated this way round because the invariant a
-  maintainer needs is _when to distrust the published figure_, and "every MoE" would have them
-  replacing correct values.
+  full. Stated this way round because the invariant a maintainer needs is _when to distrust the
+  published figure_, and "every MoE" would have them replacing correct values.
+
+  What is left, as the catalog stands — a snapshot of the rule rather than a list to trust, since the
+  rule is what survives the next seed: **Command A+ and Mistral Small 4** (multimodal MoEs, towers),
+  **every Gemma 3 row and Ministral 3 3B** (tied dense, but with a tower — Ministral publishes 3.849B
+  against a 3.429B basis on a 0.420B encoder, and it is not a Gemma, which is how it went missing from
+  the first draft of this sentence), and **the untied dense rows** on the embedding. Derive the list
+  from `nonLanguageParams` and `tiedEmbeddings` rather than reading it here.
   The engine reads `activeDenseParams`:
   - the embedding is subtracted only when **untied**. A tied table _is_ the output projection —
     a full vocab matmul every step — so subtracting it understates Gemma 3 12B by 5%.
@@ -1276,6 +1281,7 @@ ceiling)` keeps an over-budget stack on screen, which is right and stays. What i
     per token. The tensor classifier tests non-language prefixes _first_, against the name with a
     leading `model.` stripped — newer transformers exports nest the tower as
     `model.vision_tower.*`, which the `model.` language prefix would otherwise swallow silently.
+
 - **Prefill additionally excludes the output projection.** Logits are computed for the positions
   that need them — one — not every prompt token. Charging it per token overstated gpt-oss-20b
   prefill 16%.
