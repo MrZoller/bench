@@ -24,32 +24,6 @@ const FITNESS: Record<Fitness, { icon: string; word: string; color: string }> = 
   good: { icon: '●', word: 'Yes', color: 'var(--color-good)' },
   tight: { icon: '◐', word: 'Tight', color: 'var(--color-warning)' },
   fail: { icon: '○', word: 'No', color: 'var(--color-critical)' },
-  /**
-   * Not a fourth grade — the absence of one, and styled to say so (#75).
-   *
-   * The three above are a status scale with reserved colour tokens: full, half, empty, and `fail`
-   * shares `--color-critical` with Telemetry's "Will not run". This state is not on that scale, so it
-   * takes an ink token rather than a status hue. A neutral row wearing the strongest negative in the
-   * vocabulary made that colour mean two different things — "this machine cannot do it" and "you have
-   * not configured this yet" — and the second one is a prompt to move a slider, not a verdict.
-   *
-   * `--color-text-faint` is the recessive ink, 5.10:1 on the panel surface, which clears the 4.5:1 a
-   * 12px status word needs; the status tokens are reserved for states that are actually graded.
-   *
-   * The glyph leaves the circle family on purpose. `○` is the *bottom* of that ordered set, and a row
-   * that was never measured does not sit at the bottom of an ordering it is not in — a dash reads as
-   * "no reading", the same convention Telemetry's `value: '—'` already uses for a figure it cannot
-   * report. And it is `aria-hidden` below, like the other three: the word beside it is the grading.
-   *
-   * An em dash, U+2014, which is the character Telemetry actually uses — the first version of this
-   * said so in the comment and shipped an en dash, U+2013, which is a narrower glyph than any of the
-   * three circles. That is not only a typographic quibble: the word beside it starts after the glyph,
-   * so at 1440px "Not measured" began at x = 202.0 while "Yes", "Tight" and "No" all began at 206.1,
-   * a 4.1px jog in the column #70 exists to have aligned. The glyph is now inside a fixed box at
-   * `sm`, which is where the shared column exists, so the alignment no longer depends on which
-   * character this is — see the icon span below.
-   */
-  unmeasured: { icon: '—', word: 'Not measured', color: 'var(--color-text-faint)' },
 };
 
 export function Workloads({ evaluation, config }: { evaluation: Evaluation; config: Config }) {
@@ -85,32 +59,42 @@ export function Workloads({ evaluation, config }: { evaluation: Evaluation; conf
          * prefill left decode describing the smaller cache, so an agent could be graded on a rate
          * measured at 512 tokens while its own turn is 16K.
          *
+         * **Concurrency is an input here too since #96**, and it is the reason serving stopped
+         * reading the slider: every other archetype declares the prompt it sends, and concurrency is
+         * that same kind of declaration for the one archetype whose subject it is. Six of the seven
+         * are still handed `config.concurrency` unchanged.
+         *
          * `estimateConfig`, not `evaluateConfig`: the latter also computes `maxContextTokens` and
          * `runnableContextTokens`, and each of those is a binary search over the model's whole
          * context range. This callback discarded both, every time, for every archetype — roughly
          * forty `planPlacement` calls to use one, and on a layer-split rig each of those sorts the
          * model's layers.
          */
-        evaluateAt: (promptTokens, contextTokens, cachedPrefixTokens) =>
-          estimateConfig({ ...config, promptTokens, contextTokens }, cachedPrefixTokens),
+        evaluateAt: (promptTokens, contextTokens, cachedPrefixTokens, concurrency) =>
+          estimateConfig(
+            { ...config, promptTokens, contextTokens, concurrency },
+            cachedPrefixTokens
+          ),
       }),
     [evaluation, config]
   );
 
   /**
-   * The headline counts what was graded — both sides of the fraction.
+   * The headline counts what was graded, which since #96 is every row.
    *
-   * `usable` was `fitness !== 'fail'` over all seven rows, so an *ungraded* row was subtracted
-   * exactly as a failing one was: at the default concurrency of 1 this panel read "5 of 7 workloads"
-   * on a Spark that would serve several users perfectly well, because nobody had touched the slider
-   * (#75). And that is the first number most visitors read here, at the setting they arrive on.
+   * This used to split the denominator: `usable` was `fitness !== 'fail'` over all seven rows, so an
+   * *ungraded* serving row was subtracted exactly as a failing one was and the panel read "5 of 7
+   * workloads" on a Spark that would serve several users perfectly well, because nobody had touched
+   * the slider (#75). The interim fix left the row out of both halves — "5 of 6", with the seventh
+   * still on screen saying what it was waiting for.
    *
-   * A row that was not measured is not evidence in either direction, so it leaves the numerator and
-   * the denominator together — "5 of 6", with the seventh row still on screen saying what it is
-   * waiting for. Dropping it from the numerator alone would report the same understatement; keeping
-   * it in both would count it as a pass, which is the opposite lie.
+   * Grading serving at its own four users removed the state rather than the symptom, so both sides
+   * of the fraction are the whole list again. `graded` is kept as a separate binding rather than
+   * folded away because the denominator being the list is now a *fact* rather than an assumption,
+   * and the count below still qualifies its noun when the two differ — which is the assertion that
+   * would catch a fourth grade arriving without this being reconsidered.
    */
-  const graded = verdicts.filter((v) => v.fitness !== 'unmeasured');
+  const graded = verdicts;
   const usable = graded.filter((v) => v.fitness !== 'fail').length;
 
   /**
@@ -118,12 +102,10 @@ export function Workloads({ evaluation, config }: { evaluation: Evaluation; conf
    * list, and the rows keep only their status. Seven identical explanations read as seven
    * separate problems.
    *
-   * `every` over *all* the verdicts rather than over `graded`, now that a row can be ungraded, and
-   * the difference is load-bearing: this collapse blanks each row's own reason, so folding an
-   * ungraded row into it would delete the one sentence saying what that row is waiting for. Only
-   * `judgeWorkloads`' top-level refusal gives seven rows one sentence, and it grades all seven
-   * `fail` — so an `unmeasured` row in the list is itself proof the rows are not all saying the same
-   * thing, and it blocks the collapse rather than being swallowed by it.
+   * `every` over *all* the verdicts, which is the same set as `graded` since #96 and written this
+   * way deliberately: the collapse blanks each row's own reason, so it may only fire when every row
+   * genuinely carries the same one. Only `judgeWorkloads`' top-level refusal does that, and it
+   * grades all seven `fail`.
    */
   const sharedReason =
     verdicts.every((v) => v.fitness === 'fail') && new Set(verdicts.map((v) => v.reason)).size === 1
@@ -137,18 +119,15 @@ export function Workloads({ evaluation, config }: { evaluation: Evaluation; conf
           What you could do with it
         </h2>
         {/*
-          The noun qualifies the denominator whenever it is short of the list (found in review).
+          The noun qualifies the denominator whenever it is short of the list.
 
-          `graded.length` deliberately omits an ungraded row, so that a row nobody asked about is
-          not counted as a failure — but the fraction it produces is read as a headline, and
-          "6 of 6 workloads" beside seven visible rows claims complete coverage. That is the same
-          false implication the omission exists to avoid, arriving through the total instead of
-          through the numerator.
-
-          Naming the denominator is the smallest fix that removes the claim: "6 of 6 measured
-          workloads" is true, and the row saying "Not measured" is on screen to account for the
-          seventh. The alternative — counting all seven and marking the ungraded one as neither —
-          needs a three-part fraction, which is a bigger change to a headline than this earns.
+          Dead as written, and kept on purpose. `graded` is every verdict since #96 removed the
+          ungraded state, so the denominator is always seven and the qualifier never renders — but
+          the reason it existed is not dead: a fraction short of the visible list claims coverage it
+          does not have, which is what "6 of 6 workloads" beside seven rows was doing (found in
+          review on #94). The condition is one comparison, and it is the thing that would have to be
+          re-derived by whoever adds a grade this panel cannot count. `App.test.tsx` pins the live
+          branch — seven of seven, unqualified — so the dead one cannot rot into a wrong string.
         */}
         <PanelCount count={usable} total={graded.length}>
           {graded.length === verdicts.length ? 'workloads' : 'measured workloads'}
@@ -230,14 +209,21 @@ export function Workloads({ evaluation, config }: { evaluation: Evaluation; conf
                 min-content — so an unbreakable string here is a hard floor on the width of the whole
                 row, and the row is inside a panel inside the document.
 
-                Three short words never reached that floor. "Not measured" does: measured in Chromium
+                Three short words never reached that floor. "Not measured" did: measured in Chromium
                 at `reflow.spec.ts`'s own configuration — 320x900, `defaultFontSize=32`, `--font-sans`
-                set to Courier New — the seventh row's status cell had a min-content of 199px against
-                55px for "○ No", which took `documentElement.scrollWidth` to 371px in a 320px viewport
-                and put 29 elements outside the document. That is WCAG 1.4.4 (#35), the criterion this
-                repo already shipped a failure of once. Letting the word wrap below `sm` drops the same
-                cell to 142px and the document back to 320/320, because the floor becomes the longest
-                *word* rather than the whole string.
+                set to Courier New — that row's status cell had a min-content of 199px against 55px
+                for "○ No", which took `documentElement.scrollWidth` to 371px in a 320px viewport and
+                put 29 elements outside the document. That is WCAG 1.4.4 (#35), the criterion this
+                repo already shipped a failure of once. Letting the word wrap below `sm` dropped the
+                same cell to 142px and the document back to 320/320, because the floor becomes the
+                longest *word* rather than the whole string.
+
+                **The string that needed it is gone and the scoping stays** (#96): the ungraded state
+                was removed at its root, so the longest status word is now "Tight". Kept because the
+                mechanism is what is right — an unbreakable string in the `1fr` of a stacked row is a
+                hard floor on the document's width — and the next status word is one grade away from
+                reintroducing it. Deleting the scope would make that a 1.4.4 regression discovered in
+                a browser instead of never happening.
 
                 At the default text size it never wraps — on a 390px phone the cell holds 96px of
                 content in a 188px track, and even at 320px 96px in 131px — so this costs nothing on
@@ -250,10 +236,12 @@ export function Workloads({ evaluation, config }: { evaluation: Evaluation; conf
                 {/*
                   A fixed box at `sm`, so the word beside it starts at the same x on all seven rows.
 
-                  The circles are ~11.1px at this size and the dash is 10.5px; before this the word's
-                  left edge moved with the glyph, which put "Not measured" 4.1px left of the other six
-                  in the column #70 exists to have aligned — and every alignment assertion in
-                  `e2e/workload-columns.spec.ts` kept passing, because they measure the *cell* box.
+                  The circles are ~11.1px at this size and the em dash the ungraded row used was
+                  10.5px; before this the word's left edge moved with the glyph, which put "Not
+                  measured" 4.1px left of the other six in the column #70 exists to have aligned — and
+                  every alignment assertion in `e2e/workload-columns.spec.ts` kept passing, because
+                  they measure the *cell* box. The three glyphs left after #96 are one width, so the
+                  box is inert today and is the reason the next one cannot break the column.
 
                   `w-3` is `0.75rem`, the same length as `text-xs`, so the box is one em at every root
                   size and a glyph wider than the box is centred rather than nudging the word.

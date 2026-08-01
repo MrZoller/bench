@@ -159,18 +159,64 @@ export const magnitudeRamp = [...sequential].reverse();
  * A degenerate domain — every cell identical, or a single cell — has nothing for a ramp to say and
  * takes the top step: with no variation each cell is simultaneously the best and the worst on its
  * own grid, and the brightest step is the one that does not imply a deficit that was never measured.
+ *
+ * **`direction` is where "larger is better" is finally said, and it is required rather than
+ * defaulted** ([#97](https://github.com/MrZoller/bench/issues/97)). It used to be said by the
+ * caller, by handing this function `1 / seconds` for the one measure that runs the other way — and
+ * composing a reciprocal with a logarithm is the defect, not a style: `log1p(1/t) ≈ 1/t` for any
+ * latency above about a second, so the log did nothing and the scale was harmonic, collapsing 63% of
+ * the Envelope's graded cells and 81% of the Matrix's onto one step. Taking the logarithm of the
+ * quantity itself and reversing the *placement* is the same picture read the right way round. No
+ * default, because a defaulted direction is wrong silently and in the direction that still renders:
+ * the grid paints, the legend still reads "worse … better", and every cell is on the wrong step.
  */
-export function magnitudeFill(value: number, domain: { min: number; max: number }): string {
+export function magnitudeFill(
+  value: number,
+  domain: { min: number; max: number },
+  direction: 'higher' | 'lower'
+): string {
   const steps = magnitudeRamp.length;
   const top = magnitudeRamp[steps - 1];
-  // `log1p` rather than `log` so a zero floor — the Matrix's domain — is 0 rather than -Infinity,
-  // and a zero value with it. Both are real: a cell that did not fit has no headroom at all.
+  /**
+   * A non-finite input has no place on a ramp, and it reaches one more easily than it looks.
+   *
+   * `estimatePrefill` returns `Infinity` by design for a device whose compute rate the catalog does
+   * not state, so a grid containing one gets `max: Infinity` — and then `log1p(Infinity) -
+   * log1p(Infinity)` is `NaN`, `span > 0` is false, and every cell on the grid takes the top step:
+   * the *best* colour, for a field one of whose readings could not be taken. Worse with a finite
+   * floor, where the span is `Infinity` and each placement is `NaN`, indexing the ramp with
+   * `undefined` and painting nothing at all.
+   *
+   * Callers are expected to keep such readings off the scale — `measureValue` in `matrix.ts` returns
+   * `undefined` for them and the Envelope filters its domain — and this is the guard that makes a
+   * caller which forgets fail visibly rather than silently. The darkest step is the honest answer:
+   * whichever direction the measure runs, a reading nobody could take is not evidence of a good one.
+   */
+  if (!Number.isFinite(value) || !Number.isFinite(domain.min) || !Number.isFinite(domain.max)) {
+    return magnitudeRamp[0];
+  }
+  // `log1p` rather than `log` so a zero floor — the Matrix's domain for the two measures that have
+  // one — is 0 rather than -Infinity, and a zero value with it. Both are real: a cell that did not
+  // fit has no headroom at all.
   const span = Math.log1p(domain.max) - Math.log1p(domain.min);
   if (!(span > 0)) return top;
   const placed = (Math.log1p(value) - Math.log1p(domain.min)) / span;
   // Clamped at both ends: `placed` is 1 at the top of the domain, which would index past the ramp,
-  // and a caller may legitimately ask about a value below its own floor.
-  return magnitudeRamp[Math.max(0, Math.min(steps - 1, Math.floor(placed * steps)))];
+  // and a caller may legitimately ask about a value outside its own domain.
+  const step = Math.max(0, Math.min(steps - 1, Math.floor(placed * steps)));
+  /**
+   * The reflection, and the whole of what `direction` buys — taken on the **step** rather than on
+   * the placement, which is not the same thing.
+   *
+   * `1 - placed` before the `floor` looks equivalent and is off by one bucket at every interior
+   * boundary: `floor` breaks a tie toward the bright end in both directions, so a value landing
+   * exactly on a boundary is not sent to the mirror of where the other direction sends it. With
+   * seven steps over `{min: 1, max: 255}`, a value of 3 is step 1 read upward and came out step 6
+   * read downward, where its true mirror is 5 — so the best bucket quietly absorbed the first
+   * boundary value. Mirroring the quantized index is an exact reversal by construction, which is
+   * what `tokens.test.ts` asserts as an identity rather than as "the fast one is brighter".
+   */
+  return magnitudeRamp[direction === 'lower' ? steps - 1 - step : step];
 }
 
 /** Parse a `#rrggbb` token into an `[r, g, b]` tuple. */

@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { Envelope } from './Envelope';
 import { DEFAULT_CONFIG } from '@/store/scenario';
 import { colors, magnitudeRamp, withAlpha } from '@/design/tokens';
+import { parseDisplayedSeconds } from '@/lib/verdicts';
 
 /**
  * What the feasibility field is actually painted in (#65).
@@ -388,14 +389,78 @@ describe('the ramp keys itself as a ranking, not a verdict', () => {
     expect(within(legend()).getByText('more room')).toBeInTheDocument();
 
     /*
-     * Per measure rather than one generic pair, and this is the assertion that pins it. `measureOf`
-     * inverts latency so larger is better throughout, so a generic "least to most" would read
-     * backwards against the caption beside it ("Time until the first token appears.") — a reader
-     * would take the dark end for the quick one.
+     * Per measure rather than one generic pair, and this is the assertion that pins it. Latency runs
+     * the other way from the other two — `MEASURE_DIRECTION` is where that is said since #97 — so a
+     * generic "least to most" would read backwards against the caption beside it ("Time until the
+     * first token appears."): a reader would take the dark end for the quick one.
      */
     await user.click(within(legend()).getByRole('button', { name: 'How responsive' }));
     expect(within(legend()).getByText('slower to start')).toBeInTheDocument();
     expect(within(legend()).getByText('quicker to start')).toBeInTheDocument();
+  });
+
+  /**
+   * The ramp has to be **spent**, and per measure — which is the assertion
+   * [#97](https://github.com/MrZoller/bench/issues/97) was filed for.
+   *
+   * "Grades the region instead of painting one flat colour", above, is this claim for the measure
+   * the panel opens on, and it is the only measure it was ever made for. Latency failed it badly
+   * and invisibly: `measureOf` returned `1 / seconds` and `magnitudeFill` then took `log1p` of that,
+   * so above about a second the logarithm did nothing and the scale was harmonic. Measured on this
+   * scenario, the seven steps held **29, 12, 2, 2, 0, 0 and 1** of the 46 graded cells — 63% on one
+   * step and two interior steps unused — on the panel whose entire subject is shape. After the fix:
+   * 4, 5, 6, 7, 12, 9, 3.
+   *
+   * **The obvious test passes on the collapsed ramp**, which is why this is shaped the way it is.
+   * "The fast cell is brighter than the slow cell" was true throughout; so was "both ends of the
+   * ramp are reached", the assertion two tests up. Only the distribution tells them apart.
+   *
+   * **Both measures that span a decade, not only the one that broke.** Latency runs 1.30s to 729.1s
+   * here (2.75 decades) and decode 2.19 to 43.4 tok/s (1.30); asserting only latency would leave the
+   * decode ramp free to collapse the same way, which is the "fix what was named" failure this file's
+   * own history is made of. Headroom is excluded, at 0.183 to 0.488 — 0.43 of a decade. That is not
+   * an exemption for the inconvenient case, and the tempting justification for it is wrong: the
+   * domain is this grid's own span, so `placed` covers the whole ramp whatever the range. The real
+   * reason is that fit's distribution is a property of *this rig's* shape — its variation rides a
+   * large constant, which is what the `{min, max}` domain exists for — so a bar on it would pin a
+   * snapshot rather than a property. It has its own test, two up: "grades the region instead of
+   * painting one flat colour".
+   */
+  it('spends the ramp on both measures whose readings span a decade', async () => {
+    const user = userEvent.setup();
+    const table = await openTable(user);
+    /*
+     * The latencies the field is actually painted from, off the table — which is the field's own
+     * textual equivalent, so this cannot drift from what was drawn. `describeCell` ends every row
+     * with the wait, and `parseDisplayedSeconds` is the same reader the engine's classification uses.
+     */
+    const latencies = within(table)
+      .getAllByRole('cell')
+      .map((cell) => /([\d.]+)\s*(ms|min|s) to first token$/.exec(cell.textContent ?? ''))
+      .filter((m): m is RegExpExecArray => m !== null)
+      .map((m) => parseDisplayedSeconds(`${m[1]} ${m[2]}`, Number(m[1])));
+    expect(latencies.length, 'no wait was parsed out of the table').toBeGreaterThan(40);
+
+    const decades = Math.log10(Math.max(...latencies) / Math.min(...latencies));
+    expect(decades, 'this scenario no longer spans orders of magnitude').toBeGreaterThan(1);
+
+    for (const measure of ['How fast', 'How responsive']) {
+      painted.fills.length = 0;
+      await user.click(within(field()).getByRole('button', { name: measure }));
+
+      const steps = painted.fills.map(step).filter((s) => s >= 0);
+      expect(steps.length, `${measure} painted nothing from the ramp`).toBeGreaterThan(40);
+
+      const held = magnitudeRamp.map((_, s) => steps.filter((x) => x === s).length);
+      expect(
+        held.filter((n) => n === 0),
+        `${measure} left a step of the ramp unused`
+      ).toEqual([]);
+      expect(
+        Math.max(...held) / steps.length,
+        `under ${measure} one step holds ${Math.max(...held)} of ${steps.length} graded cells`
+      ).toBeLessThan(0.5);
+    }
   });
 
   it('states the comparison class in the legend and in the canvas description', () => {

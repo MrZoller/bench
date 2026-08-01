@@ -6,11 +6,12 @@ import {
   type MatrixCell,
   type MatrixMeasure,
 } from '@/engine/matrix';
-import { DEVICES, getDevice, getModel, modelsByPopularity } from '@/data/catalog';
+import { comparisonGrid, getDevice, getModel } from '@/data/catalog';
 import { getQuant } from '@/data/quants';
 import { getRuntime, kvSubstitutionFor, runtimeDrives, substitutionFor } from '@/data/runtimes';
 import { FALLBACK_QUANT_ID, quantApplies } from '@/lib/quantChoice';
 import { magnitudeFill, magnitudeRamp } from '@/design/tokens';
+import { MEASURE_DIRECTION } from '@/engine/measure';
 import { DEVICE_CLASS_LABELS, MEASURES, kvLabel } from '@/lib/stops';
 import { PanelCount } from './PanelCount';
 import { params, percent, rate, seconds, tokens } from '@/lib/format';
@@ -134,18 +135,20 @@ export function Matrix({ config }: { config: Config }) {
   const kv = kvLabel(runtime, config.kvPrecision);
 
   /**
-   * The rows, most-downloaded first — from the catalog's helper rather than a comparator here.
+   * What this grid covers — rows most-downloaded first, columns the shipping rows in file order.
    *
-   * This file and `Bench.tsx` each held a hand-written copy of the same `sort` while
-   * `modelsByPopularity()` — the named helper that does exactly this — was called by nothing outside
-   * its own test: one ordering rule with three definitions and the canonical one dead (#79). The two
-   * grids agreed by coincidence, which is the same coincidence `kvLabel` and `columnReadout` were
-   * written to remove one seam over.
+   * Both from `comparisonGrid()` rather than derived here, which is the same rule the ordering
+   * itself was fixed under: this file and `Bench.tsx` each held a hand-written copy of the
+   * popularity `sort` while `modelsByPopularity()` — the named helper that does exactly this — was
+   * called by nothing outside its own test, so one ordering rule had three definitions and the
+   * canonical one was dead (#79). The two grids agreed by coincidence. The shipping filter was the
+   * other half of that shape, live rather than latent: it was a `status` rule enforced in a
+   * component, where `catalog.test.ts` could not see it.
+   *
+   * Memoised on `[]` because the extent does not change while the page is mounted, and because the
+   * arrays are identities every dependency array below is keyed on.
    */
-  const models = useMemo(() => modelsByPopularity(), []);
-  // Shipping hardware only: a rumoured row would put speculative specs into a comparison people
-  // read as a shortlist, and `status` exists precisely so that never happens silently.
-  const devices = useMemo(() => DEVICES.filter((d) => d.status === 'shipping'), []);
+  const { models, devices } = useMemo(() => comparisonGrid(), []);
 
   /**
    * The class bands: which columns open one, and what to call them.
@@ -289,11 +292,11 @@ export function Matrix({ config }: { config: Config }) {
    * mostly two derivations of one number disagreeing.
    */
   const range = useMemo(() => measureRange(cells, measure), [cells, measure]);
-  // `range.max` rather than `measureValue(range.high, measure)`, which is the same number and the
-  // hazard `MeasureRange` names in its own docstring: two derivations of one quantity are how a scale
-  // and its legend come to describe different grids. The zero is the empty grid, where `fill` wants
-  // no ceiling at all and paints every cell as a hole.
-  const max = range?.max ?? 0;
+  // `range.domain` rather than a domain rebuilt here, which is the hazard `MeasureRange` names in its
+  // own docstring: two derivations of one quantity are how a scale and its legend come to describe
+  // different grids. `undefined` is the empty grid, where `fill` has no ramp to place anything on and
+  // paints every cell as a hole.
+  const domain = range?.domain;
 
   /**
    * The grid-wide counts and flags the heading, the caption and the legend all read.
@@ -1141,7 +1144,7 @@ export function Matrix({ config }: { config: Config }) {
                           ? 'inset-ring-2 inset-ring-[var(--color-accent)] shadow-[inset_0_0_0_3px_var(--color-surface)]'
                           : ''
                       }`}
-                      style={{ background: fill(cell, measure, max) }}
+                      style={{ background: fill(cell, measure, domain) }}
                     />
                   </td>
                 ))}
@@ -1201,8 +1204,10 @@ export function Matrix({ config }: { config: Config }) {
             `better` alone say which way to read the ramp and nothing about what it spans, so a
             mid-blue under "How fast" could be 20 tok/s or 200 — and since `fill` log-scales, the
             colour is deliberately a rank, which leaves no other route to a magnitude. They are the
-            extremes of the values actually on the grid, not a per-step key: the ramp anchors its log
-            curve at zero, so the lowest cell need not paint the first step. The claim is the span.
+            extremes of the values actually on the grid, not a per-step key — and for `fit` and
+            `decode`, whose ramps anchor at zero, the lowest cell need not paint the first step at
+            all. Under `ttft` the domain is the grid's own span and it does (#97). The claim is the
+            span either way.
 
             The two throughput figures come off the cell at that end rather than out of the ramp value,
             which is argued at `MeasureRange` — for TTFT they would otherwise be a floating-point round
@@ -1508,31 +1513,35 @@ function headerColumns<T extends { name: string }>(
 }
 
 /** Colour for a cell: a step of the ramp, or the recessive "did not run" fill. */
-function fill(cell: MatrixCell, measure: MatrixMeasure, max: number): string {
+function fill(
+  cell: MatrixCell,
+  measure: MatrixMeasure,
+  domain: { min: number; max: number } | undefined
+): string {
   const value = measureValue(cell, measure);
   // Absence is not a low score. A pair that cannot run gets the empty fill, so the ramp is only
   // ever read across things that actually ran.
   // A hole, not a dark value: the panel surface, so an unrunnable pair is never mistaken for a
   // poor score at the bottom of a ramp whose darkest step is also nearly black.
-  if (value === undefined || max <= 0) return 'transparent';
+  if (value === undefined || domain === undefined) return 'transparent';
 
   /**
-   * Floored at zero rather than at the grid's own worst cell, which is the right domain *here* and
-   * the wrong one on the Envelope — see `magnitudeFill`. This grid spans a desktop CPU to a B200,
-   * so its bottom really is near nothing, and a cell's step therefore says how it compares to the
-   * best available rather than only to its neighbours in the same range.
+   * The domain and the direction both come from the measure, and neither is decided here — see
+   * `MeasureRange`, which argues why the zero floor is right for the two measures that have a
+   * reachable zero and wrong for the one that does not (#97).
    */
-  return magnitudeFill(value, { min: 0, max });
+  return magnitudeFill(value, domain, MEASURE_DIRECTION[measure]);
 }
 
 /**
  * The figure at one end of the ramp, said as the quantity that end is made of.
  *
- * A cell rather than a number, because two of the three measures are not stored as what a reader
- * wants to see. `measureValue` inverts TTFT so larger is better, so recovering seconds from the ramp
- * value means `1 / (1 / t)` — a second derivation of a figure the cell already holds, and not
- * reliably equal to `t`. Reading the field instead makes the legend's figure and that cell's own
- * tooltip the same string, for `decode` and `ttft`, by construction.
+ * A cell rather than a number, and it stays a cell after #97 removed the reason it first had to be
+ * one. `measureValue` used to invert TTFT so larger was better, so recovering seconds from the ramp
+ * value meant `1 / (1 / t)` — a second derivation of a figure the cell already holds, and not
+ * reliably equal to `t`. It returns seconds now, so that particular round trip is gone; reading the
+ * field is still what makes the legend's figure and that cell's own tooltip the same string, for
+ * `decode` and `ttft`, by construction rather than by two call sites agreeing.
  *
  * **`fit` is the exception, and what it prints is the ramp's value rather than any one cell's
  * sentence.** There the ramp value *is* the quantity — headroom — so a second `1 - utilization`

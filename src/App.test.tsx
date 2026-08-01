@@ -1,10 +1,10 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 import { useConfig, DEFAULT_CONFIG, estimateConfig } from '@/store/config';
 import { configToShareSearch } from '@/store/url';
-import { DEVICES, MODELS, getDevice, getModel } from '@/data/catalog';
+import { DEVICES, MODELS, comparisonGrid, getDevice, getModel } from '@/data/catalog';
 import { params, tokens } from '@/lib/format';
 import { DEVICE_CLASS_LABELS, SETTING_LABELS, SETTING_NOTES, deviceCountNote } from '@/lib/stops';
 import { DETAIL_ANCHOR_ID } from '@/components/Matrix';
@@ -15,7 +15,7 @@ import { judgeWorkloads } from '@/engine/verdict';
 import { RUNTIMES, getRuntime, kvSubstitutionFor, runtimeDrives } from '@/data/runtimes';
 import { effectiveActiveParams } from '@/engine/weights';
 import { canShard, maxAllocatablePerDevice } from '@/engine/placement';
-import { colors, marks } from '@/design/tokens';
+import { colors, magnitudeRamp, marks } from '@/design/tokens';
 
 /**
  * Wrapped rather than replaced, so every other test in this file still exercises the real verdict
@@ -41,9 +41,125 @@ vi.mock('@/data/runtimes', async (importOriginal) => {
   return { ...actual, kvSubstitutionFor: vi.fn(actual.kvSubstitutionFor) };
 });
 
+/**
+ * And the same treatment for the Matrix's extent, which is what this file's wall clock is made of
+ * ([#101](https://github.com/MrZoller/bench/issues/101)).
+ *
+ * The Matrix is models × devices and every test here renders the whole page, so every test pays for
+ * the whole grid — 1,470 buttons, each with a full-sentence `aria-label` that `getByRole` computes
+ * on every name-matched query. #78 and #77 grew both axes in one sweep and took this file from 42s
+ * to about fourteen minutes on CI, for changes that touched no component; the per-test timeout was
+ * raised twice on the way and must not be raised again.
+ *
+ * So the grid is bounded by default here and the real one is opted into. **The polarity is the whole
+ * design.** Bounding it by default makes the wall clock a constant — {@link BOUNDED_CELLS} cells
+ * however large the catalog grows, which is the property the issue asks for: a change that touches
+ * no component cannot fail CI on grid size. Opting in makes every full-grid case a written decision
+ * rather than an accident, which matters because the full grid is what caught #52's roving tab index
+ * and #64's rotated header, and a shrunken grid would have passed both.
+ *
+ * The line is not "does this test mention the Matrix" but **"does this test assert something about
+ * the grid"** — see {@link atFullGrid}. Everything else merely renders it.
+ */
+vi.mock('@/data/catalog', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/data/catalog')>();
+  return { ...actual, comparisonGrid: vi.fn(actual.comparisonGrid) };
+});
+
+/** The real extent, kept so {@link atFullGrid} restores it rather than re-deriving it. */
+const realComparisonGrid = (
+  await vi.importActual<typeof import('@/data/catalog')>('@/data/catalog')
+).comparisonGrid;
+
+/**
+ * The rows and columns the bounded grid renders, chosen so it is small and still not degenerate.
+ *
+ * Every one of these is here for a property some test in this file reads off the grid, and dropping
+ * any of them makes an assertion vacuous rather than red:
+ *
+ * - `openai/gpt-oss-120b` on `dgx-spark` is {@link DEFAULT_CONFIG}, so the grid contains the marked
+ *   cell — without it `isCurrent` is false everywhere and the selection ring, its legend key and
+ *   `aria-current` all have nothing to test.
+ * - Three device classes in file order, so the class bands are a run of three rather than one, and
+ *   `separated` is non-empty.
+ * - `epyc-9654` is a column vLLM cannot drive, so the struck-heading branch is reachable.
+ * - `rtx-3060-12gb` at 12 GiB refuses most rows on counted bytes while `rtx-5090` holds them, so
+ *   both the ran and the did-not-fit inks are painted.
+ * - `Qwen/Qwen3-8B` is dense, so the MXFP4 default substitutes on it and the stand-in note fires.
+ *
+ * Ids rather than indices, and asserted to resolve below: a slice of the catalog is a fixture that
+ * silently becomes a different fixture the next time the catalog moves.
+ */
+const BOUNDED_MODEL_IDS = ['openai/gpt-oss-120b', 'Qwen/Qwen3-8B', 'deepseek-ai/DeepSeek-R1'];
+const BOUNDED_DEVICE_IDS = ['rtx-5090', 'rtx-3060-12gb', 'dgx-spark', 'epyc-9654'];
+const BOUNDED_CELLS = BOUNDED_MODEL_IDS.length * BOUNDED_DEVICE_IDS.length;
+
+function boundedGrid(): ReturnType<typeof realComparisonGrid> {
+  const real = realComparisonGrid();
+  return {
+    // Filtered out of the real extent rather than looked up, so both lists keep the order the
+    // component is entitled to assume — popularity for the rows, file order for the columns.
+    models: real.models.filter((m) => BOUNDED_MODEL_IDS.includes(m.id)),
+    devices: real.devices.filter((d) => BOUNDED_DEVICE_IDS.includes(d.id)),
+  };
+}
+
+/**
+ * Render this test's Matrix at the real catalog extent.
+ *
+ * Call it before `render`, in any test whose subject is the grid itself: its size, its column
+ * headings, its bands, its tab sequence, or a sweep over the cells it paints. The rule of thumb is
+ * whether the assertion would still mean something with twelve cells — if it would, leave it
+ * bounded.
+ */
+function atFullGrid() {
+  vi.mocked(comparisonGrid).mockImplementation(realComparisonGrid);
+}
+
+beforeEach(() => {
+  vi.mocked(comparisonGrid).mockImplementation(boundedGrid);
+});
+
 afterEach(() => {
   cleanup();
   useConfig.setState(DEFAULT_CONFIG);
+});
+
+/**
+ * The fixture's own preconditions, since a fixture that quietly stops matching the catalog is the
+ * failure this file has already had twice in other forms — a sweep that filtered on a field the type
+ * does not have, and an exemption list that matched nothing. Both reported compliance over zero
+ * cases.
+ */
+describe('the bounded grid this file renders', () => {
+  it('names rows and columns the catalog still has', () => {
+    const { models, devices } = boundedGrid();
+    expect(models.map((m) => m.id)).toEqual(expect.arrayContaining(BOUNDED_MODEL_IDS));
+    expect(devices.map((d) => d.id)).toEqual(expect.arrayContaining(BOUNDED_DEVICE_IDS));
+    expect(models).toHaveLength(BOUNDED_MODEL_IDS.length);
+    expect(devices).toHaveLength(BOUNDED_DEVICE_IDS.length);
+  });
+
+  it('is a constant the catalog cannot grow', () => {
+    // The property #101 asks for, stated as an assertion: this file's grid is 12 cells whatever the
+    // catalog does next, so a change that touches no component cannot fail CI on grid size.
+    expect(BOUNDED_CELLS).toBe(12);
+    const real = realComparisonGrid();
+    // And it really is a reduction — a fixture equal to the catalog would satisfy everything above
+    // while restoring the whole cost.
+    expect(real.models.length * real.devices.length).toBeGreaterThan(BOUNDED_CELLS * 10);
+  });
+
+  it('spans the three device classes, in the catalog’s own order', () => {
+    const classes = boundedGrid().devices.map((d) => d.class);
+    expect(classes).toEqual(['discrete-gpu', 'discrete-gpu', 'unified-soc', 'cpu-ram']);
+  });
+
+  it('contains the default scenario, so a cell is marked', () => {
+    const { models, devices } = boundedGrid();
+    expect(models.map((m) => m.id)).toContain(DEFAULT_CONFIG.modelId);
+    expect(devices.map((d) => d.id)).toContain(DEFAULT_CONFIG.deviceId);
+  });
 });
 
 /**
@@ -644,47 +760,42 @@ describe('the workload strip keeps up with the scenario', () => {
       .trim();
 
   /**
-   * The headline counts what was graded, on both sides of the fraction (#75).
+   * The headline counts what was graded, on both sides of the fraction — and since #96 that is
+   * every row.
    *
    * This is the number the panel is read by, and at the setting every visitor arrives on it was
-   * wrong: multi-user serving is not measured at one concurrent user, and `usable` subtracted the
-   * ungraded row exactly as it subtracted a failing one. gpt-oss-120b on a Spark read "5 of 7
-   * workloads" while the seventh row said, in critical red, that the reader should move a slider.
+   * wrong twice in a row. First it read "5 of 7 workloads" on a Spark that would serve several
+   * users perfectly well, because `usable` subtracted an *ungraded* serving row exactly as it
+   * subtracted a failing one (#75). Then, with the row out of both sides, it read "5 of 6" beside
+   * seven visible rows — coverage claimed through the denominator instead of the numerator (#94).
    *
-   * Asserted here rather than in the engine suite because the count is this component's arithmetic —
-   * `judgeWorkloads` returns seven verdicts either way. The pinned pair is the issue's own
-   * measurement of the default scenario; the row count beside it is what says the denominator moved
-   * for the stated reason rather than because the engine regraded something.
+   * Grading serving at its own four users removed the state both fixes were working around, so the
+   * denominator is the list again. Asserted here rather than in the engine suite because the count
+   * is this component's arithmetic: `judgeWorkloads` returns seven verdicts either way.
    */
-  it('leaves an ungraded workload out of both sides of the headline', () => {
+  it('counts every row, on both sides of the headline', () => {
     render(<App />);
 
-    const ungraded = rows().filter((text) => text.includes('Not measured'));
-    const serving = rows().find((text) => text.includes('Multi-user serving'))!;
-
-    // The default scenario — gpt-oss-120b on a Spark at one user — has exactly one ungraded row.
-    expect(ungraded).toHaveLength(1);
-    expect(serving).toContain('Not measured');
-    // Neutral, not the strongest negative in the vocabulary: `fail` renders "No".
-    expect(serving).not.toMatch(/\bNo\b/);
-
-    /**
-     * **The denominator has to name itself while it is short of the list** (found in review on #94).
-     *
-     * Dropping the ungraded row from both sides is right — it is not evidence in either direction —
-     * but the fraction it leaves is read as a headline, and "5 of 6 workloads" beside seven visible
-     * rows claims the panel covered all of them. That is the same false implication the omission
-     * exists to prevent, arriving through the total instead of through the numerator. It is most
-     * visible one step from here: a rig that clears every graded bar renders "6 of 6", which reads as
-     * a clean sweep of a list whose seventh row says it was never measured.
-     */
-    expect(headline()).toBe('5 of 6 measured workloads');
-    expect(headline()).not.toMatch(/of 7 workloads/);
-    // The qualifier is what stops the fraction claiming coverage it does not have.
-    expect(headline()).not.toBe('5 of 6 workloads');
+    // The default scenario — gpt-oss-120b on a Spark at one user — grades all seven now. The row
+    // that used to be ungraded is the assertion: "Not measured" was a status word this panel could
+    // render, and there is no longer a state that produces it.
+    expect(rows().filter((text) => text.includes('Not measured'))).toHaveLength(0);
+    expect(headline()).toMatch(/of 7 workloads$/);
+    // And the qualifier goes with the shortfall: once the denominator is the whole list there is
+    // nothing to disclose, and "of 7 measured workloads" would imply some other total exists.
+    expect(headline()).not.toMatch(/measured/);
   });
 
-  it('does not paint an ungraded row in the colour that means "will not run"', () => {
+  /**
+   * The row that used to carry the ungraded state, checked for what it says now.
+   *
+   * `--color-critical` is this panel's "No" and Telemetry's "Will not run", and #75 was that word
+   * appearing for "you have not configured this yet". The fix then was a fourth, recessive state;
+   * the fix now is that the question is always answered, so the row wears a real grade at the
+   * setting every visitor arrives on — and the neighbouring row it was confused with, RAG at 31s to
+   * read a 32K document, still means the thing `fail` means.
+   */
+  it('gives multi-user serving a real grade at the setting readers arrive on', () => {
     render(<App />);
 
     const serving = within(strip())
@@ -692,37 +803,47 @@ describe('the workload strip keeps up with the scenario', () => {
       .find((li) => li.textContent?.includes('Multi-user serving'))!;
     const status = serving.children[0] as HTMLElement;
 
-    // `--color-critical` is this panel's "No" and Telemetry's "Will not run". Wearing it for "you
-    // have not configured this yet" made the strongest negative in the vocabulary mean two things —
-    // and the row it sat next to, RAG at 31s to read a 32K document, means the other one. An
-    // ungraded row is not on that scale at all, so it takes recessive ink instead.
-    expect(status.textContent).toContain('Not measured');
-    expect(status.style.color).toBe('var(--color-text-faint)');
-    expect(status.style.color).not.toBe('var(--color-critical)');
-  });
-
-  it('counts every row again as soon as they are all graded', () => {
-    render(<App />);
-
-    // Two users is enough to put serving back on the scale, and nothing else can go ungraded — so
-    // the denominator returns to seven. The precondition for the case above: this asserts the
-    // denominator tracks the grading rather than simply being one smaller.
-    act(() => useConfig.getState().set('concurrency', 2));
-
-    expect(rows().filter((text) => text.includes('Not measured'))).toHaveLength(0);
-    expect(headline()).toMatch(/of 7 workloads$/);
-    // And the qualifier goes away with the shortfall: once the denominator is the whole list there
-    // is nothing to disclose, and "of 7 measured workloads" would imply some other total exists.
-    expect(headline()).not.toMatch(/measured/);
+    expect(status.textContent).toMatch(/Yes|Tight|No/);
+    expect(status.textContent).not.toContain('Not measured');
+    // A status hue, because the row is on the scale — the recessive ink was for a row that was not.
+    expect(status.style.color).not.toBe('var(--color-text-faint)');
+    // And the sentence names the archetype's own users rather than the slider's one.
+    expect(serving.textContent).toMatch(/4 users at /);
+    expect(serving.textContent).not.toMatch(/set concurrency/i);
   });
 
   /**
-   * And the collapse for a configuration that cannot run must not lose the ungraded row's sentence.
+   * The serving row does not move with the slider, on the rendered surface.
    *
-   * The strip says one shared reason above the list and blanks the rows' own — which is right when
-   * all seven say the same thing, and would delete the only sentence explaining an ungraded row. The
-   * refusal path grades all seven `fail`, so the two states cannot meet; this is the assertion that
-   * keeps it that way.
+   * The engine suite asserts the verdict; this asserts what a reader sees, because the defect was
+   * always a rendered one — a row that changed from `○ No` to `● Yes` when nobody had touched the
+   * hardware. Deliberately *not* the headline: six archetypes are still graded at the reader's
+   * concurrency and legitimately move with it, batch most obviously, since its aggregate is summed
+   * across workers. A test asserting the whole panel is slider-independent would be asserting
+   * something false.
+   */
+  it('leaves the serving row alone when the reader moves the concurrency slider', () => {
+    render(<App />);
+    const servingRow = () =>
+      within(strip())
+        .getAllByRole('listitem')
+        .find((li) => li.textContent?.includes('Multi-user serving'))!.textContent;
+
+    const before = servingRow();
+    expect(before).toMatch(/4 users at /);
+
+    for (const concurrency of [2, 4, 8]) {
+      act(() => useConfig.getState().set('concurrency', concurrency));
+      expect(servingRow(), `the serving row changed at ${concurrency} users`).toBe(before);
+    }
+  });
+
+  /**
+   * And the collapse for a configuration that cannot run has to keep working.
+   *
+   * The strip says one shared reason above the list and blanks the rows' own, which is right only
+   * when all seven genuinely say the same thing. That is the refusal path, which grades all seven
+   * `fail`; nothing else in the panel may reach it.
    */
   it('still collapses seven identical reasons into one when nothing runs', async () => {
     const user = userEvent.setup();
@@ -1269,6 +1390,8 @@ describe('the Matrix stays informative', () => {
   const matrix = () => screen.getByRole('region', { name: /Every model on every machine/i });
 
   it('does not blank half the catalog when the format is expert-only', () => {
+    // The claim is about the catalog, so it is measured against the catalog.
+    atFullGrid();
     render(<App />);
     // The default quant is MXFP4, which applies to no dense model. Forcing it across the grid
     // reported "does not apply" for a majority of rows — a quantization fact standing in for a
@@ -1283,6 +1406,7 @@ describe('the Matrix stays informative', () => {
   });
 
   it('says what every cell means without relying on its colour', () => {
+    atFullGrid();
     render(<App />);
     const cells = within(matrix()).getAllByRole('button', { name: / on / });
     expect(cells.length).toBeGreaterThan(100);
@@ -1314,6 +1438,60 @@ describe('the Matrix stays informative', () => {
     const byFit = fills();
     await user.click(within(matrix()).getByRole('button', { name: 'How fast' }));
     expect(fills()).not.toEqual(byFit);
+  });
+
+  /**
+   * The ramp has to be **spent** on this grid too, and it was the worse of the two surfaces
+   * ([#97](https://github.com/MrZoller/bench/issues/97)).
+   *
+   * The Matrix has offered "How responsive" for longer than the Envelope has, and its domain was
+   * floored at zero — which for a reciprocal reduces the placement to `t_fastest / t`, so a cell ten
+   * times slower than the grid's fastest painted the bottom step on a grid spanning a desktop CPU to
+   * a B200. Measured at the default scenario: **1,025 of 1,269 timed cells on one step of seven**,
+   * 81%, against decode's healthy 262 at its busiest. After the fix, 323 at its busiest — 25%.
+   *
+   * Full grid deliberately. The claim is about the shape of the real field, and a dozen cells cannot
+   * have one; a bounded grid would satisfy every threshold here for want of anything to distribute.
+   */
+  it('spends the ramp across the field, not on one step of it', async () => {
+    atFullGrid();
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(within(matrix()).getByRole('button', { name: 'How responsive' }));
+
+    /*
+     * The painted cells, which are the ones on the scale — a pair that cannot run is `transparent`
+     * by design and is not a low score. Reading the inline background is the same channel the ramp
+     * arithmetic sweep below uses.
+     */
+    const painted = within(matrix())
+      .getAllByRole('button', { name: / on / })
+      .map((b) => (b as HTMLElement).style.background)
+      .filter((fill) => fill && fill !== 'transparent');
+    expect(painted.length, 'the grid painted nothing from the ramp').toBeGreaterThan(300);
+
+    // jsdom serialises an inline colour as `rgb(r, g, b)`, so the ramp's hexes are put in the same
+    // form rather than compared across notations — which silently matches nothing.
+    const asRgb = (hex: string) =>
+      `rgb(${[1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16)).join(', ')})`;
+    const held = magnitudeRamp.map((step) => painted.filter((f) => f === asRgb(step)).length);
+    expect(
+      held.reduce((a, b) => a + b, 0),
+      'no painted cell matched a step of the ramp, so the notations disagree'
+    ).toBe(painted.length);
+    /*
+     * Two properties, and the second is the one the old code failed. "Both ends are reached" was
+     * already true of the collapsed ramp — the fastest and slowest cells still landed at the ends —
+     * so only the distribution tells the two apart.
+     */
+    expect(
+      held.filter((n) => n === 0),
+      'a step of the ramp went unused'
+    ).toEqual([]);
+    expect(
+      Math.max(...held) / painted.length,
+      `one step holds ${Math.max(...held)} of ${painted.length} painted cells`
+    ).toBeLessThan(0.5);
   });
 });
 
@@ -1419,6 +1597,7 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
    * where it was and the keyboard has moved twice.
    */
   it('lets the keyboard take the line back from a pointer that has stopped moving', () => {
+    atFullGrid();
     render(<App />);
     const resting = cells()[0];
 
@@ -1456,6 +1635,7 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
    * is the *absence* of an enter rather than the presence of a move.
    */
   it('lets a pointer that never left reclaim the line by moving in place', () => {
+    atFullGrid();
     render(<App />);
     const resting = cells()[3];
 
@@ -1561,6 +1741,7 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
   });
 
   it('punctuates a refusal once, now that the sentence is printed rather than hovered', async () => {
+    atFullGrid();
     const user = userEvent.setup();
     render(<App />);
     // vLLM drives no Mac, no Strix Halo and no CPU host, so this fills the grid with the refusals
@@ -1578,6 +1759,7 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
   });
 
   it('spells out a truncated model row, parameter count and all', () => {
+    atFullGrid();
     render(<App />);
     const heading = matrix().querySelectorAll('tbody th')[3];
 
@@ -1599,6 +1781,7 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
    * derivation, and a grid announces a row header once per row rather than once per cell.
    */
   it('tells a screen reader the row’s parameter count, which no cell states', () => {
+    atFullGrid();
     render(<App />);
     const headings = [...matrix().querySelectorAll('tbody th')];
 
@@ -1640,6 +1823,7 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
     );
 
   it('anchors the ramp with the throughput its own cells report', async () => {
+    atFullGrid();
     const user = userEvent.setup();
     render(<App />);
     await user.click(within(matrix()).getByRole('button', { name: 'How fast' }));
@@ -1653,6 +1837,7 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
   });
 
   it('puts the longest wait at the worse end, which the stored value inverts', async () => {
+    atFullGrid();
     const user = userEvent.setup();
     render(<App />);
     await user.click(within(matrix()).getByRole('button', { name: 'How responsive' }));
@@ -1679,6 +1864,7 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
   });
 
   it('anchors the fit ramp with the most headroom any cell has', () => {
+    atFullGrid();
     render(<App />);
 
     const free = spoken(cells(), /: (\d+)% of the ceiling free\.$/);
@@ -1762,6 +1948,7 @@ describe('the Matrix tells a runtime refusal from a memory one', () => {
   const caption = () => matrix().querySelector('caption')!.textContent ?? '';
 
   it('strikes the columns the runtime cannot drive, and only those', async () => {
+    atFullGrid();
     const user = userEvent.setup();
     render(<App />);
 
@@ -1865,6 +2052,7 @@ describe('the Matrix tells a runtime refusal from a memory one', () => {
    * struck column whose cells kept their ink.
    */
   it('leaves no hole on the grid that a struck heading does not explain', async () => {
+    atFullGrid();
     const user = userEvent.setup();
     render(<App />);
     await user.selectOptions(screen.getByLabelText('Runtime'), 'vllm');
@@ -1909,6 +2097,7 @@ describe('the Matrix tells a runtime refusal from a memory one', () => {
    * sentence — the only channel that says which machine and which runtime — would go with it.
    */
   it('makes a closed column inert without taking it out of the grid', async () => {
+    atFullGrid();
     const user = userEvent.setup();
     render(<App />);
     await user.selectOptions(screen.getByLabelText('Runtime'), 'vllm');
@@ -2010,6 +2199,10 @@ describe('the Matrix tells a runtime refusal from a memory one', () => {
  * unnoticed.
  */
 describe('the Matrix header reserves the rotation once', () => {
+  // #64 is arithmetic over the labels the catalog actually renders — a 40-character name at 45
+  // degrees — and the qualifier rule only has something to do where two rows share a name stem.
+  // A four-column fixture reproduces neither, so this whole describe takes the real header.
+  beforeEach(atFullGrid);
   const matrix = () => screen.getByRole('region', { name: /Every model on every machine/i });
 
   /**
@@ -2129,6 +2322,7 @@ describe('the Matrix header reserves the rotation once', () => {
 
 describe('clicking a Matrix cell loads what that cell was scored under', () => {
   it('carries the quantization the cell was evaluated at, not the one selected', async () => {
+    atFullGrid();
     const user = userEvent.setup();
     render(<App />);
 
@@ -2918,6 +3112,7 @@ describe('a figure derived from a stand-in format says so', () => {
   });
 
   it('marks the Matrix when any row on it was scored at a stand-in', async () => {
+    atFullGrid();
     const user = userEvent.setup();
     render(<App />);
 
@@ -3062,6 +3257,7 @@ describe('the cache-width marker', () => {
     });
 
     it('says so on the Matrix, for every scored cell', async () => {
+      atFullGrid();
       const user = userEvent.setup();
       render(<App />);
 
@@ -3102,6 +3298,7 @@ describe('the cache-width marker', () => {
    * claim and the assertion above would stop distinguishing them.
    */
   it('has unscored cells under MLX, which is why the qualifier is there', async () => {
+    atFullGrid();
     const user = userEvent.setup();
     render(<App />);
 
@@ -3533,6 +3730,11 @@ describe('the heading outline reaches every control and mis-parents nothing', ()
  * it implements no sequential focus navigation at all; that assertion is in `e2e/matrix-grid.spec.ts`.
  */
 describe('the comparison grid is one tab stop, not four hundred', () => {
+  // #52's defect is a property of the real grid: 408 cells was the measurement, and a roving
+  // index over a dozen would satisfy every assertion below while the page went back to one tab
+  // stop per cell on the shipped catalog. Whole-describe rather than per-test for the same
+  // reason — Home/End and the five-row page step mean nothing on a grid three rows tall.
+  beforeEach(atFullGrid);
   const grid = (container: HTMLElement) =>
     container.querySelector<HTMLTableElement>('table[role="grid"]')!;
   const cellsOf = (container: HTMLElement) => [
@@ -3789,6 +3991,7 @@ describe('every control declares an indicator that says it has focus', () => {
     }"`;
 
   it('never declares an indicator thinner than the 2px minimum', () => {
+    atFullGrid();
     const { container } = render(<App />);
     const summaries = controls(container).map((el) => ({ el, ...declared(el) }));
     const withIndicator = summaries.filter((s) => s.thickness !== null);
@@ -3945,6 +4148,7 @@ describe('a mark drawn on the heatmap stays visible on every step of the ramp', 
       .map((name) => colors[name]);
 
   it('keeps one of the selected square’s tones 3:1 against every fill it can land on', () => {
+    atFullGrid();
     render(<App />);
     const matrix = screen.getByRole('region', { name: /every model on every machine/i });
     const cells = within(matrix)
@@ -4864,6 +5068,7 @@ describe('the catalog shows the order it is listed in', () => {
   });
 
   it('marks every column that opens a class band on the Matrix, and only those', () => {
+    atFullGrid();
     render(<App />);
 
     const matrix = screen.getByRole('region', { name: /every model on every machine/i });
