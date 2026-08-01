@@ -52,6 +52,26 @@ describe('useDevicePixelRatio', () => {
     expect(media.queries).toEqual(['(resolution: 2dppx)', '(resolution: 1dppx)']);
   });
 
+  it('reconciles a ratio that changed between first render and subscription', () => {
+    const media = stubMatchMedia();
+    // A getter whose first read (the state initializer, during render) sees the old display and
+    // every later read (the effect, arming and reconciling) sees the new one — the gap a window
+    // moved during a delayed initial render falls into. The armed query already matches the new
+    // ratio, so no event ever corrects state; only the explicit reconcile can.
+    let reads = 0;
+    Object.defineProperty(window, 'devicePixelRatio', {
+      configurable: true,
+      get: () => (++reads === 1 ? 1 : 2),
+    });
+    try {
+      const { result } = renderHook(() => useDevicePixelRatio());
+      expect(result.current).toBe(2);
+      expect(media.queries).toEqual(['(resolution: 2dppx)']);
+    } finally {
+      Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 1 });
+    }
+  });
+
   it('survives jsdom, where matchMedia does not exist', () => {
     vi.stubGlobal('devicePixelRatio', 1.5);
     // No matchMedia stub: the guard leaves the initial reading standing.

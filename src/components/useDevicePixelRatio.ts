@@ -48,6 +48,11 @@ export function useDevicePixelRatio(): number {
       detach = () => media?.removeEventListener('change', onChange);
     };
     arm();
+    // Reconcile the mount gap (raised in review on #150): a ratio that changed between the
+    // state initializer and this effect leaves `arm()` holding a query built around the *new*
+    // ratio — which already matches, so it never fires — over state still carrying the old one.
+    // A no-op re-render when nothing moved; the correction when something did.
+    setDpr(window.devicePixelRatio || 1);
     return () => detach();
   }, []);
 
