@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useSyncExternalStore } from 'react';
 
 /**
- * The display scale a canvas must draw at, as state rather than a read (#129).
+ * The display scale a canvas must draw at, as a subscription rather than a read (#129).
  *
  * Every canvas here sizes its bitmap `CSS box × devicePixelRatio` so cell edges stay crisp on a
  * retina display — but a repaint triggered only by a `ResizeObserver` never fires for a DPR-only
@@ -14,9 +14,13 @@ import { useEffect, useState } from 'react';
  * matches exactly the *current* ratio, re-armed on every fire because each query is one-shot by
  * construction — the moment it stops matching, a new query has to be built around the new ratio.
  *
- * A value rather than a tick, so a draw effect lists it as an ordinary dependency and reads the
- * ratio it was scheduled for. jsdom has no `matchMedia`; the guard leaves the initial value
- * standing.
+ * `useSyncExternalStore` rather than state in an effect, and not only for the lint rule: its
+ * post-subscribe snapshot check is precisely the mount-gap reconciliation this needs (raised in
+ * review on #150). A ratio that changes between first render and subscription leaves the armed
+ * query already matching — it will never fire — and React re-reads the snapshot after
+ * subscribing and re-renders on the difference itself.
+ *
+ * jsdom has no `matchMedia`; the guard subscribes to nothing and the snapshot stands.
  *
  * **The browser half of this is deliberately untested, and the reason is measured, not
  * assumed.** Playwright can only change `deviceScaleFactor` after load through CDP's
@@ -29,32 +33,29 @@ import { useEffect, useState } from 'react';
  * — is the documented standard pattern for exactly this. `e2e/canvases.spec.ts` still proves
  * the draw uses the ratio in force whenever it runs, at 1x and, via the `retina` project, at 2x.
  */
-export function useDevicePixelRatio(): number {
-  const [dpr, setDpr] = useState(() => window.devicePixelRatio || 1);
+function subscribe(onStoreChange: () => void): () => void {
+  if (typeof window.matchMedia !== 'function') return () => {};
 
-  useEffect(() => {
-    if (typeof window.matchMedia !== 'function') return;
-
-    let media: MediaQueryList | null = null;
-    let detach = () => {};
-    const arm = () => {
-      detach();
-      media = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
-      const onChange = () => {
-        setDpr(window.devicePixelRatio || 1);
-        arm();
-      };
-      media.addEventListener('change', onChange);
-      detach = () => media?.removeEventListener('change', onChange);
+  let media: MediaQueryList | null = null;
+  let detach = () => {};
+  const arm = () => {
+    detach();
+    media = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+    const onChange = () => {
+      onStoreChange();
+      arm();
     };
-    arm();
-    // Reconcile the mount gap (raised in review on #150): a ratio that changed between the
-    // state initializer and this effect leaves `arm()` holding a query built around the *new*
-    // ratio — which already matches, so it never fires — over state still carrying the old one.
-    // A no-op re-render when nothing moved; the correction when something did.
-    setDpr(window.devicePixelRatio || 1);
-    return () => detach();
-  }, []);
+    media.addEventListener('change', onChange);
+    detach = () => media?.removeEventListener('change', onChange);
+  };
+  arm();
+  return () => detach();
+}
 
-  return dpr;
+function getSnapshot(): number {
+  return window.devicePixelRatio || 1;
+}
+
+export function useDevicePixelRatio(): number {
+  return useSyncExternalStore(subscribe, getSnapshot);
 }
