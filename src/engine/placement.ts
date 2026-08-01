@@ -92,8 +92,77 @@ export interface Placement {
   /** True when the configuration is over budget and offload cannot rescue it. */
   impossible: boolean;
 
+  /** How the model was actually laid out over the rig. See {@link Assignment}. */
+  assignment: Assignment;
+
   /** Set when the runtime cannot drive this class of device at all. */
   unsupported?: string;
+}
+
+/**
+ * One device's share of the model — or several devices', where they all hold the same thing.
+ *
+ * `layers` and `weightBytes` answer different questions and only `Assignment.parallelism` says
+ * which: under a layer split a device owns `layers` whole layers and `weightBytes` is their total
+ * weight, while under tensor parallelism every device holds a *slice* of every layer, so `layers`
+ * is the model's own count and `weightBytes` is the slice. Reading one as the other is how a
+ * launch command comes to name a split that does not exist.
+ */
+export interface DeviceShare {
+  /** How many of the rig's devices carry this exact load. */
+  deviceCount: number;
+  layers: number;
+  /**
+   * Of `layers`, how many keep their weights on the device rather than streaming from host RAM.
+   *
+   * **Derived from this share's own bytes and this share's own layer count**, never from the
+   * rig-wide `offloadFraction`. That distinction is the whole reason this field exists: under a
+   * layer split the devices hold different amounts, so a rig-wide ratio applied to a per-device
+   * layer count is the #14 defect one level up — and here it would be shipped as a number the
+   * reader pastes into a shell.
+   *
+   * Floored, because the rounding has a safe direction: too few layers on the device is slow, and
+   * one too many is an out-of-memory error on load.
+   */
+  residentLayers: number;
+  weightBytes: number;
+  kvBytes: number;
+}
+
+/**
+ * The layout `planPlacement` packed, kept rather than discarded.
+ *
+ * The packing has always existed — `layerSplitBins` sizes a real assignment, because a hybrid
+ * model's layers are not interchangeable — but only the busiest bin's byte totals survived onto
+ * `Placement`, so nothing downstream could say *how many layers go where*. That is the one
+ * question a launch command has to answer (#136), and recovering it from `offloadFraction`
+ * afterwards is exactly the derivation this engine has already been wrong about once.
+ *
+ * Recording, not modelling: every figure here comes from the same bins the byte totals do.
+ */
+export interface Assignment {
+  /**
+   * The runtime's layout, restated so a reader of this object can interpret `layers` without
+   * fetching the runtime back.
+   */
+  parallelism: RuntimeSpec['parallelism'];
+  /** One entry per distinct load, compressed exactly as the packing is — see `binsPerEntry`. */
+  shares: readonly DeviceShare[];
+  /**
+   * Layers whose weights sit on a device, counted across the whole rig.
+   *
+   * Under a layer split the devices hold *different* layers, so the rig's total is the sum; under
+   * tensor parallelism they all hold slices of the *same* layers, so the rig's count is one
+   * device's and summing would multiply the model by the rig.
+   *
+   * **This is a layout, not yet a flag.** It is the quantity llama.cpp's `-ngl` is, and a caller
+   * emitting that flag still owes it two gates. A `cpu-ram` rig has no GPU to offload *to*, so
+   * every layer reports resident here — truthfully, since nothing spilled — while the honest
+   * `-ngl` for that machine is 0. And llama.cpp counts the output tensor as one position past the
+   * repeating blocks, so "all of them" is `layers + 1` rather than `layers`. Neither belongs in the
+   * engine, which has no notion of a flag; both belong to whatever prints one.
+   */
+  residentLayers: number;
 }
 
 /**
@@ -364,9 +433,23 @@ export function kvShards(model: ModelSpec, shards: number, runtime?: RuntimeSpec
 interface DeviceLoad {
   weightBytes: number;
   kvBytes: number;
+  /**
+   * Whole layers in this bin.
+   *
+   * Counted during the packing rather than recovered afterwards as `weightBytes / perLayerWeight`.
+   * The two agree today only because weights are modelled uniform per layer, while the packing
+   * balances on the *combined* per-layer cost and therefore hands out layers by cache size — so
+   * the derived version is a coincidence of the weight model, and it would go silently wrong the
+   * day per-layer weights stop being uniform.
+   */
+  layers: number;
 }
 
-const loadOf = (d: DeviceLoad) => d.weightBytes + d.kvBytes;
+/**
+ * Structural rather than `DeviceLoad`, because it is also asked of a single *layer* during the
+ * packing, and a layer has no layer count of its own. The two byte fields are all it reads.
+ */
+const loadOf = (d: { weightBytes: number; kvBytes: number }) => d.weightBytes + d.kvBytes;
 
 /**
  * What each device holds under a layer split, weights and cache together.
@@ -413,6 +496,7 @@ function layerSplitBins(
   const bins: DeviceLoad[] = Array.from({ length: devices }, () => ({
     weightBytes: 0,
     kvBytes: 0,
+    layers: 0,
   }));
 
   for (const layer of layers) {
@@ -422,6 +506,7 @@ function layerSplitBins(
     }
     bins[lightest].weightBytes += layer.weightBytes;
     bins[lightest].kvBytes += layer.kvBytes;
+    bins[lightest].layers += 1;
   }
 
   return bins;
@@ -476,6 +561,11 @@ export function planPlacement(
         {
           weightBytes: totalWeightBytes / weightShards(model, shards, runtime),
           kvBytes: totalKvBytes / kvShards(model, shards, runtime),
+          // Every layer, in both cases this branch covers, and for two different reasons: one
+          // device holds all of them whole, and a tensor-parallel rank holds a slice of each. The
+          // bytes beside it are what distinguishes the two, which is why `Assignment.parallelism`
+          // has to travel with the shares.
+          layers: model.layers,
         },
       ];
   /** How many real devices each entry of `bins` describes. */
@@ -512,14 +602,53 @@ export function planPlacement(
    * identical overflows over `n` identical shards gives back exactly the per-device ratio this used
    * to compute.
    */
-  const spilledBytes = canOffload
-    ? binsPerEntry *
-      bins.reduce((sum, bin) => {
-        const over = loadOf(bin) + activations - allocatableBytesPerDevice;
-        return sum + Math.min(Math.max(0, over), bin.weightBytes);
-      }, 0)
-    : 0;
+  const spilledOf = (bin: DeviceLoad) =>
+    canOffload
+      ? Math.min(
+          Math.max(0, loadOf(bin) + activations - allocatableBytesPerDevice),
+          bin.weightBytes
+        )
+      : 0;
+  const spilledBytes = binsPerEntry * bins.reduce((sum, bin) => sum + spilledOf(bin), 0);
   const offloadFraction = Math.min(1, spilledBytes / Math.max(totalWeightBytes, 1));
+
+  /**
+   * The same overflow read as a layer count, which is what a launch command needs.
+   *
+   * **Every quantity in the expression belongs to the same bin**, and that is the point rather
+   * than an implementation detail: `spilled / bin.weightBytes` is this device's own share of its
+   * own weights, and multiplying it by this device's own layer count keeps the whole derivation
+   * inside one device. Reaching for `offloadFraction` here — a rig-wide ratio — and applying it to
+   * a per-device layer count is the #14 defect with the operands swapped, and it would ship as a
+   * number the reader pastes into a shell rather than as a figure on a panel.
+   *
+   * Floored: too few layers on the device costs speed, one too many costs an OOM on load.
+   */
+  const residentLayersOf = (bin: DeviceLoad) => {
+    if (bin.layers <= 0 || bin.weightBytes <= 0) return bin.layers;
+    const resident = bin.weightBytes - spilledOf(bin);
+    return Math.max(0, Math.min(bin.layers, Math.floor((resident / bin.weightBytes) * bin.layers)));
+  };
+
+  const shares: DeviceShare[] = bins.map((bin) => ({
+    deviceCount: binsPerEntry,
+    layers: bin.layers,
+    residentLayers: residentLayersOf(bin),
+    weightBytes: bin.weightBytes,
+    kvBytes: bin.kvBytes,
+  }));
+
+  const assignment: Assignment = {
+    parallelism: runtime.parallelism,
+    shares,
+    // A sum under a layer split, because the cards hold different layers; one card's count under
+    // tensor parallelism, because they hold slices of the same ones. Summing there would report a
+    // rig holding several times the model it is running.
+    residentLayers:
+      runtime.parallelism === 'layer'
+        ? shares.reduce((sum, s) => sum + s.deviceCount * s.residentLayers, 0)
+        : shares.reduce((min, s) => Math.min(min, s.residentLayers), model.layers),
+  };
 
   // Even offloading every weight leaves KV and activations, which must sit on the device. Taken
   // over every device rather than the busiest one: `busiest` is heaviest by *combined* load, and on
@@ -579,6 +708,7 @@ export function planPlacement(
     floorBytesPerDevice,
     offloadFraction,
     impossible,
+    assignment,
     unsupported,
   };
 }
