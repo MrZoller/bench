@@ -92,7 +92,14 @@ filters on `status === 'shipping'`, so the rumoured M5 Ultra has never been a co
 products are 17 × 24 = 408, 17 × 42 = 714 and 35 × 42 = 1,470. The error is invisible at a glance
 because both series grow the same way, and it is the same shape as every other figure in this file
 that was derived from the wrong denominator: the number came from the catalog, and what the reader
-needed came from the surface. #101 carried the wrong figures too and has been corrected.
+needed came from the surface.
+
+The same three numbers were live in two other places, which is the usual shape: the issue body of
+#101, corrected in a comment there, and the timeout rationale in `vite.config.ts` — the one place a
+maintainer is sent to read them, and the one this file tells them not to raise again. That copy is
+corrected on the #101 branch rather than here, because it sits three lines from the timeout that
+change also lowers the pressure on; until that merges the repository holds both readings, and this
+paragraph is the record of which one is right.
 
 **Codex needs a nudge here, and the ROADMAP's "~40 minutes" reads as patience when it is absence.**
 Every clean verdict in the sweep arrived within about two minutes of an `@codex review` comment, and
@@ -965,8 +972,12 @@ ceiling)` keeps an over-budget stack on screen, which is right and stays. What i
   `activeParams` is the _published_ convention, which is not one rule: `publishedActiveParams` returns
   `totalParams` outright on a dense model — embedding and all — and only on an MoE builds an
   embedding-subtracted dense residual back up with the routed share. So on a multimodal model it
-  includes the non-language towers a token never touches, and on a dense one it is not a per-token
-  basis at all. `activeDenseParams`
+  includes the non-language towers a token never touches, and on an untied dense one it includes an
+  input embedding decode never reads. On a **tied, text-only dense** row it is exactly right, because
+  a tied table _is_ the output projection and a full vocab matmul runs every step: Llama 3.2 3B,
+  Qwen3 4B and granite-4.1-8b all have total, published and dense identical to the digit. The rule is
+  not "dense rows are wrong" — it is that the published convention answers a different question and
+  coincides with the physical one only where nothing is being excluded. `activeDenseParams`
   is the always-active dense part and excludes the routed experts. `effectiveActiveParams(model, b)`
   is `activeDenseParams + expertParams * expertFraction(model, b)`, and it is the physical count — the
   one the Bench's aside has to print, since that sentence says a token "routes through" a figure and
@@ -1237,7 +1248,10 @@ ceiling)` keeps an over-budget stack on screen, which is right and stays. What i
   simply `totalParams`.** `publishedActiveParams` returns the total outright when there is no MoE
   derivation, so the embedding is subtracted only on the MoE branch, where the dense residual is
   rebuilt and the routed share added back. It is what reconciles every derived figure with its
-  vendor's, and it is the wrong basis for decode on every row. The engine reads `activeDenseParams`:
+  vendor's, and it is the wrong basis for decode wherever the two conventions disagree — which is
+  every MoE, every multimodal row, and every untied dense one. On a tied text-only dense row they
+  agree exactly, and that is a coincidence of the arithmetic rather than a property to rely on. The
+  engine reads `activeDenseParams`:
   - the embedding is subtracted only when **untied**. A tied table _is_ the output projection —
     a full vocab matmul every step — so subtracting it understates Gemma 3 12B by 5%.
   - **tied-ness comes from the absence of an `lm_head.weight` tensor**, never from
