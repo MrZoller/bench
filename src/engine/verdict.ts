@@ -984,26 +984,36 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
         // never mentioned the user count.
         return (
           shortOfGood(
-            // No internal "and", and no internal comma: `shortOfGood` joins its items with commas
-            // and a final "and", so a bar carrying either of its own leaves the reader unable to
-            // see where one item stops. Three of these can be live at once.
+            /*
+             * No internal "and", and no internal comma: `shortOfGood` joins its items with commas
+             * and a final "and", so a bar carrying either of its own leaves the reader unable to
+             * see where one item stops. Three of these can be live at once.
+             *
+             * **Every clause but the first is gated on `servingGood.holds`**, and the reason is one
+             * this file's own history predicts: the gate was added to the spill clause on review and
+             * the class was four clauses wide, not one. `estimateScenario` returns decode and prefill
+             * figures for an impossible placement — it prices what was asked for and `planPlacement`
+             * separately says it cannot be held — so an ungated clause quotes a rate and a wait the
+             * machine cannot deliver, beside a sentence saying it does not hold four users at all.
+             * When the four-user placement is not a placement, its capacity is the only thing about
+             * it worth reporting.
+             */
             !servingGood.holds &&
               `it holds a turn each for ${usersWord(BARS.serving.tight.users)} but not for the ${BARS.serving.good.users} a serving deployment is graded at`,
-            good.decode.perUserTokensPerSec < BARS.serving.good.rate &&
+            servingGood.holds &&
+              good.decode.perUserTokensPerSec < BARS.serving.good.rate &&
               `${fmt(good.decode.perUserTokensPerSec)} tok/s each at ${usersWord(BARS.serving.good.users)} is under the ${BARS.serving.good.rate} tok/s a served user expects`,
             /*
              * Spill can hold serving back while every printed figure looks healthy: the rate is
              * fine, the fit is fine, and the reason said so.
              *
-             * **Gated on the four-user placement being a placement at all**, which took two rounds to
-             * state correctly. `offloadFraction > 0` alone is not it: `planPlacement` computes the
-             * spilled fraction *before* it decides `impossible` from the non-offloadable floor, so a
-             * discrete GPU whose cache and activations alone are over its ceiling carries a positive
-             * fraction on a configuration that cannot run — and the sentence then contrasts spilling
-             * with "simply not fitting" for a workload that is, exactly, not fitting. On a
-             * unified-memory machine the same clause fired with a zero fraction and negative headroom.
-             * `holds` is the one predicate that excludes both, and the clause above already says four
-             * users do not fit.
+             * `offloadFraction > 0` is not on its own the test for "spilling": `planPlacement`
+             * computes the spilled fraction *before* it decides `impossible` from the
+             * non-offloadable floor, so a discrete GPU whose cache and activations alone are over
+             * its ceiling carries a positive fraction on a configuration that cannot run — and the
+             * sentence then contrasts spilling with "simply not fitting" for a workload that is,
+             * exactly, not fitting. On a unified-memory machine the same clause fired with a zero
+             * fraction and negative headroom. `holds` above excludes both.
              */
             servingGood.holds &&
               good.placement.offloadFraction > 0 &&
@@ -1022,7 +1032,8 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
               good.placement.offloadFraction === 0 &&
               good.placement.headroomBytes <= 0 &&
               'it uses every allocatable byte at four users, so there is nothing left for a fifth',
-            good.prefill.ttftSeconds > BARS.serving.good.ttft &&
+            servingGood.holds &&
+              good.prefill.ttftSeconds > BARS.serving.good.ttft &&
               `${secs(good.prefill.ttftSeconds)}s to first token across ${usersWord(BARS.serving.good.users)} of queued prompts is longer than a served user waits`
           ) ??
           `${usersWord(BARS.serving.good.users)} at ${fmt(good.decode.perUserTokensPerSec)} tok/s each, ${fmt(good.decode.aggregateTokensPerSec)} aggregate, ${secs(good.prefill.ttftSeconds)}s to first token.`

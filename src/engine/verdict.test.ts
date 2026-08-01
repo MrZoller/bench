@@ -527,6 +527,43 @@ describe('serving is graded at its own concurrency, not the slider’s', () => {
     expect(serving.reason).not.toMatch(/spilling to host RAM/);
   });
 
+  it('quotes no four-user figure at all when four users cannot run', () => {
+    /*
+     * The class the two gates above were a subset of (found in review, third round).
+     * `estimateScenario` returns decode and prefill figures for an impossible placement — it prices
+     * what was asked for, and `planPlacement` separately says it cannot be held — so the rate and
+     * TTFT clauses quoted a speed the machine cannot deliver, in the same sentence as "it does not
+     * hold four users".
+     *
+     * Driven with figures that miss *every* good-tier bar, so all four clauses would fire if none
+     * were gated; only the capacity one may.
+     */
+    const overAtFour: Placement = { ...OVER, offloadFraction: 0.4 };
+    const slow = {
+      decode: { ...STUB_SPEED.decode, perUserTokensPerSec: 1, aggregateTokensPerSec: 1 },
+      prefill: { ...STUB_SPEED.prefill, ttftSeconds: 90 },
+    };
+    const serving = new Map(
+      judgeWorkloads({
+        selectedPlacement: RESIDENT,
+        usage: { contextTokens: 2048, concurrency: 1, promptTokens: 2048, kvPrecision: 'fp16' },
+        maxContextTokens: 200_000,
+        runnableContextTokens: 200_000,
+        evaluateAt: (_prompt, _context, _prefix, concurrency) =>
+          concurrency >= WORKLOAD_BARS.serving.good.users
+            ? { ...slow, placement: overAtFour }
+            : { ...STUB_SPEED, placement: RESIDENT },
+      }).map((v) => [v.workload.id, v])
+    ).get('serving')!;
+
+    expect(serving.fitness).toBe('tight');
+    expect(serving.reason).toMatch(/holds a turn each for 2 users but not for the 4/);
+    // The three figures a placement that cannot exist has no business reporting.
+    expect(serving.reason).not.toMatch(/tok\/s each at 4 users/);
+    expect(serving.reason).not.toMatch(/to first token across 4 users/);
+    expect(serving.reason).not.toMatch(/spilling to host RAM/);
+  });
+
   it('says why a rig with no spare byte is only tight', () => {
     /*
      * `pass` requires `headroomBytes > 0`, so a resident placement using precisely its allocatable
