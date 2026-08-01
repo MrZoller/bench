@@ -421,7 +421,8 @@ describe('serving is graded at its own concurrency, not the slider’s', () => {
      * Both figures here come from the placement that actually refused, at two users.
      */
     expect(serving.reason).toBe(
-      '2 users each holding 2.5K of context need 17 GiB against the 16 GiB this machine can allocate.'
+      '2 users each holding 2.5K of context need 17 GiB per device against the 16 GiB each one ' +
+        'can allocate, and this machine has no host tier to spill the weights to.'
     );
   });
 
@@ -446,7 +447,7 @@ describe('serving is graded at its own concurrency, not the slider’s', () => {
           concurrency: 1,
           contextTokens: 2048,
         }).get('serving')!;
-        const stated = /need ([\d.]+) GiB against the ([\d.]+) GiB/.exec(serving.reason);
+        const stated = /need ([\d.]+) GiB[^,]*? against (?:the )?([\d.]+) GiB/.exec(serving.reason);
         if (!stated) continue;
         reached++;
         expect(
@@ -466,6 +467,72 @@ describe('serving is graded at its own concurrency, not the slider’s', () => {
       reached,
       'no rig reached the serving capacity sentence, so this proves nothing'
     ).toBeGreaterThan(0);
+  });
+
+  /**
+   * And the good tier's shortfall may not claim a spill on a machine that cannot spill.
+   *
+   * `impossible` and negative headroom are different claims — this file says so about the predicate
+   * and said the opposite in this sentence. When four served turns are over a unified-memory
+   * machine's ceiling the placement is `impossible` *because* there is no host tier, and its headroom
+   * is negative, so the clause fired and told the reader the weights were spilling to host RAM on the
+   * one class of machine where nothing can. Found in review on #96.
+   */
+  it('never tells a machine with no host tier that its weights are spilling', () => {
+    const overAtFour: Placement = { ...OVER, offloadFraction: 0 };
+    const serving = new Map(
+      judgeWorkloads({
+        selectedPlacement: RESIDENT,
+        usage: { contextTokens: 2048, concurrency: 1, promptTokens: 2048, kvPrecision: 'fp16' },
+        maxContextTokens: 200_000,
+        runnableContextTokens: 200_000,
+        // Two served turns fit; four are over, and cannot offload — the unified-memory shape.
+        evaluateAt: (_prompt, _context, _prefix, concurrency) => ({
+          ...STUB_SPEED,
+          placement: concurrency >= WORKLOAD_BARS.serving.good.users ? overAtFour : RESIDENT,
+        }),
+      }).map((v) => [v.workload.id, v])
+    ).get('serving')!;
+
+    expect(serving.fitness).toBe('tight');
+    expect(serving.reason).toMatch(/holds a turn each for 2 users but not for the 4/);
+    expect(serving.reason).not.toMatch(/spilling to host RAM/);
+  });
+
+  /**
+   * The other half of the capacity sentence, which the catalog sweep above cannot reach.
+   *
+   * `impossible` fires two ways — the machine cannot offload at all, or the non-offloadable floor is
+   * over the ceiling even after spilling every weight — and the honest figure differs by which. The
+   * sweep finds only the first, because a discrete GPU whose *cache alone* will not hold two 2.5K
+   * turns is not a machine in this catalog. Built rather than found, so both branches are pinned.
+   */
+  it('names the cache alone when that is what makes it impossible', () => {
+    const floorOver: Placement = {
+      ...OVER,
+      // Cache and activations past the ceiling on their own, which is what `impossible` tests on a
+      // rig that *can* offload — so the weights are not the reason and must not be the figure.
+      floorBytesPerDevice: 12 * 1024 ** 3,
+      usedBytesPerDevice: 40 * 1024 ** 3,
+      allocatableBytesPerDevice: 10 * 1024 ** 3,
+      offloadFraction: 1,
+    };
+    const serving = new Map(
+      judgeWorkloads({
+        selectedPlacement: RESIDENT,
+        usage: { contextTokens: 2048, concurrency: 1, promptTokens: 2048, kvPrecision: 'fp16' },
+        maxContextTokens: 200_000,
+        runnableContextTokens: 200_000,
+        evaluateAt: () => ({ ...STUB_SPEED, placement: floorOver }),
+      }).map((v) => [v.workload.id, v])
+    ).get('serving')!;
+
+    expect(serving.fitness).toBe('fail');
+    // The floor, not the 40 GiB `used` — which would attribute the refusal to weights the planner
+    // would happily spill, and overstate the requirement fourfold.
+    expect(serving.reason).toContain('12 GiB of cache and overhead per device');
+    expect(serving.reason).not.toContain('40 GiB');
+    expect(serving.reason).toContain('the 10 GiB each one can allocate');
   });
 
   /**
@@ -941,7 +1008,7 @@ describe('a shortfall always reads as a shortfall', () => {
       // and this row is not graded there (#96). Same claim, different quantity.
       const states =
         v.workload.id === 'serving'
-          ? /need .* GiB against the .* GiB this machine can allocate/
+          ? /need .* GiB.* against the .* GiB each one can allocate/
           : /needs .* with room to answer in/;
       expect(v.reason, `${v.workload.id} does not state what it needs`).toMatch(states);
     }

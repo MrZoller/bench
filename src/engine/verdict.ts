@@ -940,8 +940,37 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
            * bytes available, on the device, at this tier's user count. Nothing is re-derived and
            * nothing comes from a different scenario.
            */
-          const { usedBytesPerDevice, allocatableBytesPerDevice } = servingTight.measured.placement;
-          return `${usersWord(BARS.serving.tight.users)} each holding ${ctx(servingTight.contextTokens)} of context need ${gib(usedBytesPerDevice)} against the ${gib(allocatableBytesPerDevice)} this machine can allocate.`;
+          /**
+           * `floorBytesPerDevice`, not `usedBytesPerDevice`, and per device rather than per machine.
+           *
+           * Three corrections in one line, all from review, and the first is the one this file
+           * already wrote down once: **`impossible` is decided on the floor** — cache and activations,
+           * the bytes that cannot go anywhere — while `used` includes weights the planner is willing
+           * to spill. Quoting `used` names a requirement larger than the one that actually refused,
+           * and attributes the refusal to bytes that are offloadable, which is #14's lesson about a
+           * predicate and its sentence reading one value.
+           *
+           * And both figures are per-device fields, so "this machine can allocate" misdescribed a
+           * multi-device rig: two cards with a 23 GiB ceiling apiece would have read as a 23 GiB
+           * machine holding 46.
+           */
+          const { floorBytesPerDevice, usedBytesPerDevice, allocatableBytesPerDevice } =
+            servingTight.measured.placement;
+          /**
+           * **`impossible` has two causes and they need two sentences**, which is the correction
+           * within the correction. `planPlacement` refuses when the non-offloadable floor is over the
+           * ceiling *or* when the machine cannot offload at all, and the honest figure differs:
+           * quoting `used` on the first attributes the refusal to weights the planner would happily
+           * spill, and quoting the floor on the second reports 1.3 GiB against a 16 GiB ceiling — a
+           * sentence disproving its own verdict, which is what the first draft of this shipped on the
+           * very Mac mini the issue was filed about.
+           */
+          const floorOver = floorBytesPerDevice > allocatableBytesPerDevice;
+          const per = `${usersWord(BARS.serving.tight.users)} each holding ${ctx(servingTight.contextTokens)} of context`;
+          const ceiling = `the ${gibDown(allocatableBytesPerDevice)} each one can allocate`;
+          return floorOver
+            ? `${per} need ${gibUp(floorBytesPerDevice)} of cache and overhead per device — which offload cannot move — against ${ceiling}.`
+            : `${per} need ${gibUp(usedBytesPerDevice)} per device against ${ceiling}, and this machine has no host tier to spill the weights to.`;
         }
         if (tight.decode.perUserTokensPerSec < BARS.serving.tight.rate) {
           return `${fmt(tight.decode.perUserTokensPerSec)} tok/s each at ${usersWord(BARS.serving.tight.users)}, under the ${BARS.serving.tight.rate} tok/s a shared deployment needs — and sharing the device further cannot raise it.`;
@@ -962,9 +991,19 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
               `it holds a turn each for ${usersWord(BARS.serving.tight.users)} but not for the ${BARS.serving.good.users} a serving deployment is graded at`,
             good.decode.perUserTokensPerSec < BARS.serving.good.rate &&
               `${fmt(good.decode.perUserTokensPerSec)} tok/s each at ${usersWord(BARS.serving.good.users)} is under the ${BARS.serving.good.rate} tok/s a served user expects`,
-            // Spill can hold serving back while every printed figure looks healthy: the rate is
-            // fine, the fit is fine, and the reason said so.
-            good.placement.headroomBytes <= 0 &&
+            /*
+             * Spill can hold serving back while every printed figure looks healthy: the rate is
+             * fine, the fit is fine, and the reason said so.
+             *
+             * **Gated on the placement actually offloading**, which is not the same test as negative
+             * headroom — this file's own note says so about `impossible`, and this clause was the
+             * counter-example. When the four-user tier is over a unified-memory machine's capacity
+             * the placement is `impossible` *because* it cannot offload, and its headroom is
+             * negative, so an ungated clause told the reader the weights were spilling to host RAM
+             * on the one class of machine where nothing can. The clause above already says four
+             * users do not fit; this one is about the case where they do, slowly.
+             */
+            good.placement.offloadFraction > 0 &&
               'the weights are spilling to host RAM so every additional user makes that worse rather than simply not fitting',
             good.prefill.ttftSeconds > BARS.serving.good.ttft &&
               `${secs(good.prefill.ttftSeconds)}s to first token across ${usersWord(BARS.serving.good.users)} of queued prompts is longer than a served user waits`
@@ -1032,17 +1071,32 @@ function secs(value: number): string {
  * so a shortfall always looks like one.
  */
 /**
- * Bytes as GiB, rounded *up* on a requirement and printed to a tenth below 10.
+ * Bytes as GiB, in the two directions a shortfall sentence needs — and it needs both.
  *
- * The direction follows the bound, like `secs` and unlike `ctx`: a figure printed as what a
- * configuration needs must never round down into looking affordable. Both sides of the serving
- * capacity sentence use it, so the shortfall cannot be an artefact of two roundings.
+ * The direction follows the *bound*, like `secs` and unlike `ctx`. A requirement must never round
+ * down into looking affordable, so `gibUp` ceilings; a capacity must never round up into looking
+ * sufficient, so `gibDown` floors. **Rounding both the same way is what makes a real failure print
+ * as a tie** (found in review): the shipped DGX Spark / vLLM / MiniMax M2.7 AWQ scenario needs
+ * 115.89 GiB against 115.2 at two users, and one ceiling on each side rendered
+ * "need 116 GiB against the 116 GiB" beside a `fail` — a sentence disproving its own verdict, which
+ * is the exact defect the sentence it replaced was written for.
+ *
+ * A tenth below 10 GiB, where a whole number is most of the quantity; whole above it, where a tenth
+ * is noise. Both scales keep their direction.
  */
-function gib(bytes: number): string {
+function gibUp(bytes: number): string {
+  return gibAt(bytes, Math.ceil);
+}
+
+function gibDown(bytes: number): string {
+  return gibAt(bytes, Math.floor);
+}
+
+function gibAt(bytes: number, round: (value: number) => number): string {
   const value = bytes / 1024 ** 3;
   if (!Number.isFinite(value)) return '—';
-  if (value >= 10) return `${Math.ceil(value)} GiB`;
-  return `${(Math.ceil(value * 10) / 10).toFixed(1)} GiB`;
+  if (value >= 10) return `${round(value)} GiB`;
+  return `${(round(value * 10) / 10).toFixed(1)} GiB`;
 }
 
 function ctx(tokens: number): string {
