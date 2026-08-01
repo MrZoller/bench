@@ -46,4 +46,16 @@ CI runs **lint → format:check → test → build → test:e2e**; run them befo
   safetensors index. Unknown architecture is a loud failure, never a guess.
 - Every `devices.json` row carries a `source` URL and a `status` (`shipping`/`announced`/
   `rumored`). Pre-release specs must stay visibly labelled in the UI.
+- **`devices.json` row order is display order.** Nothing sorts it: both the Hardware picker and the
+  Matrix render the file as written. Rows are grouped by `class` — `discrete-gpu`, `unified-soc`,
+  `cpu-ram` — and a vendor's rows are contiguous within a class; `catalog.test.ts` enforces both.
+  Inside a vendor, **`$comment-order` in the file is the statement of record** and no test can check
+  it: a product line is contiguous, newest generation leading and largest bin first _within a tiered
+  ladder_, and newest-released first where a line is not one — which is why the datacenter GPUs read
+  B200, H200, L40S, H100, A100 rather than grouping Hopper together. Read it before moving a row; a
+  half-remembered version of the rule is how the same list gets regrouped against itself.
+- **`quants.ts` and `runtimes.ts` are the same contract**, stated in each file's order docblock and
+  checked in `quants.test.ts` / `runtimes.test.ts`: `QUANTS` is grouped by checkpoint family and runs
+  widest-first inside a family (so it is _not_ globally bpw-descending — Q8_0 follows NVFP4), and
+  `RUNTIMES` runs widest catalog coverage first.
 - Load the `dataviz` skill before writing any chart, meter, heatmap, or palette code.

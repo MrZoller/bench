@@ -6,12 +6,12 @@ import {
   type MatrixCell,
   type MatrixMeasure,
 } from '@/engine/matrix';
-import { DEVICES, MODELS, getDevice, getModel } from '@/data/catalog';
+import { DEVICES, getDevice, getModel, modelsByPopularity } from '@/data/catalog';
 import { getQuant } from '@/data/quants';
 import { getRuntime, kvSubstitutionFor, runtimeDrives, substitutionFor } from '@/data/runtimes';
 import { FALLBACK_QUANT_ID, quantApplies } from '@/lib/quantChoice';
 import { magnitudeFill, magnitudeRamp } from '@/design/tokens';
-import { MEASURES, kvLabel } from '@/lib/stops';
+import { DEVICE_CLASS_LABELS, MEASURES, kvLabel } from '@/lib/stops';
 import { PanelCount } from './PanelCount';
 import { params, percent, rate, seconds, tokens } from '@/lib/format';
 import { useConfig, type Config } from '@/store/config';
@@ -52,6 +52,50 @@ const SUBSTITUTE_QUANT_IDS = ['q4_k_m', 'awq_4bit', 'int8', 'q8_0', FALLBACK_QUA
 export const DETAIL_ANCHOR_ID = 'bench-detail';
 
 /**
+ * What separates one class band of columns from the next: two spacing steps of the panel's own
+ * surface, which is 8px at the default root.
+ *
+ * **A gap rather than a rule, because the grid's existing separator between squares is already a
+ * gap.** The table is `border-separate` with `border-spacing-0.5`, so every square is bounded by half
+ * a spacing step of surface — the `dataviz` guidance's "2px surface gap between fills" — and a band
+ * boundary is that same channel, five times wider: `2 × --spacing` on top of the `0.5 × --spacing`
+ * gutter. Ink was the alternative and it has nowhere to come from:
+ * `tokens.ts` records `--color-border` at 1.18:1 on this fill, which is why it is the panel edge and
+ * not a control boundary, and anything strong enough to read here would compete with the two borders
+ * a cell already uses to mean something (dashed for "does not fit", warning for "past the default
+ * allocation").
+ *
+ * **A border rather than padding, and that is geometry rather than taste.** The rotated column label
+ * is absolutely positioned at `right-1/2` of its `th`, which resolves against the *padding* box —
+ * padding would shift the label off the centre of the square it names, a border does not. The column
+ * is widened by exactly the gap (`w-7` → `w-9`, and the coarse-pointer `w-11` → `w-13`) so the square
+ * inside keeps its width and its 44px touch target: the gap is added to the column, not taken out of
+ * the cell.
+ *
+ * **`calc(var(--spacing) * 2)` rather than `8px`, and that is the whole of what "exactly the gap"
+ * means.** Every length this is compensated against is a multiple of `--spacing`, which is `0.25rem`:
+ * `.w-9{width:calc(var(--spacing) * 9)}` against `.w-7{width:calc(var(--spacing) * 7)}` is a
+ * difference of two steps, and `border-spacing-0.5` is half a step. Written as `8px` the arithmetic
+ * held at a 16px root and nowhere else — at 200% text the column grew by 16px while the border stayed
+ * at 8, so two of the 42 squares painted 8px (14%) wider than every other square, and the boundary
+ * gutter fell from 5x an ordinary one to 3x. That is #44 exactly ("a length measured from text belongs
+ * in the same units as the text"), one token away from the `marks.lineWidth` lesson in `BudgetBar`:
+ * two literals for one quantity, here across a *unit* boundary rather than across a file. In the
+ * spacing unit the identity `w-7 + gap = w-9` is true at every root, and
+ * `e2e/catalog-order.spec.ts` measures it at 16px and at 32px for that reason.
+ *
+ * Two boundaries at 8px is 16px on a grid whose columns already reach ~1405px, which is the other
+ * reason it is spent this way. #64 and #34 are both this header overflowing, so a separator that
+ * reserved space per column, or leaned on free space that does not exist, would reopen them; this is
+ * the whole cost, it is in flow, and `e2e/catalog-order.spec.ts` measures it at 320px.
+ *
+ * `data-band-start` carries no style and exists so a spec can find these columns without naming the
+ * utility that draws them — the e2e locators named that border class, so the unit fix above would have
+ * silently emptied every one of them and passed.
+ */
+const BAND_GAP = 'border-l-[calc(var(--spacing)*2)] border-l-[var(--color-surface)]';
+
+/**
  * What the readout under the grid is pointed at.
  *
  * A position rather than a sentence, so the line is derived from the same state the grid is drawn
@@ -89,14 +133,47 @@ export function Matrix({ config }: { config: Config }) {
    */
   const kv = kvLabel(runtime, config.kvPrecision);
 
-  const models = useMemo(
-    () =>
-      [...MODELS].sort((a, b) => (b.popularity?.downloads ?? 0) - (a.popularity?.downloads ?? 0)),
-    []
-  );
+  /**
+   * The rows, most-downloaded first — from the catalog's helper rather than a comparator here.
+   *
+   * This file and `Bench.tsx` each held a hand-written copy of the same `sort` while
+   * `modelsByPopularity()` — the named helper that does exactly this — was called by nothing outside
+   * its own test: one ordering rule with three definitions and the canonical one dead (#79). The two
+   * grids agreed by coincidence, which is the same coincidence `kvLabel` and `columnReadout` were
+   * written to remove one seam over.
+   */
+  const models = useMemo(() => modelsByPopularity(), []);
   // Shipping hardware only: a rumoured row would put speculative specs into a comparison people
   // read as a shortlist, and `status` exists precisely so that never happens silently.
   const devices = useMemo(() => DEVICES.filter((d) => d.status === 'shipping'), []);
+
+  /**
+   * The class bands: which columns open one, and what to call them.
+   *
+   * `devices.json` is grouped by class and both surfaces render it in file order, so the bands were
+   * already there and nothing marked them — the discrete-GPU, unified-memory and CPU columns ran
+   * together as one 42-column strip, and the left-to-right progression that makes 42 rotated headings
+   * readable at all was invisible (#79). The gap below is the channel a sighted reader gets and the
+   * caption is the channel a screen reader gets, which is the same split the struck headings already
+   * make; both come from this one walk, because a mark and the sentence naming it are one claim.
+   *
+   * Derived from *adjacency* rather than from the declared order in `DEVICE_CLASS_LABELS`, for the
+   * reason `Select` groups by adjacency: this marks the runs the catalog actually has, so a row out of
+   * its band renders as an extra gap rather than as a grid quietly re-sorted. `catalog.test.ts` is
+   * what fails first.
+   *
+   * The first column opens the first band and gets no separator — there is nothing to its left to be
+   * separated from, and a gap there would be indistinguishable from padding. The label comes verbatim
+   * from the table the picker's `<optgroup>` headings come from, so a reader who has met "Discrete
+   * GPUs" in the Hardware control hears the same words here.
+   */
+  const bands = useMemo(() => {
+    const opens = devices.filter((d, i) => i === 0 || d.class !== devices[i - 1].class);
+    return {
+      labels: opens.map((d) => DEVICE_CLASS_LABELS[d.class]),
+      separated: new Set(opens.slice(1).map((d) => d.id)),
+    };
+  }, [devices]);
 
   /**
    * The columns this runtime cannot drive at all — one fact about the scenario, not one per row.
@@ -653,8 +730,17 @@ export function Matrix({ config }: { config: Config }) {
                 state, the same rule the legend below follows. */}
             {undrivable.size > 0 &&
               ` ${undrivable.size} of the ${devices.length} device columns are hardware ${runtime.label} does not support at any size, struck through in the header: their cells are empty because of the runtime, not for want of memory.`}{' '}
-            This grid is a single tab stop: use the arrow keys to move between cells, Home and End
-            for the ends of a row, and Control with Home or End for the ends of the grid.
+            {/* **What each axis is sorted by, which is the one fact this grid's own headings cannot
+                carry** (#79). Both orders were deliberate and unstated: 35 rows in download order
+                with nothing naming the criterion — a row heading here is name-only, where the Bench's
+                Model picker at least prints "N downloads/mo" under the selection — and a column
+                sequence whose gaps now say *that* there is a boundary without saying what divides it.
+                This is also the whole of the band channel for a reader who cannot see the gap, which
+                is why it is one sentence with the mark rather than prose somewhere else. */}
+            Columns run left to right in {bands.labels.length} bands — {bands.labels.join(', ')} —
+            with a gap between them, and rows run most-downloaded first. This grid is a single tab
+            stop: use the arrow keys to move between cells, Home and End for the ends of a row, and
+            Control with Home or End for the ends of the grid.
           </caption>
           <thead>
             <tr>
@@ -687,7 +773,17 @@ export function Matrix({ config }: { config: Config }) {
                   // Fixed width, and the label taken out of flow below, so a long name cannot
                   // stretch its own column — "RTX PRO 6000 Blackwell" was three times the width
                   // of its neighbours and skewed the whole grid.
-                  className="relative w-7 min-w-7 p-0 align-bottom font-normal text-[var(--color-text-faint)] [@media(pointer:coarse)]:w-11 [@media(pointer:coarse)]:min-w-11"
+                  //
+                  // A column opening a class band carries the separator, and it is `BAND_GAP`:
+                  // whitespace in the panel's own colour, four times the `border-spacing` between
+                  // squares. See the constant for why it is a border, why it is a gap, and why both
+                  // lengths are in the spacing unit.
+                  data-band-start={bands.separated.has(device.id) ? '' : undefined}
+                  className={`relative p-0 align-bottom font-normal text-[var(--color-text-faint)] ${
+                    bands.separated.has(device.id)
+                      ? `${BAND_GAP} w-9 min-w-9 [@media(pointer:coarse)]:w-13 [@media(pointer:coarse)]:min-w-13`
+                      : 'w-7 min-w-7 [@media(pointer:coarse)]:w-11 [@media(pointer:coarse)]:min-w-11'
+                  }`}
                   style={{ height: headerBand.height }}
                   /**
                    * The runtime refusal, for a reader who is hearing this column rather than seeing
@@ -809,7 +905,18 @@ export function Matrix({ config }: { config: Config }) {
                   {model.name}
                 </th>
                 {cells[r].map((cell, c) => (
-                  <td key={devices[c].id} role="gridcell" className="p-0">
+                  // The band separator, on the same columns as the header's and by the same
+                  // mechanism, so the gap runs the full height of the grid rather than stopping at
+                  // the labels. On the `td` rather than on the button inside it: the button's borders
+                  // are already two other channels — dashed for "measured and does not fit", warning
+                  // for "past the default allocation" — and a third meaning on the same property is
+                  // how a legend comes to key a mark that means two things.
+                  <td
+                    key={devices[c].id}
+                    role="gridcell"
+                    data-band-start={bands.separated.has(cell.deviceId) ? '' : undefined}
+                    className={`p-0 ${bands.separated.has(cell.deviceId) ? BAND_GAP : ''}`}
+                  >
                     <button
                       type="button"
                       ref={(node) => {
@@ -1158,6 +1265,34 @@ export function Matrix({ config }: { config: Config }) {
           />
           will not run
         </span>
+        {/* The band gap, keyed rather than left to be inferred.
+            The gap is a mark this legend keys every neighbour of — the dashed border, the struck
+            heading, the selection ring, the warning border — and it shipped with its only sentence
+            inside a `sr-only` caption, so a screen-reader user was told the columns are grouped and a
+            sighted reader met two channels of whitespace with nothing on the page naming them. That is
+            #73's asymmetry, in the same direction and on the same surface. A boundary legible only to
+            someone who already knows that `dgx-spark` is not a discrete GPU is not a channel a legend
+            gets to rely on.
+
+            The bands are named here in order, so the key also answers the question the gap raises
+            rather than only labelling it — which makes this the visible half of the caption's column
+            sentence rather than a second copy of it. The words come from `DEVICE_CLASS_LABELS`, the
+            same table the picker's `<optgroup>` headings come from.
+
+            The sample *is* the mark, like the struck heading above: two squares in the empty-cell
+            colour with the real gap between them, `w-2` being the `2 × --spacing` the columns spend.
+            Conditional like its neighbours — one class band is a grid with no boundary in it, and a
+            key for a mark that appears nowhere is worse than prose. */}
+        {bands.labels.length > 1 && (
+          <span className="flex items-center gap-1.5">
+            <span aria-hidden="true" className="inline-flex items-center">
+              <span className="h-3 w-1.5 rounded-sm bg-[var(--color-grid)]" />
+              <span className="h-3 w-2" />
+              <span className="h-3 w-1.5 rounded-sm bg-[var(--color-grid)]" />
+            </span>
+            a gap between columns — the hardware class changes: {bands.labels.join(', ')}
+          </span>
+        )}
         {/* The other refusal — the one the swatch above used to absorb (#72).
             A state the grid is really in gets a line, and only when it is in it: the same rule the
             four conditional keys below follow, and the reason this cannot simply be listed

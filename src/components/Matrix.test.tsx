@@ -33,10 +33,20 @@ import { DEFAULT_CONFIG, useConfig } from '@/store/config';
  * 1677.6 GiB against the same 1450 — so the margin is 15.7% and it comes from the *weights*, which
  * no context or concurrency stop moves.
  */
+/**
+ * **Both the array and the ordering helper, because the Matrix reads the helper** (#79).
+ *
+ * It used to sort `MODELS` itself, so replacing the array was the whole seam. The rows now come from
+ * `modelsByPopularity()` — one definition of the ordering rule instead of three — and that function
+ * closes over the real catalog, so a mock that replaced only the array left this grid rendering all
+ * 35 models while every assertion below went on describing a one-row one. Overriding one and not the
+ * other is a mock that lies quietly, which is why the sort order is stated here too: one model, so
+ * the order is not what is under test, but the *seam* is.
+ */
 vi.mock('@/data/catalog', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/data/catalog')>();
   const only = actual.MODELS.filter((m) => m.id === 'moonshotai/Kimi-K2-Instruct');
-  return { ...actual, MODELS: only };
+  return { ...actual, MODELS: only, modelsByPopularity: () => only };
 });
 
 const { Matrix } = await import('./Matrix');

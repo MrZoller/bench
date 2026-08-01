@@ -1,9 +1,9 @@
 import { useId, useMemo } from 'react';
-import { DEVICES, MODELS, RUNTIMES, evaluateConfig, useConfig } from '@/store/config';
+import { DEVICES, RUNTIMES, evaluateConfig, useConfig } from '@/store/config';
 import { useUrlSync } from '@/store/useUrlSync';
 import { getRuntime, kvSubstitutionFor, runtimeDrives, substitutionFor } from '@/data/runtimes';
 import { QUANTS, getQuant } from '@/data/quants';
-import { getDevice, getModel } from '@/data/catalog';
+import { getDevice, getModel, modelsByPopularity } from '@/data/catalog';
 // The decode basis itself, so the sentence that attributes speed to a figure prints the figure the
 // speed was computed from rather than a near neighbour of it.
 import { effectiveActiveParams } from '@/engine/weights';
@@ -24,6 +24,7 @@ import { classifyDecode } from '@/lib/verdicts';
 import { quantApplies } from '@/lib/quantChoice';
 import {
   CONCURRENCY_STOPS,
+  DEVICE_CLASS_LABELS,
   DEVICE_COUNT_STOPS,
   KV_PRECISIONS,
   PROMPT_STOPS,
@@ -201,25 +202,32 @@ export function Bench() {
    */
   const shardable = canShard(device);
 
+  /**
+   * Most-downloaded first, through the catalog's own helper rather than a comparator written here.
+   *
+   * `modelsByPopularity()` existed and was used by nothing outside its own test, while this file and
+   * `Matrix.tsx` each carried a hand-written copy of the same `sort` — three definitions of one
+   * ordering rule, with the canonical one dead (#79). The two surfaces agreed by coincidence, which
+   * is the coincidence this repo keeps paying for: `kvLabel`, `SETTING_LABELS` and `columnReadout`
+   * are all the same lesson at other seams.
+   */
   const modelOptions = useMemo(
     () =>
-      [...MODELS]
-        .sort((a, b) => (b.popularity?.downloads ?? 0) - (a.popularity?.downloads ?? 0))
-        .map((m) => ({
-          value: m.id,
-          label: `${m.name} — ${params(m.totalParams)}${
-            m.expertParams > 0 ? ` (${params(m.activeParams)} active)` : ''
-          }`,
-          // The override note takes precedence: six models carry a hand-entered totalParams,
-          // and every figure on screen derives from it. That provenance outranks a download count.
-          note:
-            m.overrideNote ??
-            (m.popularity && m.popularity.downloads > 0
-              ? `${compact(m.popularity.downloads)} downloads/mo${
-                  m.popularity.measuredOn ? ` on ${m.popularity.measuredOn}` : ''
-                }`
-              : undefined),
-        })),
+      modelsByPopularity().map((m) => ({
+        value: m.id,
+        label: `${m.name} — ${params(m.totalParams)}${
+          m.expertParams > 0 ? ` (${params(m.activeParams)} active)` : ''
+        }`,
+        // The override note takes precedence: six models carry a hand-entered totalParams,
+        // and every figure on screen derives from it. That provenance outranks a download count.
+        note:
+          m.overrideNote ??
+          (m.popularity && m.popularity.downloads > 0
+            ? `${compact(m.popularity.downloads)} downloads/mo${
+                m.popularity.measuredOn ? ` on ${m.popularity.measuredOn}` : ''
+              }`
+            : undefined),
+      })),
     []
   );
 
@@ -267,6 +275,21 @@ export function Bench() {
           label: deviceOptionLabel(d),
           note: claim,
           detail,
+          /**
+           * The band this row is in, which is the list's order made visible (#79).
+           *
+           * `DEVICES` is `devices.json` mapped, and the file is grouped by class — so this is a
+           * heading over a run that already exists rather than a regrouping. `Select` builds one
+           * `<optgroup>` per contiguous run, so the picker cannot reorder the catalog to make its
+           * groups: if a row ever moved out of its band, the control would render two groups with one
+           * heading instead of quietly re-sorting, and `catalog.test.ts` fails first either way.
+           *
+           * #69 argued against an `<optgroup>` and was right about the grouping it was offered: a
+           * group over `status` would have put the one rumoured row in a heading of its own and
+           * imposed an order on the picker, which is why it left the question to this issue. Class is
+           * the grouping the file already has.
+           */
+          group: DEVICE_CLASS_LABELS[d.class],
         };
       }),
     []

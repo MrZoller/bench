@@ -6,7 +6,7 @@ import { useConfig, DEFAULT_CONFIG, estimateConfig } from '@/store/config';
 import { configToShareSearch } from '@/store/url';
 import { DEVICES, MODELS, getDevice, getModel } from '@/data/catalog';
 import { params, tokens } from '@/lib/format';
-import { SETTING_LABELS, SETTING_NOTES, deviceCountNote } from '@/lib/stops';
+import { DEVICE_CLASS_LABELS, SETTING_LABELS, SETTING_NOTES, deviceCountNote } from '@/lib/stops';
 import { DETAIL_ANCHOR_ID } from '@/components/Matrix';
 // The one component this file mounts on its own, and only to sweep a renderer over all 43 catalog
 // rows — see "leaves none of the markup in any note the catalog carries".
@@ -4749,5 +4749,172 @@ describe('the aside prints the basis the speed is actually computed from', () =>
     expect(aside.textContent, 'prints the published figure, not the physical one').not.toContain(
       params(moe.activeParams)
     );
+  });
+});
+
+/**
+ * The list order, on the two surfaces that render it (#79).
+ *
+ * `devices.json`'s row order *is* the display order — `catalog.ts` maps the file straight through and
+ * neither surface sorts — and until this landed nothing anywhere said so, enforced it, or showed it.
+ * The picker was a flat list of 43 options, so scrolling from `rtx-3090` to `rtx-pro-6000-blackwell`
+ * to `h100-sxm` crossed two segment boundaries in silence; the Matrix ran the three classes together
+ * as one 42-column strip and its caption explained the arrow keys while naming neither axis.
+ *
+ * `catalog.test.ts` owns the file's own structure — class runs, vendor runs, and the prose that states
+ * them. What is asserted here is the other half of the issue: that the structure reaches a reader.
+ * Every claim below is about rendered markup and fails against the flat version.
+ */
+describe('the catalog shows the order it is listed in', () => {
+  const hardware = () => screen.getByLabelText(SETTING_LABELS.deviceId) as HTMLSelectElement;
+
+  /**
+   * The bands a given set of rows has, in file order, paired with the heading each expects.
+   *
+   * Parameterised because the two surfaces render different sets: the picker offers the whole catalog,
+   * the Matrix only the shipping rows. They happen to produce the same three bands today, and
+   * "happen to" is what this file keeps recording as the thing that stops being true.
+   */
+  const expectedBands = (rows: readonly (typeof DEVICES)[number][]) => {
+    const bands: { label: string; ids: string[] }[] = [];
+    for (const device of rows) {
+      const label = DEVICE_CLASS_LABELS[device.class];
+      const last = bands.at(-1);
+      if (last && last.label === label) last.ids.push(device.id);
+      else bands.push({ label, ids: [device.id] });
+    }
+    return bands;
+  };
+
+  it('gives the Hardware picker a heading per class band, over the rows the file already grouped', () => {
+    render(<App />);
+
+    const groups = [...hardware().querySelectorAll('optgroup')].map((group) => ({
+      label: group.label,
+      ids: [...group.querySelectorAll('option')].map((option) => option.value),
+    }));
+
+    // The premise, so a picker that grew one group and lost the rest cannot pass the comparison below
+    // for the wrong reason.
+    expect(groups.length, 'the picker renders no optgroups at all').toBe(3);
+    // Whole thing at once — headings *and* membership *and* sequence. Grouping by filtering the
+    // catalog three times would satisfy a check on the headings while quietly owning the order.
+    expect(groups).toEqual(expectedBands(DEVICES));
+  });
+
+  /**
+   * That the grouping cannot reorder the list, demonstrated on a list where reordering would show.
+   *
+   * Asserting the catalog's own order against the rendered options proves nothing here: `DEVICES` is
+   * already class-grouped in the declared band order, so a `Select` that built its groups by
+   * filtering the list three times would emit the same sequence and pass. This is the mechanism
+   * instead — `optionRuns` splits on a *change* of group, so an interleaved list renders as two runs
+   * with one heading rather than being tidied into one, and the sequence the call site passed survives
+   * untouched. That distinction is why the Hardware picker can be grouped at all without taking
+   * ownership of `devices.json`'s order.
+   */
+  it('groups a Select by adjacency, so no call site loses the order it passed', () => {
+    const options = [
+      { value: 'a', label: 'A', group: 'First' },
+      { value: 'b', label: 'B', group: 'Second' },
+      { value: 'c', label: 'C', group: 'First' },
+      { value: 'd', label: 'D' },
+    ];
+    render(<Select label="Interleaved" value="a" onChange={() => {}} options={options} />);
+
+    const select = screen.getByLabelText('Interleaved') as HTMLSelectElement;
+    expect([...select.options].map((o) => o.value)).toEqual(['a', 'b', 'c', 'd']);
+    expect(
+      [...select.querySelectorAll('optgroup')].map((g) => ({
+        label: g.label,
+        ids: [...g.querySelectorAll('option')].map((o) => o.value),
+      }))
+    ).toEqual([
+      { label: 'First', ids: ['a'] },
+      { label: 'Second', ids: ['b'] },
+      { label: 'First', ids: ['c'] },
+    ]);
+    // And an option with no group is rendered outside every heading rather than swept into the last
+    // one — the two forms compose, which is what lets the other three pickers stay ungrouped.
+    expect(select.querySelector('option[value="d"]')!.closest('optgroup')).toBeNull();
+  });
+
+  it('marks every column that opens a class band on the Matrix, and only those', () => {
+    render(<App />);
+
+    const matrix = screen.getByRole('region', { name: /every model on every machine/i });
+    const shipping = DEVICES.filter((d) => d.status === 'shipping');
+    // Adjacency, like the component: the first column opens the first band and needs no separator,
+    // since there is nothing to its left to be separated from.
+    const expected = shipping.filter((d, i) => i > 0 && d.class !== shipping[i - 1].class);
+    expect(expected.length, 'the shipping catalog spans one class, so this proves nothing').toBe(2);
+
+    /**
+     * Every column's heading, paired with whether it carries the band gap.
+     *
+     * By `data-band-start` rather than by the utility class that draws the gap. The first version of
+     * this read `classList.contains()` on the border utility, and that border is a
+     * `calc(var(--spacing) * 2)` now — the same length in the unit the columns are measured in — so a
+     * class-name assertion would have gone quietly false while the markup got *more* correct. The
+     * attribute is what the component promises; the border is how it currently looks.
+     */
+    const separated = [...matrix.querySelectorAll('thead th')]
+      .slice(1)
+      .map((th, i) => ({ id: shipping[i].id, gap: th.hasAttribute('data-band-start') }));
+    expect(separated.filter((c) => c.gap).map((c) => c.id)).toEqual(expected.map((d) => d.id));
+
+    // And down the grid, not only across the header — the gap is a full-height channel or it is a
+    // decoration on the labels. One body row is enough: the class is a property of the column.
+    const firstRow = matrix.querySelectorAll('tbody tr')[0];
+    const cells = [...firstRow.querySelectorAll('td')].map((td, i) => ({
+      id: shipping[i].id,
+      gap: td.hasAttribute('data-band-start'),
+    }));
+    expect(cells.filter((c) => c.gap).map((c) => c.id)).toEqual(expected.map((d) => d.id));
+  });
+
+  /**
+   * The gap, keyed where a sighted reader can find it.
+   *
+   * The band gap shipped named only inside the `sr-only` caption: a screen-reader user was told the
+   * columns are grouped, and a sighted reader met two channels of whitespace with nothing on the page
+   * saying what divided them — while the legend beside it keys every other mark on the surface. That is
+   * #73's asymmetry, on the same surface and in the same direction, and the caption assertion below
+   * passes happily with it live, which is why this is a separate case.
+   */
+  it('keys the band gap on the page, not only in the caption', () => {
+    render(<App />);
+
+    const matrix = screen.getByRole('region', { name: /every model on every machine/i });
+    const key = within(matrix).getByText(/a gap between columns/i);
+    // Outside the caption, which is the whole claim: `sr-only` text would satisfy a text query and
+    // leave the sighted channel exactly as unkeyed as it was.
+    expect(key.closest('caption')).toBeNull();
+    // And it answers the question the gap raises rather than only labelling it — the bands, in order,
+    // in the words the picker's headings use.
+    expect(key).toHaveTextContent(
+      expectedBands(DEVICES.filter((d) => d.status === 'shipping'))
+        .map((band) => band.label)
+        .join(', ')
+    );
+  });
+
+  it('names both of the Matrix’s axes in its caption, which its headings cannot', () => {
+    render(<App />);
+
+    const matrix = screen.getByRole('region', { name: /every model on every machine/i });
+    const caption = matrix.querySelector('caption')!.textContent ?? '';
+
+    // The bands, in order and by the same names the picker's headings use — a reader who met
+    // "Discrete GPUs" in the Hardware control should hear the same words here. Off the *shipping*
+    // rows, which is what this grid renders.
+    expect(caption).toContain(
+      expectedBands(DEVICES.filter((d) => d.status === 'shipping'))
+        .map((band) => band.label)
+        .join(', ')
+    );
+    // And the row axis, which is the one fact the Matrix cannot state anywhere else: its row headings
+    // are name-only, so 35 rows appeared in an order with no stated basis.
+    expect(caption).toMatch(/rows run most-downloaded first/i);
   });
 });
