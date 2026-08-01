@@ -45,12 +45,26 @@ export default defineConfig({
      * the thing to question.
      *
      * **Raised a second time, on #77, and that is the signal rather than the fix.** The grid is
-     * models x devices and both axes grew in one sweep: 425 cells before it, 731 after #78 added
-     * eighteen devices, 1,505 after #77 doubled the model list. The suite went 42s to 837s — 3.5x
-     * the cells for 20x the wall clock, because `userEvent` slows superlinearly with tree size — and
-     * two PRs that touched no component have now failed CI on this limit alone. 30s unblocks the
-     * second one; the total is the actual problem and it is #101. If a third change trips this,
-     * raise #101 rather than this number.
+     * models x devices and both axes grew in one sweep: 408 cells before it, 714 after #78 added
+     * eighteen devices, 1,470 after #77 doubled the model list — shipping rows, since the Matrix
+     * never renders a rumoured one. The suite went 42s to 837s — 3.6x the cells for 20x the wall
+     * clock, because `userEvent` slows superlinearly with tree size — and two PRs that touched no
+     * component have now failed CI on this limit alone.
+     *
+     * **#101 removed the pressure on it, and deliberately did not lower it.** `App.test.tsx` renders
+     * a bounded grid by default now and opts the two dozen tests that are genuinely *about* the grid
+     * back into the real one: that file alone went 143s to 22s locally, the whole suite 155s to 24s,
+     * and the slowest single test from ~5s to 2.2s. The tempting follow-up is to claw the limit back
+     * down, and the arithmetic says not to. The runner is about 5.4x this machine — the same suite
+     * that measures 155s here measured 837s there before this change — so a 2.2s test
+     * is ~12s in CI and anything under about 25s is a coin toss on runner load. Lowering it would be
+     * a fourth adjustment of a number whose three previous adjustments were all the wrong lever.
+     *
+     * The number to watch has never been this one: a fourteen-minute suite stops being run locally
+     * long before any single test crosses a per-test limit. What #101 actually fixed is asserted
+     * rather than hoped for — `App.test.tsx` renders a fixed twelve cells whatever the catalog does
+     * next, so a change that touches no component cannot fail CI on grid size. This stays a safety
+     * net. A test approaching it is a test rendering the full grid for a claim that does not need it.
      */
     testTimeout: 30_000,
     coverage: {

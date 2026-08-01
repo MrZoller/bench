@@ -6,7 +6,7 @@ import {
   type MatrixCell,
   type MatrixMeasure,
 } from '@/engine/matrix';
-import { DEVICES, getDevice, getModel, modelsByPopularity } from '@/data/catalog';
+import { comparisonGrid, getDevice, getModel } from '@/data/catalog';
 import { getQuant } from '@/data/quants';
 import { getRuntime, kvSubstitutionFor, runtimeDrives, substitutionFor } from '@/data/runtimes';
 import { FALLBACK_QUANT_ID, quantApplies } from '@/lib/quantChoice';
@@ -134,18 +134,20 @@ export function Matrix({ config }: { config: Config }) {
   const kv = kvLabel(runtime, config.kvPrecision);
 
   /**
-   * The rows, most-downloaded first — from the catalog's helper rather than a comparator here.
+   * What this grid covers — rows most-downloaded first, columns the shipping rows in file order.
    *
-   * This file and `Bench.tsx` each held a hand-written copy of the same `sort` while
-   * `modelsByPopularity()` — the named helper that does exactly this — was called by nothing outside
-   * its own test: one ordering rule with three definitions and the canonical one dead (#79). The two
-   * grids agreed by coincidence, which is the same coincidence `kvLabel` and `columnReadout` were
-   * written to remove one seam over.
+   * Both from `comparisonGrid()` rather than derived here, which is the same rule the ordering
+   * itself was fixed under: this file and `Bench.tsx` each held a hand-written copy of the
+   * popularity `sort` while `modelsByPopularity()` — the named helper that does exactly this — was
+   * called by nothing outside its own test, so one ordering rule had three definitions and the
+   * canonical one was dead (#79). The two grids agreed by coincidence. The shipping filter was the
+   * other half of that shape, live rather than latent: it was a `status` rule enforced in a
+   * component, where `catalog.test.ts` could not see it.
+   *
+   * Memoised on `[]` because the extent does not change while the page is mounted, and because the
+   * arrays are identities every dependency array below is keyed on.
    */
-  const models = useMemo(() => modelsByPopularity(), []);
-  // Shipping hardware only: a rumoured row would put speculative specs into a comparison people
-  // read as a shortlist, and `status` exists precisely so that never happens silently.
-  const devices = useMemo(() => DEVICES.filter((d) => d.status === 'shipping'), []);
+  const { models, devices } = useMemo(() => comparisonGrid(), []);
 
   /**
    * The class bands: which columns open one, and what to call them.

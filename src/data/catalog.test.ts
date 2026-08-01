@@ -5,6 +5,7 @@ import {
   DEVICE_ID_ALIASES,
   MODELS,
   canonicalDeviceId,
+  comparisonGrid,
   getDevice,
   getModel,
   modelsByPopularity,
@@ -178,6 +179,40 @@ describe('device catalog', () => {
  * the Apple run was one of *two* live vendor splits, and the second was in a class the issue never
  * looked at (`threadripper-7995wx`, between the Xeon and the EPYCs).
  */
+/**
+ * What the comparison grid covers, pinned here because both halves of it are catalog rules.
+ *
+ * The shipping filter was written in `Matrix.tsx` — a `status` rule enforced in a component, where
+ * nothing in this file could see it. `status` exists so a pre-release spec stays visibly labelled,
+ * and the grid is read as a shortlist, so "the rumoured row is not a column" is the same claim as
+ * "the rumoured row carries a note" asserted above. The convention rather than the values: a count
+ * would fail on the next device added, which is the failure mode that teaches people to update
+ * assertions without reading them.
+ */
+describe('the comparison grid covers the shipping catalog and nothing else', () => {
+  it('takes every shipping row, in the order the file lists them', () => {
+    const { devices } = comparisonGrid();
+    expect(devices.map((d) => d.id)).toEqual(
+      DEVICES.filter((d) => d.status === 'shipping').map((d) => d.id)
+    );
+  });
+
+  it('leaves out anything not yet shipping, and there is something to leave out', () => {
+    // The precondition, because a filter over a catalog with nothing to filter is a filter nobody
+    // is testing — and this catalog has had exactly one non-shipping row for most of its life.
+    const held = DEVICES.filter((d) => d.status !== 'shipping');
+    expect(held.length).toBeGreaterThan(0);
+    const shown = new Set(comparisonGrid().devices.map((d) => d.id));
+    for (const device of held) expect(shown.has(device.id)).toBe(false);
+  });
+
+  it('takes every model, most-downloaded first, from the one helper that says so', () => {
+    const { models } = comparisonGrid();
+    expect(models.map((m) => m.id)).toEqual(modelsByPopularity().map((m) => m.id));
+    expect(models).toHaveLength(MODELS.length);
+  });
+});
+
 describe('the device catalog is listed in the order it states', () => {
   /**
    * Maximal runs of adjacent rows sharing a key, which is the shape every claim here is about.

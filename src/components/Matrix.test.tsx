@@ -34,19 +34,29 @@ import { DEFAULT_CONFIG, useConfig } from '@/store/config';
  * no context or concurrency stop moves.
  */
 /**
- * **Both the array and the ordering helper, because the Matrix reads the helper** (#79).
+ * **The grid's extent, because that is what the Matrix reads** (#79, #101).
  *
- * It used to sort `MODELS` itself, so replacing the array was the whole seam. The rows now come from
- * `modelsByPopularity()` — one definition of the ordering rule instead of three — and that function
- * closes over the real catalog, so a mock that replaced only the array left this grid rendering all
- * 35 models while every assertion below went on describing a one-row one. Overriding one and not the
- * other is a mock that lies quietly, which is why the sort order is stated here too: one model, so
- * the order is not what is under test, but the *seam* is.
+ * This has now been wrong twice in the same direction, and the shape is worth keeping. The component
+ * originally sorted `MODELS` itself, so replacing the array was the whole seam; when the rows moved to
+ * `modelsByPopularity()` a mock that replaced only the array left the grid rendering all 35 models
+ * while every assertion below went on describing a one-row one. `comparisonGrid()` is now the single
+ * seam — it closes over the real catalog for both axes — and overriding `MODELS` alone would fail the
+ * same quiet way a third time. That is the argument for there being exactly one function: a mock can
+ * only lie about a seam it does not know exists.
+ *
+ * `MODELS` is narrowed alongside it because the row is looked up by id elsewhere in the tree, not
+ * because the grid needs it. The devices are the real shipping set — the precondition below turns on
+ * the largest CPU+RAM row, so cutting the columns would be cutting the thing under test.
  */
 vi.mock('@/data/catalog', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/data/catalog')>();
   const only = actual.MODELS.filter((m) => m.id === 'moonshotai/Kimi-K2-Instruct');
-  return { ...actual, MODELS: only, modelsByPopularity: () => only };
+  return {
+    ...actual,
+    MODELS: only,
+    modelsByPopularity: () => only,
+    comparisonGrid: () => ({ models: only, devices: actual.comparisonGrid().devices }),
+  };
 });
 
 const { Matrix } = await import('./Matrix');

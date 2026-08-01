@@ -289,3 +289,35 @@ export function modelsByPopularity(): readonly CatalogModel[] {
     (a, b) => (b.popularity?.downloads ?? 0) - (a.popularity?.downloads ?? 0)
   );
 }
+
+/**
+ * What the comparison grid covers: every model against every _shipping_ device.
+ *
+ * Both halves were inline in `Matrix.tsx` and both are facts about the catalog rather than about
+ * rendering, which is the reason to name them here. `status` is a catalog field and "a pre-release
+ * spec must stay visibly labelled" is a catalog rule; leaving the filter in a component put it
+ * somewhere `catalog.test.ts` could not reach, and the rumoured row would have arrived in the
+ * shortlist the day someone tidied that `useMemo`. Row order is `devices.json`'s own — nothing
+ * sorts it (#79) — and column order is popularity, from the one helper that defines it.
+ *
+ * **It is also the grid's one seam, and that is the second reason it is a function**
+ * ([#101](https://github.com/MrZoller/bench/issues/101)). The Matrix is models × devices and
+ * `App.test.tsx` renders the whole page per test, so both catalog axes are load-bearing inputs to
+ * the unit suite's wall clock: #78 and #77 together took the grid from 408 cells to 1,470 and that
+ * file from 42s to about fourteen minutes on CI, and two pull requests that touched no component
+ * failed on a per-test timeout for it. One function is what lets the integration suite bound the
+ * grid it renders while the tests that are genuinely _about_ the grid keep the real one. Narrowing
+ * it is a test's decision and never a caller's: there is no parameter here, because a grid extent
+ * the app could pass is a grid extent the app could get wrong.
+ */
+export function comparisonGrid(): {
+  models: readonly CatalogModel[];
+  devices: readonly CatalogDevice[];
+} {
+  return {
+    models: modelsByPopularity(),
+    // Shipping hardware only: a rumoured row would put speculative specs into a comparison people
+    // read as a shortlist, and `status` exists precisely so that never happens silently.
+    devices: DEVICES.filter((d) => d.status === 'shipping'),
+  };
+}
