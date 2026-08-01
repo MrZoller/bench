@@ -15,7 +15,7 @@ import { judgeWorkloads } from '@/engine/verdict';
 import { RUNTIMES, getRuntime, kvSubstitutionFor, runtimeDrives } from '@/data/runtimes';
 import { effectiveActiveParams } from '@/engine/weights';
 import { canShard, maxAllocatablePerDevice } from '@/engine/placement';
-import { colors, marks } from '@/design/tokens';
+import { colors, magnitudeRamp, marks } from '@/design/tokens';
 
 /**
  * Wrapped rather than replaced, so every other test in this file still exercises the real verdict
@@ -1433,6 +1433,60 @@ describe('the Matrix stays informative', () => {
     const byFit = fills();
     await user.click(within(matrix()).getByRole('button', { name: 'How fast' }));
     expect(fills()).not.toEqual(byFit);
+  });
+
+  /**
+   * The ramp has to be **spent** on this grid too, and it was the worse of the two surfaces
+   * ([#97](https://github.com/MrZoller/bench/issues/97)).
+   *
+   * The Matrix has offered "How responsive" for longer than the Envelope has, and its domain was
+   * floored at zero — which for a reciprocal reduces the placement to `t_fastest / t`, so a cell ten
+   * times slower than the grid's fastest painted the bottom step on a grid spanning a desktop CPU to
+   * a B200. Measured at the default scenario: **1,025 of 1,269 timed cells on one step of seven**,
+   * 81%, against decode's healthy 262 at its busiest. After the fix, 323 at its busiest — 25%.
+   *
+   * Full grid deliberately. The claim is about the shape of the real field, and a dozen cells cannot
+   * have one; a bounded grid would satisfy every threshold here for want of anything to distribute.
+   */
+  it('spends the ramp across the field, not on one step of it', async () => {
+    atFullGrid();
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(within(matrix()).getByRole('button', { name: 'How responsive' }));
+
+    /*
+     * The painted cells, which are the ones on the scale — a pair that cannot run is `transparent`
+     * by design and is not a low score. Reading the inline background is the same channel the ramp
+     * arithmetic sweep below uses.
+     */
+    const painted = within(matrix())
+      .getAllByRole('button', { name: / on / })
+      .map((b) => (b as HTMLElement).style.background)
+      .filter((fill) => fill && fill !== 'transparent');
+    expect(painted.length, 'the grid painted nothing from the ramp').toBeGreaterThan(300);
+
+    // jsdom serialises an inline colour as `rgb(r, g, b)`, so the ramp's hexes are put in the same
+    // form rather than compared across notations — which silently matches nothing.
+    const asRgb = (hex: string) =>
+      `rgb(${[1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16)).join(', ')})`;
+    const held = magnitudeRamp.map((step) => painted.filter((f) => f === asRgb(step)).length);
+    expect(
+      held.reduce((a, b) => a + b, 0),
+      'no painted cell matched a step of the ramp, so the notations disagree'
+    ).toBe(painted.length);
+    /*
+     * Two properties, and the second is the one the old code failed. "Both ends are reached" was
+     * already true of the collapsed ramp — the fastest and slowest cells still landed at the ends —
+     * so only the distribution tells the two apart.
+     */
+    expect(
+      held.filter((n) => n === 0),
+      'a step of the ramp went unused'
+    ).toEqual([]);
+    expect(
+      Math.max(...held) / painted.length,
+      `one step holds ${Math.max(...held)} of ${painted.length} painted cells`
+    ).toBeLessThan(0.5);
   });
 });
 

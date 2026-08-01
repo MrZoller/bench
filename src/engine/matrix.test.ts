@@ -12,6 +12,7 @@ import {
   MAC_STUDIO_M3_ULTRA_512,
 } from './fixtures';
 import { LLAMA_CPP, MLX } from './fixtures';
+import { MEASURE_DIRECTION } from './measure';
 
 const USAGE = {
   contextTokens: 8192,
@@ -152,24 +153,95 @@ describe('the model-by-device grid', () => {
     for (const measure of ['fit', 'decode', 'ttft'] as MatrixMeasure[]) {
       const range = measureRange(cells, measure);
       expect(range).toBeDefined();
-      expect(range!.max).toBeGreaterThan(0);
+      expect(range!.domain.max).toBeGreaterThan(range!.domain.min);
       for (const cell of cells.flat()) {
         const value = measureValue(cell, measure);
-        if (value !== undefined) expect(value).toBeLessThanOrEqual(range!.max);
+        if (value === undefined) continue;
+        // Every reading is inside the domain its ramp is placed in — for all three measures, which
+        // is what the zero floor used to make trivially true for two of them.
+        expect(value).toBeGreaterThanOrEqual(range!.domain.min);
+        expect(value).toBeLessThanOrEqual(range!.domain.max);
       }
     }
   });
 
   /**
+   * The domain's floor, which is the half [#97](https://github.com/MrZoller/bench/issues/97)
+   * changed.
+   *
+   * A zero floor anchors the ramp's *worst* end, and it is right wherever zero is a reading a cell
+   * can have: `measureValue('fit')` returns exactly 0 for every offloaded cell, and no throughput is
+   * the bottom of the decode scale. For a lower-is-better measure the worst end is unbounded — no
+   * cell answers in zero seconds — so anchoring there is anchoring at a point nothing reaches, and
+   * the placement degenerates to `t_fastest / t`: a cell ten times slower than the grid's fastest
+   * lands on the bottom step of a grid spanning far more than tenfold.
+   */
+  /**
+   * A latency nobody could take is off the scale, at both ends
+   * ([#97](https://github.com/MrZoller/bench/issues/97), raised in review on it).
+   *
+   * `estimatePrefill` answers `Infinity` by design when a device states no compute rate — pinned in
+   * `index.test.ts` — and under the old reciprocal orientation that became `1 / Infinity = 0`, the
+   * worst reading, correct by luck. In seconds it is the *largest* number on the grid, so it takes
+   * the domain's ceiling with it: the span becomes `Infinity`, every placement comes out `NaN`, the
+   * ramp is indexed with `undefined`, and the whole grid paints nothing. One unpriceable device
+   * blanks every cell beside it.
+   *
+   * Asserted on a device the catalog does not contain, because that is the point: the guard is for
+   * the row somebody adds without a `tflops` entry, and there is no such row today to notice it.
+   */
+  it('keeps an untimeable cell off the ramp instead of poisoning the grid', () => {
+    const noCompute = { ...RTX_5090, id: 'no-compute', flops: {} };
+    const cells = matrix({ devices: [RTX_5090, noCompute] });
+
+    const blind = cells.map((row) => row[1]);
+    expect(
+      blind.some((cell) => cell.ttftSeconds === Infinity),
+      'no cell is untimeable, so this proves nothing'
+    ).toBe(true);
+
+    // Off the scale, not at the bad end of it: `undefined` is what `fill` paints as a hole.
+    for (const cell of blind) {
+      if (cell.ttftSeconds === Infinity) expect(measureValue(cell, 'ttft')).toBeUndefined();
+    }
+
+    // And the grid beside it still has a domain, which is the half that was broken: every finite
+    // reading kept its step rather than every cell losing its colour.
+    const range = measureRange(cells, 'ttft')!;
+    expect(Number.isFinite(range.domain.min)).toBe(true);
+    expect(Number.isFinite(range.domain.max)).toBe(true);
+    expect(range.domain.max).toBeGreaterThan(range.domain.min);
+  });
+
+  it('floors the domain at zero only where zero is a reading', () => {
+    const cells = matrix();
+
+    expect(measureRange(cells, 'fit')!.domain.min).toBe(0);
+    expect(measureRange(cells, 'decode')!.domain.min).toBe(0);
+
+    const ttft = measureRange(cells, 'ttft')!;
+    const waits = cells
+      .flat()
+      .map((cell) => measureValue(cell, 'ttft'))
+      .filter((value): value is number => value !== undefined);
+    expect(ttft.domain).toEqual({ min: Math.min(...waits), max: Math.max(...waits) });
+    // The precondition, so this is not a claim about a grid with one timed cell on it.
+    expect(waits.length).toBeGreaterThan(3);
+    expect(new Set(waits).size, 'every timed cell reads the same wait').toBeGreaterThan(1);
+    expect(ttft.domain.min).toBeGreaterThan(0);
+  });
+
+  /**
    * The span the legend names, and the one thing about it that is easy to get backwards.
    *
-   * `low` and `high` are ordered by `measureValue` — the ramp's own ordering — not by any field on
-   * the cell, and for TTFT the two disagree by construction: the measure is inverted so that larger
-   * is better, so the *slowest* cell belongs at the worst end. A range picked by "smallest
-   * `ttftSeconds`" would put the fastest machine under the word `worse`, and every colour on the
-   * grid would still be right, which is what makes it the kind of error nothing else catches.
+   * `low` and `high` are the ramp's ends — worst and best — not the numeric ones, and for TTFT the
+   * two disagree by construction: the slowest cell is the largest number and belongs under the word
+   * `worse`. That used to be arranged by inverting the value, so numeric-smallest and worst
+   * coincided; since #97 the value is seconds and the sort consults `MEASURE_DIRECTION` instead. A
+   * range picked by "smallest `ttftSeconds`" would put the fastest machine under `worse` while every
+   * colour on the grid stayed right, which is what makes it the kind of error nothing else catches.
    */
-  it('puts the worst cell at the low end of every measure, including the inverted one', () => {
+  it('puts the worst cell at the low end of every measure, including the one that runs backwards', () => {
     const cells = matrix();
 
     for (const measure of ['fit', 'decode', 'ttft'] as MatrixMeasure[]) {
@@ -178,10 +250,11 @@ describe('the model-by-device grid', () => {
         .flat()
         .map((cell) => measureValue(cell, measure))
         .filter((value): value is number => value !== undefined);
+      const worst = MEASURE_DIRECTION[measure] === 'higher' ? Math.min : Math.max;
+      const best = MEASURE_DIRECTION[measure] === 'higher' ? Math.max : Math.min;
 
-      expect(measureValue(range.low, measure)).toBe(Math.min(...values));
-      expect(measureValue(range.high, measure)).toBe(Math.max(...values));
-      expect(range.max).toBe(Math.max(...values));
+      expect(measureValue(range.low, measure)).toBe(worst(...values));
+      expect(measureValue(range.high, measure)).toBe(best(...values));
       // Both ends are cells that ran, so a caller can read any field off them and get a figure.
       expect(range.low.runs && range.high.runs).toBe(true);
     }
