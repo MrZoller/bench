@@ -59,6 +59,14 @@ describe('the shortlist', () => {
     ).toBeInTheDocument();
   });
 
+  it('names the cache width per precision, not as a two-way split', () => {
+    // The first version's ternary mapped every non-FP16 precision to "8-bit", so a Q4 selection
+    // made the footer misstate an axis the ranking used.
+    useConfig.getState().replace({ ...DEFAULT_CONFIG, runtimeId: 'llama.cpp', kvPrecision: 'q4' });
+    render(<Recommend />);
+    expect(within(panel()).getByText(/4-bit cache at/)).toBeInTheDocument();
+  });
+
   it('states the fallback rule only when the fallback fired', () => {
     // Two headline rules beside one headline row is two claims about one thing. The default device
     // clears the bar, so this sentence must be absent here — `recommend.test.ts` owns the case

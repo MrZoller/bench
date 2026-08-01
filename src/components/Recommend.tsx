@@ -60,6 +60,20 @@ const FITNESS: Record<Fitness, { icon: string; word: string; color: string }> = 
  */
 const DEFAULT_WORKLOAD = 'chat';
 
+/**
+ * The cache width in words, runtime-neutral.
+ *
+ * The sweep crosses runtimes and they name the same precision differently — vLLM's one-byte cache
+ * is FP8, not integer Q8, which `kvLabels` exists to say — so the footer describes the *width*
+ * rather than borrowing one runtime's spelling. Keyed per precision rather than split on fp16,
+ * because "not 16-bit" is not "8-bit".
+ */
+const CACHE_WIDTHS: Record<string, string> = {
+  fp16: '16-bit',
+  q8: '8-bit',
+  q4: '4-bit',
+};
+
 export function Recommend() {
   const headingId = useId();
   const config = useConfig();
@@ -191,7 +205,11 @@ export function Recommend() {
               differently — vLLM's one-byte cache is FP8, not integer Q8, which `kvLabels` exists to
               say. Printing one runtime's label over a list containing the other misstates an axis
               the ranking used. Raised by Codex on #167. */}
-          {device.name} with a {config.kvPrecision === 'fp16' ? '16-bit' : '8-bit'} cache at{' '}
+          {/* Per precision, not a two-way split. The first version's ternary mapped *every*
+              non-FP16 precision to "8-bit", so selecting Q4 under llama.cpp made the footer
+              misstate an axis the ranking used — a regression introduced by the fix for the
+              runtime-specific label it replaced. Raised by Codex on #167. */}
+          {device.name} with a {CACHE_WIDTHS[config.kvPrecision]} cache at{' '}
           {config.concurrency === 1 ? 'one user' : `${config.concurrency} users`}, each graded at
           the prompt its own workload sends. Change the hardware, the cache or the user count above
           and the list moves.
