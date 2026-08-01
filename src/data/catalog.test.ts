@@ -447,6 +447,93 @@ describe('the catalog covers the hardware the audience owns', () => {
    * 40-core M4 Max) still state it, because "capacity implies it" is exactly the reasoning that was
    * wrong three times.
    */
+  /**
+   * **A `cpu-ram` row's compute must be reproducible from a core count, a clock and an FMA width
+   * the row itself states** ([#90](https://github.com/MrZoller/bench/issues/90)).
+   *
+   * The same shape as the Apple check below, filed for the opposite reason. There, five rows shared
+   * one correct rule and three of them applied it to the wrong bin. Here, five rows shared no rule
+   * at all: each carried a figure conservative by a different unstated factor, and catalogued over
+   * computed vector peak ran **0.41 to 1.12** across them — a 2.7x spread, which means the CPU rows
+   * could not be ranked against each other on the surface whose entire purpose is ranking hardware.
+   * A reader could not check any of them, and the one row whose note claimed a formula was checked
+   * and found not to hold.
+   *
+   * So the convention is the theoretical vector peak, and the convention is what this asserts rather
+   * than any of the five values — the same doctrine `#51` established for bandwidth, on the compute
+   * axis. `runtimes.ts`'s `computeEfficiency` owns the gap between the ceiling and what a runtime
+   * reaches; a row that pre-discounts its own figure has that applied a second time on top, which is
+   * exactly the double-discount `measuredBandwidthGBs` was deleted for.
+   *
+   * Parsed out of the note rather than added as fields, for the reason the Apple check parses the
+   * name: three more columns on every row is an invitation, and the reader who needs to check the
+   * arithmetic is reading the note anyway. What the parse costs is that a row wording it differently
+   * fails here — which is the intended outcome, since a row that does not state its basis is the
+   * defect.
+   */
+  /**
+   * The clause every `cpu-ram` note has to carry, and the whole of what this check parses.
+   *
+   * `double-pumped` is inside the match rather than searched for separately, so a row cannot inherit
+   * the modifier from a sentence about a different part — see below.
+   */
+  const CPU_PEAK =
+    /(\d+) cores at ([\d.]+) GHz with two (256|512)-bit FMA pipelines(, double-pumped)?/;
+
+  it('derives every CPU row from a core count, a clock and an FMA width it states', () => {
+    const cpus = DEVICES.filter((d) => d.class === 'cpu-ram');
+    expect(cpus.length, 'no CPU rows to check').toBeGreaterThan(3);
+
+    for (const device of cpus) {
+      const stated = CPU_PEAK.exec(device.note ?? '');
+      expect(
+        stated,
+        `${device.id} states no vector-peak basis, so nothing connects it to its ${
+          device.flops.fp16! / 1e12
+        } TFLOPS`
+      ).not.toBeNull();
+
+      const [, coresText, clockText, widthText, pumped] = stated!;
+      const cores = Number(coresText);
+      const ghz = Number(clockText);
+      /**
+       * Two pipes x (width / 32) fp32 lanes x 2 flops, which is `width / 8` — and **halved for a
+       * Zen 4 part**, which decodes a 512-bit AVX-512 op onto 256-bit datapaths in two passes.
+       *
+       * Keyed on the row saying so **inside the same clause** rather than on the vendor or on a
+       * mention anywhere in the prose. AMD ships Zen 4 and Zen 5 side by side here, so vendor is no
+       * guide — and the first version of this scanned the whole note for "Zen 4", which the Zen 5
+       * row matched by naming its Zen 4 neighbours in the sentence explaining why it is faster. A
+       * modifier that can be triggered by prose about another row is not a modifier.
+       */
+      const doublePumped = pumped !== undefined;
+      const flopsPerCycle = Number(widthText) / 8 / (doublePumped ? 2 : 1);
+      const expected = (cores * ghz * flopsPerCycle) / 1000;
+      const actual = device.flops.fp16! / 1e12;
+
+      expect(
+        Math.abs(actual - expected) / expected,
+        `${device.id} states ${cores} cores at ${ghz} GHz on ${widthText}-bit FMA${
+          doublePumped ? ' (Zen 4, double-pumped)' : ''
+        }, which is ${expected.toFixed(2)} TFLOPS, but carries ${actual}`
+      ).toBeLessThan(0.02);
+    }
+
+    /*
+     * And the spread, which is the measurement this test exists to keep at zero. Before #90 these
+     * ratios ran 0.41 to 1.12; a row added on a different basis reopens exactly that, and would
+     * otherwise only fail the per-row check above with a message about one row.
+     */
+    const ratios = cpus.map((d) => {
+      const [, c, g, w, pumped] = CPU_PEAK.exec(d.note ?? '')!;
+      const perCycle = Number(w) / 8 / (pumped === undefined ? 1 : 2);
+      return d.flops.fp16! / 1e12 / ((Number(c) * Number(g) * perCycle) / 1000);
+    });
+    expect(Math.max(...ratios) / Math.min(...ratios), 'the CPU rows are on two bases').toBeLessThan(
+      1.02
+    );
+  });
+
   it('derives every Apple row from a GPU core count the row states', () => {
     // fp16 TFLOPS per GPU core, by generation. Constant within a generation; the M4 family runs
     // 0.85 across Air, Pro and Max, which is the property that makes the check meaningful.
