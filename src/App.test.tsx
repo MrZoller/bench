@@ -2759,6 +2759,33 @@ describe('the capacity tile does not promise context a model cannot take', () =>
 });
 
 /**
+ * ARIA reference integrity, as a sweep rather than per instance (#131).
+ *
+ * Two disclosures mounted their region only while expanded, so collapsed they pointed
+ * `aria-controls` at an id that was not in the DOM — a reference a screen reader's "jump to
+ * controlled region" cannot resolve, and an axe `aria-valid-attr-value` failure. The contract on
+ * `DisclosureToggle.controls` now requires the region in both states; this sweeps every
+ * `aria-controls` on the default page, which renders both offending disclosures collapsed, so a
+ * new call site that unmounts its region fails here rather than in an audit.
+ */
+describe('every aria-controls points at a node that exists', () => {
+  it('resolves each reference on the default page, collapsed states included', () => {
+    render(<App />);
+
+    const referencing = Array.from(document.querySelectorAll('[aria-controls]'));
+    // The sweep must be sweeping something: both #131 instances ship collapsed by default.
+    expect(referencing.length).toBeGreaterThanOrEqual(2);
+    for (const el of referencing) {
+      const id = el.getAttribute('aria-controls')!;
+      expect(
+        document.getElementById(id),
+        `aria-controls="${id}" resolves to nothing`
+      ).not.toBeNull();
+    }
+  });
+});
+
+/**
  * "Comfortable" promises the answer starts promptly, and the tile beside it calls anything past
  * two seconds "Noticeable" in amber. A ten-second threshold here left the two disagreeing.
  */
@@ -4946,12 +4973,13 @@ describe('the controls that drive every figure explain what they are', () => {
       render(<App />);
       await user.selectOptions(hardware(), 'mac-studio-m3-ultra-512');
 
-      // Collapsed: the provenance is not on the page at all, which is what stops it setting the
-      // height of a grid cell whose row also holds the Quantization and Runtime pickers.
-      expect(screen.queryByText(/what the sysctl parses/i)).not.toBeInTheDocument();
+      // Collapsed: the provenance is hidden, not unmounted — `hidden` is display: none, so it
+      // still sets no height on a grid cell whose row also holds the Quantization and Runtime
+      // pickers, while the toggle's `aria-controls` keeps resolving to a real node (#131).
+      expect(screen.getByText(/what the sysctl parses/i)).not.toBeVisible();
 
       await user.click(toggle());
-      expect(screen.getByText(/what the sysctl parses/i)).toBeInTheDocument();
+      expect(screen.getByText(/what the sysctl parses/i)).toBeVisible();
       // Open, and still not part of the control's accessible description. A disclosure that got
       // wired into `aria-describedby` when expanded would be the same defect with a click in front
       // of it.
