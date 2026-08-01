@@ -331,10 +331,20 @@ export const SEEDS: Seed[] = [
  *   - `repo` — the refusal is about what this *repository* publishes rather than what the model is:
  *     an export whose safetensors total counts group scales as parameters. Expires when the org
  *     re-uploads, same id and a different answer, so these age too.
- *   - `catalog` — the row would answer no question the catalog does not already answer. Nothing
- *     about the repo can change that; only a change here can, which is visible locally and does not
- *     need a fetch. These do **not** age, and re-asking them every six months would be the noise
- *     that teaches people to skip the report.
+ *   - `catalog` — a seeded row already answers this question, named in `supersededBy`. Nothing about
+ *     the repo can change that; only a change *here* can.
+ *   - `size` — the model is small enough that every catalogued device holds it comfortably, so every
+ *     cell of its row would agree and the placement question has no content. Only a change here can
+ *     falsify that either — a smaller device.
+ *
+ * **The last two do not age, and that is a claim this file now has to earn rather than assert.** The
+ * first draft said their assumptions were "visible locally and free to check" and checked neither
+ * (found in review), which made them exactly as permanent as the prose refusals the whole change was
+ * about. So each carries a mechanically enforced invariant instead of a calendar:
+ * `build-catalog.test.ts` asserts every `catalog` refusal names a repo that is still seeded, and
+ * that the smallest device in the catalog still holds a 2B model with room to spare. Remove the seed
+ * or add a smaller machine and the suite names the refusal that has gone stale — which is a better
+ * signal than a date, because it fires on the event rather than six months after it.
  *
  * `checkedAt` is the day the repo was last looked at, and {@link staleRefusals} is what reads it.
  * Set it to the day you check, not the day you edit the line — a re-worded reason is not a re-check.
@@ -345,11 +355,19 @@ export const SEEDS: Seed[] = [
  */
 export interface Refusal {
   /** What would have to change for this repo to become seedable — see the docblock above. */
-  cause: 'engine' | 'repo' | 'catalog';
+  cause: 'engine' | 'repo' | 'catalog' | 'size';
   /** ISO date the repo was last checked against the live API. */
   checkedAt: string;
   /** Why not, for the human who has to decide whether it still holds. */
   why: string;
+  /**
+   * The seeded repo that already answers this question — required on a `catalog` refusal.
+   *
+   * The id rather than the display name, so the invariant is checkable: a refusal deferring to a row
+   * somebody later removes is a refusal that has quietly stopped being true, and the prose could not
+   * say so.
+   */
+  supersededBy?: string;
 }
 
 export const NOT_SEEDED: Readonly<Record<string, Refusal>> = {
@@ -552,11 +570,13 @@ export const NOT_SEEDED: Readonly<Record<string, Refusal>> = {
   'mistralai/Devstral-Small-2-24B-Instruct-2512': {
     cause: 'catalog',
     checkedAt: '2026-07-29',
+    supersededBy: 'mistralai/Mistral-Small-24B-Instruct-2501',
     why: "24B dense at 40x5120 — Mistral Small 24B's row",
   },
   'mistralai/Mistral-Small-3.2-24B-Instruct-2506': {
     cause: 'catalog',
     checkedAt: '2026-07-29',
+    supersededBy: 'mistralai/Mistral-Small-24B-Instruct-2501',
     why: 'superseded by Mistral Small 4; same shape',
   },
   /**
@@ -571,61 +591,73 @@ export const NOT_SEEDED: Readonly<Record<string, Refusal>> = {
   'mistralai/Mistral-Nemo-Instruct-2407': {
     cause: 'catalog',
     checkedAt: '2026-07-29',
+    supersededBy: 'unsloth/gemma-3-12b-it',
     why: "12B dense at 40x5120 — the 12-14B tier Gemma 3 12B and Qwen3 14B already answer, and a July 2024 model rather than the head of its family (Ministral 3 3B and Mistral Small 4 are). The gap it fills is in Mistral's lineup, not in the hardware question.",
   },
   'mistralai/Devstral-Small-2507': {
     cause: 'catalog',
     checkedAt: '2026-07-29',
+    supersededBy: 'mistralai/Mistral-Small-24B-Instruct-2501',
     why: "24B dense at 40x5120, which is Mistral Small 24B's row; superseded by Devstral Small 2",
   },
   'CohereLabs/c4ai-command-a-03-2025': {
     cause: 'catalog',
     checkedAt: '2026-07-29',
+    supersededBy: 'CohereLabs/command-a-plus-05-2026-bf16',
     why: 'superseded by Command A+ (05-2026), which is seeded; 111B dense against its 219B MoE',
   },
   'zai-org/GLM-4.5': {
     cause: 'catalog',
     checkedAt: '2026-07-29',
+    supersededBy: 'zai-org/GLM-4.7',
     why: "one checkpoint of GLM 4.7's architecture",
   },
   'zai-org/GLM-4.6': {
     cause: 'catalog',
     checkedAt: '2026-07-29',
+    supersededBy: 'zai-org/GLM-4.7',
     why: "one checkpoint of GLM 4.7's architecture",
   },
   'MiniMaxAI/MiniMax-M2': {
     cause: 'catalog',
     checkedAt: '2026-07-29',
+    supersededBy: 'MiniMaxAI/MiniMax-M2.7',
     why: "one checkpoint of MiniMax M2.7's architecture",
   },
   'MiniMaxAI/MiniMax-M2.5': {
     cause: 'catalog',
     checkedAt: '2026-07-29',
+    supersededBy: 'MiniMaxAI/MiniMax-M2.7',
     why: "one checkpoint of MiniMax M2.7's architecture",
   },
   'moonshotai/Kimi-K2-Instruct-0905': {
     cause: 'catalog',
     checkedAt: '2026-07-29',
+    supersededBy: 'moonshotai/Kimi-K2-Instruct',
     why: "one checkpoint of Kimi K2's architecture",
   },
   'deepseek-ai/DeepSeek-V3-0324': {
     cause: 'catalog',
     checkedAt: '2026-07-29',
+    supersededBy: 'deepseek-ai/DeepSeek-V3',
     why: "one checkpoint of DeepSeek V3's architecture",
   },
   'deepseek-ai/DeepSeek-R1-0528-Qwen3-8B': {
     cause: 'catalog',
     checkedAt: '2026-07-29',
+    supersededBy: 'Qwen/Qwen3-8B',
     why: 'a Qwen3-8B distill: 36 x 4096, which is Qwen3 8B',
   },
   'Qwen/Qwen3-Coder-30B-A3B-Instruct': {
     cause: 'catalog',
     checkedAt: '2026-07-29',
+    supersededBy: 'Qwen/Qwen3-30B-A3B',
     why: 'same shape as Qwen3-30B-A3B: 48 x 2048, 128 experts of 768',
   },
   'HuggingFaceTB/SmolLM3-3B': {
     cause: 'catalog',
     checkedAt: '2026-07-29',
+    supersededBy: 'unsloth/Llama-3.2-3B-Instruct',
     why: '3B dense, the tier Llama 3.2 3B and Ministral 3 3B already answer',
   },
   /**
@@ -637,32 +669,32 @@ export const NOT_SEEDED: Readonly<Record<string, Refusal>> = {
    * starts to matter, and there are five of those.
    */
   'Qwen/Qwen3-0.6B': {
-    cause: 'catalog',
+    cause: 'size',
     checkedAt: '2026-07-29',
     why: 'sub-2B: fits comfortably on every catalogued device, so every cell agrees',
   },
   'Qwen/Qwen3-1.7B': {
-    cause: 'catalog',
+    cause: 'size',
     checkedAt: '2026-07-29',
     why: 'sub-2B: fits comfortably on every catalogued device',
   },
   'google/gemma-3-1b-it': {
-    cause: 'catalog',
+    cause: 'size',
     checkedAt: '2026-07-29',
     why: 'sub-2B: fits comfortably on every catalogued device',
   },
   'google/gemma-3-270m': {
-    cause: 'catalog',
+    cause: 'size',
     checkedAt: '2026-07-29',
     why: 'sub-2B: fits comfortably on every catalogued device',
   },
   'google/gemma-3-270m-it': {
-    cause: 'catalog',
+    cause: 'size',
     checkedAt: '2026-07-29',
     why: 'sub-2B: fits comfortably on every catalogued device',
   },
   'openbmb/MiniCPM5-1B': {
-    cause: 'catalog',
+    cause: 'size',
     checkedAt: '2026-07-29',
     why: 'sub-2B: fits comfortably on every catalogued device',
   },
@@ -2265,10 +2297,14 @@ export const REFUSAL_MONTHS = 6;
  * have changed", and they need different actions from whoever reads them — a new candidate needs a
  * decision, a stale refusal needs a re-check. Printed as two sections for that reason.
  *
- * `catalog` refusals are excluded by construction rather than by date: nothing about the repository
- * can make "this row answers no new question" false, so ageing them would list twenty rows every six
- * months whose answer is unchanged and unchangeable from outside. What *can* falsify one is a change
- * in this catalog, which is local, free to check, and does not need a calendar.
+ * `catalog` and `size` refusals are excluded by construction rather than by date: nothing about the
+ * repository can make "a seeded row already answers this" or "every catalogued device holds it"
+ * false, so ageing them would list twenty rows every six months whose answer is unchanged and
+ * unchangeable from outside. What *can* falsify one is a change in this catalog, and that is checked
+ * where it happens — `build-catalog.test.ts` fails the moment a `supersededBy` target stops being
+ * seeded or a device smaller than the `size` assumption is added. **Written positively — the two
+ * causes that age are named rather than the ones that do not** — so a cause added later has to be
+ * classified deliberately instead of ageing by default or never ageing by default.
  *
  * Pure and separated from the clock for the same reason `unseededCandidates` is separated from the
  * fetch: what it decides is which names land in front of a human, and a function that reads
@@ -2284,7 +2320,7 @@ export function staleRefusals(options: {
   const MONTH_MS = (1000 * 60 * 60 * 24 * 365.25) / 12;
 
   return Object.entries(refusals)
-    .filter(([, refusal]) => refusal.cause !== 'catalog')
+    .filter(([, refusal]) => refusal.cause === 'engine' || refusal.cause === 'repo')
     .map(([id, refusal]) => {
       const checked = Date.parse(refusal.checkedAt);
       /**
@@ -2295,7 +2331,16 @@ export function staleRefusals(options: {
        * halfway through revisiting. This repo has shipped three variants of a filter that reported
        * compliance over nothing; the guard is to make the unreadable case the loud one.
        */
-      if (!Number.isFinite(checked)) return { id, refusal, monthsOld: Number.POSITIVE_INFINITY };
+      /**
+       * Unreadable *or* in the future is infinitely stale, and the second half was a fail-open the
+       * first draft shipped (found in review). A mistyped year — `2096` for `2026` — parses cleanly
+       * and yields a large negative age, which filters the entry out for seventy years: the exact
+       * permanence this whole mechanism exists to remove, reintroduced by a typo and silent. A date
+       * this table cannot have been checked on is a date it was not checked on.
+       */
+      if (!Number.isFinite(checked) || checked > now.getTime()) {
+        return { id, refusal, monthsOld: Number.POSITIVE_INFINITY };
+      }
       return { id, refusal, monthsOld: (now.getTime() - checked) / MONTH_MS };
     })
     .filter((entry) => entry.monthsOld >= months)
@@ -2324,6 +2369,66 @@ export function seededIds(seeds: readonly Seed[] = SEEDS): Set<string> {
  * The report catches the *field moving*; a question somebody has already asked has to be written
  * down when it is answered.
  */
+/**
+ * The other half of the report, and a different question with a different action (#103).
+ *
+ * {@link reportSeedCandidates} asks what the field is downloading that nobody has looked at. This
+ * asks what somebody looked at long enough ago that the answer may have changed — a written refusal
+ * used to be permanent, and the ids in {@link NOT_SEEDED} are by construction the high-download ones
+ * that mechanism exists to surface.
+ *
+ * **Its own function, called independently, and that is the fix rather than the tidying** (found in
+ * review). It began as a second block inside the candidate report, after a `try` whose `catch`
+ * returns — so a transient failure on an unrelated Hugging Face listing suppressed the whole
+ * re-check section, silently, and left a summary saying only that the candidates were not checked.
+ * This reads `NOT_SEEDED` and the clock and touches no network; nothing about a fetch should be able
+ * to decide whether it runs. Same shape as the failed-fetch path that block already had to learn:
+ * silence is indistinguishable from good news.
+ *
+ * Printed uncapped, unlike the candidates: this list is bounded by the table's own size and shrinks
+ * every time somebody acts on it, where the candidate list is bounded by the hub.
+ */
+async function reportStaleRefusals(now = new Date()): Promise<void> {
+  const heading =
+    `Refusals worth re-asking — checked over ${REFUSAL_MONTHS} months ago, and for a reason ` +
+    'something outside this repo could have changed';
+  const stale = staleRefusals({ refusals: NOT_SEEDED, now });
+
+  if (stale.length > 0) {
+    console.log(`\n${heading}:`);
+    for (const { id, refusal, monthsOld } of stale) {
+      const age = Number.isFinite(monthsOld) ? `${Math.floor(monthsOld)}mo` : 'never';
+      console.log(`  ${age.padStart(6)}  ${refusal.cause.padEnd(7)}  ${id}  — ${refusal.why}`);
+    }
+  }
+
+  const summary = process.env.GITHUB_STEP_SUMMARY;
+  if (!summary) return;
+  /*
+   * Written even when it is empty, unlike the candidates, and that is the point of the mechanism: a
+   * quiet section says the refusals were asked and still hold, where silence says nothing at all —
+   * which is exactly what a permanent refusal was.
+   */
+  await appendFile(
+    summary,
+    stale.length === 0
+      ? `\n### ${heading}\n\nNone — every refusal that can expire was checked inside the last ` +
+          `${REFUSAL_MONTHS} months.\n`
+      : `\n### ${heading}\n\n${stale.length} refusal(s) to re-ask. \`engine\` means the ` +
+          'derivation could not price the architecture, so the question is whether it can now; ' +
+          '`repo` means the export itself was the problem, so the question is whether it was ' +
+          're-uploaded. Either way: re-check, then move `checkedAt` to the day you checked.\n\n' +
+          '| model | cause | last checked | why not |\n| --- | --- | --- | --- |\n' +
+          stale
+            .map(
+              ({ id, refusal }) =>
+                `| \`${id}\` | ${refusal.cause} | ${refusal.checkedAt} | ${refusal.why} |`
+            )
+            .join('\n') +
+          '\n'
+  );
+}
+
 async function reportSeedCandidates(): Promise<void> {
   const MIN_DOWNLOADS = 250_000;
   const MONTHS = 18;
@@ -2425,9 +2530,6 @@ async function reportSeedCandidates(): Promise<void> {
   const heading =
     `Seed candidates — released in the last ${MONTHS} months, over ` +
     `${(MIN_DOWNLOADS / 1000).toFixed(0)}K downloads, neither seeded nor listed in NOT_SEEDED`;
-  const refusalHeading =
-    `Refusals worth re-asking — checked over ${REFUSAL_MONTHS} months ago, and for a reason ` +
-    'something outside this repo could have changed';
 
   /**
    * The console keeps its 25-line cap; the summary below does not (found in review).
@@ -2457,27 +2559,6 @@ async function reportSeedCandidates(): Promise<void> {
       `\n  ${candidates.length} candidate(s). Each one is either a seed or a line in NOT_SEEDED ` +
         'saying why not — the list ages silently otherwise.'
     );
-  }
-
-  /**
-   * The second half of the report, and a different question with a different action (#103).
-   *
-   * Above: what is the field downloading that nobody has looked at. Here: what did somebody look at
-   * long enough ago that the answer may have changed. A written refusal used to be permanent — the
-   * filter above drops every id in `NOT_SEEDED` unconditionally — so the models most likely to
-   * matter were the ones this mechanism could never surface, which is the failure it was built to
-   * prevent, pointed inward.
-   *
-   * Printed uncapped, unlike the candidates: this list is bounded by the table's own size and
-   * shrinks every time somebody acts on it, where the candidate list is bounded by the hub.
-   */
-  const stale = staleRefusals({ refusals: NOT_SEEDED, now: new Date() });
-  if (stale.length > 0) {
-    console.log(`\n${refusalHeading}:`);
-    for (const { id, refusal, monthsOld } of stale) {
-      const age = Number.isFinite(monthsOld) ? `${Math.floor(monthsOld)}mo` : 'never';
-      console.log(`  ${age.padStart(6)}  ${refusal.cause.padEnd(7)}  ${id}  — ${refusal.why}`);
-    }
   }
 
   /**
@@ -2524,37 +2605,6 @@ async function reportSeedCandidates(): Promise<void> {
       : `\n### ${heading}\n${incomplete}\n${candidates.length} candidate(s). Each is either a new seed or a line in ` +
           '`NOT_SEEDED` saying why not; the list ages silently otherwise.\n\n' +
           `| model | downloads | released |\n| --- | --- | --- |\n${rows}\n`
-  );
-
-  /**
-   * And the refusals in their own section, because they need a different action.
-   *
-   * Deliberately a second heading rather than more rows in the table above: a new candidate is a
-   * decision — seed it or write down why not — and a stale refusal is a re-check, of a decision
-   * somebody already made and recorded. Folding them together would produce one list whose rows mean
-   * two things, which is the shape `Fitness` was just relieved of one directory over.
-   *
-   * Written even when it is empty, unlike the candidates, and that is the point of the whole
-   * mechanism: a quiet section says the refusals were asked and still hold, where silence says
-   * nothing at all — which is what a permanent refusal was.
-   */
-  await appendFile(
-    summary,
-    stale.length === 0
-      ? `\n### ${refusalHeading}\n\nNone — every refusal that can expire was checked inside the ` +
-          `last ${REFUSAL_MONTHS} months.\n`
-      : `\n### ${refusalHeading}\n\n${stale.length} refusal(s) to re-ask. \`engine\` means the ` +
-          'derivation could not price the architecture, so the question is whether it can now; ' +
-          '`repo` means the export itself was the problem, so the question is whether it was ' +
-          're-uploaded. Either way: re-check, then move `checkedAt` to the day you checked.\n\n' +
-          '| model | cause | last checked | why not |\n| --- | --- | --- | --- |\n' +
-          stale
-            .map(
-              ({ id, refusal }) =>
-                `| \`${id}\` | ${refusal.cause} | ${refusal.checkedAt} | ${refusal.why} |`
-            )
-            .join('\n') +
-          '\n'
   );
 }
 
@@ -2614,6 +2664,9 @@ async function main() {
   if (dryRun) {
     console.log('\n--dry-run: nothing written.');
     await reportSeedCandidates();
+    // Independently, and before nothing can stop it: this reads the table and the clock, so a
+    // listing endpoint having a bad minute must not decide whether the refusals get re-asked.
+    await reportStaleRefusals();
     return;
   }
 
@@ -2636,6 +2689,7 @@ async function main() {
   );
   console.log(`\nWrote ${OUT}`);
   await reportSeedCandidates();
+  await reportStaleRefusals();
 }
 
 /**

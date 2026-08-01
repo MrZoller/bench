@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { DEVICES } from '@/data/catalog';
 import {
   NOT_SEEDED,
   SEEDS,
@@ -1364,19 +1365,83 @@ describe('the seed list knows what it is not carrying', () => {
    * `checkedAt` decides when.
    */
   it('says what would change each answer, and when it was last asked', () => {
-    const causes = new Set(['engine', 'repo', 'catalog']);
+    const causes = new Set(['engine', 'repo', 'catalog', 'size']);
     for (const [id, refusal] of Object.entries(NOT_SEEDED)) {
       expect(causes.has(refusal.cause), `${id} has cause "${refusal.cause}"`).toBe(true);
       // A date `Date.parse` cannot read is treated as infinitely stale by `staleRefusals`, which
       // fails loud rather than open — but a typo should not need the weekly report to surface it.
       expect(refusal.checkedAt, `${id} has no check date`).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-      expect(Number.isFinite(Date.parse(refusal.checkedAt)), `${id}'s date is unreadable`).toBe(
-        true
-      );
+      const checked = Date.parse(refusal.checkedAt);
+      expect(Number.isFinite(checked), `${id}'s date is unreadable`).toBe(true);
+      // And not in the future, which parses cleanly and is the fail-open `staleRefusals` guards
+      // against: a mistyped year filters the entry out for decades rather than for six months.
+      expect(checked, `${id} was checked in the future`).toBeLessThanOrEqual(Date.now());
     }
-    // The precondition: all three causes are in use, so none of them is a branch nothing exercises.
+    // The precondition: every cause is in use, so none of them is a branch nothing exercises.
     const used = new Set(Object.values(NOT_SEEDED).map((r) => r.cause));
-    expect([...used].sort()).toEqual(['catalog', 'engine', 'repo']);
+    expect([...used].sort()).toEqual(['catalog', 'engine', 'repo', 'size']);
+  });
+
+  /**
+   * The invariant that lets a `catalog` refusal skip the calendar (found in review on #103).
+   *
+   * The claim is that its assumption is "visible locally", and the first draft asserted that and
+   * checked nothing — which made those twenty entries exactly as permanent as the prose refusals the
+   * change was about. A row declined because another row already answers the question stops being
+   * true the moment that other row is removed, and nothing said so.
+   *
+   * `supersededBy` is the id rather than the display name for precisely this: a name in prose cannot
+   * be resolved and an id can. This fires on the event rather than six months after it, which is a
+   * better signal than a date wherever one is available.
+   */
+  it('defers only to rows the catalog still carries', () => {
+    const seeded = seededIds();
+    const deferring = Object.entries(NOT_SEEDED).filter(([, r]) => r.cause === 'catalog');
+    expect(deferring.length, 'no catalog refusals, so this proves nothing').toBeGreaterThan(5);
+
+    for (const [id, refusal] of deferring) {
+      expect(refusal.supersededBy, `${id} names no row it defers to`).toBeDefined();
+      expect(
+        seeded.has(refusal.supersededBy!),
+        `${id} defers to ${refusal.supersededBy}, which is no longer seeded`
+      ).toBe(true);
+    }
+
+    // And nothing else claims a deferral, since a `supersededBy` on an `engine` refusal would read
+    // as "already answered" for an architecture the engine cannot price at all.
+    for (const [id, refusal] of Object.entries(NOT_SEEDED)) {
+      if (refusal.cause === 'catalog') continue;
+      expect(
+        refusal.supersededBy,
+        `${id} is ${refusal.cause} and names a superseding row`
+      ).toBeUndefined();
+    }
+  });
+
+  /**
+   * And the invariant behind the `size` refusals, which is a fact about the *device* catalog.
+   *
+   * Six repos are declined because every catalogued machine holds them comfortably, so every cell of
+   * their row would agree and the placement question has no content. That is true until somebody
+   * adds a smaller machine — an 8 GiB card, a phone-class SoC — and then it is silently false, with
+   * the ids still filtered out of the candidate report.
+   *
+   * Asserted against the smallest allocatable ceiling in `devices.json` rather than against a list
+   * of device ids, so a new row is checked by arriving rather than by somebody remembering. 2B at
+   * BF16 is 4 GB of weights, and "comfortably" is the claim the refusals make — a machine that holds
+   * it with nothing to spare would make the row interesting again, which is the point.
+   */
+  it('declines a sub-2B row only while every machine holds one comfortably', () => {
+    const sized = Object.entries(NOT_SEEDED).filter(([, r]) => r.cause === 'size');
+    expect(sized.length, 'no size refusals, so this proves nothing').toBeGreaterThan(3);
+
+    const smallest = Math.min(...DEVICES.map((d) => d.allocatableBytes));
+    const twoBillionAtBf16 = 2e9 * 2;
+    expect(
+      smallest / twoBillionAtBf16,
+      `the smallest catalogued ceiling is ${(smallest / 1024 ** 3).toFixed(1)} GiB, which no longer ` +
+        `holds a 2B model comfortably — ${sized.length} refusals in NOT_SEEDED assume it does`
+    ).toBeGreaterThan(2);
   });
 
   it('seeds each repo once, and names each row once', () => {
