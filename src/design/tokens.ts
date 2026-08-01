@@ -201,13 +201,22 @@ export function magnitudeFill(
   const span = Math.log1p(domain.max) - Math.log1p(domain.min);
   if (!(span > 0)) return top;
   const placed = (Math.log1p(value) - Math.log1p(domain.min)) / span;
-  // The reflection, and the whole of what `direction` buys: the domain is always stated
-  // low-to-high in the measure's own units, so a lower-is-better measure is the same placement
-  // read from the other end.
-  const ranked = direction === 'lower' ? 1 - placed : placed;
-  // Clamped at both ends: `ranked` is 1 at the good end of the domain, which would index past the
-  // ramp, and a caller may legitimately ask about a value outside its own domain.
-  return magnitudeRamp[Math.max(0, Math.min(steps - 1, Math.floor(ranked * steps)))];
+  // Clamped at both ends: `placed` is 1 at the top of the domain, which would index past the ramp,
+  // and a caller may legitimately ask about a value outside its own domain.
+  const step = Math.max(0, Math.min(steps - 1, Math.floor(placed * steps)));
+  /**
+   * The reflection, and the whole of what `direction` buys — taken on the **step** rather than on
+   * the placement, which is not the same thing.
+   *
+   * `1 - placed` before the `floor` looks equivalent and is off by one bucket at every interior
+   * boundary: `floor` breaks a tie toward the bright end in both directions, so a value landing
+   * exactly on a boundary is not sent to the mirror of where the other direction sends it. With
+   * seven steps over `{min: 1, max: 255}`, a value of 3 is step 1 read upward and came out step 6
+   * read downward, where its true mirror is 5 — so the best bucket quietly absorbed the first
+   * boundary value. Mirroring the quantized index is an exact reversal by construction, which is
+   * what `tokens.test.ts` asserts as an identity rather than as "the fast one is brighter".
+   */
+  return magnitudeRamp[direction === 'lower' ? steps - 1 - step : step];
 }
 
 /** Parse a `#rrggbb` token into an `[r, g, b]` tuple. */

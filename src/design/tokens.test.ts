@@ -127,6 +127,28 @@ describe('placing a magnitude on the ramp', () => {
     expect(index(domain.max, domain, 'lower')).toBe(0);
   });
 
+  it('mirrors exactly on a bucket boundary, not one step off it', () => {
+    /*
+     * The case the identity above cannot reach, because its values are all interior to a bucket
+     * (found in review on #97). Reflecting the *placement* before `floor` is off by one wherever a
+     * value lands on a boundary: `floor` ties toward the bright end in both directions, so the two
+     * readings are not mirrors of each other there. Seven steps over this domain put 3 on step 1
+     * upward, and the pre-fix expression put it on 6 downward against a true mirror of 5 — the best
+     * bucket absorbing the first boundary value. The reflection is taken on the index now.
+     */
+    const domain = { min: 1, max: 255 };
+    expect(index(3, domain, 'higher')).toBe(1);
+    expect(index(3, domain, 'lower')).toBe(magnitudeRamp.length - 2);
+
+    // And every boundary, swept, since one of them is an example and all of them are the claim.
+    for (let step = 0; step < magnitudeRamp.length; step++) {
+      const boundary = Math.expm1((step / magnitudeRamp.length) * Math.log1p(domain.max));
+      expect(index(boundary, domain, 'lower'), `step ${step} does not mirror`).toBe(
+        magnitudeRamp.length - 1 - index(boundary, domain, 'higher')
+      );
+    }
+  });
+
   /**
    * The defect [#97](https://github.com/MrZoller/bench/issues/97) was filed for, asserted in both
    * directions so the fix cannot be silently reverted.
