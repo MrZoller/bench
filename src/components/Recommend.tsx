@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from 'react';
+import { useDeferredValue, useId, useMemo, useState } from 'react';
 import {
   FALLBACK_RULE,
   QUANT_RULE,
@@ -83,6 +83,18 @@ export function Recommend() {
   const device = getDevice(config.deviceId);
 
   /**
+   * **The sweep is deferred, because it is on the concurrency slider's drag path.**
+   *
+   * Adding concurrency as a third axis was right — it is what stops this panel and the verdict
+   * strip grading the same batch row differently — and it put a ~20ms catalog sweep behind a range
+   * control that emits an update at every stop it crosses. `useDeferredValue` lets React paint the
+   * drag at the old shortlist and recompute once the value settles, which is exactly the shape of
+   * this workload: the slider must stay responsive, and a shortlist one stop behind for a frame is
+   * nobody's problem. Raised by Codex on #167.
+   */
+  const deferredConcurrency = useDeferredValue(config.concurrency);
+
+  /**
    * Memoised on the four inputs the sweep actually reads, not on the whole config.
    *
    * The sweep is ~20ms over the shipped catalog — cheap for a selection change and not for a slider
@@ -96,14 +108,14 @@ export function Recommend() {
         device,
         deviceCount: config.deviceCount,
         kvPrecision: config.kvPrecision,
-        concurrency: config.concurrency,
+        concurrency: deferredConcurrency,
         workloadId,
         models: MODELS,
         runtimes: RUNTIMES,
         quantsFor: (model, runtime) =>
           QUANTS.filter((q) => quantApplies(q, model, device, runtime)),
       }),
-    [device, config.deviceCount, config.kvPrecision, config.concurrency, workloadId]
+    [device, config.deviceCount, config.kvPrecision, deferredConcurrency, workloadId]
   );
 
   const headline = shortlist.best ?? shortlist.fallback;
@@ -210,7 +222,7 @@ export function Recommend() {
               misstate an axis the ranking used — a regression introduced by the fix for the
               runtime-specific label it replaced. Raised by Codex on #167. */}
           {device.name} with a {CACHE_WIDTHS[config.kvPrecision]} cache at{' '}
-          {config.concurrency === 1 ? 'one user' : `${config.concurrency} users`}, each graded at
+          {deferredConcurrency === 1 ? 'one user' : `${deferredConcurrency} users`}, each graded at
           the prompt its own workload sends. Change the hardware, the cache or the user count above
           and the list moves.
         </p>
