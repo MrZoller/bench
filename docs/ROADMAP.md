@@ -144,6 +144,37 @@ size and the scale-plus-bias dtypes, so the width is 8.5 bits and the catalog sa
 forced the contract question the marker always carried (#45) — the field asks whether a width is
 _established_ now, not whether it is nominal.
 
+## What's next — the v2 candidates
+
+Four features, filed under the
+[`v2 — guided mode` milestone](https://github.com/MrZoller/bench/milestone/1). The design for each
+lives in its issue — the approach, the seams it builds on, and the traps already named — because
+this file records settled decisions and the issues are where a feature's design lives until it
+ships. What belongs here is the direction and the sequencing, so a session starting cold finds it
+without walking the issue list.
+
+The common thread: the moat today is correctness, and correctness is invisible to a first-time
+visitor — every alternative _looks_ the same at a glance. Each of these either makes the accuracy
+legible or removes the expertise the current entry point assumes.
+
+| Feature                                                         | Issue                                                | Why it is on the list                                                                                                               |
+| --------------------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Launch commands — emit the runnable command for the placement   | [#136](https://github.com/MrZoller/bench/issues/136) | The engine already computed the layer split; competitors never did, so they structurally cannot print one. A formatter, not a model |
+| Detect — one-click "what can my machine run"                    | [#137](https://github.com/MrZoller/bench/issues/137) | The 43-row picker assumes knowledge most visitors don't have. WebGPU narrows it to 2–4 candidates; a guess stays visibly a guess    |
+| Recommend — rank the catalog for a device + workload            | [#138](https://github.com/MrZoller/bench/issues/138) | The question people arrive with. The Matrix holds the answer as 1,470 cells; this returns the decision                              |
+| Calibrate — predicted-vs-measured, submitted via issue template | [#139](https://github.com/MrZoller/bench/issues/139) | Two anchors become a measured lattice, and a public "we said 44, users measured 41" record is the argument no competitor can copy   |
+
+**The sequencing is part of the record.** Launch commands first — smallest lift, pure leverage on
+`planPlacement`'s existing output, and calibrate cannot honestly ask anyone for measurements until
+running the priced scenario is a paste rather than a research project. Detect and recommend ship
+together as one guided-mode project, because each is half of the three-click landing path — detect
+the machine, ask what the reader wants to do, answer. Calibrate last: it is the slow-burn moat, and
+it compounds from the day the other three make submitting easy.
+
+Deliberately absent, and not forgotten: cloud pricing stays out of scope per the settled decision
+below, and fine-tuning memory (LoRA/QLoRA) is a second engine rather than a feature — real demand,
+weak incumbents, and the wrong thing to attempt before guided mode ships. It is the v3-scale bet.
+
 ## Deployment
 
 Two workflows, and the interesting decisions are in what each refuses to do.
