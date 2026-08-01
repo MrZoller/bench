@@ -575,14 +575,9 @@ export function Matrix({ config }: { config: Config }) {
     return cells.map((row) =>
       row.map((cell) => ({
         full: tooltip(cell, measure, quant.id, config.deviceCount),
-        brief: tooltip(
-          cell,
-          measure,
-          quant.id,
-          config.deviceCount,
-          true,
-          shown.get(cell.deviceId) ?? getDevice(cell.deviceId).name
-        ),
+        brief: tooltip(cell, measure, quant.id, config.deviceCount, {
+          shortDevice: shown.get(cell.deviceId) ?? getDevice(cell.deviceId).name,
+        }),
       }))
     );
   }, [cells, devices, measure, quant.id, config.deviceCount]);
@@ -1743,10 +1738,14 @@ function tooltip(
    *
    * Both forms are rendered and CSS picks one, because the choice is a *layout* question and this
    * component has no viewport to read. The paragraph is `aria-hidden`, so nothing hears both.
+   *
+   * **An options object with a required field rather than a boolean and a defaulted string**, which
+   * is this file's own doctrine about a guard that fails open: `shortDevice = ''` would let a caller
+   * ask for the narrow form and get ": 69% of the ceiling free" — a sentence naming no machine at
+   * all, which is the defect the narrow form was just corrected for. Present means narrow, and the
+   * type will not let it be present and empty-handed.
    */
-  brief = false,
-  /** The column's own shortened heading, for the narrow form — see `headerColumns`. */
-  shortDevice = ''
+  narrow?: { shortDevice: string }
 ): string {
   const model = getModel(cell.modelId).name;
   const device = getDevice(cell.deviceId).name;
@@ -1774,10 +1773,10 @@ function tooltip(
      * render, and both of the names in it are on the axes or in the Runtime picker at this width.
      * `evaluated` is exactly the split: false for a refusal that never consulted the arithmetic.
      */
-    if (brief) {
+    if (narrow) {
       return cell.evaluated
-        ? `${shortDevice}: ${reason}${stop}`
-        : `${shortDevice}: the runtime does not drive this.`;
+        ? `${narrow.shortDevice}: ${reason}${stop}`
+        : `${narrow.shortDevice}: the runtime does not drive this.`;
     }
     return `${model} on ${rig}: ${reason}${stop}`;
   }
@@ -1788,7 +1787,7 @@ function tooltip(
         ? // The other long one, and the narrow form says the same fact in a third of the characters.
           // "of its weights" and "runs only by" are the sentence around the figure, and the figure is
           // what a reader who cannot hover tapped the cell for.
-          brief
+          narrow
           ? `spills ${percent(cell.offloadFraction)} to host RAM`
           : `runs only by spilling ${percent(cell.offloadFraction)} of its weights to host RAM`
         : `${percent(Math.max(0, 1 - cell.utilization))} of the ceiling free`
@@ -1799,5 +1798,5 @@ function tooltip(
   const at = cell.quantId === selectedQuantId ? '' : ` at ${getQuant(cell.quantId).label}`;
   // The stand-in stays in the brief form: it is the one part of the preamble the axes do not carry,
   // and a figure derived from a format the runtime cannot load has to say so at every width.
-  return brief ? `${shortDevice}: ${detail}${at}.` : `${model} on ${rig}${at}: ${detail}.`;
+  return narrow ? `${narrow.shortDevice}: ${detail}${at}.` : `${model} on ${rig}${at}: ${detail}.`;
 }
