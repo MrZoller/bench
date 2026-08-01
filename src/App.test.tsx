@@ -225,6 +225,11 @@ describe('the Bench', () => {
     const user = userEvent.setup();
     render(<App />);
 
+    // DeepSeek-V3 rather than the default model, since #121: gpt-oss-120b at Q5_K_M is 78.8 GiB
+    // against the 96 GB Mac's 72 GiB *default* — past a setting, not past the machine, so the
+    // strip now says "Past the default allocation" there rather than the flat refusal this test
+    // pins. 445.6 GiB is past any ceiling this machine can be tuned to.
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
     await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-96');
     await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
     await user.selectOptions(screen.getByLabelText('Quantization'), 'q5_k_m');
@@ -1124,6 +1129,34 @@ describe('the Envelope agrees with the verdicts beside it', () => {
 
     await user.click(screen.getByRole('button', { name: /region as a table/i }));
     if (willNotRun) expect(currentCell()).toMatch(/Will not run/);
+  });
+
+  /**
+   * The other half of the agreement, on the one machine class the test above cannot reach: the
+   * rtx-5090 has no tunable ceiling, so its "Will not run" premise is never violated there. On a
+   * Mac past the default allocation but inside the raiseable ceiling, the capacity tile used to
+   * say "Will not run" over its own detail explaining a setting would fix it, while the Envelope
+   * cell one panel down said "Past the default allocation" about the same placement (#121).
+   */
+  it('says a raiseable ceiling is a setting, in the same words as the table', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // DeepSeek-V3 at Q5_K_M needs ~446 GiB: past the 512 GB Mac Studio's 384 GiB default
+    // allocation, inside the ceiling macOS lets the user raise.
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-512');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q5_k_m');
+
+    const verdicts = screen.getByRole('region', { name: 'Verdicts' });
+    // The capacity tile's word stops contradicting its own detail — and no tile in the strip
+    // asserts a flat refusal for a placement one setting would admit.
+    expect(within(verdicts).getByText('Past the default allocation')).toBeInTheDocument();
+    expect(within(verdicts).queryByText('Will not run')).not.toBeInTheDocument();
+
+    // And the Envelope's marked cell describes the same placement in the same words.
+    await user.click(screen.getByRole('button', { name: /region as a table/i }));
+    expect(currentCell()).toMatch(/Past the default allocation/);
   });
 
   it('locates the current scenario for a screen reader, not only as a ring', () => {

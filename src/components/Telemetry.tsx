@@ -1,7 +1,13 @@
 import { useId } from 'react';
 import type { Evaluation } from '@/engine';
 import type { StatusTone } from '@/design/tokens';
-import { CAPACITY_TIGHT, HOST_RAM_UNCHECKED, classifyDecode, classifyTtft } from '@/lib/verdicts';
+import {
+  CAPACITY_TIGHT,
+  HOST_RAM_UNCHECKED,
+  PAST_DEFAULT_ALLOCATION,
+  classifyDecode,
+  classifyTtft,
+} from '@/lib/verdicts';
 import { gibLabel, percent, rate, tokens } from '@/lib/format';
 
 /**
@@ -62,6 +68,13 @@ function capacityReading(
       value: gibLabel(-headroom),
       unit: 'over',
       tone: 'critical',
+      /**
+       * "Will not run" is the right word for two of the three variants below and refutes the
+       * third: the tunable-ceiling detail explains that a setting would fix this, and the flat
+       * word above it asserted the machine cannot (#121). The override is the same phrase the
+       * Envelope's table and the Matrix print for this placement, so the surfaces agree.
+       */
+      verdict: !canOffload && tunableCeiling ? PAST_DEFAULT_ALLOCATION : undefined,
       /**
        * A discrete GPU reaches `impossible` by a different route than a Mac does: not because
        * there is nowhere to spill, but because KV and activations alone overflow the card, and
@@ -264,10 +277,21 @@ export function Telemetry({
           value: '—',
           unit: '',
           tone: 'critical' as const,
-          verdict: unsupported ? 'Unsupported' : 'Will not run',
+          // The same split the capacity tile makes one column over, on the same guard, so the
+          // two can never diverge if a tunable discrete GPU ever lands: at a tunable ceiling
+          // the placement is past a default rather than unrunnable, and a speed tile saying
+          // "Will not run" would reintroduce the contradiction the capacity override removes
+          // (#121).
+          verdict: unsupported
+            ? 'Unsupported'
+            : !canOffload && tunableCeiling
+              ? 'No estimate'
+              : 'Will not run',
           detail: unsupported
             ? 'No estimate — this runtime cannot drive this hardware.'
-            : 'No estimate — the model does not fit, so there is no speed to report.',
+            : !canOffload && tunableCeiling
+              ? 'No estimate — past the default allocation, so there is no speed to report at the untuned ceiling.'
+              : 'No estimate — the model does not fit, so there is no speed to report.',
         })),
       ]
     : [
