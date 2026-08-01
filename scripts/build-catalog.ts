@@ -311,60 +311,274 @@ export const SEEDS: Seed[] = [
  * become seedable the day the engine grows the term they need, and the report is what will say so —
  * nothing here is checked for still being true.
  */
-export const NOT_SEEDED: Readonly<Record<string, string>> = {
+/**
+ * Repos that were checked and declined, with what would change the answer and when it was last
+ * asked ([#103](https://github.com/MrZoller/bench/issues/103)).
+ *
+ * **A written refusal used to be permanent**, and that is the defect this shape exists for.
+ * `unseededCandidates` filters out every id in here unconditionally, so a model was invisible to the
+ * report the moment somebody explained why it was not seeded — and the models in here are, by
+ * construction, the high-download ones the report exists to surface. The reasons expire in two
+ * unlike ways and neither had a mechanism: support arrives and the refusal becomes wrong, or the
+ * repository changes under the id and the same id has a different answer.
+ *
+ * So a refusal is structured rather than prose. `cause` says **what would change the answer**, which
+ * is the part that decides how it expires:
+ *
+ *   - `engine` — this architecture is one the derivation cannot price. Expires when the engine gains
+ *     a capability, which nothing in this repo can detect from the outside, so these age on the
+ *     calendar and the weekly report re-asks them.
+ *   - `repo` — the refusal is about what this *repository* publishes rather than what the model is:
+ *     an export whose safetensors total counts group scales as parameters. Expires when the org
+ *     re-uploads, same id and a different answer, so these age too.
+ *   - `catalog` — a seeded row already answers this question, named in `supersededBy`. Nothing about
+ *     the repo can change that; only a change *here* can.
+ *   - `size` — the model is small enough that every catalogued device holds it comfortably, so every
+ *     cell of its row would agree and the placement question has no content. Only a change here can
+ *     falsify that either — a smaller device.
+ *
+ * **The last two do not age, and that is a claim this file now has to earn rather than assert.** The
+ * first draft said their assumptions were "visible locally and free to check" and checked neither
+ * (found in review), which made them exactly as permanent as the prose refusals the whole change was
+ * about. So each carries a mechanically enforced invariant instead of a calendar:
+ * `build-catalog.test.ts` asserts every `catalog` refusal names a repo that is still seeded, and
+ * that the smallest device in the catalog still holds a 2B model with room to spare. Remove the seed
+ * or add a smaller machine and the suite names the refusal that has gone stale — which is a better
+ * signal than a date, because it fires on the event rather than six months after it.
+ *
+ * `checkedAt` is the day the repo was last looked at, and {@link staleRefusals} is what reads it.
+ * Set it to the day you check, not the day you edit the line — a re-worded reason is not a re-check.
+ *
+ * `why` stays prose because its reader is a human deciding whether to overturn the refusal, and no
+ * enum is going to carry "31 of 80 blocks have no attention at all". What the structure buys is that
+ * the *machine* can now tell an expired refusal from a current one, which prose could not.
+ */
+export interface Refusal {
+  /** What would have to change for this repo to become seedable — see the docblock above. */
+  cause: 'engine' | 'repo' | 'catalog' | 'size';
+  /** ISO date the repo was last checked against the live API. */
+  checkedAt: string;
+  /** Why not, for the human who has to decide whether it still holds. */
+  why: string;
+  /**
+   * The seeded repo that already answers this question — required on a `catalog` refusal.
+   *
+   * The id rather than the display name, so the invariant is checkable: a refusal deferring to a row
+   * somebody later removes is a refusal that has quietly stopped being true, and the prose could not
+   * say so.
+   */
+  supersededBy?: string;
+}
+
+export const NOT_SEEDED: Readonly<Record<string, Refusal>> = {
   // Hybrid linear attention: refused in `refuseLinearStack`. This is now the *mainstream* of the
   // field rather than an exotic corner — the entire current Qwen generation, at every size.
-  'Qwen/Qwen3.6-27B': 'hybrid: 16 of 64 layers attend (full_attention_interval 4)',
-  'Qwen/Qwen3.6-35B-A3B': 'hybrid: 10 of 40 layers attend',
-  'Qwen/Qwen3.5-9B': 'hybrid: 8 of 32 layers attend',
-  'Qwen/Qwen3.5-4B': 'hybrid: 8 of 32 layers attend',
-  'Qwen/Qwen3.5-2B': 'hybrid linear attention, same stack as Qwen3.5-9B',
-  'Qwen/Qwen3.5-0.8B': 'hybrid linear attention, same stack as Qwen3.5-9B',
-  'Qwen/Qwen3.5-122B-A10B': 'hybrid: 12 of 48 layers attend',
-  'Qwen/Qwen3.5-397B-A17B': 'hybrid: 15 of 60 layers attend',
-  'Qwen/Qwen3-Next-80B-A3B-Instruct': 'hybrid: 12 of 48 layers attend',
-  'moonshotai/Kimi-K3': 'hybrid: linear_attn_config, Kimi-Delta on most layers',
-  'moonshotai/Kimi-Linear-48B-A3B-Instruct': 'hybrid: 7 of 27 layers attend',
-  'ibm-granite/granite-4.0-h-small': 'hybrid: 4 of 40 layers attend, 36 Mamba-2',
-  'Qwen/Qwen3-Coder-Next': 'hybrid: Qwen3Next linear attention, 12 of 48 layers attend',
-  'LiquidAI/LFM2.5-1.2B-Instruct': 'hybrid: 6 of 16 layers attend, 10 short-convolution',
+  'Qwen/Qwen3.6-27B': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'hybrid: 16 of 64 layers attend (full_attention_interval 4)',
+  },
+  'Qwen/Qwen3.6-35B-A3B': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'hybrid: 10 of 40 layers attend',
+  },
+  'Qwen/Qwen3.5-9B': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'hybrid: 8 of 32 layers attend',
+  },
+  'Qwen/Qwen3.5-4B': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'hybrid: 8 of 32 layers attend',
+  },
+  'Qwen/Qwen3.5-2B': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'hybrid linear attention, same stack as Qwen3.5-9B',
+  },
+  'Qwen/Qwen3.5-0.8B': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'hybrid linear attention, same stack as Qwen3.5-9B',
+  },
+  'Qwen/Qwen3.5-122B-A10B': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'hybrid: 12 of 48 layers attend',
+  },
+  'Qwen/Qwen3.5-397B-A17B': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'hybrid: 15 of 60 layers attend',
+  },
+  'Qwen/Qwen3-Next-80B-A3B-Instruct': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'hybrid: 12 of 48 layers attend',
+  },
+  'moonshotai/Kimi-K3': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'hybrid: linear_attn_config, Kimi-Delta on most layers',
+  },
+  'moonshotai/Kimi-Linear-48B-A3B-Instruct': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'hybrid: 7 of 27 layers attend',
+  },
+  'ibm-granite/granite-4.0-h-small': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'hybrid: 4 of 40 layers attend, 36 Mamba-2',
+  },
+  'Qwen/Qwen3-Coder-Next': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'hybrid: Qwen3Next linear attention, 12 of 48 layers attend',
+  },
+  'LiquidAI/LFM2.5-1.2B-Instruct': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'hybrid: 6 of 16 layers attend, 10 short-convolution',
+  },
   // NVIDIA has no seedable row at all, which is worth stating rather than leaving as a gap: every
   // current Nemotron is either Mamba-2 hybrid or a per-block NAS export, and the two guards that
   // refuse them are different guards.
-  'nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16': 'hybrid: Mamba-2 (NemotronH)',
-  'nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16': 'hybrid: Mamba-2 (NemotronH)',
-  'nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16': 'hybrid: Mamba-2 (NemotronH)',
-  'nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4': 'hybrid: Mamba-2 per hybrid_override_pattern',
-  'nvidia/NVIDIA-Nemotron-Labs-3-Puzzle-75B-A9B-BF16': 'per-block NAS architecture (block_configs)',
-  'nvidia/Llama-3_3-Nemotron-Super-49B-v1_5':
-    'per-block NAS architecture: 31 of 80 blocks have no attention at all, and the KV grouping ' +
-    'is per block (13x KV read as uniform MHA)',
+  'nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'hybrid: Mamba-2 (NemotronH)',
+  },
+  'nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'hybrid: Mamba-2 (NemotronH)',
+  },
+  'nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'hybrid: Mamba-2 (NemotronH)',
+  },
+  'nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'hybrid: Mamba-2 per hybrid_override_pattern',
+  },
+  'nvidia/NVIDIA-Nemotron-Labs-3-Puzzle-75B-A9B-BF16': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'per-block NAS architecture (block_configs)',
+  },
+  'nvidia/Llama-3_3-Nemotron-Super-49B-v1_5': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'per-block NAS architecture: 31 of 80 blocks have no attention at all, and the KV grouping is per block (13x KV read as uniform MHA)',
+  },
   // Sparse attention: a second cache and a bounded read, refused in `deriveAttention`.
-  'deepseek-ai/DeepSeek-V4-Pro': 'sparse-attention indexer (index_topk 1024)',
-  'deepseek-ai/DeepSeek-V4-Flash': 'sparse-attention indexer (index_topk 512)',
-  'deepseek-ai/DeepSeek-V3.2': 'sparse-attention indexer',
-  'deepseek-ai/DeepSeek-V3.2-Exp': 'sparse-attention indexer',
-  'zai-org/GLM-5.2': 'sparse-attention indexer (GlmMoeDsa)',
-  'zai-org/GLM-5.1': 'sparse-attention indexer (GlmMoeDsa)',
-  'zai-org/GLM-5': 'sparse-attention indexer (GlmMoeDsa)',
-  'MiniMaxAI/MiniMax-M3': 'sparse_attention_config, and a per-layer moe_layer_freq array',
+  'deepseek-ai/DeepSeek-V4-Pro': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'sparse-attention indexer (index_topk 1024)',
+  },
+  'deepseek-ai/DeepSeek-V4-Flash': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'sparse-attention indexer (index_topk 512)',
+  },
+  'deepseek-ai/DeepSeek-V3.2': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'sparse-attention indexer',
+  },
+  'deepseek-ai/DeepSeek-V3.2-Exp': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'sparse-attention indexer',
+  },
+  'zai-org/GLM-5.2': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'sparse-attention indexer (GlmMoeDsa)',
+  },
+  'zai-org/GLM-5.1': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'sparse-attention indexer (GlmMoeDsa)',
+  },
+  'zai-org/GLM-5': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'sparse-attention indexer (GlmMoeDsa)',
+  },
+  'MiniMaxAI/MiniMax-M3': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'sparse_attention_config, and a per-layer moe_layer_freq array',
+  },
   // A cache this script has no term for, one key at a time.
-  'google/gemma-4-31B-it': 'attention_k_eq_v, and global layers with their own KV shape',
-  'google/gemma-4-26B-A4B-it': 'attention_k_eq_v, global KV shape, and top_k_experts',
-  'google/gemma-4-12B-it': 'attention_k_eq_v, and global layers with their own KV shape',
-  'google/gemma-4-E4B-it': 'num_kv_shared_layers 18 of 42, so 18 layers cache nothing of their own',
-  'meta-llama/Llama-4-Scout-17B-16E-Instruct': 'chunked attention (attention_chunk_size 8192)',
-  'meta-llama/Llama-4-Maverick-17B-128E-Instruct': 'chunked attention',
+  'google/gemma-4-31B-it': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'attention_k_eq_v, and global layers with their own KV shape',
+  },
+  'google/gemma-4-26B-A4B-it': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'attention_k_eq_v, global KV shape, and top_k_experts',
+  },
+  'google/gemma-4-12B-it': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'attention_k_eq_v, and global layers with their own KV shape',
+  },
+  'google/gemma-4-E4B-it': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'num_kv_shared_layers 18 of 42, so 18 layers cache nothing of their own',
+  },
+  'meta-llama/Llama-4-Scout-17B-16E-Instruct': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'chunked attention (attention_chunk_size 8192)',
+  },
+  'meta-llama/Llama-4-Maverick-17B-128E-Instruct': {
+    cause: 'engine',
+    checkedAt: '2026-07-29',
+    why: 'chunked attention',
+  },
   // Native int4 exports whose safetensors total counts the group scales as parameters — one BF16
   // scale per 32 weights, which is +31.7B on a 1T model. Seeded through their FP8 sibling instead,
   // which is the same architecture with a derivable count.
-  'moonshotai/Kimi-K2.6':
-    'int4 export: safetensors total counts group scales (see Kimi-K2-Instruct)',
-  'moonshotai/Kimi-K2.5': 'int4 export: safetensors total counts group scales',
-  'moonshotai/Kimi-K2-Thinking': 'int4 export: safetensors total counts group scales',
+  'moonshotai/Kimi-K2.6': {
+    cause: 'repo',
+    checkedAt: '2026-07-29',
+    why: 'int4 export: safetensors total counts group scales (see Kimi-K2-Instruct)',
+  },
+  'moonshotai/Kimi-K2.5': {
+    cause: 'repo',
+    checkedAt: '2026-07-29',
+    why: 'int4 export: safetensors total counts group scales',
+  },
+  'moonshotai/Kimi-K2-Thinking': {
+    cause: 'repo',
+    checkedAt: '2026-07-29',
+    why: 'int4 export: safetensors total counts group scales',
+  },
   // Shape-identical to a row already in the catalog, so it answers no new question.
-  'mistralai/Devstral-Small-2-24B-Instruct-2512': "24B dense at 40x5120 — Mistral Small 24B's row",
-  'mistralai/Mistral-Small-3.2-24B-Instruct-2506': 'superseded by Mistral Small 4; same shape',
+  'mistralai/Devstral-Small-2-24B-Instruct-2512': {
+    cause: 'catalog',
+    checkedAt: '2026-07-29',
+    supersededBy: 'mistralai/Mistral-Small-24B-Instruct-2501',
+    why: "24B dense at 40x5120 — Mistral Small 24B's row",
+  },
+  'mistralai/Mistral-Small-3.2-24B-Instruct-2506': {
+    cause: 'catalog',
+    checkedAt: '2026-07-29',
+    supersededBy: 'mistralai/Mistral-Small-24B-Instruct-2501',
+    why: 'superseded by Mistral Small 4; same shape',
+  },
   /**
    * The three repos [#77](https://github.com/MrZoller/bench/issues/77) named by id and this list did
    * not answer, which is a different failure from the ones above: each was checked, each was
@@ -374,23 +588,78 @@ export const NOT_SEEDED: Readonly<Record<string, string>> = {
    * 250K download floor, so the weekly report was never going to raise them either. Those filters
    * are a floor on what the report *surfaces*, not a bound on what this table has to explain.
    */
-  'mistralai/Mistral-Nemo-Instruct-2407':
-    '12B dense at 40x5120 — the 12-14B tier Gemma 3 12B and Qwen3 14B already answer, and a ' +
-    'July 2024 model rather than the head of its family (Ministral 3 3B and Mistral Small 4 are). ' +
-    "The gap it fills is in Mistral's lineup, not in the hardware question.",
-  'mistralai/Devstral-Small-2507':
-    "24B dense at 40x5120, which is Mistral Small 24B's row; superseded by Devstral Small 2",
-  'CohereLabs/c4ai-command-a-03-2025':
-    'superseded by Command A+ (05-2026), which is seeded; 111B dense against its 219B MoE',
-  'zai-org/GLM-4.5': "one checkpoint of GLM 4.7's architecture",
-  'zai-org/GLM-4.6': "one checkpoint of GLM 4.7's architecture",
-  'MiniMaxAI/MiniMax-M2': "one checkpoint of MiniMax M2.7's architecture",
-  'MiniMaxAI/MiniMax-M2.5': "one checkpoint of MiniMax M2.7's architecture",
-  'moonshotai/Kimi-K2-Instruct-0905': "one checkpoint of Kimi K2's architecture",
-  'deepseek-ai/DeepSeek-V3-0324': "one checkpoint of DeepSeek V3's architecture",
-  'deepseek-ai/DeepSeek-R1-0528-Qwen3-8B': 'a Qwen3-8B distill: 36 x 4096, which is Qwen3 8B',
-  'Qwen/Qwen3-Coder-30B-A3B-Instruct': 'same shape as Qwen3-30B-A3B: 48 x 2048, 128 experts of 768',
-  'HuggingFaceTB/SmolLM3-3B': '3B dense, the tier Llama 3.2 3B and Ministral 3 3B already answer',
+  'mistralai/Mistral-Nemo-Instruct-2407': {
+    cause: 'catalog',
+    checkedAt: '2026-07-29',
+    supersededBy: 'unsloth/gemma-3-12b-it',
+    why: "12B dense at 40x5120 — the 12-14B tier Gemma 3 12B and Qwen3 14B already answer, and a July 2024 model rather than the head of its family (Ministral 3 3B and Mistral Small 4 are). The gap it fills is in Mistral's lineup, not in the hardware question.",
+  },
+  'mistralai/Devstral-Small-2507': {
+    cause: 'catalog',
+    checkedAt: '2026-07-29',
+    supersededBy: 'mistralai/Mistral-Small-24B-Instruct-2501',
+    why: "24B dense at 40x5120, which is Mistral Small 24B's row; superseded by Devstral Small 2",
+  },
+  'CohereLabs/c4ai-command-a-03-2025': {
+    cause: 'catalog',
+    checkedAt: '2026-07-29',
+    supersededBy: 'CohereLabs/command-a-plus-05-2026-bf16',
+    why: 'superseded by Command A+ (05-2026), which is seeded; 111B dense against its 219B MoE',
+  },
+  'zai-org/GLM-4.5': {
+    cause: 'catalog',
+    checkedAt: '2026-07-29',
+    supersededBy: 'zai-org/GLM-4.7',
+    why: "one checkpoint of GLM 4.7's architecture",
+  },
+  'zai-org/GLM-4.6': {
+    cause: 'catalog',
+    checkedAt: '2026-07-29',
+    supersededBy: 'zai-org/GLM-4.7',
+    why: "one checkpoint of GLM 4.7's architecture",
+  },
+  'MiniMaxAI/MiniMax-M2': {
+    cause: 'catalog',
+    checkedAt: '2026-07-29',
+    supersededBy: 'MiniMaxAI/MiniMax-M2.7',
+    why: "one checkpoint of MiniMax M2.7's architecture",
+  },
+  'MiniMaxAI/MiniMax-M2.5': {
+    cause: 'catalog',
+    checkedAt: '2026-07-29',
+    supersededBy: 'MiniMaxAI/MiniMax-M2.7',
+    why: "one checkpoint of MiniMax M2.7's architecture",
+  },
+  'moonshotai/Kimi-K2-Instruct-0905': {
+    cause: 'catalog',
+    checkedAt: '2026-07-29',
+    supersededBy: 'moonshotai/Kimi-K2-Instruct',
+    why: "one checkpoint of Kimi K2's architecture",
+  },
+  'deepseek-ai/DeepSeek-V3-0324': {
+    cause: 'catalog',
+    checkedAt: '2026-07-29',
+    supersededBy: 'deepseek-ai/DeepSeek-V3',
+    why: "one checkpoint of DeepSeek V3's architecture",
+  },
+  'deepseek-ai/DeepSeek-R1-0528-Qwen3-8B': {
+    cause: 'catalog',
+    checkedAt: '2026-07-29',
+    supersededBy: 'Qwen/Qwen3-8B',
+    why: 'a Qwen3-8B distill: 36 x 4096, which is Qwen3 8B',
+  },
+  'Qwen/Qwen3-Coder-30B-A3B-Instruct': {
+    cause: 'catalog',
+    checkedAt: '2026-07-29',
+    supersededBy: 'Qwen/Qwen3-30B-A3B',
+    why: 'same shape as Qwen3-30B-A3B: 48 x 2048, 128 experts of 768',
+  },
+  'HuggingFaceTB/SmolLM3-3B': {
+    cause: 'catalog',
+    checkedAt: '2026-07-29',
+    supersededBy: 'unsloth/Llama-3.2-3B-Instruct',
+    why: '3B dense, the tier Llama 3.2 3B and Ministral 3 3B already answer',
+  },
   /**
    * The sub-2B tier, which is absent on purpose and not by oversight — Qwen3-0.6B is the
    * most-downloaded text-generation repo on the hub and would still be a row whose every cell says
@@ -399,12 +668,36 @@ export const NOT_SEEDED: Readonly<Record<string, string>> = {
    * content. The interesting small models are the 3-4B ones, where an 8 GiB card at long context
    * starts to matter, and there are five of those.
    */
-  'Qwen/Qwen3-0.6B': 'sub-2B: fits comfortably on every catalogued device, so every cell agrees',
-  'Qwen/Qwen3-1.7B': 'sub-2B: fits comfortably on every catalogued device',
-  'google/gemma-3-1b-it': 'sub-2B: fits comfortably on every catalogued device',
-  'google/gemma-3-270m': 'sub-2B: fits comfortably on every catalogued device',
-  'google/gemma-3-270m-it': 'sub-2B: fits comfortably on every catalogued device',
-  'openbmb/MiniCPM5-1B': 'sub-2B: fits comfortably on every catalogued device',
+  'Qwen/Qwen3-0.6B': {
+    cause: 'size',
+    checkedAt: '2026-07-29',
+    why: 'sub-2B: fits comfortably on every catalogued device, so every cell agrees',
+  },
+  'Qwen/Qwen3-1.7B': {
+    cause: 'size',
+    checkedAt: '2026-07-29',
+    why: 'sub-2B: fits comfortably on every catalogued device',
+  },
+  'google/gemma-3-1b-it': {
+    cause: 'size',
+    checkedAt: '2026-07-29',
+    why: 'sub-2B: fits comfortably on every catalogued device',
+  },
+  'google/gemma-3-270m': {
+    cause: 'size',
+    checkedAt: '2026-07-29',
+    why: 'sub-2B: fits comfortably on every catalogued device',
+  },
+  'google/gemma-3-270m-it': {
+    cause: 'size',
+    checkedAt: '2026-07-29',
+    why: 'sub-2B: fits comfortably on every catalogued device',
+  },
+  'openbmb/MiniCPM5-1B': {
+    cause: 'size',
+    checkedAt: '2026-07-29',
+    why: 'sub-2B: fits comfortably on every catalogued device',
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -1981,6 +2274,114 @@ export function unseededCandidates(options: {
     .sort((a, b) => (b.downloads ?? 0) - (a.downloads ?? 0));
 }
 
+/**
+ * How long a refusal that can expire stays trusted before the report re-asks it.
+ *
+ * Six months, and the number is a trade between two failures the issue names. Too short and every
+ * weekly run lists thirty-seven architectures nobody has taught the engine yet, which is the report
+ * becoming noise — and a report people skip is the state {@link NOT_SEEDED} was created to leave.
+ * Too long and a capability arriving is invisible for as long as it takes somebody to remember.
+ *
+ * The choice is a heuristic and says so, which is the honest version of the alternative: re-deriving
+ * every entry weekly would be exact, and costs a fetch and a full derivation per row on a job whose
+ * whole point is to be cheap enough to run unattended. This is the first step the issue calls for,
+ * not the last: `cause` is already the structure a by-cause trigger would need.
+ */
+export const REFUSAL_MONTHS = 6;
+
+/**
+ * How long each cause stays trusted, and the one that never expires.
+ *
+ * `engine` and `repo` age at {@link REFUSAL_MONTHS}: what would change them is outside this
+ * repository and nothing here can detect it, so the calendar is the only trigger available.
+ *
+ * **`catalog` ages too, at twice the window, and the first draft had it never ageing** (found in
+ * review). The argument was that `supersededBy` catches the assumption breaking — and it catches
+ * only half of it. A deferral says "that row already answers this", which stops being true if the
+ * row is *removed* (the id check sees that) or if its architecture changes **in place** under the
+ * same id, which is precisely what the weekly refresh exists to pick up and what no id check can
+ * see. Twelve months rather than six because a shape changing under a stable id is rarer than a
+ * capability arriving, and because the id check already covers the common case.
+ *
+ * **`size` ages at eighteen months, and two drafts had it never ageing.** Its assumption reads as
+ * purely local — every catalogued machine holds a 2B model comfortably, which
+ * `build-catalog.test.ts` asserts against the smallest allocatable ceiling in `devices.json` — and
+ * that is only half of it (found in review). The other half is a fact about the *repository*: it is
+ * sub-2B, and a publisher can revise a config under the same id, exactly as they can for a `repo`
+ * refusal. The device check catches a smaller machine arriving, the day it arrives, and cannot catch
+ * a model growing. Longest window of the three because both halves are slow, and because a
+ * misclassified entry would otherwise be invisible for ever.
+ *
+ * **So nothing in this table is permanent any more**, which is the whole of #103 and took three
+ * rounds to actually mean: every cause has a date, and the mechanical checks are what make the dates
+ * long rather than what make them unnecessary.
+ */
+const CAUSE_MONTHS: Record<Refusal['cause'], number> = {
+  engine: REFUSAL_MONTHS,
+  repo: REFUSAL_MONTHS,
+  catalog: REFUSAL_MONTHS * 2,
+  size: REFUSAL_MONTHS * 3,
+};
+
+/**
+ * Refusals old enough to be worth asking again, oldest first.
+ *
+ * The other half of the report. `unseededCandidates` answers "what is the field downloading that
+ * nobody has looked at"; this answers "what did somebody look at long enough ago that the answer may
+ * have changed", and they need different actions from whoever reads them — a new candidate needs a
+ * decision, a stale refusal needs a re-check. Printed as two sections for that reason.
+ *
+ * Each cause has its own window — see {@link CAUSE_MONTHS}, which is where the argument for each one
+ * lives. Every cause has one: a mechanical check covers what it covers, and none of them covers a
+ * publisher revising a config under an id this table has already declined. **Written as a lookup
+ * keyed on the cause** rather than as a list of exclusions, so a cause added later has to be
+ * classified deliberately instead of inheriting a default.
+ *
+ * Pure and separated from the clock for the same reason `unseededCandidates` is separated from the
+ * fetch: what it decides is which names land in front of a human, and a function that reads
+ * `Date.now()` cannot be tested at the boundary where it matters.
+ */
+export function staleRefusals(options: {
+  refusals: Readonly<Record<string, Refusal>>;
+  now: Date;
+  months?: number;
+}): { id: string; refusal: Refusal; monthsOld: number }[] {
+  const { refusals, now, months } = options;
+  /** An average month, since the comparison is "about six months" and not a calendar boundary. */
+  const MONTH_MS = (1000 * 60 * 60 * 24 * 365.25) / 12;
+
+  return (
+    Object.entries(refusals)
+      .filter(([, refusal]) => CAUSE_MONTHS[refusal.cause] !== null)
+      .map(([id, refusal]) => {
+        const checked = Date.parse(refusal.checkedAt);
+        /**
+         * An unparseable date is stale, not fresh, and the direction is the whole of this line.
+         *
+         * The alternative fails open: a typo in one entry would exempt that entry from re-checking for
+         * ever, silently, and the entries most likely to be hand-edited are the ones somebody is
+         * halfway through revisiting. This repo has shipped three variants of a filter that reported
+         * compliance over nothing; the guard is to make the unreadable case the loud one.
+         */
+        /**
+         * Unreadable *or* in the future is infinitely stale, and the second half was a fail-open the
+         * first draft shipped (found in review). A mistyped year — `2096` for `2026` — parses cleanly
+         * and yields a large negative age, which filters the entry out for seventy years: the exact
+         * permanence this whole mechanism exists to remove, reintroduced by a typo and silent. A date
+         * this table cannot have been checked on is a date it was not checked on.
+         */
+        if (!Number.isFinite(checked) || checked > now.getTime()) {
+          return { id, refusal, monthsOld: Number.POSITIVE_INFINITY };
+        }
+        return { id, refusal, monthsOld: (now.getTime() - checked) / MONTH_MS };
+      })
+      // The caller's window overrides, so a test can drive any cause at any age; otherwise each cause
+      // ages at its own. `!` is safe because the filter above dropped every `null`.
+      .filter((entry) => entry.monthsOld >= (months ?? CAUSE_MONTHS[entry.refusal.cause]!))
+      .sort((a, b) => b.monthsOld - a.monthsOld)
+  );
+}
+
 /** Every repo id the catalog already speaks for, mirrors and canonical repos alike. */
 export function seededIds(seeds: readonly Seed[] = SEEDS): Set<string> {
   return new Set(
@@ -2003,6 +2404,68 @@ export function seededIds(seeds: readonly Seed[] = SEEDS): Set<string> {
  * The report catches the *field moving*; a question somebody has already asked has to be written
  * down when it is answered.
  */
+/**
+ * The other half of the report, and a different question with a different action (#103).
+ *
+ * {@link reportSeedCandidates} asks what the field is downloading that nobody has looked at. This
+ * asks what somebody looked at long enough ago that the answer may have changed — a written refusal
+ * used to be permanent, and the ids in {@link NOT_SEEDED} are by construction the high-download ones
+ * that mechanism exists to surface.
+ *
+ * **Its own function, called independently, and that is the fix rather than the tidying** (found in
+ * review). It began as a second block inside the candidate report, after a `try` whose `catch`
+ * returns — so a transient failure on an unrelated Hugging Face listing suppressed the whole
+ * re-check section, silently, and left a summary saying only that the candidates were not checked.
+ * This reads `NOT_SEEDED` and the clock and touches no network; nothing about a fetch should be able
+ * to decide whether it runs. Same shape as the failed-fetch path that block already had to learn:
+ * silence is indistinguishable from good news.
+ *
+ * Printed uncapped, unlike the candidates: this list is bounded by the table's own size and shrinks
+ * every time somebody acts on it, where the candidate list is bounded by the hub.
+ */
+async function reportStaleRefusals(now = new Date()): Promise<void> {
+  const heading =
+    'Refusals worth re-asking — past the window their cause is trusted for, and for a reason ' +
+    'something outside this repo could have changed';
+  const stale = staleRefusals({ refusals: NOT_SEEDED, now });
+
+  if (stale.length > 0) {
+    console.log(`\n${heading}:`);
+    for (const { id, refusal, monthsOld } of stale) {
+      const age = Number.isFinite(monthsOld) ? `${Math.floor(monthsOld)}mo` : 'never';
+      console.log(`  ${age.padStart(6)}  ${refusal.cause.padEnd(7)}  ${id}  — ${refusal.why}`);
+    }
+  }
+
+  const summary = process.env.GITHUB_STEP_SUMMARY;
+  if (!summary) return;
+  /*
+   * Written even when it is empty, unlike the candidates, and that is the point of the mechanism: a
+   * quiet section says the refusals were asked and still hold, where silence says nothing at all —
+   * which is exactly what a permanent refusal was.
+   */
+  await appendFile(
+    summary,
+    stale.length === 0
+      ? `\n### ${heading}\n\nNone — every refusal is inside its own window. Those windows differ by ` +
+          `cause: ${REFUSAL_MONTHS} months for \`engine\` and \`repo\`, ${REFUSAL_MONTHS * 2} for ` +
+          `\`catalog\`, ${REFUSAL_MONTHS * 3} for \`size\`. Saying "checked in the last ` +
+          `${REFUSAL_MONTHS} months" would be false of the longer ones the moment they pass six.\n`
+      : `\n### ${heading}\n\n${stale.length} refusal(s) to re-ask. \`engine\` means the ` +
+          'derivation could not price the architecture, so the question is whether it can now; ' +
+          '`repo` means the export itself was the problem, so the question is whether it was ' +
+          're-uploaded. Either way: re-check, then move `checkedAt` to the day you checked.\n\n' +
+          '| model | cause | last checked | why not |\n| --- | --- | --- | --- |\n' +
+          stale
+            .map(
+              ({ id, refusal }) =>
+                `| \`${id}\` | ${refusal.cause} | ${refusal.checkedAt} | ${refusal.why} |`
+            )
+            .join('\n') +
+          '\n'
+  );
+}
+
 async function reportSeedCandidates(): Promise<void> {
   const MIN_DOWNLOADS = 250_000;
   const MONTHS = 18;
@@ -2229,6 +2692,18 @@ async function main() {
       `\n${failures.length} seed(s) failed — refusing to overwrite the catalog with a partial ` +
         'list. Fix the failures, or pass --allow-partial to write anyway.'
     );
+    /**
+     * The refusals still get re-asked on the way out (found in review on #103).
+     *
+     * `catalog-refresh.yml` runs this without `--allow-partial` by design, so one gated repo or one
+     * 503 among thirty-five seeds takes this exit — and everything after it, including a report that
+     * reads a local table and a clock and needs no network at all, went unwritten for that week. The
+     * same fail-open the candidate report's own catch path had to learn: the section going missing is
+     * indistinguishable from it having nothing to say.
+     *
+     * Before the exit rather than in a `finally`, so the ordering is visible where the exit is.
+     */
+    await reportStaleRefusals();
     process.exit(1);
   }
   if (failures.length > 0) {
@@ -2238,6 +2713,9 @@ async function main() {
   if (dryRun) {
     console.log('\n--dry-run: nothing written.');
     await reportSeedCandidates();
+    // Independently, and before nothing can stop it: this reads the table and the clock, so a
+    // listing endpoint having a bad minute must not decide whether the refusals get re-asked.
+    await reportStaleRefusals();
     return;
   }
 
@@ -2260,6 +2738,7 @@ async function main() {
   );
   console.log(`\nWrote ${OUT}`);
   await reportSeedCandidates();
+  await reportStaleRefusals();
 }
 
 /**
