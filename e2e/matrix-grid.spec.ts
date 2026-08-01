@@ -139,3 +139,49 @@ test('the grid says how it is driven', async ({ page }) => {
   await expect(caption).toContainText(/single tab stop/i);
   await expect(caption).toContainText(/arrow keys/i);
 });
+
+/**
+ * The left edge's half of focus-follows-scroll (#123).
+ *
+ * The model column is `sticky left-0` and opaque, and the browser's minimal focus-reveal aligns an
+ * off-screen-left cell with the scrollport's *content* edge — directly underneath it. The cell, its
+ * colour, and the focus ring — the keyboard reader's only positional mark — were all occluded, and
+ * every further ArrowLeft kept them there. `Home` escaped by accident (column 1 forces scrollLeft
+ * to 0), which is why a manual pass never caught it; and the existing Ctrl+End spec only ever
+ * navigates *right*, where the reveal is unobstructed. The container's `scroll-padding-left` is
+ * the fix, and this walks the direction the defect needs.
+ */
+test('a leftward walk never parks focus under the sticky model column', async ({ page }) => {
+  // The defect's own viewport (#123 measured at 500px), and not decoration: at the desktop
+  // default the scrollable range is ~175px, so 25 presses from Ctrl+End never reach a cell that
+  // needs revealing and the loop verifies clearance nobody threatened — this spec passed against
+  // the unfixed container at 1280px. At 500px the reveals start about seven presses in.
+  await page.setViewportSize({ width: 500, height: 800 });
+  await page.goto('/');
+  const grid = page.locator('table[role="grid"]');
+  await grid.locator('td button[tabindex="0"]').first().focus();
+  await page.keyboard.press('Control+End');
+
+  let revealedWhileScrolled = 0;
+  for (let press = 1; press <= 25; press++) {
+    await page.keyboard.press('ArrowLeft');
+    const state = await page.evaluate(() => {
+      const table = document.querySelector('table[role="grid"]')!;
+      const scroller = table.closest('div')!;
+      const focused = document.activeElement!;
+      const sticky = focused.closest('tr')!.querySelector('th')!;
+      return {
+        scrollLeft: scroller.scrollLeft,
+        cellLeft: focused.getBoundingClientRect().left,
+        stickyRight: sticky.getBoundingClientRect().right,
+      };
+    });
+    // Only a scrolled grid can occlude, so the clearance claim is made there — and the walk has
+    // to actually reach that state, or the loop verifies nothing (vacuity guard below).
+    if (state.scrollLeft > 0) {
+      revealedWhileScrolled++;
+      expect(state.cellLeft, `press ${press}`).toBeGreaterThanOrEqual(state.stickyRight - 1);
+    }
+  }
+  expect(revealedWhileScrolled).toBeGreaterThan(0);
+});
