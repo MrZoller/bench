@@ -22,6 +22,7 @@ import {
   CAPACITY_TIGHT,
   DECODE_USABLE,
   HOST_RAM_UNCHECKED,
+  PAST_DEFAULT_ALLOCATION,
   TTFT_RESPONSIVE,
   parseDisplayedSeconds,
 } from '@/lib/verdicts';
@@ -727,7 +728,7 @@ export function Envelope({ config }: { config: Config }) {
                       hint: 'Some of these are past what this machine holds; the rest are only past the ceiling it hands out by default, which you can raise. The table says which.',
                     }
                   : {
-                      label: 'Past the default allocation',
+                      label: PAST_DEFAULT_ALLOCATION,
                       hint: 'Within the memory this machine has, but past the ceiling it hands out by default — which you can raise.',
                     }
                 : /*
@@ -985,9 +986,7 @@ function frontier(grid: EnvelopeGrid): string | undefined {
 /** What a cell says in the table: its state, why, and what it costs. */
 function describeCell(cell: EnvelopeCell): string {
   if (cell.state === 'over') {
-    return cell.overBecause === 'allocation'
-      ? 'Past the default allocation'
-      : STATE_STYLE.over.label;
+    return cell.overBecause === 'allocation' ? PAST_DEFAULT_ALLOCATION : STATE_STYLE.over.label;
   }
   if (cell.state === 'unsupported') return STATE_STYLE.unsupported.label;
   const why =

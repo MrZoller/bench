@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { computeMatrix, measureRange, measureValue, type MatrixMeasure } from './matrix';
+import { PAST_DEFAULT_ALLOCATION } from '@/lib/verdicts';
 import { MODELS, DEVICES } from '@/data/catalog';
 import { getQuant } from '@/data/quants';
 import { getRuntime } from '@/data/runtimes';
@@ -362,7 +363,11 @@ describe('a tunable allocation ceiling is not a hardware limit', () => {
 
     expect(cell.runs).toBe(false);
     expect(cell.raiseCeilingWouldHelp).toBe(true);
-    expect(cell.blockedBy).not.toBe('Does not fit');
+    // Equality against the constant every component surface renders, not just "some other
+    // string": the engine cannot import `@/lib/verdicts` (it imports nothing outside
+    // `src/engine/`), so this assertion is what keeps the two spellings from agreeing by
+    // coincidence — the capacity tile, the Envelope and this cell must say one thing (#121).
+    expect(cell.blockedBy).toBe(PAST_DEFAULT_ALLOCATION);
   });
 
   it('does not mark one that is past the hardware', () => {
