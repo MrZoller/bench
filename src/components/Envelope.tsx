@@ -268,7 +268,13 @@ export function Envelope({ config }: { config: Config }) {
     const values = grid.cells
       .flat()
       .filter(graded)
-      .map((cell) => measureOf(cell, measure));
+      .map((cell) => measureOf(cell, measure))
+      // Non-finite readings are off the scale rather than at one end of it: `estimatePrefill`
+      // answers `Infinity` for a device whose compute rate the catalog does not state, and one such
+      // cell takes `max` to `Infinity`, the span with it, and every placement on the field to `NaN`
+      // (#97). The Matrix turns the same reading away in `measureValue`; this is the other grid's
+      // half of one rule.
+      .filter((value) => Number.isFinite(value));
     return values.length > 0
       ? { min: Math.min(...values), max: Math.max(...values) }
       : { min: 0, max: 0 };
@@ -304,7 +310,11 @@ export function Envelope({ config }: { config: Config }) {
   const anyMeasureVaries = useMemo(() => {
     const cells = grid.cells.flat().filter(graded);
     return MEASURES.some(({ value }) => {
-      const values = cells.map((cell) => measureOf(cell, value));
+      // Same filter as `domain`, and for the same reason: a field whose only variation is between a
+      // number and `Infinity` has no ramp to offer, and offering the control would produce one.
+      const values = cells
+        .map((cell) => measureOf(cell, value))
+        .filter((reading) => Number.isFinite(reading));
       return values.length > 1 && Math.max(...values) > Math.min(...values);
     });
   }, [grid]);
@@ -908,7 +918,11 @@ function describe(
   const spread = grid.cells
     .flat()
     .filter(graded)
-    .map((c) => measureOf(c, measure));
+    .map((c) => measureOf(c, measure))
+    // The third copy of the finite filter, and the one that would have gone quiet rather than wrong:
+    // a field containing an untimeable cell has no gradient to describe, and `Infinity > 1.3` would
+    // have promised one in the canvas description while the picture had none.
+    .filter((value) => Number.isFinite(value));
   const coloured =
     spread.length > 0 && Math.max(...spread) > Math.min(...spread)
       ? `Cells that fit are coloured by ${paints} — ${ends[0]} to ${ends[1]}, ranked against the other cells on this grid rather than on an absolute scale.`

@@ -177,6 +177,24 @@ export function magnitudeFill(
 ): string {
   const steps = magnitudeRamp.length;
   const top = magnitudeRamp[steps - 1];
+  /**
+   * A non-finite input has no place on a ramp, and it reaches one more easily than it looks.
+   *
+   * `estimatePrefill` returns `Infinity` by design for a device whose compute rate the catalog does
+   * not state, so a grid containing one gets `max: Infinity` — and then `log1p(Infinity) -
+   * log1p(Infinity)` is `NaN`, `span > 0` is false, and every cell on the grid takes the top step:
+   * the *best* colour, for a field one of whose readings could not be taken. Worse with a finite
+   * floor, where the span is `Infinity` and each placement is `NaN`, indexing the ramp with
+   * `undefined` and painting nothing at all.
+   *
+   * Callers are expected to keep such readings off the scale — `measureValue` in `matrix.ts` returns
+   * `undefined` for them and the Envelope filters its domain — and this is the guard that makes a
+   * caller which forgets fail visibly rather than silently. The darkest step is the honest answer:
+   * whichever direction the measure runs, a reading nobody could take is not evidence of a good one.
+   */
+  if (!Number.isFinite(value) || !Number.isFinite(domain.min) || !Number.isFinite(domain.max)) {
+    return magnitudeRamp[0];
+  }
   // `log1p` rather than `log` so a zero floor — the Matrix's domain for the two measures that have
   // one — is 0 rather than -Infinity, and a zero value with it. Both are real: a cell that did not
   // fit has no headroom at all.

@@ -176,6 +176,43 @@ describe('the model-by-device grid', () => {
    * the placement degenerates to `t_fastest / t`: a cell ten times slower than the grid's fastest
    * lands on the bottom step of a grid spanning far more than tenfold.
    */
+  /**
+   * A latency nobody could take is off the scale, at both ends
+   * ([#97](https://github.com/MrZoller/bench/issues/97), raised in review on it).
+   *
+   * `estimatePrefill` answers `Infinity` by design when a device states no compute rate — pinned in
+   * `index.test.ts` — and under the old reciprocal orientation that became `1 / Infinity = 0`, the
+   * worst reading, correct by luck. In seconds it is the *largest* number on the grid, so it takes
+   * the domain's ceiling with it: the span becomes `Infinity`, every placement comes out `NaN`, the
+   * ramp is indexed with `undefined`, and the whole grid paints nothing. One unpriceable device
+   * blanks every cell beside it.
+   *
+   * Asserted on a device the catalog does not contain, because that is the point: the guard is for
+   * the row somebody adds without a `tflops` entry, and there is no such row today to notice it.
+   */
+  it('keeps an untimeable cell off the ramp instead of poisoning the grid', () => {
+    const noCompute = { ...RTX_5090, id: 'no-compute', flops: {} };
+    const cells = matrix({ devices: [RTX_5090, noCompute] });
+
+    const blind = cells.map((row) => row[1]);
+    expect(
+      blind.some((cell) => cell.ttftSeconds === Infinity),
+      'no cell is untimeable, so this proves nothing'
+    ).toBe(true);
+
+    // Off the scale, not at the bad end of it: `undefined` is what `fill` paints as a hole.
+    for (const cell of blind) {
+      if (cell.ttftSeconds === Infinity) expect(measureValue(cell, 'ttft')).toBeUndefined();
+    }
+
+    // And the grid beside it still has a domain, which is the half that was broken: every finite
+    // reading kept its step rather than every cell losing its colour.
+    const range = measureRange(cells, 'ttft')!;
+    expect(Number.isFinite(range.domain.min)).toBe(true);
+    expect(Number.isFinite(range.domain.max)).toBe(true);
+    expect(range.domain.max).toBeGreaterThan(range.domain.min);
+  });
+
   it('floors the domain at zero only where zero is a reading', () => {
     const cells = matrix();
 

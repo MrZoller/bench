@@ -179,16 +179,23 @@ export function measureValue(cell: MatrixCell, measure: MatrixMeasure): number |
   // since the weights are crossing the bus whatever the headroom arithmetic says.
   if (measure === 'fit' && cell.offloadFraction > 0) return 0;
   /**
-   * A cell that ran and was never timed is off this scale rather than at the good end of it.
+   * A cell that ran and was not timed — at either end — is off this scale rather than on it.
    *
-   * Unreachable today — every running cell gets a `ttftSeconds` from `estimatePrefill` — and stated
-   * because the polarity of the guard inverted with #97. Under the old orientation `measureOf`
-   * returned `0` for an untimed cell and `0` was the *worst* reading, so the two zeros agreed by
-   * accident. In seconds, zero is instantaneous: the same cell would take the brightest step on the
-   * grid and drag the domain's floor down with it. Turning it away is the only reading that is not a
-   * claim about a measurement nobody made.
+   * **Both ends, and each was wrong in the opposite direction under the old orientation.** A zero
+   * means never timed, and in seconds zero is instantaneous: it would take the brightest step and
+   * drag the domain's floor to it, where under the reciprocal it was `1 / 0` guarded to the worst
+   * reading. An `Infinity` is `estimatePrefill`'s deliberate answer for a device whose compute rate
+   * the catalog does not state (`index.test.ts` pins it), and under the reciprocal it became `0` —
+   * the worst reading, by luck rather than by design. In seconds it poisons the domain: `max` is
+   * `Infinity`, the span is `Infinity`, and every placement on the grid comes out `NaN`, which
+   * indexes the ramp with `undefined` and leaves *every* cell unpainted. So the fix that made the
+   * zero explicit has to make the infinity explicit too, or one guard replaces two.
+   *
+   * `undefined` rather than the darkest step, because that is what this function already means by
+   * "no reading": the caller paints a hole, and a hole is what a cell nobody could time is.
    */
-  if (measure === 'ttft' && !(cell.ttftSeconds > 0)) return undefined;
+  if (measure === 'ttft' && !(cell.ttftSeconds > 0 && Number.isFinite(cell.ttftSeconds)))
+    return undefined;
   return measureOf(cell, measure);
 }
 

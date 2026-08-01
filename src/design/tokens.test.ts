@@ -99,6 +99,21 @@ describe('placing a magnitude on the ramp', () => {
     expect(index(1000, domain)).toBe(magnitudeRamp.length - 1);
   });
 
+  it('gives a non-finite reading the worst step rather than blanking the ramp', () => {
+    /*
+     * The last line of defence, and the reason it is here rather than only at the two call sites:
+     * `log1p(Infinity) - log1p(Infinity)` is `NaN`, so `span > 0` is false and the degenerate-domain
+     * branch above hands the *brightest* step to a field one of whose readings could not be taken.
+     * With a finite floor it is worse — the span is `Infinity`, every placement is `NaN`, and the
+     * ramp is indexed with `undefined`, which paints nothing at all.
+     */
+    expect(index(Infinity, { min: 1, max: 100 }, 'lower')).toBe(0);
+    expect(index(50, { min: 1, max: Infinity }, 'lower')).toBe(0);
+    expect(index(Number.NaN, { min: 1, max: 100 }, 'higher')).toBe(0);
+    // And the finite case beside it is untouched, so this is a guard and not a new rule.
+    expect(index(1, { min: 1, max: 100 }, 'lower')).toBe(magnitudeRamp.length - 1);
+  });
+
   it('reads a lower-is-better domain from the other end, exactly', () => {
     const domain = { min: 1.3, max: 729 };
     // The reflection is the whole of what `direction` does, so it is asserted as an identity rather
