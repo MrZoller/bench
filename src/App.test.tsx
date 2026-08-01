@@ -1075,6 +1075,41 @@ describe('the slider never displays a value the engine is not using', () => {
     );
   });
 
+  /**
+   * The other direction of the same invariant (#134): the stop lists fold the stored value in so
+   * an off-stop URL value displays truthfully, but the fold is keyed on the stored value — so
+   * the injected stop vanished the moment a drag moved off it, and the input's `max` and
+   * index-to-value mapping changed under the held pointer. Opened at `?u=3`, the first notch of
+   * a drag snapped the thumb back and remapped the next pixel of movement against the new scale.
+   */
+  it('keeps one scale under the pointer while an off-stop value is dragged away from', () => {
+    render(<App />);
+
+    // A URL-borne off-stop value: 3 is not among the fixed concurrency stops.
+    act(() => {
+      useConfig.getState().set('concurrency', 3);
+    });
+    const slider = screen.getByLabelText('Concurrent users');
+    // Nine stops while 3 is selected — the eight fixed ones plus the injection.
+    expect(slider).toHaveAttribute('max', '8');
+    expect(slider).toHaveValue('2');
+
+    // A drag starts on the injected stop and moves one notch right.
+    fireEvent.pointerDown(slider);
+    fireEvent.change(slider, { target: { value: '3' } });
+    expect(useConfig.getState().concurrency).toBe(4);
+
+    // Mid-drag the scale must not collapse: same max, thumb exactly where the pointer put it.
+    expect(slider).toHaveAttribute('max', '8');
+    expect(slider).toHaveValue('3');
+
+    // Released, the injection expires while nothing is being dragged against it.
+    fireEvent.pointerUp(slider);
+    expect(slider).toHaveAttribute('max', '7');
+    expect(slider).toHaveValue('2');
+    expect(useConfig.getState().concurrency).toBe(4);
+  });
+
   it('does not offer NVFP4 on NVIDIA cards without FP4 tensor cores', async () => {
     const user = userEvent.setup();
     render(<App />);
