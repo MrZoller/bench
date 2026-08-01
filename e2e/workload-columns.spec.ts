@@ -80,6 +80,59 @@ async function rows(page: Page) {
 const spread = (values: number[]) => Math.max(...values) - Math.min(...values);
 
 /**
+ * The longest status word this panel has ever rendered, injected rather than waited for.
+ *
+ * Every geometry test below was written against `Not measured`, the ungraded state's word — and #96
+ * removed that state at its root, so the longest word the panel can now produce is `Tight`. Three
+ * short words have 46px of slack in a 144px track and cannot reach any of the failures these tests
+ * exist for: the overlap, the 4.1px jog in the word column, and the 371px-in-320px reflow.
+ *
+ * Deleting the tests would delete the mechanism's only coverage; loosening them would leave three
+ * assertions that cannot fail. So the string is put back by hand. That is the same move this suite
+ * already makes for the Matrix legend, whose overflow needs three keys at once and gets them from a
+ * querystring: **pin the state a conditional defect needs.** Here the state is no longer reachable
+ * through the app at all, which makes injection the only way to keep the geometry honest — and the
+ * right way, since what is being measured is the column, not the vocabulary.
+ *
+ * Returns the word so the caller can assert against it rather than repeating the literal.
+ */
+const LONGEST_STATUS = 'Not measured';
+
+/**
+ * The glyph that went with it, and the reason the word alone is not the whole stress.
+ *
+ * The three surviving glyphs are circles of one width, so a test about *the word's left edge moving
+ * with the glyph before it* has nothing to move: injecting only the word leaves every row's icon
+ * identical and the assertion passes with the `w-3` box deleted. The em dash the ungraded row used is
+ * 10.5px against the circles' 11.1px — which is inside this file's own 1px tolerance, so it was never
+ * the glyph that made that test bite; the **en dash** it first shipped as is, at 4.1px narrower, and
+ * that is the state the box was added for. So the stress uses the character the defect had.
+ */
+const ODD_GLYPH = '–';
+
+async function stressLongestStatus(page: Page) {
+  const applied = await strip(page)
+    .locator('li')
+    .evaluateAll(
+      (items, [word, glyph]) => {
+        const cell = items[items.length - 1].children[0] as HTMLElement;
+        const [icon, span] = Array.from(cell.children) as HTMLElement[];
+        span.textContent = word;
+        icon.textContent = glyph;
+        return { word: (span.textContent ?? '').trim(), glyph: (icon.textContent ?? '').trim() };
+      },
+      [LONGEST_STATUS, ODD_GLYPH] as const
+    );
+  expect(applied.word, 'the status word was not replaced, so this measures the short words').toBe(
+    LONGEST_STATUS
+  );
+  expect(applied.glyph, 'the status glyph was not replaced, so no jog is reachable').toBe(
+    ODD_GLYPH
+  );
+  return LONGEST_STATUS;
+}
+
+/**
  * The two spans *inside* each status cell — the aria-hidden glyph and the word.
  *
  * `rows()` above measures cell boxes, and every alignment assertion built on those kept passing
@@ -251,11 +304,12 @@ for (const [name, size] of [
      * row really is the long word, and without that this measures three short ones against 144px.
      */
     test('every status word fits inside the fixed status column', async ({ page }) => {
+      await stressLongestStatus(page);
       const measured = await rows(page);
 
       expect(
-        measured.some((row) => row.cells[0].text.includes('Not measured')),
-        'no row is ungraded at the default scenario, so the longest status word is not on screen'
+        measured.some((row) => row.cells[0].text.includes(LONGEST_STATUS)),
+        'the longest status word is not on screen, so this measures three short ones'
       ).toBe(true);
 
       // The mechanism the paragraph above depends on: at `sm` the cell must not wrap, or a word too
@@ -294,11 +348,12 @@ for (const [name, size] of [
      * whatever font the runner happened to resolve.
      */
     test('every status word starts at the same x, whatever glyph precedes it', async ({ page }) => {
+      await stressLongestStatus(page);
       const measured = await statusWords(page);
 
       expect(
-        measured.some((row) => row.word === 'Not measured'),
-        'no row is ungraded at the default scenario, so the odd glyph is not on screen'
+        measured.some((row) => row.word === LONGEST_STATUS),
+        'the longest status word is not on screen, so the jog it caused is not reachable'
       ).toBe(true);
 
       // The claim first, so a regression reports the jog rather than its cause.
@@ -492,15 +547,15 @@ test.describe('below sm', () => {
       'the stress font did not widen the text, so this run proves nothing'
     ).toBeGreaterThan(1.05);
 
+    await stressLongestStatus(page);
     const measured = await rows(page);
     const statuses = await statusWords(page);
 
-    // The precondition: the long word has to be on screen, and at the default scenario's one
-    // concurrent user it is. Without this the case measures three short words that never had a
-    // problem.
+    // The precondition: the long word has to be on screen. Without it this case measures three
+    // short words that never had a problem — see `stressLongestStatus` for why it is injected.
     expect(
-      statuses.some((row) => row.word === 'Not measured'),
-      'no row is ungraded at the default scenario, so the longest status word is not on screen'
+      statuses.some((row) => row.word === LONGEST_STATUS),
+      'the longest status word is not on screen, so the floor it set is not reachable'
     ).toBe(true);
 
     // The claim, first, so a regression reports the harm — the unfixed markup fails here on the
