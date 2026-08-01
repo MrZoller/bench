@@ -4708,10 +4708,15 @@ describe('a picker states its caveats where the choice is made', () => {
  * Three quantities are in play and they differ by enough to matter on the models this catalog exists
  * for. `activeParams` is the *published* convention: `publishedActiveParams` returns `totalParams`
  * outright on a dense model and only on an MoE rebuilds an embedding-subtracted dense residual with
- * the routed share added back, so it disagrees with the physical count exactly where something is
- * excluded per token — a non-language tower, or an untied input embedding — and nowhere else.
- * `activeDenseParams` is the always-active dense part and excludes the routed experts.
- * `effectiveActiveParams(model, 1)` is the physical count, and the one this sentence has to print.
+ * the routed share added back. It disagrees with the physical count wherever the two **exclude
+ * different things**, which is three cases and not one: a non-language tower, an untied input
+ * embedding on a dense row, and — the one two drafts of this missed — a **tied** input embedding on
+ * an MoE, which the published figure subtracts unconditionally and `activeDenseParams` correctly
+ * keeps, a tied table being the output projection. Command A+ is that case, and it is why its
+ * published figure is 0.578B *low* where Mistral Small 4's is 7% high: the omitted 1.074B table
+ * outweighs the included 0.495B tower. `activeDenseParams` is the always-active dense part and
+ * excludes the routed experts. `effectiveActiveParams(model, 1)` is the physical count, and the one
+ * this sentence has to print.
  *
  * `speed.ts` divides by neither, which is worth saying here because the aside sounds as though it
  * does: `estimateDecode` reads `activeWeightBytes`, which prices the dense and expert halves at
