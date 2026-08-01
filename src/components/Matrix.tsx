@@ -1966,14 +1966,37 @@ function tooltip(
    * surface read as a shortlist. The constant rides verbatim as its own sentence, after the
    * period the composition already writes.
    *
-   * The narrow readout stays bare, and the decision is measured rather than aesthetic (argued
-   * in review, both ways): its sentence — "spills 66% to host RAM" — states the spill and makes
-   * no load claim, the tooltip and aria-label carry the full constant at every width, and
-   * qualifying the visual narrow line costs a reservation nobody should pay. Measured at 200%
+   * **The narrow readout stays bare, settled in #160** — the one deliberately-unresolved thread on
+   * #158, filed as a decision rather than patched. Four things decided it, and the first is the
+   * only one that would have been enough on its own:
+   *
+   * *The rule's trigger is a load claim, and this sentence makes none.* `HOST_RAM_UNCHECKED` exists
+   * to stop a surface promising a load the engine never checked. The wide form promises — "**runs**
+   * only by spilling 66% of its weights to host RAM" — and carries the constant. The narrow form
+   * says "spills 66% to host RAM", which is the spill stated as a fact, with no verb claiming the
+   * thing loads. Qualifying it would be qualifying a promise nobody made.
+   *
+   * *The channels that do promise are not width-dependent.* The `title` and the cell's `aria-label`
+   * are both `sentences[r][c].full` — the constant rides at 320px exactly as it does at 1440.
+   *
+   * *And the colour is not a third promise.* `measureValue` returns 0 for a spilled cell under
+   * `fit` — the dimmest step, categorical rather than a degree — so the grid paints a spilled fit
+   * at the bottom of its own ramp rather than as a comfortable one.
+   *
+   * *Against that, the price is permanent and the wording does not survive it.* Measured at 200%
    * text on a 320px viewport, where the rem floor doubles while the line width halves: the full
    * constant needs a 10rem floor and the inline-clause register still needs 7.5rem — 120px of
-   * permanently reserved blank space on a phone, against 80px today. The legend's keyed line
-   * and the caption remain the panel-level channels.
+   * permanently reserved blank space on a phone against 80px today, paid on every page view
+   * whether or not the grid holds a spilled cell. And `HOST_RAM_UNCHECKED_BRIEF` cannot simply be
+   * appended: it reads "if the host has room for **them**", where "them" is the *weights* the
+   * Envelope's count line names one clause earlier. This sentence names no weights, so the
+   * capitalised fragment lands with a dangling pronoun and granting the caveat properly needs a
+   * third spelling of one fact — which is the drift the two-register pair exists to prevent.
+   *
+   * What the finding got right and this does not repair: the legend's keyed line is non-sticky, so
+   * the panel-level channel is off screen at the moment the sticky readout exists for. It is the
+   * caption and the legend that answer that, at panel level, plus the two per-cell channels above —
+   * not a reservation on every narrow reader for a claim the narrow line is not making.
    */
   const unchecked =
     measure === 'fit' && cell.offloadFraction > 0 && !narrow ? ` ${HOST_RAM_UNCHECKED}` : '';

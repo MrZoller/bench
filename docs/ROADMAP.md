@@ -278,6 +278,31 @@ Settled, with reasons. Reopen only with new information.
   conversations. Capping
   completion at chat's grade would restore the appearance of a ladder by reporting a failure that
   is not happening. The claim was dropped instead; the thresholds stay independent.
+- **A qualifier attaches to a claim, not to a subject** ([#160](https://github.com/MrZoller/bench/issues/160)).
+  The narrow Matrix readout shows a tapped spilled cell as "spills 66% to host RAM" and carries no
+  host-RAM caveat, and it stays that way. `HOST_RAM_UNCHECKED` exists because `planPlacement` sizes a
+  spill with no host-RAM input at all, so any surface saying a spilled configuration **loads** is
+  promising something the engine never checked — and the test is the verb, not the topic. The wide
+  form promises ("runs only by spilling…") and carries the constant; the narrow form states the spill
+  and promises nothing. Both channels that do promise are width-independent — the `title` and every
+  cell's `aria-label` are the same `full` string at 320px as at 1440 — and the colour is not a third
+  promise either, since `measureValue` scores a spilled fit at 0 under `fit`, the dimmest step.
+
+  Granting it was costed rather than argued: at 200% text on a 320px viewport the rem floor doubles
+  while the line width halves, so the full sentence needs a 10rem reservation and even the
+  inline-clause register needs 7.5rem — **120px of permanently reserved blank space on a phone
+  against 80px today**, on every page view whether or not the grid holds a spilled cell. And the
+  brief register does not survive the move: "if the host has room for **them**" points at the
+  _weights_ the Envelope's count line names one clause earlier, and this sentence names none, so
+  granting the caveat properly would need a third spelling of one fact — the drift the two-register
+  pair exists to prevent.
+
+  **The finding's true half is recorded rather than repaired**: the legend line carrying the
+  panel-level caveat is non-sticky, so it is off screen at exactly the moment the sticky readout
+  exists for. The answer to that is the caption and the legend at panel level plus the two per-cell
+  channels above — not a reservation levied on every narrow reader for a claim the narrow line is
+  not making. Reopen only with a shorter register that reads correctly beside "spills 66% to host
+  RAM", since the reservation is what the wording costs.
 
 ## Things that took real work to get right
 
