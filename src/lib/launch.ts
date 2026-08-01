@@ -549,6 +549,14 @@ function ollama(input: LaunchInput): Pair {
     serve: {
       ok: true,
       text: [
+        /**
+         * `set -e` first, and it is the fix for a defect in this block's own previous fix (raised
+         * by Codex on #164). Chaining `ollama create && ollama run` stops the *run* after a failed
+         * create — but the heredoc above them is a separate command, so a noclobber refusal there
+         * still fell through to a create against the old file. A heredoc cannot be `&&`-chained to
+         * what follows it; aborting the whole block on any failure is the shell's own answer.
+         */
+        `set -e`,
         ...(quantizedCache
           ? [
               `# The cache precision is read by the daemon at startup, not from the Modelfile.`,
