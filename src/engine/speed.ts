@@ -355,9 +355,11 @@ export function estimatePrefill(
   // only its selected experts, so this uses active rather than total parameters — FLOPs scale
   // with per-token active params, while bytes scale with the batch-wide expert union.
   //
-  // Not `model.activeParams`: that is the published figure, which subtracts the embedding table
-  // even when it is tied and therefore run as a full output matmul, and which counts a vision
-  // tower that a text-only prompt never touches.
+  // Not `model.activeParams`: that is the published figure, and it disagrees with this one wherever
+  // the two exclude different things. On an MoE it subtracts the embedding table even when it is
+  // tied and therefore run as a full output matmul; on a dense row it subtracts nothing at all,
+  // being `totalParams`, so it carries an *untied* table this basis drops; and on either it counts a
+  // vision tower a text-only prompt never touches.
   //
   // The output projection is charged once, not per token: logits are produced only for the
   // position that needs them. Per-token it would be 16% of a gpt-oss-20b prompt pass; dropped
