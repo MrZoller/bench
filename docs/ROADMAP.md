@@ -122,10 +122,14 @@ is that a nested checkout is invisible to a human and not to a tool that walks t
 **Cleaning up afterwards needs GitHub, because neither git command for "is this branch merged" works
 against a squash merge.** The repo squash-merges, so a merged branch's tip is not an ancestor of
 `main` and `git merge-base --is-ancestor` reports every one of them unmerged. `git cherry` fails the
-same way for a subtler reason: the squash commit's patch is the _union_ of the branch's commits, so no
-individual commit has a matching patch-id and every branch reports `+`. Both answers look like
-"unmerged work you are about to delete", which is the answer that stops a cleanup. The test that
-actually holds is matching the local tip against the merged PR's `headRefOid` — GitHub squashed
+same way for a subtler reason, and _conditionally_, which is worse: the squash commit's patch is the
+_union_ of the branch's commits, so on a branch of two or more no individual commit has a matching
+patch-id and every one reports `+`. A one-commit branch is the exception — its patch and the squash's
+are the same patch, so `git cherry` correctly reports `-`. That is the trap rather than the escape: a
+rule verified on the one-commit case and then applied to the rest looks like it works. Both failing
+answers read as "unmerged work you are about to delete", which is the answer that stops a cleanup. The
+test that actually holds, on branches of any length, is matching the local tip against the merged PR's
+`headRefOid` — GitHub squashed
 exactly that commit, so identity there is proof and nothing local can substitute for it.
 
 MLX's 8-bit KV cache (#33) is **derived rather than marked**: `mlx-lm`'s source states the group
@@ -644,16 +648,20 @@ reading the test that guards them.
   bar it fills at y=602, so the control was 2,402px below its own output. The pixel count is the
   evidence; the misrepresentation is the reason.
 
-  Usage now sits directly under Configuration, and Envelope and Matrix remain the terminal panels. The
+  Usage now sits directly under Setup — the landmark's own name since #74, where it stopped being
+  "Configuration" and became an `sr-only` heading, which is what `App.test.tsx` and
+  `usage-placement.spec.ts` both locate it by. Envelope and Matrix remain the terminal panels. The
   roving tab index is untouched and still does the work this entry is about — 15 presses either way.
 
   **The cost is real and was accepted rather than solved.** At 390px both panels stack, so nine
   controls — about 620px — now precede the first figure, where before there were none. #66 named a
   sticky summary strip as the mitigation and deprioritised it, and the phone spec asserts the honest
-  property (the controls are inside the first two screens) rather than pretending a slider and the bar
-  share a viewport there. Three source comments that asserted the old geometry moved with it, on the
-  reasoning that a comment describing the old layout is how the next reader concludes the fix was a
-  mistake.
+  property — the controls are inside the first two screens — rather than a landing-screen claim the
+  layout does not make. The slider and the bar _do_ come within one viewport of each other here, 683px
+  apart on an 844px screen, which is the laptop test's property holding on a phone; what is not true is
+  that either of them is on the first screen. Three source comments that asserted the old geometry
+  moved with it, on the reasoning that a comment describing the old layout is how the next reader
+  concludes the fix was a mistake.
 
   **And the spec did not assert the property this paragraph credited it with.** It measured
   `panel.top < 2 x viewport` — the panel _starts_ inside two screens — which stays green with the last
