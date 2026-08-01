@@ -449,7 +449,15 @@ export function Matrix({ config }: { config: Config }) {
     setActive([row, col]);
     // Focus moved here rather than in an effect keyed on `active`, which would pull focus into
     // the grid on first render and on every unrelated re-render that reset it.
-    cellRefs.current.get(`${row}:${col}`)?.focus();
+    const cell = cellRefs.current.get(`${row}:${col}`);
+    // `preventScroll`, because the browser's own focus-reveal ignores the container's
+    // `scroll-padding-left` in Chromium — measured, not assumed: with the padding declared, a
+    // leftward walk still parked cells 26px under the sticky model column (#123). The reveal
+    // itself lives in the cell's `onFocus`, which this focus() fires, so every path focus can
+    // arrive by — this handler, or Tab into a grid a pointer has scrolled — goes through the
+    // one `scrollIntoView` that honours the padding and the cells' `scroll-mb-*` alike. The
+    // browser half is `e2e/matrix-grid.spec.ts`; jsdom has no `scrollIntoView` at all.
+    cell?.focus({ preventScroll: true });
   }, []);
 
   const onCellKeyDown = useCallback(
@@ -805,7 +813,13 @@ export function Matrix({ config }: { config: Config }) {
         </p>
       </fieldset>
 
-      <div className="mt-4 overflow-x-auto">
+      {/* `scroll-pl-36` is the left edge's counterpart to the cells' `scroll-mb-*` (#123): the
+          model column is sticky and opaque, so the browser's minimal focus-reveal — which aligns
+          an off-screen-left cell with the scrollport's content edge — parked the cell and its
+          focus ring underneath it, invisible at every further ArrowLeft. Scroll padding moves the
+          reveal target past the column; 36 is the column's own `max-w-[9rem]`, so the two lengths
+          scale together. */}
+      <div className="mt-4 overflow-x-auto scroll-pl-36">
         {/* `role="grid"` rather than the native table role, because the cells are widgets a
             keyboard drives rather than data a reader browses — which is the distinction the two
             roles exist to draw, and what tells a screen reader to hand the arrow keys over. */}
@@ -1131,8 +1145,17 @@ export function Matrix({ config }: { config: Config }) {
                        * stopped moving never reports leaving. Both halves of that are what keep the
                        * line agreeing with the visible ring — see the two states above.
                        */
-                      onFocus={() => {
+                      onFocus={(event) => {
                         setFocused({ kind: 'cell', row: r, col: c });
+                        // The reveal rides `onFocus` rather than only `focusCell`, so it covers
+                        // every path focus can arrive by — Tab into a grid a pointer has scrolled
+                        // rightward is the one `focusCell` never sees (raised in review on #123).
+                        // Idempotent when `focusCell` triggered it, a no-op when the cell is
+                        // already visible, and optional-chained for jsdom.
+                        event.currentTarget.scrollIntoView?.({
+                          block: 'nearest',
+                          inline: 'nearest',
+                        });
                         // And the pointer's claim expires here, because a resting pointer fires no
                         // `mouseleave` of its own — argued at the two states above. Without this the
                         // line prints one cell while the ring is drawn on another, indefinitely.
