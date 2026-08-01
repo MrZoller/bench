@@ -269,8 +269,17 @@ describe('llama.cpp: one catalog row, three launchers', () => {
 
       const emitted = commands(gemma)['llama-server'].serve;
       expect(text(emitted)).not.toContain('-ts');
+
+      /**
+       * **And it says so, which omitting the flag does not.** Leaving `-ts` off does not make
+       * llama.cpp reproduce the packing — it makes llama.cpp divide by device memory instead, which
+       * on identical cards is an even split and the wrong one for this model. A silent omission
+       * reads as "bench had nothing to add"; the note says the busiest card will hold more than the
+       * panel shows. (Raised by Codex on #173.)
+       */
       if (!emitted.ok) throw new Error('unreachable');
-      expect(emitted.notes.join(' ')).not.toMatch(/-ts/);
+      expect(emitted.notes.join(' ')).toMatch(/llama\.cpp cannot be told that split/i);
+      expect(emitted.notes.join(' ')).toMatch(/busiest card to hold more/i);
     });
 
     it('gives the benchmark client the same split as the server', () => {
@@ -360,8 +369,13 @@ describe('llama.cpp: one catalog row, three launchers', () => {
       const measured = input(LLAMA_31_8B, getQuant('q4_k_m'), LLAMA_CPP, RTX_5090, 1, scenario);
       const command = text(commands(measured)['llama-bench'].measure);
 
+      // Two invocations: `-p` and `-n` are separate tests, and the generation one does not inherit
+      // the prompt as cache depth — so a single command measures decoding from an empty cache.
       expect(command).toContain('-p 6000');
       expect(command).toContain('-n 2192');
+      expect(command).toContain('-n 0');
+      expect(command).toContain('-p 0');
+      expect(command).toContain('-d 6000');
       // llama-bench's own defaults, which are what a reader would otherwise measure.
       expect(command).not.toContain('-p 512');
       expect(command).not.toContain('-n 128');
@@ -387,8 +401,17 @@ describe('llama.cpp: one catalog row, three launchers', () => {
       expect(emitted.notes.join(' ')).toMatch(/already in the cache/i);
     });
 
-    it('leaves -d off a standalone prompt rather than passing zero', () => {
-      expect(text(commands(i)['llama-bench'].measure)).not.toContain('-d ');
+    it('leaves -d off the prefill run of a standalone prompt, and never off the decode one', () => {
+      /**
+       * The two runs want different depths, which is the whole reason there are two. A standalone
+       * prefill is measured against an empty cache — passing `-d 0` would say the same thing more
+       * loudly — while decode is *always* measured with the prompt resident, because that is what
+       * `estimateDecode` charges every step against whatever the archetype's prefix is.
+       */
+      const [prefillRun, decodeRun] = text(commands(i)['llama-bench'].measure).split('\n\n');
+
+      expect(prefillRun).not.toContain('-d ');
+      expect(decodeRun ?? '').toMatch(/-d \d+/);
     });
 
     it('admits that it cannot reproduce concurrency', () => {
@@ -746,7 +769,11 @@ describe('what review found, kept as tests', () => {
      */
     const written = text(commands(input(LLAMA_31_8B, getQuant('q4_k_m'), LLAMA_CPP)).ollama.serve);
     expect(written).toMatch(/ollama create .+ && ollama run /);
-    expect(written.split('\n')[0]).toBe('set -e');
+    // In a subshell, so `set -e` guards the block and does not survive into the reader's own
+    // interactive shell — where it stays enabled and can close their terminal on a later failure.
+    expect(written.split('\n')[0]).toBe('(');
+    expect(written.split('\n')[1]).toBe('set -e');
+    expect(written.trimEnd().endsWith(')')).toBe(true);
   });
 
   it('admits MLX cannot reproduce a multi-user measurement either', () => {

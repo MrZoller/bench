@@ -407,6 +407,15 @@ function llamaServer(input: LaunchInput): Pair {
     nglNote(input, ngl),
     `-m takes a path on your own disk, which no catalog can supply — the placeholder is the one ` +
       `thing here you are meant to replace.`,
+    ...(split === undefined && hasSlidingLayers(model) && effectiveDeviceCount(input.rig) > 1
+      ? [
+          `bench balanced this rig by cache weight and llama.cpp cannot be told that split. ` +
+            `-ts proportions a contiguous window and this model's layers are not interchangeable — ` +
+            `its full-attention layers cache far more than its sliding ones — so llama.cpp will ` +
+            `divide by device memory instead, which on identical cards is an even split. Expect the ` +
+            `busiest card to hold more than the panel above shows.`,
+        ]
+      : []),
     ...(split === undefined
       ? []
       : [
@@ -455,9 +464,12 @@ function llamaBench(input: LaunchInput): Pair {
   const split = tensorSplit(input);
 
   const notes = [
-    `-p and -n are this scenario's own prompt and generation lengths, which is what makes the ` +
-      `result comparable with the figures above rather than with llama-bench's defaults of 512 ` +
-      `and 128.`,
+    `Two runs, because -p and -n are separate tests: the generation one does not inherit the ` +
+      `prompt as cache depth, so a single command would measure decoding from an empty cache. The ` +
+      `second run puts ${fmt(prompt + prefix)} tokens in the cache first, which is what the decode ` +
+      `figure above is charged against.`,
+    `The lengths are this scenario's own, which is what makes the result comparable with the ` +
+      `figures above rather than with llama-bench's defaults of 512 and 128.`,
     nglNote(input, ngl),
     ...(split === undefined
       ? []
@@ -491,16 +503,40 @@ function llamaBench(input: LaunchInput): Pair {
         ? { ok: false, reason: noRoomToAnswer(usage.contextTokens) }
         : {
             ok: true,
-            text: shell('llama-bench', [
-              `-m ${ggufPlaceholder(model, quant)}`,
-              `-p ${prompt}`,
-              `-n ${gen}`,
-              prefix > 0 ? `-d ${prefix}` : undefined,
-              `-ngl ${ngl}`,
-              `-ctk ${kv} -ctv ${kv}`,
-              split === undefined ? undefined : `-ts ${split}`,
-              `-o md`,
-            ]),
+            /**
+             * **Two invocations, because `-p` and `-n` are two separate tests** (raised by Codex on
+             * #173). One command with both runs a prompt-processing test *and* a generation test —
+             * and the generation test does not inherit the prompt as cache depth, so it measures
+             * decoding from an empty cache. That is the weight-bound job rather than the one the
+             * panel priced, and at an 8K or 128K context the two are far apart.
+             *
+             * So prefill is measured at its own depth — the archetype's resident prefix, usually
+             * none — and decode is measured with the prompt already in the cache, which is what
+             * `estimateDecode` charges every step against.
+             */
+            text: [
+              shell('llama-bench', [
+                `-m ${ggufPlaceholder(model, quant)}`,
+                `-p ${prompt}`,
+                `-n 0`,
+                prefix > 0 ? `-d ${prefix}` : undefined,
+                `-ngl ${ngl}`,
+                `-ctk ${kv} -ctv ${kv}`,
+                split === undefined ? undefined : `-ts ${split}`,
+                `-o md`,
+              ]),
+              '',
+              shell('llama-bench', [
+                `-m ${ggufPlaceholder(model, quant)}`,
+                `-p 0`,
+                `-n ${gen}`,
+                `-d ${prompt + prefix}`,
+                `-ngl ${ngl}`,
+                `-ctk ${kv} -ctv ${kv}`,
+                split === undefined ? undefined : `-ts ${split}`,
+                `-o md`,
+              ]),
+            ].join('\n'),
             notes,
           },
   };
@@ -556,6 +592,10 @@ function ollama(input: LaunchInput): Pair {
          * still fell through to a create against the old file. A heredoc cannot be `&&`-chained to
          * what follows it; aborting the whole block on any failure is the shell's own answer.
          */
+        // A subshell, so `set -e` guards this block and does not survive into the reader's own
+        // interactive shell — where it stays enabled and can close their terminal on any later
+        // failure. A footgun the previous fix introduced while fixing another. (Codex, #173.)
+        `(`,
         `set -e`,
         ...(quantizedCache
           ? [
@@ -579,6 +619,7 @@ function ollama(input: LaunchInput): Pair {
         // exactly when the stale-settings case fires — and a successful final command would have
         // hidden the redirection error above it. Raised by Codex on #164.
         `ollama create ${tag} -f ${tag}.Modelfile && ollama run ${tag}`,
+        `)`,
       ].join('\n'),
       notes,
     },
@@ -807,6 +848,13 @@ function mlx(input: LaunchInput): Pair {
             ]),
             notes: [
               `mlx_lm.generate prints prompt and generation tokens/sec, which are the two figures above.`,
+              ...(revisionOf(model) === undefined
+                ? []
+                : [
+                    `mlx_lm.generate takes no revision flag either, so this resolves the repo's default ` +
+                      `branch. The figures above were derived from ${revisionOf(model)!.slice(0, 10)}; if ` +
+                      `it has moved, the measurement is of a different checkpoint.`,
+                  ]),
               ...(usage.concurrency > 1
                 ? [
                     `mlx_lm.generate processes one prompt and has no concurrency option, so it ` +
