@@ -46,6 +46,28 @@ test('the run really is a touch one', async ({ page }) => {
   expect(await page.evaluate(() => navigator.maxTouchPoints)).toBeGreaterThan(0);
 });
 
+test('the narrow form is the one displayed at this width', async ({ page }) => {
+  /*
+   * Both sentences are in the DOM and CSS picks one, so nothing in either suite noticed which — the
+   * unit tests read `data-readout` by name and the height checks measure the paragraph. Drop the
+   * `sm:hidden` and both would render, the line would be twice as tall, and every other assertion
+   * here would still pass. This is a Pixel 5, which is below `sm`, so the brief form is the visible
+   * one and the full one is not.
+   */
+  await cells(page).nth(5).tap();
+  const line = readout(page);
+
+  await expect(line.locator('[data-readout="brief"]')).toBeVisible();
+  await expect(line.locator('[data-readout="full"]')).toBeHidden();
+  // And the brief form really is the shorter one, or "displayed" is being satisfied by two copies of
+  // one sentence.
+  const [brief, full] = await Promise.all([
+    line.locator('[data-readout="brief"]').textContent(),
+    line.locator('[data-readout="full"]').textContent(),
+  ]);
+  expect((brief ?? '').length).toBeLessThan((full ?? '').length);
+});
+
 test('the first tap fills the readout without loading the cell', async ({ page }) => {
   const before = scenario(page);
   // Any cell but the one already marked, so "the scenario did not change" is a claim about the tap
