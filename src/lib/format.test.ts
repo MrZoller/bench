@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { contextStopsFor } from './stops';
 import {
+  compact,
   gib,
   multiple,
   optionLabel,
@@ -79,11 +80,57 @@ describe('units stay readable as magnitude changes', () => {
     expect(seconds(900)).toBe('15 min');
   });
 
+  /**
+   * Every cutoff in this module tests the figure as it will print, not the raw value (#126).
+   * Rounding on the display side of a raw-value test printed "600 s" astride the minutes cutoff,
+   * "1000K" astride the M cutoff, and "10.0 s" where the next band says "10 s". TTFT sweeps
+   * through these bands continuously as the prompt slider moves, so each one is reachable.
+   */
+  it('never rounds a figure across the cutoff it was tested against', () => {
+    expect(seconds(599.7)).toBe('10 min');
+    expect(seconds(9.97)).toBe('10 s');
+    expect(seconds(0.9996)).toBe('1.0 s');
+    expect(rate(9.97)).toBe('10');
+    expect(gib(9.97 * 2 ** 30)).toBe('10');
+    expect(tokens(1048570)).toBe('1M');
+    expect(compact(999_500)).toBe('1M');
+  });
+
+  it('and the guard fires only where the display would actually cross', () => {
+    // The near side of every boundary above: a value whose rounded display stays under the
+    // cutoff keeps its unit and its precision. A guard rounding at the wrong granularity turns
+    // the whole 9.5–9.94 band into "10" — the first draft of this fix did exactly that.
+    expect(seconds(599.4)).toBe('599 s');
+    expect(seconds(9.7)).toBe('9.7 s');
+    expect(seconds(0.994)).toBe('994 ms');
+    expect(rate(9.7)).toBe('9.7');
+    expect(gib(9.7 * 2 ** 30)).toBe('9.7');
+    expect(tokens(1048524)).toBe('1023.9K');
+    expect(compact(999_499)).toBe('999K');
+  });
+
   it('says context lengths the way people do', () => {
     expect(tokens(4096)).toBe('4K');
     expect(tokens(131072)).toBe('128K');
     expect(tokens(1048576)).toBe('1M');
     expect(tokens(1_048_576)).toBe('1M');
+  });
+
+  it('says parameter counts the way people do, tenths included', () => {
+    // gpt-oss-120b's real count — the docblock promised "116.8B" while the code printed "117B".
+    expect(params(116_829_156_672)).toBe('116.8B');
+    expect(params(671_000_000_000)).toBe('671B');
+    expect(params(8_030_000_000)).toBe('8.03B');
+    // 99.96B prints as the "100B" people would say, not a "100.0B" claiming a measured tenth.
+    expect(params(99_960_000_000)).toBe('100B');
+  });
+
+  it('drops the trailing .0 from a rounded download count', () => {
+    // Both live in the shipped catalog today: Llama 3.1 8B and 70B Instruct.
+    expect(compact(8_022_692)).toBe('8M');
+    expect(compact(1_009_219)).toBe('1M');
+    expect(compact(1_250_000)).toBe('1.3M');
+    expect(compact(890_000)).toBe('890K');
   });
 });
 
