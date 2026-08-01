@@ -157,19 +157,28 @@ The common thread: the moat today is correctness, and correctness is invisible t
 visitor — every alternative _looks_ the same at a glance. Each of these either makes the accuracy
 legible or removes the expertise the current entry point assumes.
 
-| Feature                                                         | Issue                                                | Why it is on the list                                                                                                               |
-| --------------------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Launch commands — emit the runnable command for the placement   | [#136](https://github.com/MrZoller/bench/issues/136) | The engine already computed the layer split; competitors never did, so they structurally cannot print one. A formatter, not a model |
-| Detect — one-click "what can my machine run"                    | [#137](https://github.com/MrZoller/bench/issues/137) | The 43-row picker assumes knowledge most visitors don't have. WebGPU narrows it to 2–4 candidates; a guess stays visibly a guess    |
-| Recommend — rank the catalog for a device + workload            | [#138](https://github.com/MrZoller/bench/issues/138) | The question people arrive with. The Matrix holds the answer as 1,470 cells; this returns the decision                              |
-| Calibrate — predicted-vs-measured, submitted via issue template | [#139](https://github.com/MrZoller/bench/issues/139) | Two anchors become a measured lattice, and a public "we said 44, users measured 41" record is the argument no competitor can copy   |
+| Feature                                                         | Issue                                                | Why it is on the list                                                                                                                 |
+| --------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Launch commands — emit the runnable command for the placement   | [#136](https://github.com/MrZoller/bench/issues/136) | The engine already computes the layer split; competitors never did, so they structurally cannot print one. Surface it, then format it |
+| Detect — one-click "what can my machine run"                    | [#137](https://github.com/MrZoller/bench/issues/137) | The 43-row picker assumes knowledge most visitors don't have. WebGPU narrows it to 2–4 candidates; a guess stays visibly a guess      |
+| Recommend — rank the catalog for a device + workload            | [#138](https://github.com/MrZoller/bench/issues/138) | The question people arrive with. The Matrix holds the answer as 1,470 cells; this returns the decision                                |
+| Calibrate — predicted-vs-measured, submitted via issue template | [#139](https://github.com/MrZoller/bench/issues/139) | Two anchors become a measured lattice, and a public "we said 44, users measured 41" record is the argument no competitor can copy     |
 
-**The sequencing is part of the record.** Launch commands first — smallest lift, pure leverage on
-`planPlacement`'s existing output, and calibrate cannot honestly ask anyone for measurements until
-running the priced scenario is a paste rather than a research project. Detect and recommend ship
-together as one guided-mode project, because each is half of the three-click landing path — detect
-the machine, ask what the reader wants to do, answer. Calibrate last: it is the slow-burn moat, and
-it compounds from the day the other three make submitting easy.
+**The sequencing is part of the record.** Launch commands first — still the smallest lift, but not
+the pure formatter the first draft of this section claimed, and the two prerequisites are worth
+naming so #136 is not scoped off a false premise. `planPlacement` computes the layer assignment and
+then discards it: its bins keep byte loads rather than layer counts, and only the busiest survives
+onto `Placement` — so the split has to be surfaced before a formatter can read it, an engine change
+that records what is already computed rather than new modelling. And a command may only name a
+checkpoint that exists: the catalog carries the source repo id and no per-quant artifact, so a
+non-native selection (Q4_K_M under llama.cpp, AWQ under vLLM) needs an artifact resolver or an
+honest placeholder — naming the source checkpoint beside the quant's figures would be the
+substituted-format failure (#18) in copy-pasteable form. Calibrate still follows launch, because it
+cannot honestly ask anyone for measurements until running the priced scenario is a paste rather
+than a research project. Detect and recommend ship together as one guided-mode project, because
+each is half of the three-click landing path — detect the machine, ask what the reader wants to do,
+answer. Calibrate last: it is the slow-burn moat, and it compounds from the day the other three
+make submitting easy.
 
 Deliberately absent, and not forgotten: cloud pricing stays out of scope per the settled decision
 below, and fine-tuning memory (LoRA/QLoRA) is a second engine rather than a feature — real demand,
