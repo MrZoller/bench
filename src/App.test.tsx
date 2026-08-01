@@ -5612,7 +5612,7 @@ describe('the catalog shows the order it is listed in', () => {
   it('states how a model earns a row, and what absence means, on both channels', () => {
     render(<App />);
 
-    const statements = screen.getAllByText(/never seeded, not found unable to run/i);
+    const statements = screen.getAllByText(/not one found unable to run/i);
     // One in the sr-only caption, one where sighted readers scan — parity, not a swap: the
     // original defect was one channel getting less than the other, in either direction.
     expect(statements.some((el) => el.closest('caption') !== null)).toBe(true);

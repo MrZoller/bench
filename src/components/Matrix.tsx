@@ -787,13 +787,20 @@ export function Matrix({ config }: { config: Config }) {
             facts in the sr-only caption and the visual channel got neither — the inversion of how
             this usually breaks. The absence clause is the load-bearing half: on a grid whose whole
             point is refusals with reasons, the one refusal it cannot explain is a missing row, and
-            without the sentence a reader cannot tell "was not asked" from "does not run". The
-            criterion is `SEEDS`' own docblock, compressed — if that rule changes, both change. */}
+            without the sentence a reader cannot tell "was not asked" from "does not run".
+
+            Three softenings, each a review catch on the first draft (#155): the criterion reads
+            as curation guidance rather than a per-row guarantee (a family's superseded sibling
+            can outlive the rule that admitted it); "derived" carries a stated-overrides aside
+            (six rows carry a human-typed totalParams, documented per row); and absence says what
+            the list does not carry rather than asserting seed status, since a seed that failed a
+            partial generation is also absent and the weekly report owns naming why. */}
         <p className="basis-full text-sm text-[var(--color-text-faint)]">
-          The {models.length} models are a curated set, not a top-N chart: each row answers a
-          hardware question no other row does, or is the current head of a family already here, with
-          every figure derived from its repo on Hugging Face. Rows run most-downloaded first — and a
-          model that is absent was never seeded, not found unable to run.
+          The {models.length} models are a curated set, not a top-N chart — picked to cover distinct
+          size classes, attention families and active-parameter ratios, and to keep each
+          family&rsquo;s current head present — with figures derived from each model&rsquo;s own
+          Hugging Face repo, a handful of stated overrides aside. Rows run most-downloaded first,
+          and a missing model is one the list does not carry, not one found unable to run.
         </p>
       </header>
 
@@ -858,9 +865,9 @@ export function Matrix({ config }: { config: Config }) {
                 is why it is one sentence with the mark rather than prose somewhere else. */}
             Columns run left to right in {bands.labels.length} bands — {bands.labels.join(', ')} —
             with a gap between them, and rows run most-downloaded first from a curated seed list — a
-            model that is absent was never seeded, not found unable to run. This grid is a single
-            tab stop: use the arrow keys to move between cells, Home and End for the ends of a row,
-            and Control with Home or End for the ends of the grid.
+            missing model is one the list does not carry, not one found unable to run. This grid is
+            a single tab stop: use the arrow keys to move between cells, Home and End for the ends
+            of a row, and Control with Home or End for the ends of the grid.
           </caption>
           <thead>
             <tr>
