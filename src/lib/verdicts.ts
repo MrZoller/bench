@@ -43,6 +43,21 @@ export const HOST_RAM_UNCHECKED =
   'Loads only if the host has RAM for the spilled weights, which is not checked here.';
 
 /**
+ * The one name for the over-budget state a setting could fix.
+ *
+ * `raisingCeilingWouldHelp` splits `impossible` into a wall and a default, and every surface that
+ * renders the split has to use one word for it: the Envelope's legend and table cells did, the
+ * Matrix's `blockedBy` does, and the capacity tile said "Will not run" over a detail explaining
+ * the ceiling can be raised — a flat refusal above the sentence refuting it (#121). The tile's
+ * `verdict` field exists for exactly this override, and the word it takes is this one.
+ *
+ * `engine/matrix.ts` states the same phrase for its `blockedBy` and cannot import it — the engine
+ * imports nothing outside `src/engine/` — so `matrix.test.ts` asserts the two spellings agree
+ * rather than leaving them agreeing by coincidence.
+ */
+export const PAST_DEFAULT_ALLOCATION = 'Past the default allocation';
+
+/**
  * The one decode classification.
  *
  * A function rather than bare thresholds, because sharing the numbers was not enough: the tile

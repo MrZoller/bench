@@ -318,6 +318,24 @@ describe('offload is a cliff', () => {
       result.offloadPenalty!.withoutOffloadTokensPerSec / 2
     );
   });
+
+  it('splits the bus slice out of weight time, so a caller can compare rather than assume', () => {
+    const quant = getQuant('q4_k_m');
+    const usage = single(4096);
+    const rig = { device: RTX_5090, count: 1 };
+    const placement = planPlacement(DEEPSEEK_V3, quant, usage, rig, LLAMA_CPP);
+    const result = estimateDecode(DEEPSEEK_V3, quant, usage, rig, LLAMA_CPP, placement);
+
+    // `busSeconds` is a slice of `weightSeconds`, not a term beside it: the remainder is what
+    // the resident bytes cost at device bandwidth. The identity is what makes "does the bus set
+    // the pace" answerable from the estimate alone (#122).
+    const bus = result.offloadPenalty!.busSeconds;
+    expect(bus).toBeGreaterThan(0);
+    expect(bus).toBeLessThan(result.weightSeconds);
+    // At a 90%+ spill on a PCIe link, the bus dwarfs the resident remainder.
+    expect(placement.offloadFraction).toBeGreaterThan(0.9);
+    expect(bus).toBeGreaterThan(result.weightSeconds - bus);
+  });
 });
 
 /**

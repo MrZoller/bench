@@ -225,6 +225,11 @@ describe('the Bench', () => {
     const user = userEvent.setup();
     render(<App />);
 
+    // DeepSeek-V3 rather than the default model, since #121: gpt-oss-120b at Q5_K_M is 78.8 GiB
+    // against the 96 GB Mac's 72 GiB *default* — past a setting, not past the machine, so the
+    // strip now says "Past the default allocation" there rather than the flat refusal this test
+    // pins. 445.6 GiB is past any ceiling this machine can be tuned to.
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
     await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-96');
     await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
     await user.selectOptions(screen.getByLabelText('Quantization'), 'q5_k_m');
@@ -330,8 +335,17 @@ describe('the Bench does not overclaim', () => {
       useConfig.getState().set('deviceCount', 3);
     });
 
-    // The refusal names the card it belongs to rather than implying the one above it.
-    expect(screen.getByText(/busiest card by cache needs/i)).toBeInTheDocument();
+    // The refusal names the card it belongs to rather than implying the one above it — "the card
+    // holding the most cache", not "the busiest card", because the engine's busiest device is
+    // busiest by combined load and in this split is the one being drawn. Its quantity is named in
+    // full: `floorBytesPerDevice` is cache plus activations, the term the segments label
+    // Overhead, with a tail whose subject is that singular figure. The shared tail it replaced
+    // counted a pair ("and neither can be offloaded") this branch never names (#128).
+    expect(
+      screen.getByText(/the card holding the most cache needs .* of cache and overhead/i)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/which cannot be offloaded/i)).toBeInTheDocument();
+    expect(screen.queryByText(/neither can be offloaded/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/the cache and overhead alone need/i)).not.toBeInTheDocument();
   });
 
@@ -554,6 +568,22 @@ describe('every mark drawn over another is named in a legend', () => {
 
     expect(matrix().querySelectorAll('[aria-current="true"]')).toHaveLength(1);
     expect(within(matrix()).getByText(/the cell the Bench above is set to/)).toBeInTheDocument();
+
+    // And the sample is the mark (#130): the swatch wears the marked cell's own inset-frame
+    // utilities, not the retired offset ring — one constant, read by both, so the legend cannot
+    // drift from the grid again. The mark utilities are exactly those the cell adds when marked.
+    const marked = matrix().querySelector('[aria-current="true"]')!;
+    const swatch = within(matrix())
+      .getByText(/the cell the Bench above is set to/)
+      .querySelector('span[aria-hidden="true"]')!;
+    const markUtilities = (marked.getAttribute('class') ?? '')
+      .split(/\s+/)
+      .filter((u) => !u.includes('focus') && /^(inset-ring|shadow)/.test(u));
+    expect(markUtilities.length).toBeGreaterThanOrEqual(2);
+    for (const utility of markUtilities) {
+      expect(swatch.getAttribute('class')).toContain(utility);
+    }
+    expect(swatch.getAttribute('class')).not.toMatch(/ring-offset/);
 
     // Every cell here is scored at one device, so a two-card rig marks nothing.
     act(() => {
@@ -1124,6 +1154,34 @@ describe('the Envelope agrees with the verdicts beside it', () => {
 
     await user.click(screen.getByRole('button', { name: /region as a table/i }));
     if (willNotRun) expect(currentCell()).toMatch(/Will not run/);
+  });
+
+  /**
+   * The other half of the agreement, on the one machine class the test above cannot reach: the
+   * rtx-5090 has no tunable ceiling, so its "Will not run" premise is never violated there. On a
+   * Mac past the default allocation but inside the raiseable ceiling, the capacity tile used to
+   * say "Will not run" over its own detail explaining a setting would fix it, while the Envelope
+   * cell one panel down said "Past the default allocation" about the same placement (#121).
+   */
+  it('says a raiseable ceiling is a setting, in the same words as the table', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // DeepSeek-V3 at Q5_K_M needs ~446 GiB: past the 512 GB Mac Studio's 384 GiB default
+    // allocation, inside the ceiling macOS lets the user raise.
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'mac-studio-m3-ultra-512');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q5_k_m');
+
+    const verdicts = screen.getByRole('region', { name: 'Verdicts' });
+    // The capacity tile's word stops contradicting its own detail — and no tile in the strip
+    // asserts a flat refusal for a placement one setting would admit.
+    expect(within(verdicts).getByText('Past the default allocation')).toBeInTheDocument();
+    expect(within(verdicts).queryByText('Will not run')).not.toBeInTheDocument();
+
+    // And the Envelope's marked cell describes the same placement in the same words.
+    await user.click(screen.getByRole('button', { name: /region as a table/i }));
+    expect(currentCell()).toMatch(/Past the default allocation/);
   });
 
   it('locates the current scenario for a screen reader, not only as a ring', () => {
@@ -2755,6 +2813,96 @@ describe('the capacity tile does not promise context a model cannot take', () =>
 
     const verdicts = screen.getByRole('region', { name: 'Verdicts' });
     expect(within(verdicts).getByText(/Room to grow/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * ARIA reference integrity, as a sweep rather than per instance (#131).
+ *
+ * Two disclosures mounted their region only while expanded, so collapsed they pointed
+ * `aria-controls` at an id that was not in the DOM — a reference a screen reader's "jump to
+ * controlled region" cannot resolve, and an axe `aria-valid-attr-value` failure. The contract on
+ * `DisclosureToggle.controls` now requires the region in both states; this sweeps every
+ * `aria-controls` on the default page, which renders both offending disclosures collapsed, so a
+ * new call site that unmounts its region fails here rather than in an audit.
+ */
+describe('every aria-controls points at a node that exists', () => {
+  it('resolves each reference on the default page, collapsed states included', () => {
+    render(<App />);
+
+    const referencing = Array.from(document.querySelectorAll('[aria-controls]'));
+    // The sweep must be sweeping something: both #131 instances ship collapsed by default.
+    expect(referencing.length).toBeGreaterThanOrEqual(2);
+    for (const el of referencing) {
+      const id = el.getAttribute('aria-controls')!;
+      expect(
+        document.getElementById(id),
+        `aria-controls="${id}" resolves to nothing`
+      ).not.toBeNull();
+    }
+  });
+});
+
+/**
+ * The decode tile attributes the step to the term that costs the most time, not to whichever
+ * term exists (#122). The KV axis has made this comparison since the 0.08%-offload finding; the
+ * spill axis kept the existence test, so any configuration a hair past the ceiling was told the
+ * bus "sets the pace" — on PCIe 4.0 that claim only becomes true past roughly a 4% spill, and
+ * the band under it is exactly where a reader is deciding whether clearing the spill is worth it.
+ */
+describe('the decode tile blames the term that sets the pace', () => {
+  it('does not blame the host bus for a spill the resident reads outweigh', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Qwen3-32B at Q4_K_M on a 4090 at 16K: spilled by 0.7%, so the bus is a sliver of the
+    // step and VRAM bandwidth still sets the pace.
+    await user.selectOptions(screen.getByLabelText('Model'), 'Qwen/Qwen3-32B');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-4090');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
+    act(() => {
+      useConfig.getState().set('contextTokens', 16384);
+    });
+
+    expect(screen.queryByText(/host bus set the pace/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/resident reads still cost more per step than the 1% of weights/i)
+    ).toBeInTheDocument();
+  });
+
+  it('does not blame the bus while the cache is the largest cost in the step', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Raised in review on #145: `kvBound` compares KV against the weight terms' *sum*, so at
+    // ~7.8ms KV, ~4.6ms bus and ~3.3ms resident reads it is false — and a pairwise bus test
+    // then named the bus while KV was the largest single term. The strict three-way max names
+    // the cache.
+    await user.selectOptions(screen.getByLabelText('Model'), 'Qwen/Qwen3-30B-A3B');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-4090');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
+    act(() => {
+      useConfig.getState().set('contextTokens', 32768);
+      useConfig.getState().set('concurrency', 2);
+    });
+
+    expect(screen.queryByText(/host bus set the pace/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/KV traffic is the largest cost in the step/i)).toBeInTheDocument();
+  });
+
+  it('still blames the bus once its time outweighs the resident reads', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // The same shape past the crossover: 4.4% spilled, and the bus term is the larger half.
+    await user.selectOptions(screen.getByLabelText('Model'), 'Qwen/Qwen3-30B-A3B');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q8_0');
+    act(() => {
+      useConfig.getState().set('contextTokens', 16384);
+    });
+
+    expect(screen.getByText(/host bus set the pace — 4% of them spill/i)).toBeInTheDocument();
   });
 });
 
@@ -4946,12 +5094,13 @@ describe('the controls that drive every figure explain what they are', () => {
       render(<App />);
       await user.selectOptions(hardware(), 'mac-studio-m3-ultra-512');
 
-      // Collapsed: the provenance is not on the page at all, which is what stops it setting the
-      // height of a grid cell whose row also holds the Quantization and Runtime pickers.
-      expect(screen.queryByText(/what the sysctl parses/i)).not.toBeInTheDocument();
+      // Collapsed: the provenance is hidden, not unmounted — `hidden` is display: none, so it
+      // still sets no height on a grid cell whose row also holds the Quantization and Runtime
+      // pickers, while the toggle's `aria-controls` keeps resolving to a real node (#131).
+      expect(screen.getByText(/what the sysctl parses/i)).not.toBeVisible();
 
       await user.click(toggle());
-      expect(screen.getByText(/what the sysctl parses/i)).toBeInTheDocument();
+      expect(screen.getByText(/what the sysctl parses/i)).toBeVisible();
       // Open, and still not part of the control's accessible description. A disclosure that got
       // wired into `aria-describedby` when expanded would be the same defect with a click in front
       // of it.

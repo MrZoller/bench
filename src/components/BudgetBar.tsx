@@ -196,7 +196,16 @@ export function BudgetBar({
     floorBytes > placement.kvBytesPerDevice + placement.activationBytesPerDevice + 1;
   const overflowDetail = placement.impossible
     ? canOffload
-      ? ` — ${floorIsElsewhere ? 'the busiest card by cache needs' : 'the cache and overhead alone need'} ${gibLabel(floorBytes)}, and neither can be offloaded, so spilling every weight would still leave it over`
+      ? // Each subject carries its own tail: "and neither can be offloaded" counts the pair
+        // "cache and overhead", which the elsewhere-branch does not name — shared, it dangled
+        // there (#128). Two words in the elsewhere sentence are load-bearing: "the card holding
+        // the most cache", because the engine's *busiest* device is busiest by combined load and
+        // in the pinned Gemma split is the card being drawn, not this one; and "overhead",
+        // because the floor is cache plus `activationBytes` — the very quantity the segment
+        // above labels Overhead — so calling it workspace under-names it.
+        floorIsElsewhere
+        ? ` — the card holding the most cache needs ${gibLabel(floorBytes)} of cache and overhead, which cannot be offloaded, so spilling every weight would still leave it over`
+        : ` — the cache and overhead alone need ${gibLabel(floorBytes)}, and neither can be offloaded, so spilling every weight would still leave it over`
       : ' — and this memory is the machine’s own, so there is nowhere faster to spill to'
     : placement.offloadFraction > 0
       ? ` — ${percent(placement.offloadFraction)} of weights would spill to host RAM`
@@ -404,47 +413,47 @@ export function BudgetBar({
         {showTable ? 'Hide' : 'Show'} figures as a table
       </DisclosureToggle>
 
-      {showTable && (
-        <table id={tableId} className="mt-3 w-full text-left text-sm">
-          <caption className="sr-only">Memory budget breakdown per device</caption>
-          <thead>
-            <tr className="text-[var(--color-text-faint)]">
-              <th scope="col" className="py-1 font-normal">
-                Component
-              </th>
-              <th scope="col" className="py-1 text-right font-normal">
-                Size
-              </th>
-              <th scope="col" className="py-1 text-right font-normal">
-                Share of ceiling
-              </th>
-              <th scope="col" className="py-1 font-normal">
-                What it is
-              </th>
-            </tr>
-          </thead>
-          <tbody className="text-[var(--color-text-muted)]">
-            {segments.map((segment) => (
-              <tr key={segment.key} className="border-t border-[var(--color-border)]">
-                <th scope="row" className="py-1 font-normal text-[var(--color-text)]">
-                  {segment.label}
-                </th>
-                <td className="tabular py-1 text-right">{gibLabel(segment.bytes)}</td>
-                <td className="tabular py-1 text-right">{shareOfCeiling(segment.bytes)}</td>
-                <td className="py-1 pl-4">{segment.hint}</td>
-              </tr>
-            ))}
-            <tr className="border-t border-[var(--color-border)]">
+      {/* `hidden` rather than unmounted, so the toggle's `aria-controls` resolves in both
+          states — see the contract on `DisclosureToggle.controls` (#131). */}
+      <table hidden={!showTable} id={tableId} className="mt-3 w-full text-left text-sm">
+        <caption className="sr-only">Memory budget breakdown per device</caption>
+        <thead>
+          <tr className="text-[var(--color-text-faint)]">
+            <th scope="col" className="py-1 font-normal">
+              Component
+            </th>
+            <th scope="col" className="py-1 text-right font-normal">
+              Size
+            </th>
+            <th scope="col" className="py-1 text-right font-normal">
+              Share of ceiling
+            </th>
+            <th scope="col" className="py-1 font-normal">
+              What it is
+            </th>
+          </tr>
+        </thead>
+        <tbody className="text-[var(--color-text-muted)]">
+          {segments.map((segment) => (
+            <tr key={segment.key} className="border-t border-[var(--color-border)]">
               <th scope="row" className="py-1 font-normal text-[var(--color-text)]">
-                Allocatable ceiling
+                {segment.label}
               </th>
-              <td className="tabular py-1 text-right">{gibLabel(ceiling)}</td>
-              <td className="tabular py-1 text-right">100%</td>
-              <td className="py-1 pl-4">What the runtime can actually hand the model.</td>
+              <td className="tabular py-1 text-right">{gibLabel(segment.bytes)}</td>
+              <td className="tabular py-1 text-right">{shareOfCeiling(segment.bytes)}</td>
+              <td className="py-1 pl-4">{segment.hint}</td>
             </tr>
-          </tbody>
-        </table>
-      )}
+          ))}
+          <tr className="border-t border-[var(--color-border)]">
+            <th scope="row" className="py-1 font-normal text-[var(--color-text)]">
+              Allocatable ceiling
+            </th>
+            <td className="tabular py-1 text-right">{gibLabel(ceiling)}</td>
+            <td className="tabular py-1 text-right">100%</td>
+            <td className="py-1 pl-4">What the runtime can actually hand the model.</td>
+          </tr>
+        </tbody>
+      </table>
     </section>
   );
 }

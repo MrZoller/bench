@@ -1036,7 +1036,7 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
               good.prefill.ttftSeconds > BARS.serving.good.ttft &&
               `${secs(good.prefill.ttftSeconds)}s to first token across ${usersWord(BARS.serving.good.users)} of queued prompts is longer than a served user waits`
           ) ??
-          `${usersWord(BARS.serving.good.users)} at ${fmt(good.decode.perUserTokensPerSec)} tok/s each, ${fmt(good.decode.aggregateTokensPerSec)} aggregate, ${secs(good.prefill.ttftSeconds)}s to first token.`
+          `${usersWord(BARS.serving.good.users)} at ${servingRates(BARS.serving.good.users, good.decode.perUserTokensPerSec)}, ${secs(good.prefill.ttftSeconds)}s to first token.`
         );
       },
     }),
@@ -1088,6 +1088,31 @@ function secs(value: number): string {
   if (value >= 10) return Math.ceil(value).toString();
   if (value > 0 && value < 0.1) return '<0.1';
   return (Math.ceil(value * 10) / 10).toFixed(1);
+}
+
+/**
+ * The serving pass sentence's two rates, multiplied on the page rather than rounded apart.
+ *
+ * The sentence asserts a multiplication — "4 users at 14 tok/s each, 56 tok/s aggregate" — and
+ * flooring each figure independently from the engine let it disagree with its own arithmetic:
+ * ~14.5 each and ~58.0 aggregate printed "14" and "58", a product no reader can reproduce (#124).
+ * So the aggregate is derived from the per-user figure *as printed*. The never-flatter rule
+ * survives the derivation: the engine defines per-user as aggregate ÷ users, so users × the
+ * floored per-user figure never exceeds the aggregate it measured.
+ *
+ * The tenths branch mirrors `fmt` for a per-user rate under 10, which today's good bar (10 tok/s)
+ * keeps out of this sentence — kept anyway, so a lowered bar cannot silently turn the fragment
+ * into an integer floor of a decimal figure.
+ */
+function servingRates(users: number, perUserTokensPerSec: number): string {
+  const shown =
+    perUserTokensPerSec >= 10
+      ? Math.floor(perUserTokensPerSec)
+      : Math.floor(perUserTokensPerSec * 10) / 10;
+  const each = Number.isInteger(shown) ? shown.toString() : shown.toFixed(1);
+  const aggregate = users * shown;
+  const total = Number.isInteger(aggregate) ? aggregate.toString() : aggregate.toFixed(1);
+  return `${each} tok/s each, ${total} tok/s aggregate`;
 }
 
 /**
