@@ -122,7 +122,21 @@ function capacityReading(
 
 function decodeReading(evaluation: Evaluation): Reading {
   const { shown, word, tone } = classifyDecode(evaluation.decode.perUserTokensPerSec);
-  const { kvBound, offloadPenalty } = evaluation.decode;
+  const { kvBound, offloadPenalty, weightSeconds } = evaluation.decode;
+
+  /**
+   * Whether the bus is the term that actually sets the pace, not merely present.
+   *
+   * The KV axis learned this first — `kvBound` is the engine's own time comparison, and testing
+   * the spill's existence before it meant a 0.08% offload blamed the host bus while the cache
+   * was costing six times as much. The spill axis kept the existence test (#122): any
+   * configuration a hair past the ceiling was told the bus "sets the pace", when on PCIe 4.0
+   * that claim only becomes true past roughly a 4% spill. Same comparison now, same source —
+   * `busSeconds` is the slice of `weightSeconds` the engine already charged to the host link.
+   */
+  const busBound =
+    offloadPenalty !== undefined &&
+    offloadPenalty.busSeconds > weightSeconds - offloadPenalty.busSeconds;
 
   return {
     key: 'decode',
@@ -131,15 +145,14 @@ function decodeReading(evaluation: Evaluation): Reading {
     unit: 'tok/s per user',
     tone,
     verdict: word,
-    // `kvBound` is the engine's own comparison of weight seconds against cache seconds, so it
-    // outranks the mere *existence* of a spill. Testing the spill first meant a 0.08% offload
-    // blamed the host bus while the cache was costing six times as much time — sending someone
-    // to fix the wrong thing, which is the error this whole tile exists to avoid.
+    // `kvBound` outranks both weight terms; between the weight terms, the dominant one is named.
     detail: kvBound
       ? 'KV traffic now costs more time per step than the weights — at this context the cache, not the model, sets the speed.'
-      : offloadPenalty
-        ? `Weights crossing the host bus set the pace — ${percent(offloadPenalty.fraction)} of them spill every token.`
-        : 'Bound by weight bandwidth. Lower quantization or faster memory is what moves this.',
+      : busBound
+        ? `Weights crossing the host bus set the pace — ${percent(offloadPenalty!.fraction)} of them spill every token.`
+        : offloadPenalty
+          ? `Bound by weight bandwidth — the resident reads still cost more per step than the ${percent(offloadPenalty.fraction)} of weights crossing the host bus.`
+          : 'Bound by weight bandwidth. Lower quantization or faster memory is what moves this.',
   };
 }
 

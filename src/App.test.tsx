@@ -2759,6 +2759,49 @@ describe('the capacity tile does not promise context a model cannot take', () =>
 });
 
 /**
+ * The decode tile attributes the step to the term that costs the most time, not to whichever
+ * term exists (#122). The KV axis has made this comparison since the 0.08%-offload finding; the
+ * spill axis kept the existence test, so any configuration a hair past the ceiling was told the
+ * bus "sets the pace" — on PCIe 4.0 that claim only becomes true past roughly a 4% spill, and
+ * the band under it is exactly where a reader is deciding whether clearing the spill is worth it.
+ */
+describe('the decode tile blames the term that sets the pace', () => {
+  it('does not blame the host bus for a spill the resident reads outweigh', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Qwen3-32B at Q4_K_M on a 4090 at 16K: spilled by 0.7%, so the bus is a sliver of the
+    // step and VRAM bandwidth still sets the pace.
+    await user.selectOptions(screen.getByLabelText('Model'), 'Qwen/Qwen3-32B');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-4090');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
+    act(() => {
+      useConfig.getState().set('contextTokens', 16384);
+    });
+
+    expect(screen.queryByText(/host bus set the pace/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/resident reads still cost more per step than the 1% of weights/i)
+    ).toBeInTheDocument();
+  });
+
+  it('still blames the bus once its time outweighs the resident reads', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // The same shape past the crossover: 4.4% spilled, and the bus term is the larger half.
+    await user.selectOptions(screen.getByLabelText('Model'), 'Qwen/Qwen3-30B-A3B');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q8_0');
+    act(() => {
+      useConfig.getState().set('contextTokens', 16384);
+    });
+
+    expect(screen.getByText(/host bus set the pace — 4% of them spill/i)).toBeInTheDocument();
+  });
+});
+
+/**
  * "Comfortable" promises the answer starts promptly, and the tile beside it calls anything past
  * two seconds "Noticeable" in amber. A ten-second threshold here left the two disagreeing.
  */
