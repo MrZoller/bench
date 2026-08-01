@@ -512,6 +512,13 @@ test.describe('at 200% text size', () => {
      * single-device case the two rows above measure.
      */
     { width: 320, query: '?n=4', at: ' on four devices' },
+    /*
+     * And under a runtime that refuses most of the grid, because the refusal sentence is a different
+     * shape from the figures — it names the runtime as well as the machine, and llama.cpp drives
+     * everything, so the default scenario contains no such cell at all and the three rows above
+     * measure a case this branch never reaches.
+     */
+    { width: 320, query: '?r=mlx', at: ' under a runtime that refuses most of it' },
   ]) {
     test(`the filled readout stays inside its reservation at ${width}px${at}`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });

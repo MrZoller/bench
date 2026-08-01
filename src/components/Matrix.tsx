@@ -577,10 +577,11 @@ export function Matrix({ config }: { config: Config }) {
         full: tooltip(cell, measure, quant.id, config.deviceCount),
         brief: tooltip(cell, measure, quant.id, config.deviceCount, {
           shortDevice: shown.get(cell.deviceId) ?? getDevice(cell.deviceId).name,
+          runtime: runtime.label,
         }),
       }))
     );
-  }, [cells, devices, measure, quant.id, config.deviceCount]);
+  }, [cells, devices, measure, quant.id, config.deviceCount, runtime.label]);
 
   /**
    * The sentence itself, derived at render rather than stored when the pointer arrives.
@@ -1020,10 +1021,29 @@ export function Matrix({ config }: { config: Config }) {
                        * same reason.
                        */
                       // Before the browser's own focus moves the line — see `gesture`.
-                      onPointerDown={() => {
+                      onPointerDown={(event) => {
                         gesture.current = {
                           inspected:
-                            pointerOver.current === `${r}:${c}` ||
+                            /**
+                             * A hover record counts only for a gesture that could have made one.
+                             *
+                             * `pointerOver` is written by `mouseenter`, and a touch produces that
+                             * event *after* its own tap — so any record present when a finger lands
+                             * belongs to an earlier gesture, and trusting it made a returning tap
+                             * commit while the line described the cell the keyboard had moved to.
+                             * A mouse's record is the opposite: it is exactly the hover that makes
+                             * one click sufficient, and it survives keyboard focus moving away
+                             * because the pointer has not.
+                             *
+                             * This is not the `pointerType` test #102 removed. That one asked what
+                             * the *device* can do and got a contact-only stylus wrong. This asks
+                             * whether the gesture in progress could have produced the record it is
+                             * about to read — a question about provenance, which the event answers
+                             * exactly. A pen keeps its record for the same reason a mouse does, and
+                             * still inspects first when there is none.
+                             */
+                            (event.pointerType !== 'touch' &&
+                              pointerOver.current === `${r}:${c}`) ||
                             (target?.kind === 'cell' && target.row === r && target.col === c),
                         };
                       }}
@@ -1134,18 +1154,16 @@ export function Matrix({ config }: { config: Config }) {
                         // `mouseleave` of its own — argued at the two states above. Without this the
                         // line prints one cell while the ring is drawn on another, indefinitely.
                         setHovered(null);
-                        /**
-                         * Including the synchronous copy of that claim, or the two disagree
-                         * (found in review).
-                         *
-                         * A completed tap leaves the compatibility pointer recorded here. Move focus
-                         * to another cell by keyboard and `hovered` is cleared while this is not — so
-                         * tapping the *first* cell again reports it as already inspected, and that
-                         * returning tap loads and scrolls instead of filling the line the reader is
-                         * looking at. The ref exists to answer the same question as the state without
-                         * waiting for a render; it has to expire on the same events.
+                        /*
+                         * `pointerOver` deliberately survives this, and the round trip is worth
+                         * recording. Clearing it here fixed a returning *tap* — a completed tap
+                         * leaves a compatibility hover behind, so tapping back after a keyboard move
+                         * read as already-inspected and committed — and broke a stationary *mouse*,
+                         * which emits no new `mouseenter` and would then need two clicks after any
+                         * keyboard use. Both are real, and expiry cannot tell them apart because it
+                         * is asking the wrong question. The record's *provenance* is the question,
+                         * and it is asked at `pointerdown` instead.
                          */
-                        pointerOver.current = '';
                       }}
                       onBlur={() => setFocused(null)}
                       onMouseEnter={() => {
@@ -1783,7 +1801,7 @@ function tooltip(
    * all, which is the defect the narrow form was just corrected for. Present means narrow, and the
    * type will not let it be present and empty-handed.
    */
-  narrow?: { shortDevice: string }
+  narrow?: { shortDevice: string; runtime: string }
 ): string {
   const model = getModel(cell.modelId).name;
   const device = getDevice(cell.deviceId).name;
@@ -1834,7 +1852,14 @@ function tooltip(
     if (narrow) {
       return cell.evaluated
         ? `${rig}: ${reason}${stop}`
-        : `${rig}: the runtime does not drive this.`;
+        : /*
+           * The runtime is named, not elided (found in review). `blockedBy` here is a whole sentence
+           * naming the runtime *and* the machine, and dropping it wholesale left "the runtime does not
+           * drive this" — which is the one fact a reader cannot recover from the axes, since the
+           * Runtime picker is above the grid and off screen for a lower row. The machine comes from the
+           * column, so it is the runtime that has to stay.
+           */
+          `${rig}: ${narrow.runtime} does not drive this.`;
     }
     return `${model} on ${rig}: ${reason}${stop}`;
   }

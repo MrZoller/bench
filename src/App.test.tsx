@@ -1688,6 +1688,56 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
     expect(useConfig.getState().deviceId).toBe(before);
   });
 
+  it('keeps one click for a mouse that has not moved since the keyboard did', () => {
+    render(<App />);
+    const [under, elsewhere] = [
+      cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('RTX 3060'))!,
+      cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('DGX Spark'))!,
+    ];
+
+    /*
+     * The mouse rests on one cell while the keyboard arrows to another — and a stationary mouse
+     * emits no further `mouseenter`, so the record of where it is has to survive the focus move.
+     * Expiring it there was the previous round's fix for a returning *tap* and it broke this: an
+     * ordinary click needed two after any keyboard use. Provenance at `pointerdown` answers both,
+     * which is why nothing expires here now (found in review).
+     */
+    fireEvent.mouseEnter(under);
+    // The premise: the hover really did register, or this measures a mouse that never arrived.
+    expect(readout(), 'the mouse hover did not reach the readout').toContain('RTX 3060');
+    act(() => {
+      elsewhere.focus();
+    });
+    // And the keyboard really did take the line, which is the state the record has to survive.
+    expect(readout(), 'the keyboard did not take the readout').toContain('DGX Spark');
+
+    fireEvent.pointerDown(under, { pointerType: 'mouse' });
+    fireEvent.click(under);
+
+    expect(useConfig.getState().deviceId).toBe('rtx-3060-12gb');
+  });
+
+  it('names the runtime when a narrow readout reports a refusal', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    // MLX is Apple-only, so most columns are struck and every cell in them is a refusal.
+    await user.selectOptions(screen.getByLabelText('Runtime'), 'mlx');
+
+    const refused = cells().find((c) =>
+      /does not (run|support)/i.test(c.getAttribute('aria-label') ?? '')
+    )!;
+    expect(refused, 'no refused cell under MLX, so this has no subject').toBeDefined();
+    await user.hover(refused);
+
+    /*
+     * The machine comes from the column heading and the runtime does not — the Runtime picker is
+     * above the grid and off screen for a lower row, so eliding it left "the runtime does not drive
+     * this", which is the one fact the axes cannot supply (found in review).
+     */
+    expect(briefReadout()).toContain('MLX (Apple)');
+    expect(briefReadout()).not.toMatch(/^the runtime/i);
+  });
+
   it('loads a cell from the keyboard, with no pointer gesture in front of it', () => {
     render(<App />);
     const cell = cells().find((c) => (c.getAttribute('aria-label') ?? '').includes('RTX 3060'))!;
