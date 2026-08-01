@@ -509,6 +509,17 @@ function llamaBench(input: LaunchInput): Pair {
 function ollama(input: LaunchInput): Pair {
   const { model, quant, usage } = input;
   const tag = `bench-${slug(model.name)}-${slug(quant.label)}`;
+  /**
+   * **Ollama's cache precision is a daemon setting, not a Modelfile parameter** (raised by Codex on
+   * #164). `OLLAMA_KV_CACHE_TYPE` is read when the server starts and defaults to `f16`, so a
+   * Modelfile cannot carry it — and a long-context configuration that fits only because an 8-bit
+   * cache halves it would consume two to four times the modelled cache and OOM.
+   *
+   * The command therefore starts the daemon with the variable set rather than assuming the
+   * reader's already-running one has it, which is the only form that reproduces the placement.
+   */
+  const kv = LLAMA_KV_TYPE[usage.kvPrecision];
+  const quantizedCache = usage.kvPrecision !== 'fp16';
 
   /**
    * **Ollama's Modelfile documents no parameter for the GPU layer count**, and that is the one
@@ -523,13 +534,28 @@ function ollama(input: LaunchInput): Pair {
     `num_ctx is per request here, unlike llama-server's -c, which is the whole cache across slots.`,
     `FROM takes a path on your own disk, absolute or relative to the Modelfile.`,
     `Written to ${tag}.Modelfile rather than to Modelfile, under set -C, so this cannot overwrite ` +
-      `one you already have.`,
+      `one you already have — and chained with && so a refusal there does not go on to run the ` +
+      `old file's settings.`,
+    ...(quantizedCache
+      ? [
+          `OLLAMA_KV_CACHE_TYPE is a daemon setting rather than a Modelfile parameter, and it ` +
+            `defaults to f16 — so the block restarts the server with it. An already-running daemon ` +
+            `will not pick it up, and the figures above are sized for a ${kv} cache.`,
+        ]
+      : []),
   ];
 
   return {
     serve: {
       ok: true,
       text: [
+        ...(quantizedCache
+          ? [
+              `# The cache precision is read by the daemon at startup, not from the Modelfile.`,
+              `OLLAMA_KV_CACHE_TYPE=${kv} ollama serve &`,
+              ``,
+            ]
+          : []),
         // A bench-specific filename, never the bare `Modelfile` this first wrote to. `cat >`
         // truncates unconditionally, and the directory an Ollama user runs this from is exactly the
         // one likely to already hold a Modelfile of their own — a copy-pasteable block that
@@ -540,8 +566,11 @@ function ollama(input: LaunchInput): Pair {
         `PARAMETER num_ctx ${usage.contextTokens}`,
         `EOF`,
         ``,
-        `ollama create ${tag} -f ${tag}.Modelfile`,
-        `ollama run ${tag}`,
+        // Chained, so a noclobber refusal stops here rather than creating and running whatever the
+        // old file said. Changing only the context keeps the same filename, so the second run is
+        // exactly when the stale-settings case fires — and a successful final command would have
+        // hidden the redirection error above it. Raised by Codex on #164.
+        `ollama create ${tag} -f ${tag}.Modelfile && ollama run ${tag}`,
       ].join('\n'),
       notes,
     },
@@ -569,6 +598,27 @@ function vllm(input: LaunchInput): Pair {
   const revision = revisionOf(model);
 
   /**
+   * `--cpu-offload-gb`, without which a spilled placement is a command that OOMs (raised by Codex
+   * on #164).
+   *
+   * `planPlacement` reports a *runnable* placement whenever the cache and activations fit and only
+   * the weights are over — Qwen3 32B at BF16 on one 5090 is the reachable case — so both commands
+   * were emitted for a configuration the reader cannot actually start. vLLM defaults the flag to
+   * zero, meaning it will try to keep every weight on the GPUs.
+   *
+   * The field is documented as "the space in GiB to offload to CPU, **per GPU**", and vLLM is
+   * tensor-parallel: every rank holds an equal shard, so the rig's spill divides evenly. Rounded
+   * **up**, because the two directions are not symmetric — too little offload is an out-of-memory
+   * error on load and too much is merely slower.
+   */
+  const spilledPerGpu =
+    input.placement.offloadFraction > 0
+      ? Math.ceil(
+          (input.placement.offloadFraction * input.placement.totalWeightBytes) / tp / 1024 ** 3
+        )
+      : 0;
+
+  /**
    * `--gpu-memory-utilization` is emitted rather than left default, and the reason is that the two
    * do not agree: `RuntimeSpec.preallocFraction` is 0.9, which is what every vLLM figure on this
    * page was budgeted against, while vLLM's own default has moved to 0.92. Stating it makes the
@@ -584,6 +634,14 @@ function vllm(input: LaunchInput): Pair {
             `attention shape were read from. Without it vLLM resolves the repo's default branch, ` +
             `which can move.`,
         ]),
+    ...(spilledPerGpu > 0
+      ? [
+          `--cpu-offload-gb is per GPU, and it is what makes this placement start at all: ` +
+            `${percentish(input.placement.offloadFraction)} of the weights do not fit, and vLLM ` +
+            `defaults the flag to zero — so without it the command tries to keep everything on the ` +
+            `cards. Rounded up, because too little offload is an OOM and too much is only slower.`,
+        ]
+      : []),
     `--max-model-len is one sequence's window; --max-num-seqs is how many of them vLLM will hold ` +
       `at once. Together they are the cache the panel above sized.`,
   ];
@@ -606,6 +664,7 @@ function vllm(input: LaunchInput): Pair {
         kv === undefined ? undefined : `--kv-cache-dtype ${kv}`,
         `--gpu-memory-utilization 0.9`,
         `--max-num-seqs ${usage.concurrency}`,
+        spilledPerGpu > 0 ? `--cpu-offload-gb ${spilledPerGpu}` : undefined,
       ]),
       notes,
     },
@@ -630,6 +689,7 @@ function vllm(input: LaunchInput): Pair {
               tp > 1 ? `--tensor-parallel-size ${tp}` : undefined,
               kv === undefined ? undefined : `--kv-cache-dtype ${kv}`,
               `--gpu-memory-utilization 0.9`,
+              spilledPerGpu > 0 ? `--cpu-offload-gb ${spilledPerGpu}` : undefined,
             ]),
             notes: [
               `vllm bench latency times one batch offline, at this scenario's own prompt, ` +
@@ -739,6 +799,14 @@ function mlx(input: LaunchInput): Pair {
             ]),
             notes: [
               `mlx_lm.generate prints prompt and generation tokens/sec, which are the two figures above.`,
+              ...(usage.concurrency > 1
+                ? [
+                    `mlx_lm.generate processes one prompt and has no concurrency option, so it ` +
+                      `cannot reproduce ${usage.concurrency} users. Read what it prints as the ` +
+                      `single-user rate; the figures above are sized for the batch, and on an MoE ` +
+                      `model the batch changes the speed as well as the memory.`,
+                  ]
+                : []),
               `The prompt is piped rather than quoted because its *length* is what is being measured — ` +
                 `${fmt(prompt)} tokens. "word " is roughly one token each, so treat the count as ` +
                 `approximate and read the tokens-per-second the tool reports back.`,

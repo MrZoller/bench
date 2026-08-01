@@ -69,13 +69,14 @@ test('the whole page is a short keyboard walk, grid included', async ({ page }) 
 
   const stops = await tabStopsInsideMain(page, 80);
 
-  // 29 as measured in this browser: nine controls (four selects, four sliders, and the KV group as
-  // one stop), four disclosures, three legend keys, six measure buttons, six launch-panel stops
-  // (#136 — a copy button and a provenance link for each of the three launchers a llama.cpp
-  // scenario has), and exactly one cell. 422 before the roving tabindex landed, which the 80-press
-  // ceiling never reaches — so that regression reports Infinity.
+  // 32 as measured in this browser: nine controls (four selects, four sliders, and the KV group as
+  // one stop), four disclosures, three legend keys, six measure buttons, nine launch-panel stops
+  // (#136 — a copy button, a provenance link and the command block for each of the three launchers
+  // a llama.cpp scenario has; the block is a scroll container, which Chrome makes focusable so a
+  // keyboard reader can scroll it), and exactly one cell. 422 before the roving tabindex landed,
+  // which the 80-press ceiling never reaches — so that regression reports Infinity.
   //
-  // Where this figure and `Matrix.test.tsx`'s 32 diverge, and the divergence is the point of running
+  // Where this figure and `Matrix.test.tsx`'s 35 diverge, and the divergence is the point of running
   // both. Three apart, from two unrelated causes: a radio group offers Tab only its checked member,
   // so the three KV options are one stop here and three in a `querySelectorAll`, and the masthead's
   // copy-link button is a real stop this walk excludes because it sits outside `<main>`. The comment
