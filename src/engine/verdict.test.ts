@@ -1623,7 +1623,8 @@ describe('a tier is graded on the measurement it recommends', () => {
    */
   it('withdraws serving from a machine whose users wait minutes for a first token', () => {
     // Llama 3.1 8B Q4_K_M on an EPYC 9654, four users: it fits and decodes ~40 tok/s each, and
-    // the four 2K prompts take about 165 seconds before anyone sees a token.
+    // the four 2K prompts take about 134 seconds before anyone sees a token. (165 before #116
+    // corrected the EPYC fixture's compute from the double-discounted 6 TFLOPS to the 7.37 peak.)
     const verdicts = judge(LLAMA_31_8B, 'q4_k_m', { device: EPYC_9654, concurrency: 4 });
     const serving = verdicts.get('serving')!;
 
