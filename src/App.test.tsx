@@ -3766,8 +3766,11 @@ describe('the comparison grid is one tab stop, not four hundred', () => {
 
     // The grid has to be in this page, or the count is of a page without the problem on it.
     expect(cellsOf(container).length).toBeGreaterThan(300);
-    /* 26 as it stands, one of which is the grid. 739 if every cell were in the sequence again —
-       26 − 1 + 714 — which is what replacing the roving `tabIndex` with `tabIndex={0}` reports.
+    /* 26 as it stands, one of which is the grid. 1,495 if every cell were in the sequence again —
+       26 − 1 + 1,470 — which is what replacing the roving `tabIndex` with `tabIndex={0}` reports.
+       The subtrahend is the *shipping* device count times the model count, which is what this grid
+       renders; it read 714 until #77 doubled the model list, and a counterfactual quoting the wrong
+       grid is a wrong expected value for whoever reinjects the defect.
 
        Forty, the same ceiling `e2e/matrix-grid.spec.ts` uses, because the two count one sequence and
        a bound that fires in one channel and not the other is a bug report about the wrong file. Loose

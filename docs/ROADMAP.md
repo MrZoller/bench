@@ -668,8 +668,10 @@ reading the test that guards them.
   **one** press to cross whichever end of the page it sits at, and what is worth counting now is the
   page. Two counts, from the two suites, and the gap between them is worth stating exactly:
 
-  - `App.test.tsx` — **26** DOM tab-stop candidates over the whole document, against 739 without the
-    roving index (26 − 1 + 714).
+  - `App.test.tsx` — **26** DOM tab-stop candidates over the whole document, against **1,495**
+    without the roving index (26 − 1 + 1,470). That subtrahend is the grid, so it moves with the
+    catalog: it was 714 before #77 doubled the model list, and a counterfactual quoting the old one
+    is a wrong expected value for whoever reinjects the defect.
   - `e2e/matrix-grid.spec.ts` — **23** real browser stops, inside `<main>`.
 
   Three apart, from two unrelated causes and not one. **Two** are the KV radio group, which offers Tab
@@ -1331,29 +1333,40 @@ ceiling)` keeps an over-budget stack on screen, which is right and stays. What i
 ## Open questions
 
 Correctness follow-ups live in
-[the repository's open issues](https://github.com/MrZoller/bench/issues) — #12–#20 from the first
-pass, and #90, #96, #97, #101, #102 and #103 from the July sweep, tabulated with their measurements
-immediately below. This section is for the questions those issues cannot settle.
+[the repository's open issues](https://github.com/MrZoller/bench/issues). This section is for the
+questions those issues cannot settle, and the table below is the record of the six filed out of the
+July sweep — five of them now closed, kept because what each one turned out to need is not what the
+issue said it would.
 
-The pointer is written as "the open issues" rather than as a range on purpose: it named #12–#20 while
-six newer correctness issues sat in the table underneath it, so a maintainer following the sentence
-would have walked past exactly the deferred work this section exists to preserve. A range goes stale
-silently every time the set grows.
+The pointer names the open issues rather than a range on purpose. It read "#12–#20" while six newer
+correctness issues sat in the table underneath it, so a maintainer following the sentence walked past
+exactly the deferred work this section exists to preserve — and the same sentence called #13, #14,
+#15 and #19 open when the Status section four hundred lines up records all four as fixed. A range
+goes stale in both directions and silently in both.
 
-### Filed out of the July 2026 sweep, with their measurements
+### The six filed out of the July 2026 sweep, and what settled five of them
 
 Six findings were triaged, replied to and filed rather than patched, under the merge rule recorded
-above. Each is real, each touches something shared enough that fixing it inside another PR would have
-been the third patch at one root cause, and each issue carries the numbers so they are not re-derived:
+above. Each was real, each touched something shared enough that fixing it inside another PR would
+have been the third patch at one root cause, and each issue carried its numbers so they were not
+re-derived. **Five are fixed; the sixth is in flight.** What each one turned out to need is the part
+worth keeping, because in four of the five the filed framing was not quite the fix:
 
-|                                                                                               | why it was not fixed in place                                                                                                                                                                                                                                                                                                    |
-| --------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [#90](https://github.com/MrZoller/bench/issues/90) cpu-ram compute basis                      | No formula reproduces any of the five rows (catalogued/fp32-peak runs 0.41 to 1.12). `epyc-9654` is a calibration anchor and there is **no CPU prefill anchor** to validate a re-derivation against. Correcting one row makes it the odd one out, not the right one.                                                             |
-| [#96](https://github.com/MrZoller/bench/issues/96) serving graded at the slider's concurrency | Third symptom of one asymmetry: serving is the only archetype taking its defining parameter from a slider. `verdict.test.ts` already names grading it at its own user count as the coherent end state. 2 of 2,278 configurations affected.                                                                                       |
-| [#97](https://github.com/MrZoller/bench/issues/97) TTFT ramp collapses                        | `log1p(1/t) ≈ 1/t` above a second, so inverting before the log makes the scale harmonic: **29 of 46 cells on one step, two of seven steps unused**. Pre-existing in the Matrix and worse there (zero-floored domain gives `placed ≈ t_fastest/t`). Changes a shared colour primitive on two surfaces; wants the `dataviz` skill. |
-| [#101](https://github.com/MrZoller/bench/issues/101) the unit suite                           | 408 cells → 1,470 and 42s → ~14 minutes across #78 and #77. The per-test timeout has been raised twice and must not be a third time. The property to keep: **a change that touches no component must not fail CI on grid size.**                                                                                                 |
-| [#102](https://github.com/MrZoller/bench/issues/102) readout on touch, and at 200%            | Tap is activation, so touch still cannot inspect without committing — that needs a gesture design. And the `rem` reservation doubles at a 32px root while the wrapping doubles too, which neither suite covers: `reflow.spec.ts` never fills the readout and `matrix-readout.spec.ts` runs at default text size.                 |
-| [#103](https://github.com/MrZoller/bench/issues/103) `NOT_SEEDED` never revalidated           | A written refusal is permanent, so the high-download models the candidate report exists to resurface are the ones it can never see. Needs an expiry _policy_, and the two expiry paths — a capability arriving versus a repo changing under the same id — need different mechanisms.                                             |
+| filed                                                                                               | what it needed                                                                                                                                                                                                                                                                                                                                                                                                   |
+| --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [#90](https://github.com/MrZoller/bench/issues/90) cpu-ram compute basis, catalogued/peak 0.41–1.12 | **Fixed.** The theoretical vector peak, since `computeEfficiency` already owns the discount — the same #51 rule on the compute axis, and the five rows were being discounted twice. The open question resolved against the wider figure: llama.cpp accumulates in fp32 lanes, so AVX512-FP16 is not the rate. Decode is bandwidth-only, so the EPYC anchor is untouched at 5.94 tok/s; prefill moves up to 2.5×. |
+| [#96](https://github.com/MrZoller/bench/issues/96) serving graded at the slider's concurrency       | **Fixed**, and the ungraded state went with it: once each tier is graded at its own user count the question is always asked, so `Fitness` has three arms. The narrow capacity symptom was the least of it — the sentence quoting `runnableContextTokens` at the reader's concurrency disproved its own verdict on the two rigs the issue named.                                                                  |
+| [#97](https://github.com/MrZoller/bench/issues/97) TTFT ramp collapses                              | **Fixed.** 29 of 46 → 4,5,6,7,12,9,3 on the Envelope; 1,025 of 1,269 → 29,57,86,263,323,304,207 on the Matrix. The domain's floor was half of it: a zero anchor is right only where zero is a reading, and no cell answers in zero seconds. Mirroring the _placement_ rather than the ramp index was off by one bucket at every boundary.                                                                        |
+| [#101](https://github.com/MrZoller/bench/issues/101) the unit suite                                 | **Fixed** by rendering fewer cells: 155s → 24s locally, and CI's build job 7m9s → 1m38s. The property the issue asked for is asserted rather than hoped for — `App.test.tsx` renders a fixed twelve cells whatever the catalog does next. The timeout stayed at 30s deliberately, with the runner ratio written down.                                                                                            |
+| [#102](https://github.com/MrZoller/bench/issues/102) readout on touch, and at 200%                  | **In flight.** The issue's cheapest option does not exist — this panel has no table behind a disclosure, it _is_ the table. Two taps instead, keyed on whether the reader has been shown the figures rather than on a pointer type, which a contact-only stylus breaks. 280px against 160px reserved at 320px/200%, fixed by dropping the model from the narrow form and keeping the machine.                    |
+| [#103](https://github.com/MrZoller/bench/issues/103) `NOT_SEEDED` never revalidated                 | **Fixed** with the issue's own first step — an expiry, plus the structured reason it said to think about first. Three rounds went on one mistake: claiming a mechanical check made a cause exempt from the calendar. It never does. Every cause has a window now, and the checks are what make the windows long.                                                                                                 |
+
+**The shape of that is the thing to keep, more than any of the six.** In four, the filed framing was
+a correct description of the symptom and the wrong description of the fix — the cheapest option
+rested on a panel that does not exist, the "narrow patch" was the smallest of three defects at one
+root, the ramp's direction was half the problem and its floor the other half, and a written policy
+needed the structure the issue named as an afterthought. Filing them with their measurements is what
+made that visible; the measurements survived and the framings mostly did not.
 
 - **MLX has no native quantization entries** ([#18](https://github.com/MrZoller/bench/issues/18)).
   Other catalogued formats stand in _by width_ — Q4_K_M's 4.85 bpw against MLX's ~4.5, and the
