@@ -13,6 +13,7 @@ import { FALLBACK_QUANT_ID, quantApplies } from '@/lib/quantChoice';
 import { magnitudeFill, magnitudeRamp } from '@/design/tokens';
 import { MEASURE_DIRECTION } from '@/engine/measure';
 import { DEVICE_CLASS_LABELS, MEASURES, kvLabel } from '@/lib/stops';
+import { HOST_RAM_UNCHECKED } from '@/lib/verdicts';
 import { PanelCount } from './PanelCount';
 import { params, percent, rate, seconds, tokens } from '@/lib/format';
 import { useConfig, type Config } from '@/store/config';
@@ -328,6 +329,9 @@ export function Matrix({ config }: { config: Config }) {
       // teaches people to skip the caveat that matters.
       anyEvaluated: flat.some((c) => c.evaluated),
       anyRaiseable: flat.some((c) => c.raiseCeilingWouldHelp),
+      // Whether "combinations run" is counting any cell that only runs by spilling — the
+      // condition for the qualifier HOST_RAM_UNCHECKED exists to enforce (#127).
+      anySpilled: flat.some((c) => c.runs && c.offloadFraction > 0),
     };
   }, [cells]);
 
@@ -867,6 +871,10 @@ export function Matrix({ config }: { config: Config }) {
             Every catalogued model against every shipping device, coloured by{' '}
             {MEASURES.find((m) => m.value === measure)?.label}. {summary.runnable} of{' '}
             {summary.total} combinations run.
+            {/* The count's qualifier, in the channel where the legend line below is invisible —
+                same conditional, same constant (#127). */}
+            {summary.anySpilled &&
+              ` Some of those run only by spilling weights to host RAM. ${HOST_RAM_UNCHECKED}`}
             {/* The same fact the struck headings and the legend carry, in the channel that has
                 neither. This caption is the grid's only summary for a reader who cannot see it, and
                 at #72's own URL it read "232 of 408 combinations run" with no further explanation —
@@ -1360,7 +1368,7 @@ export function Matrix({ config }: { config: Config }) {
                       // The cursor is the pointer's half of the `aria-disabled` above — the one
                       // channel a mouse user gets before they click, on a square that has no
                       // boundary to look at.
-                      className={`h-7 w-full scroll-mb-20 rounded-sm focus:ring-2 focus:ring-[var(--color-accent)] focus:outline-none sm:scroll-mb-10 lg:scroll-mb-5 [@media(pointer:coarse)]:h-11 ${
+                      className={`h-7 w-full scroll-mb-20 rounded-sm focus:ring-2 focus:ring-[var(--color-accent)] focus:outline-none sm:scroll-mb-15 lg:scroll-mb-10 [@media(pointer:coarse)]:h-11 ${
                         undrivable.has(cell.deviceId) ? 'cursor-not-allowed' : ''
                       } ${
                         !cell.runs && cell.evaluated
@@ -1598,6 +1606,18 @@ export function Matrix({ config }: { config: Config }) {
             been measured at
           </span>
         )}
+        {/* What "combinations run" is counting, when it counts a spilled cell (#127). The panel's
+            count and every spilled cell's "runs" were the two surfaces promising a load the
+            engine never checked — planPlacement sizes the spill with no host-RAM input at all —
+            while the Envelope's legend and Telemetry's tile both carried the qualifier. One line
+            at panel level, keyed like its neighbours on the state actually being in the grid;
+            the constant rides verbatim, since a near-copy per panel is the drift it exists to
+            prevent. */}
+        {summary.anySpilled && (
+          <span>
+            some combinations run only by spilling weights to host RAM. {HOST_RAM_UNCHECKED}
+          </span>
+        )}
         {/* A default allocation and a hardware limit are not the same answer, and this grid is
             read as a shortlist. DeepSeek V3 at Q5_K_M is past the 512 GB Mac Studio's 384 GiB
             default and inside the 512 it can be tuned to — struck off the list over a checkbox,
@@ -1632,11 +1652,13 @@ export function Matrix({ config }: { config: Config }) {
           downstream is not something this reservation should depend on.
 
           So the height is **reserved per breakpoint**, from measurement rather than taste. The
-          sentence is a full model-and-device line, and its widest rendering is 80px at 320, 60 at
-          390, 40 at 640 and 768, 20 at 1024 and up — four lines, three, two, two, one. The
-          reservation follows that: `5rem` below `sm`, `2.5rem` at `sm`, `1.25rem` at `lg`. It costs
-          60px of reserved blank space on a phone and buys a layout that does not move as the reader
-          arrows across a row.
+          sentence is a full model-and-device line, and its widest rendering — a spilled cell's, which
+          since #127 carries `HOST_RAM_UNCHECKED` as a second sentence — is 80px at 320 and 60 at
+          390 (the brief form, unchanged by the qualifier), 60 at 640 and 768, 40 at 1024 and up:
+          four lines, three, three, two. The reservation follows that: `5rem` below `sm`, `3.75rem`
+          at `sm`, `2.5rem` at `lg`. It costs 60px of reserved blank space on a phone — and one
+          more line at `sm` and `lg` than before #127, which is the measured price of the spilled
+          qualifier — and buys a layout that does not move as the reader arrows across a row.
 
           A constant measured from today's device names is exactly the trap #44 records — #78
           lengthened them in this same sweep — so it is not left to hold by luck: `matrix-readout`
@@ -1673,7 +1695,7 @@ export function Matrix({ config }: { config: Config }) {
           precisely the reflow the reservation exists to prevent. The sibling test caught it. */}
       <p
         aria-hidden="true"
-        className="tabular pointer-events-none sticky bottom-0 -mx-[min(1.25rem,5vw)] mt-3 min-h-[5rem] bg-[var(--color-surface)] px-[min(1.25rem,5vw)] text-sm text-[var(--color-text)] sm:min-h-[2.5rem] lg:min-h-[1.25rem]"
+        className="tabular pointer-events-none sticky bottom-0 -mx-[min(1.25rem,5vw)] mt-3 min-h-[5rem] bg-[var(--color-surface)] px-[min(1.25rem,5vw)] text-sm text-[var(--color-text)] sm:min-h-[3.75rem] lg:min-h-[2.5rem]"
       >
         {/*
           Both forms in the DOM, one displayed. See `tooltip`'s `brief` for the arithmetic.
@@ -1937,7 +1959,25 @@ function tooltip(
         : `${seconds(cell.ttftSeconds)} to first token`;
 
   const at = cell.quantId === selectedQuantId ? '' : ` at ${getQuant(cell.quantId).label}`;
+  /**
+   * The spilled cell's "runs" carries the qualifier `HOST_RAM_UNCHECKED` exists to enforce
+   * (#127): `planPlacement` sizes the spill with no host-RAM input, so "runs only by spilling
+   * 99% of its weights to host RAM" was promising a load the engine never checked — on the one
+   * surface read as a shortlist. The constant rides verbatim as its own sentence, after the
+   * period the composition already writes.
+   *
+   * The narrow readout stays bare, and the decision is measured rather than aesthetic (argued
+   * in review, both ways): its sentence — "spills 66% to host RAM" — states the spill and makes
+   * no load claim, the tooltip and aria-label carry the full constant at every width, and
+   * qualifying the visual narrow line costs a reservation nobody should pay. Measured at 200%
+   * text on a 320px viewport, where the rem floor doubles while the line width halves: the full
+   * constant needs a 10rem floor and the inline-clause register still needs 7.5rem — 120px of
+   * permanently reserved blank space on a phone, against 80px today. The legend's keyed line
+   * and the caption remain the panel-level channels.
+   */
+  const unchecked =
+    measure === 'fit' && cell.offloadFraction > 0 && !narrow ? ` ${HOST_RAM_UNCHECKED}` : '';
   // The stand-in stays in the brief form: it is the one part of the preamble the axes do not carry,
   // and a figure derived from a format the runtime cannot load has to say so at every width.
-  return narrow ? `${rig}: ${detail}${at}.` : `${model} on ${rig}${at}: ${detail}.`;
+  return narrow ? `${rig}: ${detail}${at}.` : `${model} on ${rig}${at}: ${detail}.${unchecked}`;
 }

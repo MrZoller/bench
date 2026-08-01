@@ -7,6 +7,7 @@ import { configToShareSearch } from '@/store/url';
 import { DEVICES, MODELS, comparisonGrid, getDevice, getModel } from '@/data/catalog';
 import { params, tokens } from '@/lib/format';
 import { DEVICE_CLASS_LABELS, SETTING_LABELS, SETTING_NOTES, deviceCountNote } from '@/lib/stops';
+import { HOST_RAM_UNCHECKED } from '@/lib/verdicts';
 import { DETAIL_ANCHOR_ID } from '@/components/Matrix';
 // The one component this file mounts on its own, and only to sweep a renderer over all 43 catalog
 // rows — see "leaves none of the markup in any note the catalog carries".
@@ -1479,6 +1480,56 @@ describe('the spoken summary says everything the legend says', () => {
  * configuration — and to keep the three measures independent, since their disagreement is the
  * argument the whole surface makes.
  */
+/**
+ * A spilled "runs" carries the qualifier `HOST_RAM_UNCHECKED` exists to enforce (#127).
+ *
+ * `planPlacement` sizes a spill with no host-RAM input at all, so any surface saying a spilled
+ * configuration runs is promising something the engine never checked. The Envelope's legend and
+ * Telemetry's tile carried the sentence; the Matrix — the surface read as a shortlist — said
+ * "runs only by spilling 99% of its weights to host RAM" on every channel with no qualifier,
+ * counted those cells in "N of M combinations run", and the budget bar's spill line was a third
+ * unqualified copy. One constant, verbatim on each, since a near-copy per panel is the drift the
+ * constant's own docblock records.
+ */
+describe('a spilled "runs" says what the engine did not check', () => {
+  it('qualifies the count on both channels, and every spilled cell sentence', () => {
+    render(<App />);
+
+    // The bounded grid holds runnable spilled cells (DeepSeek-R1 on the 5090 among them), so
+    // the keyed legend line and the caption clause are both live on the default page.
+    const matrix = screen.getByRole('region', { name: /every model on every machine/i });
+    const copies = within(matrix).getAllByText(/Loads only if the host has RAM for the spilled/);
+    // Legend line and sr-only caption — the visible and the spoken channel.
+    expect(copies.length).toBeGreaterThanOrEqual(2);
+    expect(copies.some((el) => el.closest('caption') !== null)).toBe(true);
+    expect(copies.some((el) => el.closest('caption') === null)).toBe(true);
+
+    const spilled = within(matrix)
+      .getAllByRole('button')
+      .filter((b) => /runs only by spilling/.test(b.getAttribute('aria-label') ?? ''));
+    expect(spilled.length).toBeGreaterThan(0);
+    for (const cell of spilled) {
+      expect(cell.getAttribute('aria-label')).toContain(HOST_RAM_UNCHECKED);
+    }
+  });
+
+  it('qualifies the budget bar’s spill line', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // 671B on a 32 GB card: runnable via offload, so the overshoot banner carries the spill
+    // clause — and now the sentence saying what that clause does not promise.
+    await user.selectOptions(screen.getByLabelText('Model'), 'deepseek-ai/DeepSeek-V3');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
+
+    const budget = screen.getByRole('region', { name: /memory budget/i });
+    expect(
+      within(budget).getByText(/Loads only if the host has RAM for the spilled/)
+    ).toBeInTheDocument();
+  });
+});
+
 describe('the Matrix stays informative', () => {
   const matrix = () => screen.getByRole('region', { name: /Every model on every machine/i });
 

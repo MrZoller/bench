@@ -43,6 +43,15 @@ export const HOST_RAM_UNCHECKED =
   'Loads only if the host has RAM for the spilled weights, which is not checked here.';
 
 /**
+ * The same fact in its inline-clause register, for the two surfaces whose sentence cannot take a
+ * second one: the Envelope's count line, where the constant's sentence-initial "Loads" cannot sit
+ * mid-list, and the Matrix's narrow readout, whose 320px reservation the full sentence outgrows
+ * by two lines at 200% text — measured, not assumed (#127). Two registers, each stated once; a
+ * third spelling is the drift the pair exists to prevent.
+ */
+export const HOST_RAM_UNCHECKED_BRIEF = 'if the host has room for them';
+
+/**
  * The one name for the over-budget state a setting could fix.
  *
  * `raisingCeilingWouldHelp` splits `impossible` into a wall and a default, and every surface that
