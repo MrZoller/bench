@@ -3,6 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Duplicates index.css's `color-scheme: dark` for the instant before the stylesheet
+         applies, so the first paint is not a white flash on a slow load. -->
+    <meta name="color-scheme" content="dark" />
     <title>Bench — what LLM runs on your hardware?</title>
     <meta
       name="description"

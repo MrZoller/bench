@@ -263,14 +263,16 @@ export function Select<T extends string>({
           >
             {showDetail ? 'Hide' : 'Show'} the full {label.toLowerCase()} note
           </DisclosureToggle>
-          {showDetail && (
-            <p
-              id={`${id}-detail`}
-              className="text-xs leading-relaxed text-[var(--color-text-muted)]"
-            >
-              {inlineProse(detail)}
-            </p>
-          )}
+          {/* `hidden` rather than unmounted, so the toggle's `aria-controls` resolves in both
+              states — see the contract on `DisclosureToggle.controls` (#131). Display is none
+              while hidden, so the region still sets no grid-cell height collapsed. */}
+          <p
+            id={`${id}-detail`}
+            hidden={!showDetail}
+            className="text-xs leading-relaxed text-[var(--color-text-muted)]"
+          >
+            {inlineProse(detail)}
+          </p>
         </>
       )}
     </div>

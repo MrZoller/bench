@@ -162,8 +162,14 @@ export interface DecodeEstimate {
    * `withoutOffloadTokensPerSec` is per user, like `perUserTokensPerSec`, and is built from the
    * same weight and cache time terms as the real estimate with only the spill removed — so it
    * answers "what would clearing this buy" rather than "what would a different machine do".
+   *
+   * `busSeconds` is the slice of `weightSeconds` spent reading the spilled bytes over the host
+   * link, per step — so a caller can ask whether the bus actually sets the pace rather than
+   * inferring it from the spill's existence. On PCIe 4.0 the bus only outweighs the resident
+   * reads past roughly a 4% spill; below that, blaming it sends someone to clear a spill whose
+   * removal would not move the figure (#122).
    */
-  offloadPenalty?: { fraction: number; withoutOffloadTokensPerSec: number };
+  offloadPenalty?: { fraction: number; withoutOffloadTokensPerSec: number; busSeconds: number };
 }
 
 export function estimateDecode(
@@ -245,6 +251,9 @@ export function estimateDecode(
       fraction: offload,
       // Per user, matching `perUserTokensPerSec` — the byte counts already carry the batch.
       withoutOffloadTokensPerSec: resident > 0 ? 1 / resident : 0,
+      // The same term `weightSeconds` already charges for the spilled bytes, kept apart so the
+      // tile can compare it against the resident reads instead of testing the spill's existence.
+      busSeconds: offloadedBytes / spillBandwidth,
     };
   }
 

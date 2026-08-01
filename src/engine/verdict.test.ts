@@ -1604,6 +1604,21 @@ describe('a tier is graded on the measurement it recommends', () => {
     expect(serving.reason).toMatch(/to first token/);
   });
 
+  it('prints a serving aggregate that is the product of the figures beside it', () => {
+    // 14.63 tok/s each at four users. Flooring each figure independently rendered "14 tok/s
+    // each, 58 aggregate" — a multiplication that does not multiply (#124). The aggregate is
+    // derived from the per-user figure as printed, so the sentence's arithmetic holds, and the
+    // derived figure stays at or under the engine's 4 × 14.63 = 58.5.
+    const serving = judgedAt(400_000, 8, () => stub(14.63, 2)).verdicts.get('serving')!;
+
+    expect(serving.fitness).toBe('good');
+    const [, each, aggregate] = serving.reason.match(
+      /4 users at ([\d.]+) tok\/s each, ([\d.]+) tok\/s aggregate/
+    )!;
+    expect(Number(aggregate)).toBe(4 * Number(each));
+    expect(Number(aggregate)).toBeLessThanOrEqual(4 * 14.63);
+  });
+
   it('prints a RAG rate that divides into the wait beside it', () => {
     // Eight users, a 4s wait, and a machine-wide rate of 32,768 * 8 / 4. The sentence is about one
     // document, so its two figures have to multiply back to that document's length; unqualified,

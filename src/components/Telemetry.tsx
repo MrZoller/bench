@@ -1,7 +1,13 @@
 import { useId } from 'react';
 import type { Evaluation } from '@/engine';
 import type { StatusTone } from '@/design/tokens';
-import { CAPACITY_TIGHT, HOST_RAM_UNCHECKED, classifyDecode, classifyTtft } from '@/lib/verdicts';
+import {
+  CAPACITY_TIGHT,
+  HOST_RAM_UNCHECKED,
+  PAST_DEFAULT_ALLOCATION,
+  classifyDecode,
+  classifyTtft,
+} from '@/lib/verdicts';
 import { gibLabel, percent, rate, tokens } from '@/lib/format';
 
 /**
@@ -63,6 +69,13 @@ function capacityReading(
       unit: 'over',
       tone: 'critical',
       /**
+       * "Will not run" is the right word for two of the three variants below and refutes the
+       * third: the tunable-ceiling detail explains that a setting would fix this, and the flat
+       * word above it asserted the machine cannot (#121). The override is the same phrase the
+       * Envelope's table and the Matrix print for this placement, so the surfaces agree.
+       */
+      verdict: !canOffload && tunableCeiling ? PAST_DEFAULT_ALLOCATION : undefined,
+      /**
        * A discrete GPU reaches `impossible` by a different route than a Mac does: not because
        * there is nowhere to spill, but because KV and activations alone overflow the card, and
        * those cannot be offloaded at all. Explaining that as "shared memory has no faster tier"
@@ -122,7 +135,26 @@ function capacityReading(
 
 function decodeReading(evaluation: Evaluation): Reading {
   const { shown, word, tone } = classifyDecode(evaluation.decode.perUserTokensPerSec);
-  const { kvBound, offloadPenalty } = evaluation.decode;
+  const { kvSeconds, offloadPenalty, weightSeconds } = evaluation.decode;
+
+  /**
+   * The step's three time terms, attributed to the strict maximum — the same rule
+   * `prefillReading` already applies to its three.
+   *
+   * The KV axis learned the half of this first: `kvBound` is the engine's comparison of cache
+   * time against weight time, and testing the spill's *existence* before it meant a 0.08%
+   * offload blamed the host bus while the cache cost six times as much. The spill axis kept the
+   * existence test (#122): any configuration a hair past the ceiling was told the bus "sets the
+   * pace", when on PCIe 4.0 that claim only becomes true past roughly a 4% spill.
+   *
+   * Deliberately not `kvBound` for the cache branch (raised in review on #145): that flag
+   * compares KV against the weight terms' *sum*, so a step of 7.8ms KV, 4.6ms bus and 3.3ms
+   * resident reads had `kvBound` false — and the pairwise bus test then named the bus while KV
+   * was the largest single cost. Three terms, one max, from the engine's own seconds.
+   */
+  const busSeconds = offloadPenalty?.busSeconds ?? 0;
+  const residentSeconds = weightSeconds - busSeconds;
+  const largest = Math.max(kvSeconds, busSeconds, residentSeconds);
 
   return {
     key: 'decode',
@@ -131,15 +163,14 @@ function decodeReading(evaluation: Evaluation): Reading {
     unit: 'tok/s per user',
     tone,
     verdict: word,
-    // `kvBound` is the engine's own comparison of weight seconds against cache seconds, so it
-    // outranks the mere *existence* of a spill. Testing the spill first meant a 0.08% offload
-    // blamed the host bus while the cache was costing six times as much time — sending someone
-    // to fix the wrong thing, which is the error this whole tile exists to avoid.
-    detail: kvBound
-      ? 'KV traffic now costs more time per step than the weights — at this context the cache, not the model, sets the speed.'
-      : offloadPenalty
-        ? `Weights crossing the host bus set the pace — ${percent(offloadPenalty.fraction)} of them spill every token.`
-        : 'Bound by weight bandwidth. Lower quantization or faster memory is what moves this.',
+    detail:
+      largest === kvSeconds
+        ? 'KV traffic is the largest cost in the step — at this context the cache, not the model, sets the speed.'
+        : largest === busSeconds && offloadPenalty !== undefined
+          ? `Weights crossing the host bus set the pace — ${percent(offloadPenalty.fraction)} of them spill every token.`
+          : offloadPenalty !== undefined
+            ? `Bound by weight bandwidth — the resident reads still cost more per step than the ${percent(offloadPenalty.fraction)} of weights crossing the host bus.`
+            : 'Bound by weight bandwidth. Lower quantization or faster memory is what moves this.',
   };
 }
 
@@ -264,10 +295,21 @@ export function Telemetry({
           value: '—',
           unit: '',
           tone: 'critical' as const,
-          verdict: unsupported ? 'Unsupported' : 'Will not run',
+          // The same split the capacity tile makes one column over, on the same guard, so the
+          // two can never diverge if a tunable discrete GPU ever lands: at a tunable ceiling
+          // the placement is past a default rather than unrunnable, and a speed tile saying
+          // "Will not run" would reintroduce the contradiction the capacity override removes
+          // (#121).
+          verdict: unsupported
+            ? 'Unsupported'
+            : !canOffload && tunableCeiling
+              ? 'No estimate'
+              : 'Will not run',
           detail: unsupported
             ? 'No estimate — this runtime cannot drive this hardware.'
-            : 'No estimate — the model does not fit, so there is no speed to report.',
+            : !canOffload && tunableCeiling
+              ? 'No estimate — past the default allocation, so there is no speed to report at the untuned ceiling.'
+              : 'No estimate — the model does not fit, so there is no speed to report.',
         })),
       ]
     : [

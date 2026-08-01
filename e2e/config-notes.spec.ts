@@ -257,3 +257,30 @@ test('the disclosure names the control it belongs to', async ({ page }) => {
   await expect(region).toContainText(/NVLink bridge/i);
   await expect(page.getByRole('button', { name: /hide the full hardware note/i })).toBeVisible();
 });
+
+/**
+ * The toggle's target is its label, not the column (#132).
+ *
+ * `DisclosureToggle` is `inline-flex`, which shrink-wraps in block context — but this call site's
+ * parent is a flex column, where a flex item is blockified and `align-items: stretch` widened the
+ * button to the full column: 426px of activatable target for 158px of text, and a tap in the
+ * blank space right of the link toggled the note. `self-start` is the fix, and this measures the
+ * claim rather than the class: the button's box may exceed a Range over its own glyphs by only
+ * the slack a line box adds. jsdom cannot answer it — no layout — so it lives here.
+ */
+test('the note toggle is only as wide as its label', async ({ page }) => {
+  // The default page: DGX Spark carries a curated detail, so the toggle ships rendered.
+  const toggle = showFullNote(page);
+  await expect(toggle).toBeVisible();
+
+  const { button, text } = await toggle.evaluate((el) => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    return {
+      button: el.getBoundingClientRect().width,
+      text: range.getBoundingClientRect().width,
+    };
+  });
+  expect(text).toBeGreaterThan(0);
+  expect(button - text).toBeLessThan(24);
+});
