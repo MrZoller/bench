@@ -502,10 +502,20 @@ test.describe('at 200% text size', () => {
    * of every sentence that fits on one line and is the shape that let this ship. Lifting the floor
    * and re-measuring is what asks the question.
    */
-  for (const width of [320, 390]) {
-    test(`the filled readout stays inside its reservation at ${width}px`, async ({ page }) => {
+  for (const { width, query, at } of [
+    { width: 320, query: '', at: '' },
+    { width: 390, query: '', at: '' },
+    /*
+     * And on a linked rig, because the narrow form carries ", one device" there — the qualifier the
+     * panel heading states and a touch reader in a lower row cannot see (found in review on #102).
+     * It is the longest the sentence gets, so the reservation has to hold it and not merely the
+     * single-device case the two rows above measure.
+     */
+    { width: 320, query: '?n=4', at: ' on four devices' },
+  ]) {
+    test(`the filled readout stays inside its reservation at ${width}px${at}`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
-      await page.goto('/');
+      await page.goto(`/${query}`);
 
       const matrix = page.getByRole('region', { name: /every model on every machine/i });
       const cells = matrix.locator('table[role="grid"] td button');

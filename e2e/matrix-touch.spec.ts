@@ -145,3 +145,57 @@ test('a third tap commits the cell the second one moved to', async ({ page }) =>
   await second.tap();
   expect(scenario(page), 'the third tap did not commit').not.toBe(before);
 });
+
+test('a tap that turns into a scroll does not steal the next keyboard press', async ({ page }) => {
+  /*
+   * `onClick` consumes the snapshot, and a gesture can end without one: `pointercancel` when a touch
+   * becomes a scroll of the grid, or a release outside the button after a drag. The snapshot would
+   * then survive to the next `click` — which, from a keyboard, has no `pointerdown` of its own and
+   * would inherit "not inspected", so the reader's first Enter would inspect instead of loading
+   * (found in review).
+   *
+   * **Dispatched rather than performed, and the reason is that Playwright cannot perform it.** Its
+   * touch API is `tap` alone; a real finger-drag needs raw CDP touch events, and a `page.mouse` drag
+   * is a *mouse* — which has hovered, so its snapshot reads "inspected" and the stale one would be
+   * harmless. Written that way first and it passed against the defect. What is under test here is the
+   * handler contract, so the two events the contract is about are the honest thing to send.
+   */
+  const before = scenario(page);
+  const cell = cells(page).nth(5);
+
+  await cell.evaluate((el) => {
+    const at = { bubbles: true, pointerType: 'touch', isPrimary: true } as const;
+    el.dispatchEvent(new PointerEvent('pointerdown', at));
+    /*
+     * `pointerout` with a `relatedTarget` outside, not a bare `pointerleave`: React derives the
+     * leave handler from the out event and ignores a hand-made `pointerleave` entirely, so the first
+     * version of this dispatched an event nothing was listening for and failed against the fix.
+     * Still in contact — `buttons: 1` — which is the first frame of a scroll rather than a tap.
+     */
+    el.dispatchEvent(
+      new PointerEvent('pointerout', { ...at, buttons: 1, relatedTarget: document.body })
+    );
+  });
+
+  await cells(page).nth(9).focus();
+  await page.keyboard.press('Enter');
+
+  expect(scenario(page), 'Enter after an abandoned gesture did not load the cell').not.toBe(before);
+});
+
+test('a tap returning to a cell the keyboard left still inspects first', async ({ page }) => {
+  /*
+   * A completed tap leaves the compatibility pointer recorded, and moving focus by keyboard clears
+   * the readout but used not to clear that record — so a tap back on the first cell reported it as
+   * already inspected and committed immediately, while the line was describing the focused one
+   * (found in review). The ref answers the same question as the state and has to expire with it.
+   */
+  const before = scenario(page);
+  const [first, second] = [cells(page).nth(5), cells(page).nth(9)];
+
+  await first.tap();
+  await second.focus();
+  await first.tap();
+
+  expect(scenario(page), 'the returning tap committed instead of inspecting').toBe(before);
+});

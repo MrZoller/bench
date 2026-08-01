@@ -1027,6 +1027,32 @@ export function Matrix({ config }: { config: Config }) {
                             (target?.kind === 'cell' && target.row === r && target.col === c),
                         };
                       }}
+                      /**
+                       * A pointer sequence that never reaches `click` has to clear its own snapshot.
+                       *
+                       * `onClick` consumes it, and a gesture can end without one: `pointercancel`
+                       * when a touch turns into a scroll of the grid, or a release outside the button
+                       * after a drag. The snapshot would then survive to the next `click` — which,
+                       * from a keyboard, has no `pointerdown` of its own and would inherit
+                       * `inspected: false`, so the reader's first Enter would inspect instead of
+                       * loading. That is the stale-provenance defect one path over, and it is why
+                       * both exits are wired rather than the one the earlier fix needed
+                       * (found in review).
+                       *
+                       * **`pointerleave` only while the pointer is still down**, which the first
+                       * attempt at this missed and the browser suite caught immediately. A touch
+                       * pointer ceases to exist after `pointerup`, so it fires `pointerleave`
+                       * *before* `click` — clearing unconditionally therefore threw away every tap's
+                       * own snapshot and made the first tap commit, which is the whole defect back
+                       * again by way of its fix. `buttons` is non-zero only while the contact is
+                       * live, so it separates a drag off the cell from a completed tap.
+                       */
+                      onPointerCancel={() => {
+                        gesture.current = null;
+                      }}
+                      onPointerLeave={(event) => {
+                        if (event.buttons !== 0) gesture.current = null;
+                      }}
                       onClick={() => {
                         // So the tab stop follows the reader: leaving the grid and coming back
                         // returns to the cell they last used, not to the top-left corner. Done
@@ -1108,6 +1134,18 @@ export function Matrix({ config }: { config: Config }) {
                         // `mouseleave` of its own — argued at the two states above. Without this the
                         // line prints one cell while the ring is drawn on another, indefinitely.
                         setHovered(null);
+                        /**
+                         * Including the synchronous copy of that claim, or the two disagree
+                         * (found in review).
+                         *
+                         * A completed tap leaves the compatibility pointer recorded here. Move focus
+                         * to another cell by keyboard and `hovered` is cleared while this is not — so
+                         * tapping the *first* cell again reports it as already inspected, and that
+                         * returning tap loads and scrolls instead of filling the line the reader is
+                         * looking at. The ref exists to answer the same question as the state without
+                         * waiting for a render; it has to expire on the same events.
+                         */
+                        pointerOver.current = '';
                       }}
                       onBlur={() => setFocused(null)}
                       onMouseEnter={() => {
@@ -1749,9 +1787,29 @@ function tooltip(
 ): string {
   const model = getModel(cell.modelId).name;
   const device = getDevice(cell.deviceId).name;
-  // Stated even for a blocked cell: "does not run" is a claim about a machine, and on a linked rig
-  // it would otherwise read as a verdict on the rig the Bench is holding.
-  const rig = selectedDeviceCount > 1 ? `${device}, one device` : device;
+  /**
+   * Stated even for a blocked cell: "does not run" is a claim about a machine, and on a linked rig it
+   * would otherwise read as a verdict on the rig the Bench is holding.
+   *
+   * **And it is stated in the narrow form too** (found in review). The panel heading carrying "one
+   * device per cell" is at the top of a 35-row grid, so a touch reader inspecting a lower row has it
+   * off screen — and dropping the qualifier there would make the line appear to describe the
+   * multi-device rig they configured, while tapping the cell resets `deviceCount` to 1. That is the
+   * misattribution this clause exists to prevent, reintroduced at the width where the heading is
+   * least reachable.
+   */
+  const machine = narrow ? narrow.shortDevice : device;
+  /**
+   * `1x RTX 5070 Ti` in the narrow form rather than `RTX 5070 Ti, one device`, and the three
+   * characters are the whole reason.
+   *
+   * ", one device" is twelve, which at 320px with a 32px root is a fifth line and 40px past the
+   * reservation — measured, and the reason this was not simply the same clause in both forms. The
+   * prefix says the same thing in the space available and reads as a count rather than as an aside,
+   * which is what it is: the figure is for one of the devices the reader configured.
+   */
+  const rig =
+    selectedDeviceCount > 1 ? (narrow ? `1x ${machine}` : `${machine}, one device`) : machine;
   if (!cell.runs) {
     /**
      * The full stop is added only where the reason has not brought one.
@@ -1775,8 +1833,8 @@ function tooltip(
      */
     if (narrow) {
       return cell.evaluated
-        ? `${narrow.shortDevice}: ${reason}${stop}`
-        : `${narrow.shortDevice}: the runtime does not drive this.`;
+        ? `${rig}: ${reason}${stop}`
+        : `${rig}: the runtime does not drive this.`;
     }
     return `${model} on ${rig}: ${reason}${stop}`;
   }
@@ -1798,5 +1856,5 @@ function tooltip(
   const at = cell.quantId === selectedQuantId ? '' : ` at ${getQuant(cell.quantId).label}`;
   // The stand-in stays in the brief form: it is the one part of the preamble the axes do not carry,
   // and a figure derived from a format the runtime cannot load has to say so at every width.
-  return narrow ? `${narrow.shortDevice}: ${detail}${at}.` : `${model} on ${rig}${at}: ${detail}.`;
+  return narrow ? `${rig}: ${detail}${at}.` : `${model} on ${rig}${at}: ${detail}.`;
 }
