@@ -172,7 +172,21 @@ function Form({
           something the layout never asked for. It failed this block at 390px, 457 against 446.
           Moving the padding onto a `w-max` inner box fixes the rule and the visual at once, since
           the padding is then part of the content being scrolled. */}
-      <pre className="overflow-x-auto rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-xs leading-relaxed text-[var(--color-text)]">
+      {/**
+       * **A scrollable box is a tab stop in Chrome, deliberately** — a keyboard reader has to be
+       * able to scroll it — and `e2e/focus-indicators.spec.ts` found this one taking focus with no
+       * indicator and no name, as an element its sweep could not even see. The answer is to make
+       * the stop intentional rather than to suppress it: `tabIndex` declares it, the `aria-label`
+       * says which command it is, and the outline is the same 2px accent the four selects use.
+       *
+       * `outline` rather than a `ring`, for the reason `Controls.tsx` records: a ring is a
+       * `box-shadow`, and Safari's forced-colors mode drops those while keeping outlines.
+       */}
+      <pre
+        tabIndex={0}
+        aria-label={`${launcher} ${kind.toLowerCase()} command`}
+        className="overflow-x-auto rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-xs leading-relaxed text-[var(--color-text)] focus:outline-2 focus:outline-offset-2 focus:outline-[var(--color-accent)]"
+      >
         <code className="block w-max p-3">{emission.text}</code>
       </pre>
 

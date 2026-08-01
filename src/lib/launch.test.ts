@@ -681,6 +681,81 @@ describe('what review found, kept as tests', () => {
     expect(emitted.notes.join(' ')).toMatch(/abc1234567/);
   });
 
+  it('offloads to the CPU when the weights do not fit, or the command OOMs', () => {
+    /**
+     * `planPlacement` reports a *runnable* placement whenever only the weights are over — so both
+     * commands were emitted for a configuration vLLM cannot start, since it defaults
+     * `--cpu-offload-gb` to zero and tries to keep every weight on the cards.
+     */
+    const spilled = input(DEEPSEEK_V3, getQuant('fp8'), VLLM, RTX_5090, 2);
+    expect(spilled.placement.offloadFraction).toBeGreaterThan(0);
+    expect(spilled.placement.impossible).toBe(false);
+
+    const served = text(commands(spilled).vllm.serve);
+    const flag = /--cpu-offload-gb (\d+)/.exec(served);
+    expect(flag, 'no offload flag on a spilled placement').not.toBeNull();
+
+    // Per GPU, which is how vLLM documents it, and rounded up: too little offload is an OOM on
+    // load and too much is only slower.
+    const perGpu =
+      (spilled.placement.offloadFraction * spilled.placement.totalWeightBytes) / 2 / 1024 ** 3;
+    expect(Number(flag![1])).toBe(Math.ceil(perGpu));
+    // The measurement form needs it too, or it starts a machine the serving form does not.
+    expect(text(commands(spilled).vllm.measure)).toContain(`--cpu-offload-gb ${flag![1]}`);
+  });
+
+  it('leaves the offload flag off a placement that fits', () => {
+    const resident = input(LLAMA_31_8B, getQuant('bf16'), VLLM, RTX_5090, 1);
+    expect(resident.placement.offloadFraction).toBe(0);
+    expect(text(commands(resident).vllm.serve)).not.toContain('--cpu-offload-gb');
+  });
+
+  it('starts the Ollama daemon with the cache precision, which its Modelfile cannot carry', () => {
+    // `OLLAMA_KV_CACHE_TYPE` is read at server startup and defaults to f16, so a long-context
+    // configuration that fits only because 8 bits halves the cache would OOM against a Modelfile
+    // that cannot say otherwise.
+    const q8 = input(
+      LLAMA_31_8B,
+      getQuant('q4_k_m'),
+      LLAMA_CPP,
+      RTX_5090,
+      1,
+      usage({ kvPrecision: 'q8' })
+    );
+    const emitted = commands(q8).ollama.serve;
+
+    expect(text(emitted)).toContain('OLLAMA_KV_CACHE_TYPE=q8_0');
+    if (!emitted.ok) throw new Error('unreachable');
+    expect(emitted.notes.join(' ')).toMatch(/daemon setting rather than a Modelfile parameter/i);
+
+    // And nothing extra on the default precision, where the daemon already does the right thing.
+    expect(
+      text(commands(input(LLAMA_31_8B, getQuant('q4_k_m'), LLAMA_CPP)).ollama.serve)
+    ).not.toContain('OLLAMA_KV_CACHE_TYPE');
+  });
+
+  it('does not run a stale Modelfile after refusing to overwrite one', () => {
+    // `set -C` makes the redirection fail on the second run for the same model and quantization,
+    // and an unchained `ollama create` then builds and runs the previous num_ctx.
+    const written = text(commands(input(LLAMA_31_8B, getQuant('q4_k_m'), LLAMA_CPP)).ollama.serve);
+    expect(written).toMatch(/ollama create .+ && ollama run /);
+  });
+
+  it('admits MLX cannot reproduce a multi-user measurement either', () => {
+    const many = input(
+      LLAMA_31_8B,
+      getQuant('bf16'),
+      MLX,
+      MAC_STUDIO_M3_ULTRA_256,
+      1,
+      usage({ concurrency: 8 })
+    );
+    const emitted = commands(many).mlx.measure;
+    if (!emitted.ok) throw new Error('unreachable');
+
+    expect(emitted.notes.join(' ')).toMatch(/no concurrency option/i);
+  });
+
   it('measures vLLM at the configured user count, not the client’s default of 8', () => {
     const many = input(DEEPSEEK_V3, getQuant('fp8'), VLLM, RTX_5090, 8, usage({ concurrency: 16 }));
     expect(text(commands(many).vllm.measure)).toContain('--batch-size 16');
