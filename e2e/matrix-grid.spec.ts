@@ -69,20 +69,29 @@ test('the whole page is a short keyboard walk, grid included', async ({ page }) 
 
   const stops = await tabStopsInsideMain(page, 80);
 
-  // 32 as measured in this browser: nine controls (four selects, four sliders, and the KV group as
-  // one stop), four disclosures, three legend keys, six measure buttons, nine launch-panel stops
-  // (#136 — a copy button, a provenance link and the command block for each of the three launchers
-  // a llama.cpp scenario has; the block is a scroll container, which Chrome makes focusable so a
-  // keyboard reader can scroll it), and exactly one cell. 422 before the roving tabindex landed,
-  // which the 80-press ceiling never reaches — so that regression reports Infinity.
+  // 33 as measured in this browser: nine controls (four selects, four sliders, and the KV group as
+  // one stop), five disclosures — the fifth is #139's calibration panel — three legend keys, six
+  // measure buttons, nine launch-panel stops (#136: a copy button, a provenance link and the
+  // command block for each of the three launchers a llama.cpp scenario has; the block is a scroll
+  // container, which Chrome makes focusable so a keyboard reader can scroll it), and exactly one
+  // cell. 422 before the roving tabindex landed, which the 80-press ceiling never reaches — so that
+  // regression reports Infinity.
   //
-  // Where this figure and `Matrix.test.tsx`'s 35 diverge, and the divergence is the point of running
-  // both. Three apart, from two unrelated causes: a radio group offers Tab only its checked member,
-  // so the three KV options are one stop here and three in a `querySelectorAll`, and the masthead's
-  // copy-link button is a real stop this walk excludes because it sits outside `<main>`. The comment
-  // here read "23 against 25 in jsdom" and attributed the whole gap to the radios, which was one
-  // short and pointed at the wrong mechanism for the missing one. Compare a new measurement against
-  // the number from the same channel, and against a stated reason for the difference.
+  // Where this figure and `Matrix.test.tsx`'s 37 diverge, and the divergence is the point of running
+  // both. Four apart, from three unrelated causes:
+  //
+  //   - a radio group offers Tab only its checked member, so the three KV options are one stop here
+  //     and three in a `querySelectorAll`;
+  //   - the masthead's copy-link button is a real stop this walk excludes, because it sits outside
+  //     `<main>` and the walk ends when focus leaves;
+  //   - and #139's calibration textarea sits inside a `hidden` region, which this walk correctly
+  //     never reaches and a selector counts anyway, because `querySelectorAll` knows nothing about
+  //     visibility.
+  //
+  // The comment here once read "23 against 25 in jsdom" and attributed the whole gap to the radios,
+  // which was one short and pointed at the wrong mechanism for the missing one. Compare a new
+  // measurement against the number from the same channel, and against a stated reason for the
+  // difference.
   expect(stops).toBeLessThan(40);
   expect(stops, 'the walk never entered or never left <main>').toBeGreaterThan(0);
 });

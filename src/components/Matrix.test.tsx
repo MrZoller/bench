@@ -1524,29 +1524,24 @@ describe('the comparison grid is one tab stop, not four hundred', () => {
 
     // The grid has to be in this page, or the count is of a page without the problem on it.
     expect(cellsOf(container).length).toBeGreaterThan(300);
-    /* 35 as it stands, one of which is the grid. 1,504 if every cell were in the sequence again —
-       35 − 1 + 1,470 — which is what replacing the roving `tabIndex` with `tabIndex={0}` reports.
+    /* 37 as it stands, one of which is the grid. 1,506 if every cell were in the sequence again —
+       37 − 1 + 1,470 — which is what replacing the roving `tabIndex` with `tabIndex={0}` reports.
        The subtrahend is the *shipping* device count times the model count, which is what this grid
        renders; it read 714 until #77 doubled the model list, and a counterfactual quoting the wrong
        grid is a wrong expected value for whoever reinjects the defect.
 
-       It read 26 until #136 added the launch panel, which is **nine** stops for the three launchers
-       a llama.cpp scenario has: a copy button, a provenance link and the command block itself, which
-       is a scroll container and therefore a focus stop Chrome creates on its own. Nine at once
-       against a comment predicting "two to five a PR" is by far the largest single addition this
-       budget has taken, and it leaves five of the forty.
+       **Three of the forty are left, and that is the thing to read before adding a panel.** It was
+       26 before the v2 features: #136's launch panel is nine stops for its three launchers — a copy
+       button, a provenance link and the command block, which is a scroll container Chrome makes
+       focusable so a keyboard reader can scroll it — and #139's calibration panel is two, its
+       disclosure and the textarea behind it.
 
-       Worth knowing before the next panel, because two of the three are load-bearing and one is
-       not. The command block's stop is Chrome's, not this app's — a keyboard reader has to be able
-       to scroll it — and the provenance link is there because a template whose flags nobody can
-       re-check is the "flags drift" trap #136 names. The copy button is the one that could be
-       shared across the three, at the cost of the reader knowing which command they copied.
-
-       Forty, the same ceiling `e2e/matrix-grid.spec.ts` uses, because the two count one sequence and
-       a bound that fires in one channel and not the other is a bug report about the wrong file. Loose
-       on purpose: at 30 this sat four stops from red on a measured 26, and this sweep has been adding
-       two to five stops a PR — so the next disclosure would have failed a test named after the grid
-       while nothing about the grid had changed. What matters is the order of magnitude. */
+       Forty was set as an order-of-magnitude bound against 1,495, and it was never meant to be a
+       budget anyone spends down to. What it is now measuring is whether this page has quietly become
+       a form. If a panel has to give something back, the copy buttons are the candidate: one shared
+       button costs the reader knowing which command they copied, and that is a smaller loss than
+       the provenance link (the "flags drift" trap #136 names) or the command block's own scroll
+       stop, which is Chrome's and not this app's to remove. */
     expect(stops.length).toBeLessThan(40);
   });
 

@@ -11,6 +11,7 @@ import { BudgetBar } from './BudgetBar';
 import { Telemetry } from './Telemetry';
 import { Workloads } from './Workloads';
 import { Launch } from './Launch';
+import { Calibrate } from './Calibrate';
 import { Envelope } from './Envelope';
 import { DETAIL_ANCHOR_ID, Matrix } from './Matrix';
 import { Segmented, Select, StopSlider } from './Controls';
@@ -624,6 +625,11 @@ export function Bench() {
           It takes the placement rather than the whole evaluation because that is all it formats;
           nothing in the launch panel re-derives a figure. */}
       <Launch config={config} placement={evaluation.placement} />
+      {/* And immediately after it, which is the pairing: Launch prints the two `llama-bench`
+          invocations for this scenario, and this is where their output goes. Last of the
+          single-scenario panels, and the only one that asks the reader for something rather than
+          telling them something. */}
+      <Calibrate evaluation={evaluation} />
       <Envelope config={config} />
       <Matrix config={config} />
 
