@@ -287,15 +287,44 @@ describe('a measurement of a different job is not evidence about the model', () 
   });
 
   it('will not read a markdown paste as confirming a non-default cache', () => {
-    // `parseMarkdown` populates the cache types only when llama-bench printed those columns, which
-    // it does only for non-default settings — so a *default* f16 run pasted as markdown carried no
-    // cache columns at all and sailed past a Q8 prediction. Markdown is the default output and f16
-    // is the default cache, so that is the common case rather than a corner.
+    // A paste carrying no cache precision must not sail past a Q8 prediction — unverifiable is not
+    // the same as matching, and markdown is the default output.
     expect(compare(parseLlamaBench(MARKDOWN), prediction({ kvType: 'q8_0' }))[0].mismatch).toMatch(
-      /pasted without cache columns/
+      /without a stated cache precision/
     );
     // And an f16 prediction is unaffected, since nothing about it is unverifiable.
     expect(compare(parseLlamaBench(MARKDOWN), prediction())[0].mismatch).toBeUndefined();
+  });
+
+  it('treats a markdown paste as unverifiable even when it prints the cache columns', () => {
+    // The limitation is the *parser*, not the format, and the comment here claimed the opposite
+    // until Codex caught it on #175: `parseMarkdown` has no branch for `type_k`/`type_v` at all, so
+    // it never yields `kvTypes` whether or not llama-bench printed them. That matters because the
+    // panel's own measure command passes `-ctk q8_0 -ctv q8_0 -o md`, which makes it print them —
+    // so the reader who follows the panel exactly is told their correct run looks like f16.
+    //
+    // Reading those columns is #181. When it lands this assertion inverts, which is the point of
+    // pinning it: the current behaviour is a known gap rather than an unexamined one.
+    //
+    // **And `ngl` goes with them, which this fixture is what found** (Codex, on #175).
+    // `parseMarkdown` locates `ngl` by *position* — the cell before `test` — because a bare integer
+    // has no distinctive shape. The cache columns sit between the two in llama-bench's own layout,
+    // so the cell before `test` is `type_v` and the layer count is lost on exactly the output the
+    // panel's command produces. `describeMismatch` then skips the layer check, and an offloaded run
+    // compares clean against a resident prediction. Same root as #181 — the parser does not read the
+    // header row — and filed there.
+    const withCacheColumns = `
+| model                  |     params | backend | ngl | type_k | type_v |   test |          t/s |
+| ---------------------- | ---------: | ------- | --: | ------ | ------ | -----: | -----------: |
+| llama 8B Q4_K - Medium |     8.03 B | CUDA    |  33 | q8_0   | q8_0   |  tg512 | 45.67 ± 0.12 |
+`;
+    const parsed = parseLlamaBench(withCacheColumns);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].kvTypes).toBeUndefined();
+    expect(parsed[0].gpuLayers).toBeUndefined();
+    expect(compare(parsed, prediction({ kvType: 'q8_0' }))[0].mismatch).toMatch(
+      /without a stated cache precision/
+    );
   });
 
   it('does not require a decode run to be any particular length', () => {

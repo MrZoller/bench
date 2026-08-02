@@ -13,8 +13,9 @@
  * ## Parse, don't ask
  *
  * `llama-bench` emits markdown by default and JSON on `-o json`, and **JSON is strongly preferred
- * here** — it carries `build_commit`, which is the version-skew guard #139 names, plus `n_prompt`,
- * `n_gen` and `n_depth` as numbers rather than as a string to re-parse. The markdown reader exists
+ * here** — it carries `build_commit`, which #139 names as the version-skew guard and which nothing
+ * here checks (it is captured for the issue body, see {@link Measurement.buildCommit}), plus
+ * `n_prompt`, `n_gen` and `n_depth` as numbers rather than as a string to re-parse. The markdown reader exists
  * because the default output is markdown and a reader who has already run the tool should not have
  * to run it again.
  *
@@ -24,17 +25,44 @@
  *
  * ## What a measurement has to carry before it means anything
  *
- * A measurement that cannot name its scenario is unusable for calibration, and three of the four
- * ways that happens are invisible in the numbers themselves:
+ * A measurement that cannot name its scenario is worth little to calibration, so {@link compare}
+ * marks the ways that happens instead of reporting a delta against them. **{@link describeMismatch}
+ * is that list, and this section deliberately does not restate it** — four rounds of #175 went on a
+ * prose summary of that function which diverged from it in a different way each time, which is the
+ * argument for a pointer over a paraphrase.
+ *
+ * The one property of it worth stating here, because it is easy to assume otherwise: **the checks on
+ * the paste's own optional metadata fire only when the paste states the field.** llama-bench's
+ * output is sparse and most of those fields are optional in it, so a JSON row carrying neither a
+ * model name nor a cache type compares clean — the suite's own `JSON_OUTPUT` fixture is exactly that
+ * row. Unstated is not rejected, except where a default makes silence itself a claim.
+ *
+ * That rule is about the measurement's fields and nothing else. The guards that read the
+ * **prediction** — a configuration the engine refuses, a runtime `llama-bench` cannot measure, a
+ * concurrency it cannot reproduce — fire whatever the paste contains, because there is no field in
+ * it that could answer them.
+ *
+ * What this section is about is the four that are **invisible in the numbers**, because those are
+ * the ones a reader can get wrong without noticing. **Two of them this module rejects; two it only
+ * records** — a distinction worth keeping straight, since describing a recorded field as a check is
+ * advertising a guard that does not exist (Codex spent two rounds on it in #175, and a third on
+ * this paragraph reading as though the four were all of them).
+ *
+ * Rejected — marked, with no delta reported against them:
  *
  *   - **A different prompt length.** Prefill is quadratic in the prompt, so `pp512` against a
  *     prediction made at 16,384 tokens is not a disagreement about the model — it is two different
- *     jobs. {@link compare} marks that rather than reporting a delta.
+ *     jobs.
  *   - **A different depth.** `estimatePrefill` charges an agent turn's attention against a resident
  *     prefix, so a standalone `pp` run measures a different workload than the prediction. `-d` is
  *     what reproduces it, and `n_depth` is what says whether it was used.
+ *
+ * Recorded — nothing here compares them, because there is nothing to compare them against:
+ *
  *   - **A different build.** A llama.cpp from six months ago is a different runtime for calibration
- *     purposes. `build_commit` is captured when the paste carries it and its absence is stated.
+ *     purposes, and the catalog pins a runtime rather than a commit of one. `build_commit` is
+ *     captured when the paste carries it and its absence is stated, for a human weighing the
+ *     submission. See {@link Measurement.buildCommit}.
  *   - **A different machine.** `llama-bench` names the model file and the backend but not the host
  *     reliably, so the scenario URL is what ties a measurement to a device row — which is why the
  *     issue template makes that field non-optional.
@@ -51,7 +79,15 @@ export interface Measurement {
   tokensPerSec: number;
   /** The `±` figure, where the format carried one. */
   stddev?: number;
-  /** llama.cpp's own commit, from JSON output only. The version-skew guard. */
+  /**
+   * llama.cpp's own commit, from JSON output only.
+   *
+   * **Captured, never checked.** `describeMismatch` does not read it and there is nothing to read
+   * it against — the catalog pins a runtime, not a commit of one. It rides into the generated issue
+   * body so a human weighing the submission can see it, and its absence is stated there rather than
+   * assumed benign. #139 calls it the version-skew guard; that is the role it plays for a reviewer,
+   * not a rejection this module makes.
+   */
   buildCommit?: string;
   /** `-ngl`, where the format carried it — the layer split the run actually used. */
   gpuLayers?: number;
@@ -76,8 +112,9 @@ export interface Measurement {
 /**
  * Read whatever the reader pasted.
  *
- * Tries JSON first and falls back to the markdown table, because a reader who ran the tool with its
- * defaults has markdown and a reader who followed the emitted command has JSON. Returns an empty
+ * Tries JSON first and falls back to the markdown table, because both arrive and neither is the
+ * outlier: markdown is what `llama-bench` prints by default *and* what the panel's own command asks
+ * for, and JSON is what a reader who wanted the richer fields ran instead. Returns an empty
  * list rather than throwing: a paste that is not llama-bench output is a mistake to report on the
  * surface, not an exception.
  */
@@ -88,7 +125,15 @@ export function parseLlamaBench(text: string): readonly Measurement[] {
 }
 
 /**
- * The richer format, and the one the emitted command asks for.
+ * The richer format, and **not** the one the emitted command asks for — `launch.ts` emits `-o md`,
+ * because the block beside it is read by a person before it is run by one. So the reader who
+ * follows the panel arrives here with markdown and no `build_commit`, and {@link submissionUrl} is
+ * what asks for the JSON re-run — in the issue body, at the point the missing commit would have
+ * been printed. (`describeMismatch` asks for one too, and for a reason that is worse than it reads:
+ * {@link parseMarkdown} never assigns `kvTypes` at all, so **every** markdown paste is
+ * cache-unverifiable — including the one the panel's own `-ctk q8_0 -ctv q8_0 -o md` produces, where
+ * llama-bench really did print the columns. See #181.) Worth revisiting as a pair rather than in
+ * either file: whichever way it goes, the emitter and this comment have to agree.
  *
  * `-o json` produces an array of objects carrying every field the CSV header lists, so the depth,
  * the layer count and the build commit are all present as data rather than reconstructed from a
@@ -509,16 +554,28 @@ function describeMismatch(
     }
   } else if (prediction.kvType !== 'f16') {
     /**
-     * **Unverifiable is not the same as matching**, and the first version treated it as such.
-     * `parseMarkdown` populates `kvTypes` only when llama-bench printed the columns, which it does
-     * only for non-default settings — so a *default* f16 run pasted as markdown carried no cache
-     * columns at all and sailed past a Q8 or Q4 prediction. That is the common case, not a corner:
-     * markdown is the default output and f16 is the default cache.
+     * **Unverifiable is not the same as matching**, and the first version treated it as such: a
+     * paste carrying no cache precision sailed past a Q8 or Q4 prediction.
+     *
+     * **This branch is reached by every markdown paste, not only a default one** (raised by Codex
+     * on #175; the comment here previously claimed the narrower cause and was wrong).
+     * `parseMarkdown` has no branch for the cache columns at all, so it never assigns `kvTypes`
+     * whether or not llama-bench printed them — and the panel's own measure command passes
+     * `-ctk`/`-ctv` explicitly, which makes it print them. So the reader who follows the panel
+     * exactly gets told their correctly reproduced run looks like f16. Reading those columns is
+     * #181.
+     *
+     * **The sentence names neither format**, which is the correction after the first one named the
+     * wrong one (Codex again, on #175). A JSON row that simply omits `type_k`/`type_v` lands here
+     * too — the fixture in the test file does exactly that — so "pasted as markdown, re-run with
+     * `-o json`" told a JSON reader to re-run the command they had already run. `Measurement` does
+     * not record which parser produced it, so the honest sentence describes the *absence* and names
+     * the fields.
      */
     reasons.push(
-      `pasted without cache columns, which llama-bench prints only when they are not the default ` +
-        `— so this looks like an f16 run where the figures above assume ${prediction.kvType}. ` +
-        `Re-run with -o json to say for certain`
+      `pasted without a stated cache precision — no type_k/type_v — so it cannot be told apart ` +
+        `from an f16 run, where the figures above assume ${prediction.kvType}. A JSON run stating ` +
+        `those fields is what settles it`
     );
   }
 

@@ -41,15 +41,21 @@ import { GIB } from '@/engine/types';
  *   - **`GPUAdapterInfo.architecture` does not identify a Mac.** Apple GPUs report no DeviceID
  *     through Metal, so Dawn reports the highest supported *common feature family* instead —
  *     `common-1`, `common-2`, `common-3`. Every Apple silicon Mac from the M1 to the newest reports
- *     the same string, so on the one platform where a unified-memory row is the headline case, the
- *     architecture narrows nothing at all. It is `deviceMemory` and a question that do the work.
+ *     one of those three, and the three do not partition the product line, so it identifies the
+ *     **vendor** — and it is pruned on as one, which matters when the vendor string itself is
+ *     withheld — while saying nothing about *which* Mac. On the one
+ *     platform where a unified-memory row is the headline case, `deviceMemory` and a follow-up
+ *     question do the rest.
  *   - **`navigator.deviceMemory` is capped at 8 in Chrome and absent in Safari**, so it separates
- *     small machines from large ones and nothing above 8 GiB from anything else. Read as a *floor*
- *     here, never as a capacity.
- *   - **The adapter limits are allocation ceilings, not memory.** `maxBufferSize` is the largest
- *     single buffer, which a driver caps well below VRAM — so it is a lower bound on capacity and
- *     nothing more. That is still real narrowing: a card reporting a 4 GiB maximum buffer cannot be
- *     an 8 GiB card's smaller sibling.
+ *     small machines from large ones and nothing above 8 GiB from anything else. A reading *of* 8
+ *     prunes nothing and is *not* a floor of 8 — the clamp only removes the upper end of `(6, 12]`,
+ *     so it means "more than 6, unbounded above". A reading *below* 8 is a real ceiling, and the
+ *     prune it drives is at the bound itself, with the interval arithmetic written there.
+ *   - **The adapter limits are a validation ceiling, and they narrow nothing.** `maxBufferSize` is
+ *     the largest single buffer a driver will accept a descriptor for — not a promise the
+ *     allocation succeeds, so it cannot rule a machine out. It is reported as evidence; the prune
+ *     that once read it was withdrawn for removing the reader's own machine, and the reasoning is
+ *     kept at the site.
  *
  * ## Everything degrades to the picker, quietly
  *
@@ -62,12 +68,17 @@ import { GIB } from '@/engine/types';
 /**
  * Architecture strings, as Chrome actually reports them.
  *
- * **Generated from Dawn's own data file rather than transcribed**, and the transformation matters:
- * `gpu_info.json` stores names like `RDNA 3` and `Gen 12 LP`, and `dawn_gpu_info_generator.py`'s
- * `js_enum_case()` lowercases and joins with a hyphen — *except* after a digit, where it joins with
- * nothing. So `RDNA 3` is `rdna-3` and `Gen 12 LP` is `gen-12lp`, not `gen-12-lp`. A hand-written
- * table would have got the Intel rows wrong, and a web search returned both `rdna-3` and `rdna4`
- * for the same field.
+ * **Transcribed from Dawn's own data file through its generator's rule**, which is the part that
+ * matters: `gpu_info.json` stores names like `RDNA 3` and `Gen 12 LP`, and
+ * `dawn_gpu_info_generator.py`'s `js_enum_case()` lowercases and joins with a hyphen — *except*
+ * after a digit, where it joins with nothing. So `RDNA 3` is `rdna-3` and `Gen 12 LP` is
+ * `gen-12lp`, not `gen-12-lp`. Reading the names without applying that transform gets every Intel
+ * row wrong, and a web search returned both `rdna-3` and `rdna4` for the same field.
+ *
+ * **There is no generator script for this, and calling it "generated" over-claimed** (raised by
+ * Codex on #175). The model catalog is regenerable by anyone with `npm run catalog`; this is a
+ * literal table. To refresh it: re-read `gpu_info.json` at the URL below, apply `js_enum_case()` by
+ * hand, and move the read date.
  *
  * This maps architecture to **vendor only**, which is all it can honestly do. Dawn's architecture is
  * a silicon generation and `devices.json` has no generation column — adding one would mean asserting
@@ -132,7 +143,14 @@ export interface DetectionSignals {
   adapterVendor?: string;
   /** `GPUAdapterInfo.architecture` — see the two tables above for what it is worth. */
   adapterArchitecture?: string;
-  /** `GPUSupportedLimits.maxBufferSize`, in bytes. A lower bound on device memory, never a capacity. */
+  /**
+   * `GPUSupportedLimits.maxBufferSize`, in bytes. **Evidence only — this never prunes.**
+   *
+   * A validation ceiling on a buffer descriptor rather than a promise the allocation succeeds, so
+   * it is not a lower bound on device memory and cannot rule a machine out. The prune that read it
+   * that way was withdrawn for removing the reader's own machine; see the evidence line for the
+   * whole argument.
+   */
   maxBufferBytes?: number;
   /** `navigator.deviceMemory`, in GiB. Capped at 8 in Chrome, absent in Safari. */
   deviceMemoryGiB?: number;
@@ -385,16 +403,21 @@ export function detect(signals: DetectionSignals, devices: readonly DeviceSpec[]
   /**
    * `deviceMemory` prunes upward only, and the cap is why.
    *
-   * Chrome clamps it to 8, so a reading of 8 means "8 or more" and rules out nothing at the top.
+   * Chrome clamps it to 8, so a reading of 8 is unbounded above and rules out nothing at the top.
    * A reading *below* 8 is a real ceiling on system RAM, which on a unified-memory machine is also
    * a ceiling on the GPU's memory. Applied only there, since a discrete card's VRAM is unrelated to
    * how much RAM the host has.
    *
-   * **The factor of two is the spec's, not a fudge.** Device Memory reports actual RAM rounded
-   * *down* to a power of two and then clamped to [0.25, 8], so a reading of `r` means the machine
-   * has somewhere in `[r, 2r)`. `capacity <= 2r` is therefore the widest bound that is still sound,
-   * and it is deliberately generous at the boundary: the direction that matters is never excluding
-   * the reader's real machine.
+   * **The factor of two is deliberately looser than the spec's interval** (corrected on #175; this
+   * comment said "rounded *down*", which it is not). Device Memory rounds to the **nearest** power
+   * of two — the lower bound when `mem − lower ≤ upper − mem`, so ties go down — and then clamps to
+   * [0.25, 8]. A reading of `r` therefore means `(0.75r, 1.5r]`, and `r` is *not* a floor: a 3.5 GiB
+   * machine reports 4.
+   *
+   * `capacity <= 2r` is wider than that interval and stays sound because of it. Do not tighten it to
+   * `1.5r` for neatness: the one failure this module cannot accept is excluding the reader's real
+   * machine, browsers vary in what they report, and the bound is doing its job at the only end that
+   * matters.
    */
   if (signals.deviceMemoryGiB !== undefined && signals.deviceMemoryGiB < 8) {
     const reported = signals.deviceMemoryGiB;
