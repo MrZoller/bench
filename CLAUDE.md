@@ -28,7 +28,10 @@ CI runs **lint → format:check → test → build → test:e2e**; run them befo
   throughput. This is the product's whole value; everything else renders it.
 - `src/data/` — `quants.ts` (curated), `devices.json` (curated), `models.generated.json` (built
   from Hugging Face by `scripts/build-catalog.ts`).
-- `src/components/` — the Bench (hero), Envelope, Matrix.
+- `src/lib/` — the pure non-engine modules the surfaces read: `launch.ts` (runnable commands),
+  `detect.ts` (WebGPU → a candidate shortlist), `calibrate.ts` (predicted vs measured).
+- `src/components/` — the Bench (hero), Envelope, Matrix, plus the guided-mode panels: Detect,
+  Recommend, Launch, Calibrate.
 
 ## Conventions
 

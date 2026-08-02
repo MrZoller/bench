@@ -33,8 +33,15 @@ Three things are the moat, in order:
 Pages is not available on a private repo without a paid plan — which also restored the branch
 ruleset that had been convention rather than enforcement since the start.
 
-What remains is a naming decision, not work: the site serves from the Pages project URL, and a
-zoller.ai subdomain is one repository variable away. See **Deployment**, below.
+**The v2 guided-mode milestone is done too**, closed 1 August 2026. Launch commands, detect,
+recommend and calibrate shipped in one pass as five pull requests — #163 and #173 for launch, #167
+for recommend, #168 for detect, #169 for calibrate — and what each turned out to settle is under
+**v2 — guided mode**, below. Six findings were filed rather than patched under the merge rule; they
+are in **Open questions**, and three of the six share one root.
+
+What remains is a naming decision and those six issues, not planned work: the site serves from the
+Pages project URL, and a zoller.ai subdomain is one repository variable away. See **Deployment**,
+below.
 
 | Phase                              | State             | Notes                                                                                                |
 | ---------------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------- |
@@ -144,30 +151,38 @@ size and the scale-plus-bias dtypes, so the width is 8.5 bits and the catalog sa
 forced the contract question the marker always carried (#45) — the field asks whether a width is
 _established_ now, not whether it is nominal.
 
-## What's next — the v2 candidates
+## v2 — guided mode, and what building it settled
 
 Four features, filed under the
-[`v2 — guided mode` milestone](https://github.com/MrZoller/bench/milestone/1). The design for each
-lives in its issue — the approach, the seams it builds on, and the traps already named — because
-this file records settled decisions and the issues are where a feature's design lives until it
-ships. What belongs here is the direction and the sequencing, so a session starting cold finds it
-without walking the issue list.
+[`v2 — guided mode` milestone](https://github.com/MrZoller/bench/milestone/1) and **all four shipped
+on 1 August 2026**. The design for each lived in its issue while it was open; what is kept here is
+what building it settled, because a closed issue is the one place nobody looks.
 
-The common thread: the moat today is correctness, and correctness is invisible to a first-time
-visitor — every alternative _looks_ the same at a glance. Each of these either makes the accuracy
-legible or removes the expertise the current entry point assumes.
+The common thread: the moat is correctness, and correctness is invisible to a first-time visitor —
+every alternative _looks_ the same at a glance. Each of these either makes the accuracy legible or
+removes the expertise the entry point assumed.
 
-**Launch commands shipped first, as sequenced.** What it settled is below, under **Launch
-commands**; the other three are still as described here.
+| Feature                                                         | Issue                                                | Shipped                                                                                                 | Why it was on the list                                                                                                                                                                |
+| --------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Launch commands — emit the runnable command for the placement   | [#136](https://github.com/MrZoller/bench/issues/136) | [#163](https://github.com/MrZoller/bench/pull/163) + [#173](https://github.com/MrZoller/bench/pull/173) | The engine already computes the layer split; competitors never did, so they structurally cannot print one. Surface it, then format it                                                 |
+| Detect — one-click "what can my machine run"                    | [#137](https://github.com/MrZoller/bench/issues/137) | [#168](https://github.com/MrZoller/bench/pull/168)                                                      | The 43-row picker assumes knowledge most visitors don't have. WebGPU narrows it — sometimes to a handful, on a redacting browser only to a vendor — and a guess stays visibly a guess |
+| Recommend — rank the catalog for a device + workload            | [#138](https://github.com/MrZoller/bench/issues/138) | [#167](https://github.com/MrZoller/bench/pull/167)                                                      | The question people arrive with. The Matrix holds the answer as 1,470 cells; this returns the decision                                                                                |
+| Calibrate — predicted-vs-measured, submitted via issue template | [#139](https://github.com/MrZoller/bench/issues/139) | [#169](https://github.com/MrZoller/bench/pull/169)                                                      | Two anchors become a measured lattice, and a public "we said 44, users measured 41" record is the argument no competitor can copy                                                     |
 
-| Feature                                                         | Issue                                                | Why it is on the list                                                                                                                                                                 |
-| --------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Launch commands — emit the runnable command for the placement   | [#136](https://github.com/MrZoller/bench/issues/136) | The engine already computes the layer split; competitors never did, so they structurally cannot print one. Surface it, then format it                                                 |
-| Detect — one-click "what can my machine run"                    | [#137](https://github.com/MrZoller/bench/issues/137) | The 43-row picker assumes knowledge most visitors don't have. WebGPU narrows it — sometimes to a handful, on a redacting browser only to a vendor — and a guess stays visibly a guess |
-| Recommend — rank the catalog for a device + workload            | [#138](https://github.com/MrZoller/bench/issues/138) | The question people arrive with. The Matrix holds the answer as 1,470 cells; this returns the decision                                                                                |
-| Calibrate — predicted-vs-measured, submitted via issue template | [#139](https://github.com/MrZoller/bench/issues/139) | Two anchors become a measured lattice, and a public "we said 44, users measured 41" record is the argument no competitor can copy                                                     |
+**The sequencing was part of the record, and it held — including the part that was a warning rather
+than a plan.** Launch first, because its two prerequisites were real and are named below; calibrate
+after it, because `llama-bench` is what calibrate pastes back. What did _not_ hold is merge order —
+calibrate merged second of the four, since a review clears when it clears — and that was free
+because **the dependency is conceptual rather than in code**: launch tells the reader which command
+to run and calibrate reads what it printed, and the two share exactly one thing, the llama.cpp
+spelling of a cache precision. All five branches were cut from `main` rather than stacked, so
+calibrate could not import it and duplicated it under a comment saying the two must be merged when
+both land. **Both have landed and they are still two copies** — the loose end that branching in
+parallel bought, recorded under **Calibrate** below. What follows is the
+original sequencing note in its own tense, because every claim in it was load-bearing and three of
+them were tested by contact.
 
-**The sequencing is part of the record.** Launch commands first — still the smallest lift, but not
+Launch commands first — still the smallest lift, but not
 the pure formatter the first draft of this section claimed, and the two prerequisites are worth
 naming so #136 is not scoped off a false premise. `planPlacement` computes the layer assignment and
 then discards it: its bins keep byte loads rather than layer counts, and only the busiest survives
@@ -260,15 +275,198 @@ depth, which is exactly the resident-prefix state `estimatePrefill` charges an a
 so the measurement form reproduces the priced workload rather than a standalone prompt. That was the
 piece calibrate was said to need before it could ask anyone for numbers, and it exists.
 
+**The flag exists; one invocation does not carry it to both tests** (found in review on #173, and
+the paragraph above was written before it). `llama-bench -p N -n G` is not one benchmark — it is a
+prompt-processing test _and_ a generation test, and **the generation test does not inherit the
+prompt as cache depth.** So a single command measures decoding from an empty cache: the
+weight-bound job, not the KV-bound one the panel priced, and at 128K the two are nowhere near each
+other. The panel emits two invocations instead — `-p N -n 0 [-d prefix]` for prefill, and
+`-p 0 -n G -d prompt+prefix` for decode — with the reason in a note beside them. Read forward into
+calibrate, the single-command version would have submitted a decode rate measured at depth 0
+against a prediction charged at full depth, and the comparison would have reported it as a
+disagreement about the model.
+
 One thing to watch that is not a bug yet: **`RuntimeSpec.preallocFraction` is 0.9 and vLLM's own
 `gpu_memory_utilization` default has moved to 0.92.** The emitter states `--gpu-memory-utilization
 0.9` rather than leaving it out, so the command reproduces what the panel priced — but the catalog
 figure and upstream's default are no longer the same number, and whether the engine should follow is
 a separate question from whether the command should state it.
 
+### Detect, and what a browser will actually admit
+
+**Three of the four signals are worth less than the issue assumed**, and each mapping was read from
+a source rather than recalled:
+
+- **`GPUAdapterInfo.architecture` does not identify a Mac.** Apple GPUs report no DeviceID through
+  Metal, so Dawn reports the highest supported _common feature family_ instead — `common-1`,
+  `common-2`, `common-3` — and every Apple silicon Mac from the M1 up reports the same string. On
+  the one platform where a unified-memory row is the headline case, the architecture narrows
+  nothing at all; `deviceMemory` and a follow-up question do the work.
+- **`navigator.deviceMemory` is capped at 8 in Chrome and absent in Safari**, so it separates small
+  machines from large ones and nothing above 8 GiB from anything else. Read as a floor, never as a
+  capacity.
+- **The adapter limits are allocation ceilings, not memory.** `maxBufferSize` is the largest single
+  buffer, which a driver caps well below VRAM — a lower bound, and still real narrowing.
+
+**The architecture table is generated from Dawn's own data file rather than transcribed**, and the
+transformation is the reason. `gpu_info.json` stores `RDNA 3` and `Gen 12 LP`, and
+`dawn_gpu_info_generator.py`'s `js_enum_case()` lowercases and joins with a hyphen _except after a
+digit_, where it joins with nothing: `rdna-3` but `gen-12lp`, not `gen-12-lp`. A hand-written table
+gets every Intel row wrong, and a web search returned both `rdna-3` and `rdna4` for the same field.
+The same rule as the model catalog, on a smaller surface: derived, never typed.
+
+**The rule that keeps the panel honest is one line — a filter that would leave nothing is a filter
+that is wrong about this machine.** Every prune is applied only if something survives it, and one
+that would empty the list is recorded as a conflict the surface states instead. That is the issue's
+"fall back when the signals conflict" made general, and it has a reachable case rather than a
+theoretical one: an **Intel Mac** reports an Intel or AMD adapter on a macOS platform, and the
+platform prune took the vendor's rows to zero — the first version rendered "Which of these is
+yours?" over an empty list. An iPhone with WebGPU does the same from the other side. `candidates`
+is never empty, which is what the heading is allowed to assume.
+
+**Nothing is applied on the reader's behalf, and the pressed state has to be the panel's own.**
+Reading `deviceId` for it marked a candidate confirmed before anyone pressed anything, because on
+the default page the configured device is in its own detected set — the panel opened with an answer
+already given, which is the silent-selection failure the whole feature is organised against,
+arriving through the affordance built to prevent it.
+
+**Two accessibility details cost a round each, and both are the same shape: a mechanism that
+displaces what it was added to.** `role="status"` _replaces_ the implicit role, so it took the
+results panel out of the `region` landmark it is named by — the panel stopped being addressable as
+"Which of these is yours?" at the moment it became announceable. `aria-live="polite"` adds the
+behaviour and leaves the role alone. And the heading has to follow the branch: over a terminal
+state, "Which of these is yours?" is a live region announcing a question above a paragraph
+explaining there is nothing to answer.
+
+**One finding was answered rather than fixed.** On a dual-GPU laptop `requestAdapter` returns one
+adapter and the vendor prune then removes the other GPU's rows, and the review asked for both
+preferences to be queried and combined. Preferring the discrete card is not half of that — for a
+tool that prices inference it is the answer, and combining them would _widen_ the shortlist to two
+vendors, which is the opposite of what the panel does. Filed as [#174](https://github.com/MrZoller/bench/issues/174),
+as the argument rather than as a bug.
+
+### Recommend, and the printed rule that was false on 347 configurations
+
+**The sweep's axes are the engine's, not the Matrix's.** The Matrix renders every cell under one
+globally selected runtime, KV precision and substitution at a hardcoded `deviceCount: 1` — its
+cells are a _slice_ of the space rather than the space. So this sweeps models × runtimes ×
+applicable quants and takes KV precision, device count and concurrency as explicit inputs.
+Concurrency being explicit is not tidiness: hardcoding 1 let the shortlist and the verdict strip
+grade the same configuration's batch row differently on one page, so clicking a row landed the
+reader on a grade contradicting the one that sent them there.
+
+**Every ordering is exported as a sentence and rendered beside the list** — `RANKING_RULE`,
+`FALLBACK_RULE`, `QUANT_RULE` — because a ranked list with an unstated basis is an opinion wearing
+the chassis of a measurement, which is the failure this codebase is organised against. Two of those
+sentences are load-bearing in a way worth restating. The within-tier order is **parameter count,
+which is a capability _proxy_ and says so**: bench knows what runs, not what is good, and importing
+benchmark scores would be a new curation surface with a freshness problem. And the fallback is a
+different question with its own rule — when nothing clears the bar, "the biggest that loads" is the
+wrong answer, because a 671B at 0.3 tok/s is not more useful than an 8B at 40 that merely missed a
+threshold.
+
+**Then the quant rule was false on 347 shipping configurations, and the cause is a docblock this
+repo had already written.** `QUANTS` is grouped by checkpoint family and runs widest-first _inside_
+a family, so it is deliberately not globally bpw-descending — `q8_0` at 8.5 sits below `nvfp4` at
+4.5, as `quants.ts` states at length. `bestQuant` walked the caller's list and stopped at the first
+`good`, so it met `mxfp4` (4.25) before `q6_k` (6.57) and picked a narrower format than the printed
+sentence promised. The first draft documented "widest first" as the caller's responsibility and the
+only caller passed `QUANTS.filter(...)`. **A precondition a caller can silently violate is not a
+precondition**: the sort is imposed inside `recommend()` now, because the policy depends on the
+order and therefore owns it.
+
+The sentence was wrong a second and independent way. It read "the widest format that clears the
+bar", and `bestQuant` prefers a narrower `good` over a wider `tight` — tiers rank above width
+everywhere else in the module. "Clears the bar" was doing two jobs in one file, and the wording now
+says what the comparator implements.
+
+**The test that caught it was wrong four times first, and that is the transferable part.** It was
+unfalsifiable; then its comparison was backwards; then `<=` still passed, because a divergence where
+the widest format grades _equally_ is not a violation; then it swept a single device. Four
+corrections before it failed against the reinjected defect — on a defect whose entire signature is
+"an ordering assumption that is silently true on most rows". Mutation-check anything asserting an
+ordering, and sweep more than one device while doing it.
+
+**One entry per model in the runners-up**, which is a rule rather than a tidy-up: the runtime axis
+means a strong model appears two or three times over — gpt-oss 120B at Q5_K_M under llama.cpp _and_
+at NVFP4 under vLLM — and a shortlist whose three rows are two spellings of one model has not
+offered a choice.
+
+**What was filed rather than patched is one root with three symptoms**, and it is the sharpest thing
+this feature turned up: **the sweep plans one placement per candidate, and the verdict layer models
+a tier structure.** Long-context's `tight` tier is graded at a 64K prompt against its 128K job, and
+the agent's tiers carry 64K and 32K sessions against a ~16.5K turn — so a candidate can be dropped
+before the tier that would have graded it ever runs, a spill caveat can describe the `good` tier's
+scenario on a row that only earned `tight`, and the fallback can rank by a decode rate no tier ever
+measured. [#170](https://github.com/MrZoller/bench/issues/170) and
+[#172](https://github.com/MrZoller/bench/issues/172); fixing them means changing how the two layers
+divide the work, which is why neither is a patch.
+
+### Calibrate, and what a measurement has to carry
+
+**Three of the four ways a measurement becomes unusable are invisible in the numbers themselves** —
+a different prompt length, a different depth, a different build — so `compare` marks a scenario
+mismatch rather than reporting a delta against it. A `pp512` paste against a prediction made at
+16,384 tokens is not a disagreement about the model; it is two different jobs, and reporting the gap
+as evidence is how a calibration record fills with noise. The fourth is the machine, which
+`llama-bench` does not name reliably, and which is why the scenario URL is a required field in the
+issue template.
+
+**The model check is the parameter count, not the name.** llama.cpp writes an architecture where the
+catalog writes a product, so the two never agree past the first word: comparing labels catches a
+DeepSeek paste against a Llama prediction and misses Qwen3 8B against Qwen3 32B. A parameter count
+is the same quantity in both, derived on both sides rather than named.
+
+**A `-pg` row is dropped rather than read as prefill**, and the first version read it on a comment
+that was simply wrong. `llama-bench` computes a row's rate as `(n_prompt + n_gen) / time`, so a
+combined row is a _blend_ dominated by the slow half: 7,000 t/s of prefill and 100 t/s of decode
+come out around 473. Beside `prefillTokensPerSec` that is a 93% miss with nothing marking it, and
+submittable as calibration evidence. There is no way to recover either rate from one number.
+
+**Parsing a markdown table needs a per-column decision about shape versus position, and all three
+answers differ in one table.** The rate cell was first taken as the first numeric cell, which read
+`ngl` — 33 — as a throughput of 33 tok/s on a row measuring 7,285: every column between `model` and
+`t/s` is a number on some backend, so "shaped like a number" does not identify that column. The
+spread does when it is present, and `t/s` is last when it is not. `ngl` itself is then found by
+_position_ — a bare integer is not a distinctive shape — while `params` (`8.03 B`) and the backend
+word are found by shape, because a position breaks on the next column upstream adds.
+
+**Unverifiable is not the same as matching**, and treating it as such passed the common case rather
+than a corner. `llama-bench` prints the cache-type columns only when they are _not_ the default, and
+markdown is the default output and f16 the default cache — so a default run pasted as markdown
+carried no cache columns at all and sailed past a Q8 or Q4 prediction. It is called out as
+unverifiable now, with the `-o json` re-run named.
+
+**The band is judged on the rounded percent**, per the rule this file already carries for thresholds:
+a raw comparison put a 30.0% delta outside the ±30% band on float epsilon alone
+(`0.30000000000000004 <= 0.3`), and a figure that prints as "within 30%" beside a verdict of "wider
+than 30%" is the panel disagreeing with itself.
+
+**The paste never leaves the page.** Submission is a `github.com/…/issues/new` URL the reader chooses
+to open, which is the same no-backend shape the weekly catalog refresh already proved out.
+
+**Two loose ends, both bought by building these in parallel branches, and both live on `main`
+today.**
+
+The first is a duplicated constant. `Calibrate.tsx` carries `LLAMA_KV_TYPES` — `fp16 → f16`,
+`q8 → q8_0`, `q4 → q4_0` — under a comment saying it is "duplicated rather than imported only
+because that module is not on this branch, and the two must be merged when both land". Both have
+landed. It is three entries and it is the mapping that decides whether a paste is judged against the
+cache precision it was measured at, so the two copies disagreeing is a silent wrong verdict rather
+than a build error.
+
+The second is not a bug yet and spans the same two files: **the emitted `llama-bench` command asks
+for `-o md` while the parser prefers JSON.** The block is meant to be read before it is run, so
+markdown is a defensible choice — but JSON is what carries `build_commit`, the version-skew guard
+#139 names, so a reader who follows the panel exactly arrives without it and is told to re-run. Which
+way that resolves is a product decision; what is not defensible is the two files disagreeing about
+which one the panel emits, and `parseJson`'s docblock claimed the other answer until this was
+written down.
+
 Deliberately absent, and not forgotten: cloud pricing stays out of scope per the settled decision
 below, and fine-tuning memory (LoRA/QLoRA) is a second engine rather than a feature — real demand,
-weak incumbents, and the wrong thing to attempt before guided mode ships. It is the v3-scale bet.
+weak incumbents, and deliberately not attempted before guided mode shipped. Now that it has, that is
+the v3-scale bet, and the thing standing between here and it is the six issues in **Open questions**.
 
 ## Deployment
 
@@ -819,18 +1017,39 @@ reading the test that guards them.
   **one** press to cross whichever end of the page it sits at, and what is worth counting now is the
   page. Two counts, from the two suites, and the gap between them is worth stating exactly:
 
-  - `App.test.tsx` — **26** DOM tab-stop candidates over the whole document, against **1,495**
-    without the roving index (26 − 1 + 1,470). That subtrahend is the grid, so it moves with the
+  - `App.test.tsx` — **41** DOM tab-stop candidates over the whole document, against **1,510**
+    without the roving index (41 − 1 + 1,470). That subtrahend is the grid, so it moves with the
     catalog: it was 714 before #77 doubled the model list, and a counterfactual quoting the old one
     is a wrong expected value for whoever reinjects the defect.
-  - `e2e/matrix-grid.spec.ts` — **23** real browser stops, inside `<main>`.
+  - `e2e/matrix-grid.spec.ts` — **37** real browser stops, inside `<main>`.
 
-  Three apart, from two unrelated causes and not one. **Two** are the KV radio group, which offers Tab
-  only its checked member and a `querySelectorAll` all three. The **third** is scope rather than
+  Four apart, from three unrelated causes and not one. **Two** are the KV radio group, which offers
+  Tab only its checked member and a `querySelectorAll` all three. The **third** is scope rather than
   semantics: the masthead's copy-link button is a real stop that the browser walk excludes, because it
-  sits outside `<main>` and that walk ends when focus leaves. Both hold a ceiling of forty,
-  deliberately the same number, since a bound that fires in one channel and not the other is a bug
-  report about the wrong file.
+  sits outside `<main>` and that walk ends when focus leaves. The **fourth** arrived with #139 —
+  the calibration textarea sits inside a `hidden` region, which a walk correctly never reaches and a
+  selector counts anyway, because `querySelectorAll` knows nothing about visibility. Compare a new
+  measurement against the number from the same channel, and against a stated reason for the gap: the
+  e2e comment once read "23 against 25 in jsdom" and attributed the whole difference to the radios,
+  which was one short and pointed at the wrong mechanism for the missing one.
+
+  **Both bounds moved from 40 to 55 when the four v2 panels landed, and the raise is argued rather
+  than nudged** — it is the second one, and the counts went 26 → 41 and 23 → 37 in a single pass.
+  The old comment predicted this exact failure and chose a loose bound because of it ("the next
+  disclosure would have failed a test named after the grid while nothing about the grid had
+  changed"), which is the reason to trust the raise rather than to distrust it. What the bound is
+  for, stated so the next person does not have to infer it: **the defect is 1,510, not 41.** Forty
+  was an order-of-magnitude line, never a budget, and what it catches is a whole _collection_
+  re-entering the sequence — 55 catches that exactly as well, because the failure mode is three
+  orders of magnitude away and not one panel away. The two numbers stay equal on purpose, since a
+  bound that fires in one channel and not the other is a bug report about the wrong file.
+
+  **The pressure underneath it is real and is not a test problem.** Four panels landed on one page in
+  one pass, and a page that keeps adding panels is what to look at before this number is raised a
+  third time. Shedding stops was considered and declined: the copy buttons could be one shared button
+  at the cost of the reader knowing which command they copied, the provenance links are the
+  flags-drift trap #136 names, and the command block's stop is Chrome's own rather than this app's to
+  remove.
 
   **The cost is real and was accepted rather than solved.** At 390px both panels stack, so nine
   controls — about 620px — now precede the first figure, where before there were none. #66 named a
@@ -1485,9 +1704,10 @@ ceiling)` keeps an over-budget stack on screen, which is right and stays. What i
 
 Correctness follow-ups live in
 [the repository's open issues](https://github.com/MrZoller/bench/issues). This section is for the
-questions those issues cannot settle, and the table below is the record of the six filed out of the
-July sweep — five of them now closed, kept because what each one turned out to need is not what the
-issue said it would.
+questions those issues cannot settle, and the two tables below are the record of the twelve findings
+filed rather than patched — six out of the July sweep, all now closed, and six out of the v2 pass,
+all still open. They are kept because what a finding turns out to need is repeatedly not what the
+issue said it would be.
 
 The pointer names the open issues rather than a range on purpose. It read "#12–#20" while six newer
 correctness issues sat in the table underneath it, so a maintainer following the sentence walked past
@@ -1495,13 +1715,13 @@ exactly the deferred work this section exists to preserve — and the same sente
 #15 and #19 open when the Status section four hundred lines up records all four as fixed. A range
 goes stale in both directions and silently in both.
 
-### The six filed out of the July 2026 sweep, and what settled five of them
+### The six filed out of the July 2026 sweep, and what settled all six
 
 Six findings were triaged, replied to and filed rather than patched, under the merge rule recorded
 above. Each was real, each touched something shared enough that fixing it inside another PR would
 have been the third patch at one root cause, and each issue carried its numbers so they were not
-re-derived. **Five are fixed; the sixth is in flight.** What each one turned out to need is the part
-worth keeping, because in four of the five the filed framing was not quite the fix:
+re-derived. **All six are fixed**, the last of them on 1 August 2026. What each one turned out to
+need is the part worth keeping, because in four of the six the filed framing was not quite the fix:
 
 | filed                                                                                               | what it needed                                                                                                                                                                                                                                                                                                                                                                                                   |
 | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1509,7 +1729,7 @@ worth keeping, because in four of the five the filed framing was not quite the f
 | [#96](https://github.com/MrZoller/bench/issues/96) serving graded at the slider's concurrency       | **Fixed**, and the ungraded state went with it: once each tier is graded at its own user count the question is always asked, so `Fitness` has three arms. The narrow capacity symptom was the least of it — the sentence quoting `runnableContextTokens` at the reader's concurrency disproved its own verdict on the two rigs the issue named.                                                                  |
 | [#97](https://github.com/MrZoller/bench/issues/97) TTFT ramp collapses                              | **Fixed.** 29 of 46 → 4,5,6,7,12,9,3 on the Envelope; 1,025 of 1,269 → 29,57,86,263,323,304,207 on the Matrix. The domain's floor was half of it: a zero anchor is right only where zero is a reading, and no cell answers in zero seconds. Mirroring the _placement_ rather than the ramp index was off by one bucket at every boundary.                                                                        |
 | [#101](https://github.com/MrZoller/bench/issues/101) the unit suite                                 | **Fixed** by rendering fewer cells: 155s → 24s locally, and CI's build job 7m9s → 1m38s. The property the issue asked for is asserted rather than hoped for — `App.test.tsx` renders a fixed twelve cells whatever the catalog does next. The timeout stayed at 30s deliberately, with the runner ratio written down.                                                                                            |
-| [#102](https://github.com/MrZoller/bench/issues/102) readout on touch, and at 200%                  | **In flight.** The issue's cheapest option does not exist — this panel has no table behind a disclosure, it _is_ the table. Two taps instead, keyed on whether the reader has been shown the figures rather than on a pointer type, which a contact-only stylus breaks. 280px against 160px reserved at 320px/200%, fixed by dropping the model from the narrow form and keeping the machine.                    |
+| [#102](https://github.com/MrZoller/bench/issues/102) readout on touch, and at 200%                  | **Fixed.** The issue's cheapest option does not exist — this panel has no table behind a disclosure, it _is_ the table. Two taps instead, keyed on whether the reader has been shown the figures rather than on a pointer type, which a contact-only stylus breaks. 280px against 160px reserved at 320px/200%, fixed by dropping the model from the narrow form and keeping the machine.                        |
 | [#103](https://github.com/MrZoller/bench/issues/103) `NOT_SEEDED` never revalidated                 | **Fixed** with the issue's own first step — an expiry, plus the structured reason it said to think about first. Three rounds went on one mistake: claiming a mechanical check made a cause exempt from the calendar. It never does. Every cause has a window now, and the checks are what make the windows long.                                                                                                 |
 
 **The shape of that is the thing to keep, more than any of the six.** In four, the filed framing was
@@ -1518,6 +1738,38 @@ rested on a panel that does not exist, the "narrow patch" was the smallest of th
 root, the ramp's direction was half the problem and its floor the other half, and a written policy
 needed the structure the issue named as an afterthought. Filing them with their measurements is what
 made that visible; the measurements survived and the framings mostly did not.
+
+### The six filed out of the v2 pass, 1 August 2026
+
+Same rule, same shape, and **all six are open** — each carries its measurement, two carry an
+argument rather than a repair, and one records a capability gap that is not a defect at all.
+
+| filed                                                                                             | what it is                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [#165](https://github.com/MrZoller/bench/issues/165) resident layers charge the non-layer tensors | `layerSplitBins` takes `perLayerWeight = totalWeightBytes / model.layers`, and the total includes embeddings and any `nonLanguageParams` — Llama 3.2 3B's 128,256-token vocabulary is ~394M of 3.2B, over 12%, charged evenly across 28 layers that do not hold it. Invisible while the bins were read as bytes; #163 exported them as a count and #136 prints it |
+| [#166](https://github.com/MrZoller/bench/issues/166) the assignment discards _which_ layers       | The packing is greedy over individual layers, so a bin is a non-contiguous mixture and the counts alone do not reproduce it — 19 apart on five cards for Gemma 3 12B at 128K. #164 narrowed what the emitter claims instead (no `-ts` for a hybrid model), which is correct and leaves a capability gap on exactly the models where the packing is worth most     |
+| [#170](https://github.com/MrZoller/bench/issues/170) tiers graded at scenarios never planned      | `recommend` plans one placement per candidate at the archetype's own scenario and drops it when that is impossible — but long-context's `tight` tier is a 64K prompt and the agent's tiers are 64K and 32K sessions. Same answer today, because `judgeWorkloads` refuses at the top; a structural disagreement about who models the tiers                         |
+| [#172](https://github.com/MrZoller/bench/issues/172) the caveat describes the wrong tier          | Same root. A `tight` recommendation can carry the `good` tier's spill caveat, the fallback can rank by a rate no tier measured, and the serving footer names the reader's concurrency where that archetype grades at its own                                                                                                                                      |
+| [#171](https://github.com/MrZoller/bench/issues/171) the Ollama block and the daemon              | `ollama serve &` does not wait, does not notice an existing daemon still on the default `f16` cache, and configures no `OLLAMA_NUM_PARALLEL`. Both fixes push a copy-pasteable block into daemon lifecycle management, which is a different kind of command from the rest of the panel                                                                            |
+| [#174](https://github.com/MrZoller/bench/issues/174) one adapter on a dual-GPU machine            | Filed as the argument. Preferring the discrete card is the answer for a tool that prices inference, not half of "combine both preferences" — and combining would widen the shortlist to two vendors                                                                                                                                                               |
+
+**The six group into three pairs, which is the useful way to read them.** Two are the engine
+exporting a layer _count_ where what matters is which layers and what is in them (#165, #166). Two
+are one root stated twice — the sweep plans one scenario per candidate while the verdict layer
+models a tier structure (#170, #172). And two are decisions rather than defects: how far a
+copy-pasteable block should go in managing a daemon, and whether detection should ever widen. **Each
+pair wants fixing as a pair**, which is why neither was patched inside a feature branch: the first
+meets at `layerSplitBins`, where a per-layer figure that is not per-layer feeds both a count and a
+command; the second meets at the seam between `recommend` and `judgeWorkloads`, and moving that seam
+inside a PR about a panel is how a root cause gets its third patch.
+
+**And the review pattern held exactly as this file predicted.** Codex ran four rounds on some of
+these pull requests, and from round three onward the findings were largely defects in the _previous
+round's fix_ — a `&&` that cannot chain a heredoc, a `set -e` that would have escaped into the
+reader's interactive shell, a two-way ternary that labelled a Q4 format "8-bit". That is the
+argument for the merge rule rather than against it, provided the root causes are the ones fixed.
+
+### Standing questions
 
 - **MLX has no native quantization entries** ([#18](https://github.com/MrZoller/bench/issues/18)).
   Other catalogued formats stand in _by width_ — Q4_K_M's 4.85 bpw against MLX's ~4.5, and the

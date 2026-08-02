@@ -88,7 +88,11 @@ export function parseLlamaBench(text: string): readonly Measurement[] {
 }
 
 /**
- * The richer format, and the one the emitted command asks for.
+ * The richer format, and **not** the one the emitted command asks for — `launch.ts` emits `-o md`,
+ * because the block beside it is read by a person before it is run by one. So the reader who
+ * follows the panel arrives here with markdown and no `build_commit`, and
+ * {@link describeMismatch} is what asks for the JSON re-run. Worth revisiting as a pair rather than
+ * in either file: whichever way it goes, the emitter and this comment have to agree.
  *
  * `-o json` produces an array of objects carrying every field the CSV header lists, so the depth,
  * the layer count and the build commit are all present as data rather than reconstructed from a
