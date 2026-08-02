@@ -76,8 +76,9 @@ export interface Measurement {
 /**
  * Read whatever the reader pasted.
  *
- * Tries JSON first and falls back to the markdown table, because a reader who ran the tool with its
- * defaults has markdown and a reader who followed the emitted command has JSON. Returns an empty
+ * Tries JSON first and falls back to the markdown table, because both arrive and neither is the
+ * outlier: markdown is what `llama-bench` prints by default *and* what the panel's own command asks
+ * for, and JSON is what a reader who wanted the richer fields ran instead. Returns an empty
  * list rather than throwing: a paste that is not llama-bench output is a mistake to report on the
  * surface, not an exception.
  */

@@ -305,8 +305,15 @@ a source rather than recalled:
 - **`navigator.deviceMemory` is capped at 8 in Chrome and absent in Safari**, so it separates small
   machines from large ones and nothing above 8 GiB from anything else. Read as a floor, never as a
   capacity.
-- **The adapter limits are allocation ceilings, not memory.** `maxBufferSize` is the largest single
-  buffer, which a driver caps well below VRAM — a lower bound, and still real narrowing.
+- **The adapter limits narrow nothing, and that is the second review's correction rather than the
+  first draft's claim.** `maxBufferSize` looks like a sound floor — the largest single buffer a
+  driver will hand out, capped well under total memory, so a device below it is impossible. It is a
+  _validation_ ceiling on a buffer descriptor instead: WebGPU checks a request against it and can
+  still fail with an out-of-memory error, so a limit above a device's real capacity is not a
+  contradiction, and pruning on it removed the reader's actual machine. It ships as evidence the
+  reader can weigh, and prunes nobody. **This paragraph said the opposite until Codex caught it on
+  #175** — the handoff document quietly re-proposing a prune the feature had already withdrawn is
+  the specific way a file like this does damage.
 
 **The architecture table is generated from Dawn's own data file rather than transcribed**, and the
 transformation is the reason. `gpu_info.json` stores `RDNA 3` and `Gen 12 LP`, and
@@ -405,12 +412,21 @@ divide the work, which is why neither is a patch.
 ### Calibrate, and what a measurement has to carry
 
 **Three of the four ways a measurement becomes unusable are invisible in the numbers themselves** —
-a different prompt length, a different depth, a different build — so `compare` marks a scenario
-mismatch rather than reporting a delta against it. A `pp512` paste against a prediction made at
-16,384 tokens is not a disagreement about the model; it is two different jobs, and reporting the gap
-as evidence is how a calibration record fills with noise. The fourth is the machine, which
-`llama-bench` does not name reliably, and which is why the scenario URL is a required field in the
-issue template.
+a different prompt length, a different depth, a different build. `compare` marks the first two as a
+scenario mismatch rather than reporting a delta against them: a `pp512` paste against a prediction
+made at 16,384 tokens is not a disagreement about the model, it is two different jobs, and reporting
+the gap as evidence is how a calibration record fills with noise.
+
+**The build is captured rather than checked, and the distinction is worth stating because #139 calls
+it a guard.** `describeMismatch` never examines `buildCommit` — there is no expected build to
+compare against, since the catalog pins a runtime and not a commit of one. What the field does is
+ride into the issue body, where a human weighing a submission can see it, and its absence is stated
+rather than assumed benign. Calling that a rejection would be advertising a check that does not
+exist, which is the failure this whole module is written against. (Caught by Codex on #175, where
+this paragraph did exactly that.)
+
+The fourth is the machine, which `llama-bench` does not name reliably, and which is why the scenario
+URL is a required field in the issue template.
 
 **The model check is the parameter count, not the name.** llama.cpp writes an architecture where the
 catalog writes a product, so the two never agree past the first word: comparing labels catches a
@@ -457,8 +473,9 @@ than a build error.
 
 The second is not a bug yet and spans the same two files: **the emitted `llama-bench` command asks
 for `-o md` while the parser prefers JSON.** The block is meant to be read before it is run, so
-markdown is a defensible choice — but JSON is what carries `build_commit`, the version-skew guard
-#139 names, so a reader who follows the panel exactly arrives without it and is told to re-run. Which
+markdown is a defensible choice — but JSON is what carries `build_commit`, which #139 names as the
+version-skew guard, so a reader who follows the panel exactly arrives without it and is told to
+re-run. Which
 way that resolves is a product decision; what is not defensible is the two files disagreeing about
 which one the panel emits, and `parseJson`'s docblock claimed the other answer until this was
 written down.
