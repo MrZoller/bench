@@ -28,12 +28,14 @@ import { deviceOptionLabel } from '@/lib/stops';
 export function Detect() {
   const set = useConfig((s) => s.set);
   /**
-   * Subscribed to, not just written: after a candidate is pressed the list gave no sign which one
-   * had been chosen — the Hardware select that reflects it is off screen in a long list, so both a
-   * sighted and a screen-reader user could sit on an unchanged button wondering. Raised by Codex on
-   * #168.
+   * What the reader confirmed **in this panel**, not what the store happens to hold.
+   *
+   * Reading `deviceId` marked a candidate pressed before anyone pressed anything — on the default
+   * page the configured device is in its own detected set, so the panel opened with an answer
+   * already given. That is the silent-selection failure this whole feature is organised against,
+   * arriving through the affordance meant to prevent it. Raised by Codex on #168.
    */
-  const selectedDeviceId = useConfig((s) => s.deviceId);
+  const [confirmed, setConfirmed] = useState<string | null>(null);
   const headingId = useId();
   const [state, setState] = useState<'idle' | 'reading' | 'unavailable' | 'done'>('idle');
   const [result, setResult] = useState<Detection | null>(null);
@@ -92,8 +94,13 @@ export function Detect() {
           {/* One heading, because there is now one shape of answer: candidates to choose from.
               It read "What the browser would say" on the long-list path, which was a heading for a
               panel that offered nothing to do. */}
+          {/* The heading follows the body. It read "Which of these is yours?" over the terminal
+              branches too — a live region announcing a question above a paragraph explaining there
+              is nothing to answer. Raised by Codex on #168. */}
           <h3 id={headingId} className="text-xs font-medium text-[var(--color-text)]">
-            Which of these is yours?
+            {result.unsupportedPlatform !== undefined || result.narrowedNothing === true
+              ? 'What the browser would say'
+              : 'Which of these is yours?'}
           </h3>
 
           {/* Always, in every state. This is what makes a guess visibly a guess — and on a Mac it
@@ -158,14 +165,17 @@ export function Detect() {
                       type="button"
                       /* A confirmation, and the only place detection ever writes to the store. The
                        reader picks; nothing here is applied on their behalf. */
-                      onClick={() => set('deviceId', device.id)}
+                      onClick={() => {
+                        setConfirmed(device.id);
+                        set('deviceId', device.id);
+                      }}
                       /* Which one was chosen, in the accessibility tree and not only in a border. The
                      Hardware select that otherwise reflects it is off screen in a seventeen-row
                      list, so pressing a button left both a sighted and a screen-reader user on an
                      unchanged control with no sign anything had happened. Raised by Codex on #168. */
-                      aria-pressed={device.id === selectedDeviceId}
+                      aria-pressed={device.id === confirmed}
                       className={`inline-flex min-h-11 items-center rounded-md border px-3 py-1.5 text-xs text-[var(--color-text)] hover:border-[var(--color-accent-dim)] ${
-                        device.id === selectedDeviceId
+                        device.id === confirmed
                           ? 'border-[var(--color-accent)]'
                           : 'border-[var(--color-border)]'
                       }`}

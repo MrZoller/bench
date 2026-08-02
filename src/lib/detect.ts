@@ -139,6 +139,13 @@ export interface DetectionSignals {
   /** `navigator.userAgentData.platform` or `navigator.platform`, however it spells itself. */
   platform?: string;
   /**
+   * `navigator.userAgentData.mobile` — the browser's own answer to "is this a phone".
+   *
+   * The only reliable Android signal: `navigator.platform` reports a Linux value there, so the
+   * platform string alone reads an Android phone as a Linux desktop.
+   */
+  mobile?: boolean;
+  /**
    * `navigator.maxTouchPoints`, which is what separates an iPad from a Mac.
    *
    * iPadOS Safari's desktop-class mode reports `MacIntel` with a genuine Apple adapter, so every
@@ -296,7 +303,15 @@ export function detect(signals: DetectionSignals, devices: readonly DeviceSpec[]
    * it is the one signal a desktop Safari does not fake.
    */
   const tablet = platform?.includes('mac') === true && (signals.maxTouchPoints ?? 0) > 1;
-  const phone = /iphone|ipod|android/.test(platform ?? '');
+  /**
+   * `mobile` alongside the platform string, because **Android does not say Android**. With
+   * `userAgentData` absent — every non-Chromium Android browser — `navigator.platform` reports a
+   * Linux value like `Linux armv8l`, which took the non-macOS arm and pruned the Apple rows as
+   * though this were a desktop. `userAgentData.mobile` is the boolean designed for exactly this
+   * question, and where it is missing the platform regex is still the fallback. Raised by Codex
+   * on #168.
+   */
+  const phone = signals.mobile === true || /iphone|ipod|android/.test(platform ?? '');
   const handheld = phone || tablet;
   const known = handheld || /mac|darwin|win|linux|cros|x11|freebsd/.test(platform ?? '');
 
@@ -444,7 +459,16 @@ function vendorFromString(raw: string | undefined): DeviceSpec['vendor'] | undef
   // `ati` on a word boundary, never as a substring: it sits inside "Imagination", so the loose form
   // classified a PowerVR adapter as AMD and removed every non-AMD row — the opposite of the stated
   // fallback for an unrecognised vendor. Raised by Codex on #168.
-  if (value.includes('amd') || value.includes('radeon') || /\bati\b/.test(value)) return 'AMD';
+  // AMD's legal name is "Advanced Micro Devices, Inc.", which contains neither `amd` nor `radeon` —
+  // and an implementation-defined vendor string is exactly where a legal name turns up. `ati` stays
+  // token-bounded: it sits inside "Imagination". Raised by Codex on #168.
+  if (
+    value.includes('amd') ||
+    value.includes('radeon') ||
+    value.includes('advanced micro devices') ||
+    /\bati\b/.test(value)
+  )
+    return 'AMD';
   return undefined;
 }
 
@@ -489,7 +513,7 @@ export async function readSignals(): Promise<DetectionSignals | undefined> {
 
     const nav = navigator as Navigator & {
       deviceMemory?: number;
-      userAgentData?: { platform?: string };
+      userAgentData?: { platform?: string; mobile?: boolean };
     };
 
     return {
@@ -498,6 +522,7 @@ export async function readSignals(): Promise<DetectionSignals | undefined> {
       maxBufferBytes: adapter.limits?.maxBufferSize,
       deviceMemoryGiB: nav.deviceMemory,
       platform: nav.userAgentData?.platform ?? navigator.platform,
+      ...(nav.userAgentData?.mobile === undefined ? {} : { mobile: nav.userAgentData.mobile }),
       maxTouchPoints: navigator.maxTouchPoints,
     };
   } catch {

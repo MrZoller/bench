@@ -88,6 +88,12 @@ describe('when the signals narrow to a shortlist', () => {
 
     const panel = await screen.findByRole('region', { name: /which of these is yours/i });
     const choices = within(panel).getAllByRole('button');
+    /**
+     * **Nothing is pressed before the reader presses it**, and reading the store got this wrong:
+     * on the default page the configured device is in its own detected set, so the panel opened
+     * with an answer already given — the silent-selection failure this feature exists to prevent,
+     * arriving through the affordance meant to prevent it.
+     */
     expect(choices.every((b) => b.getAttribute('aria-pressed') === 'false')).toBe(true);
 
     await user.click(choices[0]);

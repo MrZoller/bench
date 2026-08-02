@@ -287,6 +287,25 @@ describe('signals that contradict each other keep the machine in the list', () =
     for (const device of mac.candidates) expect(device.vendor).toBe('Apple');
   });
 
+  it('reads Android from the browser’s own flag, since Android does not say Android', () => {
+    // With `userAgentData` absent — every non-Chromium Android browser — `navigator.platform`
+    // reports a Linux value like `Linux armv8l`, which took the non-macOS arm and pruned the Apple
+    // rows as though this were a desktop. `mobile` is the boolean designed for the question.
+    const android = detect(
+      { adapterVendor: 'arm', platform: 'Linux armv8l', mobile: true },
+      DEVICES
+    );
+    expect(android.unsupportedPlatform).toBe('phone');
+  });
+
+  it('recognises AMD by its legal name as well as its brands', () => {
+    // An implementation-defined vendor string is exactly where a legal name turns up, and
+    // "Advanced Micro Devices, Inc." contains neither `amd` nor `radeon`.
+    const legal = detect({ adapterVendor: 'Advanced Micro Devices, Inc.' }, DEVICES);
+    expect(legal.candidates.length).toBeGreaterThan(0);
+    for (const device of legal.candidates) expect(device.vendor).toBe('AMD');
+  });
+
   it('ignores a platform string it does not recognise', () => {
     // A hardened browser returning `Unknown` was classified as definitively non-macOS and pruned
     // the Apple rows on the strength of a string nobody parsed.
