@@ -475,10 +475,12 @@ divide the work, which is why neither is a patch.
 `compare` marks a long list of scenario mismatches rather than reporting a delta against them, and
 `describeMismatch` is where that list lives — deliberately not restated here or in the module
 docblock, since four rounds of #175 went on a paraphrase of that one function that diverged from it
-differently each time. **A check fires only when the paste states the field it compares**, which is
-the property worth carrying: llama-bench's output is sparse, so a row naming neither the model nor
-the cache type compares clean, and unstated is not rejected except where a default makes silence
-itself a claim.
+differently each time. The property worth carrying is narrower than it first reads: **the checks on
+the paste's own optional metadata fire only when the paste states the field**, so a row naming
+neither the model nor the cache type compares clean, and unstated is not rejected except where a
+default makes silence itself a claim. The guards that read the _prediction_ — a configuration the
+engine refuses, a runtime `llama-bench` cannot measure, a concurrency it cannot reproduce — fire
+whatever the paste contains, since no field in it could answer them.
 
 What is worth recording here is the handful of causes **invisible in the numbers**, since those are
 the ones a reader gets wrong without noticing.
@@ -520,6 +522,16 @@ answers differ in one table.** The rate cell was first taken as the first numeri
 spread does when it is present, and `t/s` is last when it is not. `ngl` itself is then found by
 _position_ — a bare integer is not a distinctive shape — while `params` (`8.03 B`) and the backend
 word are found by shape, because a position breaks on the next column upstream adds.
+
+**And the position is already broken**, on the one output that matters most: llama-bench prints
+`type_k`/`type_v` between `ngl` and `test`, so on any run with a non-default cache — which is what
+the panel's own command asks for — the cell before `test` is `q8_0` and the layer count is lost.
+`describeMismatch` then skips the placement check, so an offloaded run compares clean against a
+fully-resident prediction, which is a wrong number entering the record rather than an unverifiable
+one. Same root as the cache columns and filed with them in
+[#181](https://github.com/MrZoller/bench/issues/181): the parser never reads the header row. A fix
+that adds `type_k`/`type_v` and leaves `ngl` positional would close the quieter half and leave the
+louder one.
 
 **Unverifiable is not the same as matching**, and treating it as such let a paste with no stated
 cache precision sail past a Q8 or Q4 prediction. It is called out as unverifiable now, with the
@@ -1803,10 +1815,11 @@ ceiling)` keeps an over-budget stack on screen, which is right and stays. What i
 
 Correctness follow-ups live in
 [the repository's open issues](https://github.com/MrZoller/bench/issues). This section is for the
-questions those issues cannot settle, and the two tables below are the record of the twelve findings
-filed rather than patched — six out of the July sweep, all now closed, and six out of the v2 pass,
-all still open. They are kept because what a finding turns out to need is repeatedly not what the
-issue said it would be.
+questions those issues cannot settle, and the three tables below are the record of the fourteen
+findings filed rather than patched — six out of the July sweep, all now closed; six out of the v2
+pass; and two more out of _documenting_ the v2 pass, which is its own entry. The eight from the last
+two are open. They are kept because what a finding turns out to need is repeatedly not what the issue
+said it would be.
 
 The pointer names the open issues rather than a range on purpose. It read "#12–#20" while six newer
 correctness issues sat in the table underneath it, so a maintainer following the sentence walked past
@@ -1902,10 +1915,10 @@ should be whenever the code is the thing that can be read instead.
 
 Two of the findings were not about the prose at all. They are defects the prose walked into:
 
-| filed                                                                                       | what it is                                                                                                                                                                                                                                                                                                                                                              |
-| ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [#180](https://github.com/MrZoller/bench/issues/180) the emitted decode depth is unusable   | **P1.** `llamaBench()` emits `-d prompt+prefix`; `Calibrate` expects `contextTokens`; `describeMismatch` rejects a depth off by 10%. The panel's own command produces a row the panel marks unusable, and calibrate's expectation is not reachable by any command — `-d 32768 -n 512` does not fit a 32K window, so the question is what `estimateDecode` should charge |
-| [#181](https://github.com/MrZoller/bench/issues/181) markdown never carries cache precision | `parseMarkdown` has no branch for `type_k`/`type_v`, so every markdown paste reads as f16 — including the one the panel's own `-ctk q8_0 -ctv q8_0 -o md` produces with the columns printed. The comment claiming the narrower cause is what carried it through two reviews                                                                                             |
+| filed                                                                                                           | what it is                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [#180](https://github.com/MrZoller/bench/issues/180) the emitted decode depth is unusable                       | **P1.** `llamaBench()` emits `-d prompt+prefix`; `Calibrate` expects `contextTokens`; `describeMismatch` rejects a depth off by 10%. The panel's own command produces a row the panel marks unusable, and calibrate's expectation is not reachable by any command — `-d 32768 -n 512` does not fit a 32K window, so the question is what `estimateDecode` should charge                                                                                       |
+| [#181](https://github.com/MrZoller/bench/issues/181) markdown loses the cache precision **and the layer count** | `parseMarkdown` never reads the header row. It has no branch for `type_k`/`type_v`, so every markdown paste reads as f16 — including the one the panel's own `-ctk q8_0 -ctv q8_0 -o md` produces with the columns printed — and it finds `ngl` by position, which those same columns displace, so the placement check is skipped and an offloaded run compares clean against a resident prediction. One fix for both; a cache-only fix leaves the worse half |
 
 ### Standing questions
 
