@@ -452,14 +452,18 @@ divide the work, which is why neither is a patch.
 
 ### Calibrate, and what a measurement has to carry
 
-**Two things make a measurement mean something other than what it appears to, and both are invisible
-in the numbers**: a different prompt length and a different depth. `compare` marks each as a scenario
-mismatch rather than reporting a delta against it — a `pp512` paste against a prediction made at
-16,384 tokens is not a disagreement about the model, it is two different jobs, and reporting the gap
-as evidence is how a calibration record fills with noise.
+`compare` rejects a long list of scenario mismatches — runtime, quantization, cache precision, model
+identity and size, backend, layer placement, concurrency, a configuration the engine refuses
+outright — and `describeMismatch` is where that list lives. What is worth recording here is the
+handful that are **invisible in the numbers**, since those are the ones a reader gets wrong without
+noticing.
 
-**Two more are recorded rather than rejected, and saying otherwise is a claim about a check that does
-not exist.** The **build** is one: `describeMismatch` never examines `buildCommit`, because there is
+**Two of those are rejected**: a different prompt length and a different depth. A `pp512` paste
+against a prediction made at 16,384 tokens is not a disagreement about the model, it is two different
+jobs, and reporting the gap as evidence is how a calibration record fills with noise.
+
+**Two are recorded rather than rejected, and saying otherwise is a claim about a check that does not
+exist.** The **build** is one: `describeMismatch` never examines `buildCommit`, because there is
 no expected build to compare against — the catalog pins a runtime, not a commit of one — so a paste
 from a six-month-old llama.cpp is comparable and submittable, with the commit riding into the issue
 body for a human to weigh and its absence stated rather than assumed benign. The **machine** is the

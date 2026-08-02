@@ -25,12 +25,19 @@
  *
  * ## What a measurement has to carry before it means anything
  *
- * A measurement that cannot name its scenario is worth nothing to calibration, and four things can
- * separate the two. **Two of them this module rejects; two it only records** — a distinction worth
- * keeping straight, since describing a recorded field as a check is advertising a guard that does
- * not exist (Codex spent two rounds on it in #175).
+ * A measurement that cannot name its scenario is worth nothing to calibration. {@link compare}
+ * rejects a long list of ways that happens — incompatible runtime, quantization, cache precision,
+ * model identity and size, backend, layer placement, concurrency, and a configuration the engine
+ * refuses outright — and {@link describeMismatch} is the enumeration; do not read this section as
+ * that list.
  *
- * Rejected — {@link compare} marks these and reports no delta against them:
+ * What this section is about is the four that are **invisible in the numbers**, because those are
+ * the ones a reader can get wrong without noticing. **Two of them this module rejects; two it only
+ * records** — a distinction worth keeping straight, since describing a recorded field as a check is
+ * advertising a guard that does not exist (Codex spent two rounds on it in #175, and a third on
+ * this paragraph reading as though the four were all of them).
+ *
+ * Rejected — marked, with no delta reported against them:
  *
  *   - **A different prompt length.** Prefill is quadratic in the prompt, so `pp512` against a
  *     prediction made at 16,384 tokens is not a disagreement about the model — it is two different
