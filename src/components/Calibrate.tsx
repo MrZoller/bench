@@ -116,23 +116,23 @@ export function Calibrate({ evaluation }: { evaluation: Evaluation }) {
       deviceVendor: device.vendor,
       ...(evaluation.placement.impossible ? { impossible: true as const } : {}),
       kvType: LLAMA_KV_TYPES[config.kvPrecision],
-      /**
-       * Stated only when the placement is fully resident, where "every layer" is unambiguous.
-       * Where it spills there is no layer count to compare against without converting a rig-wide
-       * fraction into one, which is the derivation #14 was about — so the field is omitted and the
-       * check is skipped rather than made up.
-       */
+      modelLayers: model.layers,
       /**
        * Zero on a machine with no GPU, and that distinction is what the EPYC anchor depends on.
        * `planPlacement` reports `offloadFraction === 0` for a `cpu-ram` rig because there is no
        * faster tier to spill *from* — so reading that as "every layer on the GPU" marked exactly
        * the CPU measurements this feature exists to collect as a different job.
        */
-      ...(device.class === 'cpu-ram'
-        ? { gpuLayers: 0 }
-        : evaluation.placement.offloadFraction === 0
-          ? { gpuLayers: model.layers }
-          : {}),
+      /**
+       * Zero on a machine with no GPU, and the *assignment's* count everywhere else.
+       *
+       * `Placement.assignment.residentLayers` is what #136 surfaced for exactly this — the layer
+       * count the placement really sized, spilled or not. The first version stated a count only
+       * when nothing spilled, which disabled the check on precisely the configurations where a
+       * wrong `-ngl` matters most: a run with far fewer layers on the GPU is streaming most of the
+       * model across the bus, and the prediction is not.
+       */
+      gpuLayers: device.class === 'cpu-ram' ? 0 : evaluation.placement.assignment.residentLayers,
     });
   }, [
     pasted,

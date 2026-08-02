@@ -69,6 +69,7 @@ const prediction = (over: Partial<Prediction> = {}): Prediction => ({
   deviceClass: 'discrete-gpu',
   deviceVendor: 'NVIDIA',
   kvType: 'f16',
+  modelLayers: 32,
   gpuLayers: 33,
   // The scenario's whole window, which is what `estimateDecode` charges every step against.
   residentContextTokens: 2048,
@@ -245,14 +246,65 @@ describe('a measurement of a different job is not evidence about the model', () 
     const spilled = JSON.stringify([
       { n_prompt: 2048, n_gen: 0, n_depth: 0, n_gpu_layers: 12, avg_ts: 900 },
     ]);
-    expect(compare(parseLlamaBench(spilled), prediction({ gpuLayers: 33 }))[0].mismatch).toMatch(
-      /12 layers on the GPU where the placement above puts 33/
+    expect(compare(parseLlamaBench(spilled), prediction({ gpuLayers: 32 }))[0].mismatch).toMatch(
+      /12 layers on the GPU where the placement above puts 32 of 32/
     );
 
-    // And says nothing when the prediction makes no claim, which is every spilled placement.
+    // And says nothing when the prediction makes no claim.
     expect(
       compare(parseLlamaBench(spilled), prediction({ gpuLayers: undefined }))[0].mismatch
     ).toBeUndefined();
+  });
+
+  it('accepts every spelling of "all the layers"', () => {
+    /**
+     * Where the two halves of this project disagreed with each other. llama.cpp counts the output
+     * tensor a position past the repeating blocks, so #136's emitter passes `layers + 1` for a
+     * fully-resident placement, and readers type `-ngl 99` for the same thing. Comparing against
+     * the layer count alone would have marked a run that followed bench's own command.
+     */
+    for (const ngl of [32, 33, 99]) {
+      const run = JSON.stringify([
+        { n_prompt: 2048, n_gen: 0, n_depth: 0, n_gpu_layers: ngl, avg_ts: 7285.68 },
+      ]);
+      expect(
+        compare(parseLlamaBench(run), prediction({ modelLayers: 32, gpuLayers: 32 }))[0].mismatch,
+        `-ngl ${ngl}`
+      ).toBeUndefined();
+    }
+  });
+
+  it('rejects a GPU run against a CPU prediction, which a one-sided check let through', () => {
+    // `cpu-ram` predicts zero GPU layers, and only rejecting *fewer* than predicted let every
+    // positive count pass — so the EPYC-shaped measurements this feature exists for could be
+    // satisfied by a GPU run.
+    const onGpu = JSON.stringify([
+      { n_prompt: 2048, n_gen: 0, n_depth: 0, n_gpu_layers: 32, avg_ts: 7285.68 },
+    ]);
+    expect(
+      compare(parseLlamaBench(onGpu), prediction({ gpuLayers: 0, modelLayers: 32 }))[0].mismatch
+    ).toMatch(/32 layers on the GPU where the placement above puts 0 of 32/);
+  });
+
+  it('will not read a markdown paste as confirming a non-default cache', () => {
+    // `parseMarkdown` populates the cache types only when llama-bench printed those columns, which
+    // it does only for non-default settings — so a *default* f16 run pasted as markdown carried no
+    // cache columns at all and sailed past a Q8 prediction. Markdown is the default output and f16
+    // is the default cache, so that is the common case rather than a corner.
+    expect(compare(parseLlamaBench(MARKDOWN), prediction({ kvType: 'q8_0' }))[0].mismatch).toMatch(
+      /pasted without cache columns/
+    );
+    // And an f16 prediction is unaffected, since nothing about it is unverifiable.
+    expect(compare(parseLlamaBench(MARKDOWN), prediction())[0].mismatch).toBeUndefined();
+  });
+
+  it('does not require a decode run to be any particular length', () => {
+    // `perUserTokensPerSec` is a steady-state per-token rate and does not depend on how many
+    // tokens are asked for, so requiring `n_gen` to match the window's remainder rejected every
+    // ordinary tg128 against a scenario that merely happened to leave 2,192 tokens spare. What
+    // matters for decode is the cache it reads, which is the depth check.
+    const short = JSON.stringify([{ n_prompt: 0, n_gen: 128, n_depth: 2048, avg_ts: 45.67 }]);
+    expect(compare(parseLlamaBench(short), prediction())[0].mismatch).toBeUndefined();
   });
 
   it('marks a llama-bench paste against a runtime llama-bench cannot measure', () => {

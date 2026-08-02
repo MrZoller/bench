@@ -299,6 +299,8 @@ export interface Prediction {
   impossible?: boolean;
   /** Cache precision the figures were priced at — llama.cpp's `-ctk`/`-ctv` names. */
   kvType: string;
+  /** The model's own layer count, so "all of them" can be recognised however it is spelled. */
+  modelLayers: number;
   /**
    * Layers the placement expects on the GPU, when that is unambiguous.
    *
@@ -505,6 +507,19 @@ function describeMismatch(
           `${prediction.kvType}`
       );
     }
+  } else if (prediction.kvType !== 'f16') {
+    /**
+     * **Unverifiable is not the same as matching**, and the first version treated it as such.
+     * `parseMarkdown` populates `kvTypes` only when llama-bench printed the columns, which it does
+     * only for non-default settings — so a *default* f16 run pasted as markdown carried no cache
+     * columns at all and sailed past a Q8 or Q4 prediction. That is the common case, not a corner:
+     * markdown is the default output and f16 is the default cache.
+     */
+    reasons.push(
+      `pasted without cache columns, which llama-bench prints only when they are not the default ` +
+        `— so this looks like an f16 run where the figures above assume ${prediction.kvType}. ` +
+        `Re-run with -o json to say for certain`
+    );
   }
 
   /**
@@ -533,15 +548,34 @@ function describeMismatch(
    * the bus, and the prediction is not. Only flagged when the paste states it, since markdown's
    * `ngl` column is not read — this is the one field the parser captured and nothing consulted.
    */
-  if (
-    measurement.gpuLayers !== undefined &&
-    prediction.gpuLayers !== undefined &&
-    measurement.gpuLayers < prediction.gpuLayers
-  ) {
-    reasons.push(
-      `run with ${measurement.gpuLayers} layers on the GPU where the placement above puts ` +
-        `${prediction.gpuLayers} there`
-    );
+  /**
+   * **Two-sided, and it was one-sided.** Only rejecting *fewer* layers than the prediction let
+   * every positive `n_gpu_layers` pass a `cpu-ram` scenario, whose predicted count is zero — so the
+   * EPYC-shaped measurements this feature exists to collect could be satisfied by a GPU run. And
+   * more layers than predicted is its own difference: the prediction charges host streaming the
+   * measurement never paid.
+   */
+  /**
+   * **And "all of them" has more than one spelling**, which is where the two halves of this project
+   * disagreed with each other. llama.cpp counts the output tensor a position past the repeating
+   * blocks, so #136's emitter passes `layers + 1` for a fully-resident placement — and readers type
+   * `-ngl 99` for the same thing. Comparing against the layer count alone would have marked a run
+   * that followed bench's own command.
+   *
+   * So a fully-resident prediction accepts anything at or above the layer count, and a partial one
+   * is compared exactly.
+   */
+  if (measurement.gpuLayers !== undefined && prediction.gpuLayers !== undefined) {
+    const allResident = prediction.gpuLayers >= prediction.modelLayers;
+    const agrees = allResident
+      ? measurement.gpuLayers >= prediction.modelLayers
+      : measurement.gpuLayers === prediction.gpuLayers;
+    if (!agrees) {
+      reasons.push(
+        `run with ${measurement.gpuLayers} layers on the GPU where the placement above puts ` +
+          `${prediction.gpuLayers} of ${prediction.modelLayers} there`
+      );
+    }
   }
 
   /**
@@ -550,9 +584,21 @@ function describeMismatch(
    * typed their own will land near rather than on. Ten percent is close enough that the quadratic
    * term has not moved much and far enough that `pp512` against 16,384 is caught.
    */
-  // Zero means the caller makes no claim about the length — a window whose prompt fills it leaves
-  // no generation to expect, and fabricating one rejects every normal decode row.
-  if (expectedTokens > 0 && Math.abs(measurement.tokens / expectedTokens - 1) > 0.1) {
+  /**
+   * **The length is checked for prefill and not for decode**, which the third round got wrong in
+   * both directions before settling here.
+   *
+   * Prefill is quadratic in the prompt, so `pp512` against a 16,384-token prediction is two
+   * different jobs. Decode is a steady-state per-token rate — `perUserTokensPerSec` does not depend
+   * on how many tokens you ask for — so requiring `n_gen` to match the window's remainder rejected
+   * every ordinary `tg128` against a scenario that merely happened to leave 2,192 tokens spare.
+   * What *does* matter for decode is the cache it reads, and that is the depth check below.
+   */
+  if (
+    measurement.kind === 'prefill' &&
+    expectedTokens > 0 &&
+    Math.abs(measurement.tokens / expectedTokens - 1) > 0.1
+  ) {
     reasons.push(
       `run at ${measurement.tokens.toLocaleString('en-US')} tokens where the prediction is for ` +
         `${expectedTokens.toLocaleString('en-US')}`
