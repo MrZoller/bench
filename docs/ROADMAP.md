@@ -40,10 +40,11 @@ for recommend, #168 for detect, #169 for calibrate — and what each turned out 
 two more (#180, #181) came out of reviewing _this section_ a day later; they are in **Open
 questions**, and two of the first six share one root.
 
-What remains is a naming decision, **eight issues** — the six filed during the pass plus
-[#180](https://github.com/MrZoller/bench/issues/180) and
+What remains is a naming decision, **eight open issues of which seven are work** — the six filed
+during the pass plus [#180](https://github.com/MrZoller/bench/issues/180) and
 [#181](https://github.com/MrZoller/bench/issues/181), which came out of reviewing this very
-document — and **two loose ends that are on `main` and in no issue at all**: a `LLAMA_KV_TYPES`
+document, less #174, which is open as a record of a decision already made rather than as a task —
+and **two loose ends that are on `main` and in no issue at all**: a `LLAMA_KV_TYPES`
 mapping duplicated between `Calibrate.tsx` and `launch.ts` under a comment saying the two must be
 merged once both land, and the emitted `llama-bench` command asking for `-o md` while the parser
 prefers JSON. Both are described under **Calibrate**, below, and both are named here because a
@@ -530,9 +531,11 @@ written down.
 Deliberately absent, and not forgotten: cloud pricing stays out of scope per the settled decision
 below, and fine-tuning memory (LoRA/QLoRA) is a second engine rather than a feature — real demand,
 weak incumbents, and deliberately not attempted before guided mode shipped. Now that it has, that is
-the v3-scale bet, and what stands between here and it is the eight issues in **Open questions** —
-the six from the pass plus #180 and #181, one of which is a P1 on the path a reader is most likely
-to take.
+the v3-scale bet. What stands between here and it is **seven** of the eight issues in **Open
+questions** — the six from the pass plus #180 and #181, one of them a P1 on the path a reader is
+most likely to take, and [#174](https://github.com/MrZoller/bench/issues/174) not among them: it is
+open as a _record_ of an answered policy question rather than as work, and counting it as a blocker
+would make a settled decision look like a task.
 
 ## Deployment
 
@@ -1807,8 +1810,11 @@ made that visible; the measurements survived and the framings mostly did not.
 
 ### The six filed out of the v2 pass, 1 August 2026
 
-Same rule, same shape, and **all six are open** — each carries its measurement, two carry an
-argument rather than a repair, and one records a capability gap that is not a defect at all.
+Same rule, same shape, and **all six are open — but only five are work.** Each carries its
+measurement; two carry an argument rather than a repair; one records a capability gap that is not a
+defect at all; and #174 is open purely as the written argument for a decision already taken, which
+is why the counts elsewhere in this file exclude it from what stands between here and v3. An issue
+can be a record. Closing it would lose the reasoning, and counting it would invent a task.
 
 | filed                                                                                             | what it is                                                                                                                                                                                                                                                                                                                                                        |
 | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
