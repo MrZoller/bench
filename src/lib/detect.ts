@@ -396,11 +396,16 @@ export function detect(signals: DetectionSignals, devices: readonly DeviceSpec[]
    * a ceiling on the GPU's memory. Applied only there, since a discrete card's VRAM is unrelated to
    * how much RAM the host has.
    *
-   * **The factor of two is the spec's, not a fudge.** Device Memory reports actual RAM rounded
-   * *down* to a power of two and then clamped to [0.25, 8], so a reading of `r` means the machine
-   * has somewhere in `[r, 2r)`. `capacity <= 2r` is therefore the widest bound that is still sound,
-   * and it is deliberately generous at the boundary: the direction that matters is never excluding
-   * the reader's real machine.
+   * **The factor of two is deliberately looser than the spec's interval** (corrected on #175; this
+   * comment said "rounded *down*", which it is not). Device Memory rounds to the **nearest** power
+   * of two — the lower bound when `mem − lower ≤ upper − mem`, so ties go down — and then clamps to
+   * [0.25, 8]. A reading of `r` therefore means `(0.75r, 1.5r]`, and `r` is *not* a floor: a 3.5 GiB
+   * machine reports 4.
+   *
+   * `capacity <= 2r` is wider than that interval and stays sound because of it. Do not tighten it to
+   * `1.5r` for neatness: the one failure this module cannot accept is excluding the reader's real
+   * machine, browsers vary in what they report, and the bound is doing its job at the only end that
+   * matters.
    */
   if (signals.deviceMemoryGiB !== undefined && signals.deviceMemoryGiB < 8) {
     const reported = signals.deviceMemoryGiB;

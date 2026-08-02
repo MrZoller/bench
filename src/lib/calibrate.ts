@@ -93,9 +93,11 @@ export function parseLlamaBench(text: string): readonly Measurement[] {
  * because the block beside it is read by a person before it is run by one. So the reader who
  * follows the panel arrives here with markdown and no `build_commit`, and {@link submissionUrl} is
  * what asks for the JSON re-run — in the issue body, at the point the missing commit would have
- * been printed. (`describeMismatch` asks for one too, for the unrelated reason that markdown omits
- * the cache columns at their defaults.) Worth revisiting as a pair rather than in either file:
- * whichever way it goes, the emitter and this comment have to agree.
+ * been printed. (`describeMismatch` asks for one too, and for a reason that is worse than it reads:
+ * {@link parseMarkdown} never assigns `kvTypes` at all, so **every** markdown paste is
+ * cache-unverifiable — including the one the panel's own `-ctk q8_0 -ctv q8_0 -o md` produces, where
+ * llama-bench really did print the columns. See #181.) Worth revisiting as a pair rather than in
+ * either file: whichever way it goes, the emitter and this comment have to agree.
  *
  * `-o json` produces an array of objects carrying every field the CSV header lists, so the depth,
  * the layer count and the build commit are all present as data rather than reconstructed from a
@@ -516,15 +518,20 @@ function describeMismatch(
     }
   } else if (prediction.kvType !== 'f16') {
     /**
-     * **Unverifiable is not the same as matching**, and the first version treated it as such.
-     * `parseMarkdown` populates `kvTypes` only when llama-bench printed the columns, which it does
-     * only for non-default settings — so a *default* f16 run pasted as markdown carried no cache
-     * columns at all and sailed past a Q8 or Q4 prediction. That is the common case, not a corner:
-     * markdown is the default output and f16 is the default cache.
+     * **Unverifiable is not the same as matching**, and the first version treated it as such: a
+     * paste carrying no cache precision sailed past a Q8 or Q4 prediction.
+     *
+     * **This branch is reached by every markdown paste, not only a default one** (raised by Codex
+     * on #175; the comment here previously claimed the narrower cause and was wrong).
+     * `parseMarkdown` has no branch for the cache columns at all, so it never assigns `kvTypes`
+     * whether or not llama-bench printed them — and the panel's own measure command passes
+     * `-ctk`/`-ctv` explicitly, which makes it print them. So the reader who follows the panel
+     * exactly gets told their correctly reproduced run looks like f16. Reading those columns is
+     * #181; until then the sentence below has to describe the paste rather than the format.
      */
     reasons.push(
-      `pasted without cache columns, which llama-bench prints only when they are not the default ` +
-        `— so this looks like an f16 run where the figures above assume ${prediction.kvType}. ` +
+      `pasted as markdown, which this reader does not take a cache precision from — so it cannot ` +
+        `be told apart from an f16 run, where the figures above assume ${prediction.kvType}. ` +
         `Re-run with -o json to say for certain`
     );
   }

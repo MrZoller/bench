@@ -36,14 +36,18 @@ ruleset that had been convention rather than enforcement since the start.
 **The v2 guided-mode milestone is done too**, closed 1 August 2026. Launch commands, detect,
 recommend and calibrate shipped in one pass as five pull requests — #163 and #173 for launch, #167
 for recommend, #168 for detect, #169 for calibrate — and what each turned out to settle is under
-**v2 — guided mode**, below. Six findings were filed rather than patched under the merge rule; they
-are in **Open questions**, and three of the six share one root.
+**v2 — guided mode**, below. Six findings were filed rather than patched under the merge rule, and
+two more (#180, #181) came out of reviewing _this section_ a day later; they are in **Open
+questions**, and two of the first six share one root.
 
-What remains is a naming decision, those six issues, and **two loose ends that are on `main` and in
-no issue at all** — a `LLAMA_KV_TYPES` mapping duplicated between `Calibrate.tsx` and `launch.ts`
-under a comment saying the two must be merged once both land, and the emitted `llama-bench` command
-asking for `-o md` while the parser prefers JSON. Both are described under **Calibrate**, below, and
-both are named here because a handoff summary listing six issues reads as a complete inventory. The
+What remains is a naming decision, **eight issues** — the six filed during the pass plus
+[#180](https://github.com/MrZoller/bench/issues/180) and
+[#181](https://github.com/MrZoller/bench/issues/181), which came out of reviewing this very
+document — and **two loose ends that are on `main` and in no issue at all**: a `LLAMA_KV_TYPES`
+mapping duplicated between `Calibrate.tsx` and `launch.ts` under a comment saying the two must be
+merged once both land, and the emitted `llama-bench` command asking for `-o md` while the parser
+prefers JSON. Both are described under **Calibrate**, below, and both are named here because a
+handoff summary that enumerates reads as a complete inventory. The
 naming decision is the smallest of the three: the site serves from the Pages project URL, and a
 zoller.ai subdomain is one repository variable away. See **Deployment**, below.
 
@@ -290,6 +294,16 @@ calibrate, the single-command version would have submitted a decode rate measure
 against a prediction charged at full depth, and the comparison would have reported it as a
 disagreement about the model.
 
+**The two panels then disagree about _which_ depth, and neither knows it**
+([#180](https://github.com/MrZoller/bench/issues/180), a P1 from Codex on #175). The emitter puts
+`prompt + prefix` in the cache; `Calibrate` expects `contextTokens`, under a docblock arguing that
+this is what `estimateDecode` charges every step's cache read at; and `describeMismatch` rejects a
+depth off by more than 10%. So on the default 8K-prompt/32K-context scenario **bench's own measure
+command produces a row bench marks unusable** — the likeliest path a reader takes through this
+feature. It is filed rather than patched because calibrate's expectation is not reachable by any
+command at all (`-d 32768 -n 512` does not fit a 32K window), which makes it a question about what
+`estimateDecode` should charge rather than about either panel's arithmetic.
+
 One thing to watch that is not a bug yet: **`RuntimeSpec.preallocFraction` is 0.9 and vLLM's own
 `gpu_memory_utilization` default has moved to 0.92.** The emitter states `--gpu-memory-utilization
 0.9` rather than leaving it out, so the command reproduces what the panel priced — but the catalog
@@ -307,11 +321,16 @@ a source rather than recalled:
   the one platform where a unified-memory row is the headline case, the architecture narrows
   nothing at all; `deviceMemory` and a follow-up question do the work.
 - **`navigator.deviceMemory` is capped at 8 in Chrome and absent in Safari**, so a reading _of_ 8
-  means "8 or more" and rules out nothing at the top. A reading _below_ 8 is a real ceiling, and the
-  detector uses it as one: the spec reports RAM rounded **down** to a power of two, so `r` means
-  `[r, 2r)` and `capacity <= 2r` is the widest sound bound. It prunes `unified-soc` rows only, since
-  a discrete card's VRAM is unrelated to host RAM. "A floor, never a capacity" is true of the capped
-  reading alone, and this bullet said it of every reading until Codex caught it on #175.
+  means "8 or more" and rules out nothing at the top. A reading _below_ 8 is a real ceiling and the
+  detector uses it as one, pruning `unified-soc` rows only, since a discrete card's VRAM is
+  unrelated to host RAM. **The rounding is to the _nearest_ power of two, ties going down** — the
+  spec picks the lower bound when `mem − lower ≤ upper − mem` — so a reading of `r` means the
+  machine has somewhere in `(0.75r, 1.5r]`, and `r` is not a floor: a 3.5 GiB machine reports 4. The
+  shipped prune is `capacity <= 2r`, which is therefore **loose rather than tight, deliberately**:
+  the only failure this module cannot accept is excluding the reader's own machine, and a bound
+  wider than the interval never does. Two earlier versions of this bullet had it as "a floor, never
+  a capacity" and then as rounded _down_ to `[r, 2r)`; both were caught on #175, and the second is
+  the dangerous one, because tightening `2r` on that reasoning would start excluding real machines.
 - **The adapter limits narrow nothing, and that is the second review's correction rather than the
   first draft's claim.** `maxBufferSize` looks like a sound floor — the largest single buffer a
   driver will hand out, capped well under total memory, so a device below it is impossible. It is a
@@ -465,11 +484,15 @@ spread does when it is present, and `t/s` is last when it is not. `ngl` itself i
 _position_ — a bare integer is not a distinctive shape — while `params` (`8.03 B`) and the backend
 word are found by shape, because a position breaks on the next column upstream adds.
 
-**Unverifiable is not the same as matching**, and treating it as such passed the common case rather
-than a corner. `llama-bench` prints the cache-type columns only when they are _not_ the default, and
-markdown is the default output and f16 the default cache — so a default run pasted as markdown
-carried no cache columns at all and sailed past a Q8 or Q4 prediction. It is called out as
-unverifiable now, with the `-o json` re-run named.
+**Unverifiable is not the same as matching**, and treating it as such let a paste with no stated
+cache precision sail past a Q8 or Q4 prediction. It is called out as unverifiable now, with the
+`-o json` re-run named — but **the limitation is the parser rather than the format, and saying
+otherwise is how it survived two reviews**. `parseMarkdown` has no branch for `type_k`/`type_v` at
+all, so no markdown paste ever carries a cache precision, including the one the panel's own
+`-ctk q8_0 -ctv q8_0 -o md` produces with the columns printed. The reader who follows the panel
+exactly is told their correct run looks like f16. Reading those columns is
+[#181](https://github.com/MrZoller/bench/issues/181); the current behaviour is now pinned by a test
+that inverts when it lands.
 
 **The band is judged on the rounded percent**, per the rule this file already carries for thresholds:
 a raw comparison put a 30.0% delta outside the ±30% band on float epsilon alone
@@ -1808,6 +1831,25 @@ these pull requests, and from round three onward the findings were largely defec
 round's fix_ — a `&&` that cannot chain a heredoc, a `set -e` that would have escaped into the
 reader's interactive shell, a two-way ternary that labelled a Q4 format "8-bit". That is the
 argument for the merge rule rather than against it, provided the root causes are the ones fixed.
+
+### Two more filed out of documenting it, which is the finding about the documenting
+
+Writing the four sections above took four review rounds of its own and produced **thirteen findings,
+none of them false**, on a pull request that changed one comment and a Markdown file. Every one had
+the same shape: **a claim about the code that the code did not support** — an adapter limit
+described as narrowing when the feature had withdrawn that prune in review, a `compare` credited
+with checking a build commit it never reads, a table called "generated" with no generator in the
+repository, a memory reading called a floor when the spec rounds to the nearest power of two. Prose
+_about_ code is not checked by the test suite, the build, or the reader, and it is read later by
+someone who cannot easily tell it from the code. That is the argument for reviewing a documentation
+change exactly as hard as a functional one, and it is why this section exists at all.
+
+Two of the thirteen were not about the prose. They are defects the prose walked into:
+
+| filed                                                                                       | what it is                                                                                                                                                                                                                                                                                                                                                              |
+| ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [#180](https://github.com/MrZoller/bench/issues/180) the emitted decode depth is unusable   | **P1.** `llamaBench()` emits `-d prompt+prefix`; `Calibrate` expects `contextTokens`; `describeMismatch` rejects a depth off by 10%. The panel's own command produces a row the panel marks unusable, and calibrate's expectation is not reachable by any command — `-d 32768 -n 512` does not fit a 32K window, so the question is what `estimateDecode` should charge |
+| [#181](https://github.com/MrZoller/bench/issues/181) markdown never carries cache precision | `parseMarkdown` has no branch for `type_k`/`type_v`, so every markdown paste reads as f16 — including the one the panel's own `-ctk q8_0 -ctv q8_0 -o md` produces with the columns printed. The comment claiming the narrower cause is what carried it through two reviews                                                                                             |
 
 ### Standing questions
 
