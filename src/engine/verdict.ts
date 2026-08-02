@@ -51,7 +51,7 @@ export type Fitness = 'good' | 'tight' | 'fail';
  * model capped at 32,768 leaves nowhere to reply from. Small, because these archetypes ask
  * short questions of long inputs — but not zero, which is what the fit checks assumed.
  */
-const RESPONSE_ALLOWANCE = 512;
+export const RESPONSE_ALLOWANCE = 512;
 
 /**
  * The session sizes the two agent tiers recommend a machine for — and therefore have to grade it

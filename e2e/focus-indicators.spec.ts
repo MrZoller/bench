@@ -371,10 +371,23 @@ test('every tab stop paints an indicator that clears 2px and 3:1', async ({ page
   expect(stops.length, 'the tab walk found almost nothing').toBeGreaterThan(15);
   expect(stops.length, 'the walk never wrapped, so it is partial').toBeLessThan(MAX_STOPS);
   expect(unstamped, 'a focusable control the sweep cannot see').toEqual([]);
-  expect(
-    stops.filter((s) => controls[s.index].name.startsWith('<select>')).length,
-    'the four primary selects are not in the tab sequence'
-  ).toBe(4);
+  /**
+   * The four primary selects, **named rather than counted**.
+   *
+   * This asserted `=== 4` and failed the moment #138 added a fifth select — the recommendation
+   * panel's workload picker — reporting "the four primary selects are not in the tab sequence"
+   * about a page where all four were. A count is a proxy for the claim in its own message, and it
+   * goes wrong in the direction that reads as a real defect: the guard exists to prove the walk
+   * *reached* Setup, and another select elsewhere on the page is neither evidence for nor against
+   * that. Naming them is strictly stronger — it would also catch a walk that found five selects and
+   * none of these — and it is what this file's own sibling test already does one block up.
+   */
+  const selects = stops
+    .filter((s) => controls[s.index].name.startsWith('<select>'))
+    .map((s) => controls[s.index].name);
+  for (const label of ['Model', 'Hardware', 'Quantization', 'Runtime']) {
+    expect(selects, `${label} is not in the tab sequence`).toContain(`<select> "${label}"`);
+  }
 
   const named = (index: number) => controls[index].name;
   /** What was computed, so a failure here can be read without re-running the browser. */
