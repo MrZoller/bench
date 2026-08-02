@@ -29,6 +29,64 @@ export function kvElementBytes(precision: KvPrecision, runtime?: RuntimeSpec): n
  * Both errors point the same way: telling someone they need hardware they don't.
  */
 
+/**
+ * The bound on what this layer attends over, or `null` for the whole context.
+ *
+ * One function because three callers now dispatch on it and they must agree about what an absent
+ * entry means: `null` and an absent `layerWindows` pattern are both "attends over everything", and
+ * a reader that treated a missing entry as a window of zero would report a model with no cache.
+ */
+function windowOf(attention: AttentionSpec, layerIndex: number): number | null {
+  return attention.layerWindows?.[layerIndex] ?? null;
+}
+
+/**
+ * Whether this layer's attention is bounded — the property that makes a hybrid model's layers
+ * non-interchangeable, and therefore the property a per-device layer *set* has to be read against.
+ *
+ * Exported for `launch.ts`, which says what bench packed onto each card: on Gemma at 128K one of
+ * these caches ~128x what a windowed one does, so "nine layers" and "nine layers, two of them
+ * unbounded" are different statements about the same card.
+ */
+export function isSlidingLayer(model: ModelSpec, layerIndex: number): boolean {
+  return windowOf(model.attention, layerIndex) !== null;
+}
+
+/**
+ * Tokens this layer actually holds at a context — the whole of it, or its window.
+ *
+ * `…Of` rather than `cachedTokens`, which is the name of the local `layerBytes` computes from the
+ * same two lines: a module-level function shadowed by a `const` in the one place it would most
+ * naturally be called is a trap rather than a coincidence of naming.
+ */
+function cachedTokensOf(model: ModelSpec, layerIndex: number, contextTokens: number): number {
+  const window = windowOf(model.attention, layerIndex);
+  return window === null ? contextTokens : Math.min(contextTokens, window);
+}
+
+/**
+ * Whether every layer caches the same amount at this context — which is what makes a layer *count*
+ * a complete description of a packing, and is a property of the scenario rather than of the model.
+ *
+ * `hasSlidingLayers` is the model-level question and it is the wrong one to gate a per-device split
+ * on. A hybrid model whose context has not reached its shortest window has no expensive layers yet:
+ * every layer holds `contextTokens` and any assignment with the same counts has the same load. Read
+ * as "is this model hybrid" instead, `launch.ts` refused `-ts` on Gemma at a 1,024-token context —
+ * where the flag is exact — and then explained the refusal with an imbalance that does not exist at
+ * that context.
+ *
+ * Cached tokens rather than bytes, because every other factor in `layerBytes` is model-wide: two
+ * layers cache the same bytes exactly when they cache the same tokens, so this is the same
+ * comparison one multiplication earlier and needs no precision or runtime.
+ */
+export function layersCacheAlike(model: ModelSpec, contextTokens: number): boolean {
+  const first = cachedTokensOf(model, 0, contextTokens);
+  for (let layer = 1; layer < model.layers; layer++) {
+    if (cachedTokensOf(model, layer, contextTokens) !== first) return false;
+  }
+  return true;
+}
+
 /** Bytes of KV held for a single layer at a given context length. */
 function layerBytes(
   attention: AttentionSpec,
@@ -36,10 +94,9 @@ function layerBytes(
   contextTokens: number,
   elemBytes: number
 ): number {
-  const window = attention.layerWindows?.[layerIndex];
+  const window = windowOf(attention, layerIndex);
   // `null` (or an absent pattern) means this layer attends over everything.
-  const cachedTokens =
-    window === null || window === undefined ? contextTokens : Math.min(contextTokens, window);
+  const cachedTokens = window === null ? contextTokens : Math.min(contextTokens, window);
 
   switch (attention.core.kind) {
     case 'gqa':
@@ -132,9 +189,22 @@ export function kvReadBytesPerToken(
   return kvBytesPerSequence(model, contextTokens, precision, runtime);
 }
 
-/** Whether any layer uses a bounded attention window — drives the explain layer. */
+/**
+ * Whether any layer uses a bounded attention window — drives the explain layer.
+ *
+ * Asked through {@link isSlidingLayer} over the model's own layer range, rather than over
+ * `layerWindows` directly, so this and the per-layer readers cannot diverge. `some((w) => w !==
+ * null)` diverges in two ways, both outside the declared `readonly (number | null)[]` and both
+ * silent: an explicit `undefined` entry counts as a window here while `windowOf` reads it as full
+ * attention, and an entry past `model.layers` counts as a window belonging to a layer that does not
+ * exist. Neither is reachable from the shipped catalog — every row that states a pattern states
+ * exactly `layers` entries — which is what makes agreement by construction cheaper than a check.
+ */
 export function hasSlidingLayers(model: ModelSpec): boolean {
-  return model.attention.layerWindows?.some((w) => w !== null) ?? false;
+  for (let layer = 0; layer < model.layers; layer++) {
+    if (isSlidingLayer(model, layer)) return true;
+  }
+  return false;
 }
 
 /**

@@ -113,6 +113,28 @@ export interface DeviceShare {
   deviceCount: number;
   layers: number;
   /**
+   * *Which* layers, by the model's own index, ascending — not merely how many (#166).
+   *
+   * `layers` is `layerIndices.length` and stays because it is the quantity a flag reads; this is
+   * the quantity a *description* needs. The two are not interchangeable, and the gap between them
+   * is the whole finding: `layerSplitBins` packs individual layers by combined weight-plus-cache
+   * load, so a bin is a non-contiguous mixture and **many different assignments share one set of
+   * counts while holding radically different amounts**. On Gemma 3 12B at 128K over 8 users a card
+   * that lands one full-attention layer is full, and a card holding only sliding layers takes
+   * twenty to reach the same load — the counts land 19 apart on five cards, and nothing in them
+   * says why. A consumer reading `layers` alone cannot reproduce the layout that the `weightBytes`
+   * and `kvBytes` beside it describe; reading these it can.
+   *
+   * Recorded during the packing, never recovered afterwards — the same rule the rest of this
+   * interface follows, and for a sharper reason here: the packing walks the layers in *load* order,
+   * so there is no arithmetic over `layers` and `deviceCount` that reconstructs the sets.
+   *
+   * **Under tensor parallelism this is every layer**, exactly as `layers` is, because a rank holds
+   * a slice of each. `Assignment.parallelism` is still what says which reading applies: the same
+   * list means "these layers, whole" on one branch and "a slice of each of these" on the other.
+   */
+  layerIndices: readonly number[];
+  /**
    * Of `layers`, how many keep their weights on the device rather than streaming from host RAM.
    *
    * **Derived from this share's own bytes and this share's own layer count**, never from the
@@ -142,6 +164,11 @@ export interface DeviceShare {
  * `Placement`, so nothing downstream could say *how many layers go where*. That is the one
  * question a launch command has to answer (#136), and recovering it from `offloadFraction`
  * afterwards is exactly the derivation this engine has already been wrong about once.
+ *
+ * **And a count was not the whole of what the packing knew** (#166): the first version kept how
+ * many layers each device holds and discarded which, so the object described a *family* of
+ * assignments rather than the one it had sized. `DeviceShare.layerIndices` closes that; nothing
+ * else here moved, because nothing else was wrong.
  *
  * Recording, not modelling: every figure here comes from the same bins the byte totals do.
  */
@@ -463,6 +490,8 @@ interface DeviceLoad {
    * day per-layer weights stop being uniform.
    */
   layers: number;
+  /** Which layers, by the model's own index — see {@link DeviceShare.layerIndices}. */
+  layerIndices: number[];
 }
 
 /**
@@ -518,7 +547,11 @@ function layerSplitBins(
   const perLayerRepeating = weights.layerBytes / model.layers;
   const sequences = Math.max(1, usage.concurrency);
 
+  // The index travels with the load, because the sort below reorders them and the assignment is
+  // recorded in the order the walk visits — a bin's membership is not recoverable from its count
+  // afterwards, which is the whole of #166.
   const layers = Array.from({ length: model.layers }, (_, i) => ({
+    index: i,
     weightBytes: perLayerWeight,
     kvBytes: layerKvBytes(model, i, usage.contextTokens, usage.kvPrecision, runtime) * sequences,
   })).sort((a, b) => loadOf(b) - loadOf(a));
@@ -534,6 +567,7 @@ function layerSplitBins(
     layerWeightBytes: 0,
     kvBytes: 0,
     layers: 0,
+    layerIndices: [],
   }));
 
   for (const layer of layers) {
@@ -545,7 +579,13 @@ function layerSplitBins(
     bins[lightest].layerWeightBytes += perLayerRepeating;
     bins[lightest].kvBytes += layer.kvBytes;
     bins[lightest].layers += 1;
+    bins[lightest].layerIndices.push(layer.index);
   }
+
+  // The walk visits layers heaviest-first, so a bin collects its indices in load order. Sorted
+  // back into the model's own order because that is the order every reader of the list means —
+  // a card's share is "layers 5, 11 and 17", not "the three most expensive it was handed".
+  for (const bin of bins) bin.layerIndices.sort((a, b) => a - b);
 
   return bins;
 }
@@ -611,6 +651,7 @@ export function planPlacement(
           // bytes beside it are what distinguishes the two, which is why `Assignment.parallelism`
           // has to travel with the shares.
           layers: model.layers,
+          layerIndices: Array.from({ length: model.layers }, (_, i) => i),
         },
       ];
   /** How many real devices each entry of `bins` describes. */
@@ -698,6 +739,7 @@ export function planPlacement(
   const shares: DeviceShare[] = bins.map((bin) => ({
     deviceCount: binsPerEntry,
     layers: bin.layers,
+    layerIndices: bin.layerIndices,
     residentLayers: residentLayersOf(bin),
     weightBytes: bin.weightBytes,
     kvBytes: bin.kvBytes,

@@ -40,8 +40,9 @@ for recommend, #168 for detect, #169 for calibrate — and what each turned out 
 two more (#180, #181) came out of reviewing _this section_ a day later; they are in **Open
 questions**, and two of the first six share one root.
 
-What remains is a naming decision, **eight open issues of which seven are work** — the six filed
-during the pass, less [#165](https://github.com/MrZoller/bench/issues/165) which is fixed, plus
+What remains is a naming decision, **seven open issues of which six are work** — the six filed
+during the pass, less [#165](https://github.com/MrZoller/bench/issues/165) and
+[#166](https://github.com/MrZoller/bench/issues/166), which are fixed, plus
 [#180](https://github.com/MrZoller/bench/issues/180) and
 [#181](https://github.com/MrZoller/bench/issues/181), which came out of reviewing this very
 document, plus [#182](https://github.com/MrZoller/bench/issues/182), which is the half of #165 that
@@ -301,6 +302,76 @@ one case that mattered emitted nothing at all — equal counts of _unequal_ laye
 the split is needed. And **the test suite had a spilled case and a sharded case and never their
 product**, which is where the defect lived; the issue's own verification note asks for "a spilled
 one, a sharded one" and the conjunction is what was missing. Both are now one test, mutation-checked.
+
+**Then the hybrid case turned out to have no flag at all, and that is a llama.cpp fact rather than a
+bench limitation** (#166). `-ts` was narrowed in #164 to refuse any model with sliding layers,
+because it proportions a _contiguous_ run of the `-ngl` window while `layerSplitBins` assigns
+individual layers by greedy combined load. #166 filed the remaining capability gap and named
+`-ot`/`--override-tensor` as the way to close it: it takes a pattern and a buffer type and can name
+individual tensors, so a per-layer override list looks expressible in principle.
+
+**It is not, and the reason is one level below the flag.** Three files say so, and none of them is
+the argument parser:
+
+- `llama_model::load_tensors` computes `dev_layer[il]` from `n_gpu_layers` and `tensor_split` alone
+  — `i_gpu_start = max(n_layer_all + 1 - n_gpu_layers, 0)`, then an `upper_bound` over the
+  normalised splits — **before** any override is consulted.
+- The overrides are applied later, in `llama_model_loader::create_tensor`, by `std::regex_search`
+  against a _tensor_ name. They change where a weight lives and nothing else.
+- `llama_kv_cache`'s constructor takes each layer's cache buffer from
+  `ggml_backend_dev_buffer_type(model.dev_layer(il))`.
+
+So `-ot` moves a layer's weights to the card bench chose and leaves its **cache** on the card
+`-ngl`/`-ts` chose — and on a hybrid model the cache is the entire reason the packing is uneven,
+since the per-layer weights are uniform and a full-attention layer caches up to ~128x a sliding one
+at 128K. The flag moves the half that does not vary. A command built from it would start a placement
+other than the one the panel priced, which is refusal 1 rather than a caveat, so **`-ot` is not a
+follow-up here — it is answered.** Read 2 August 2026 from `src/llama-model.cpp`,
+`src/llama-model-loader.cpp` and `src/llama-kv-cache.cpp` at ggml-org/llama.cpp master.
+
+What shipped instead is the engine half of #166 — `DeviceShare.layerIndices`, which says _which_
+layers a card holds rather than only how many — and a panel that states the packing it cannot
+express. Gemma 3 12B at Q4_K_M, 128K over 8 users on five 5090s reads `2,2,2,21,21` layers against a
+composition of `2,2,2,1,1` full-attention ones: the 19-layer spread the issue was filed on, and the
+second list is the fact the first one was hiding.
+
+And it went on **both** llama.cpp launchers rather than the serving one, which is where the same
+class was already half-covered: a `llama-bench` run at llama.cpp's default split times a placement
+other than the one priced, and that is as true when bench cannot express its split as when it
+declines to repeat an even one — so the number the calibration record collects was the one arriving
+unqualified.
+
+**Three things about it were wrong on review, and the corrections are the transferable part. Two are
+the same mistake — a claim in prose that the code had never tested — and the third is this file's
+oldest one, a class swept everywhere except the function directly above.**
+
+**Being hybrid is a property of the model; caching unequal amounts is a property of the context**,
+and #164's gate read the first. Below its shortest window every one of a hybrid model's layers holds
+the whole context, so the packing hands out equal loads and a count describes it exactly — Gemma at
+a 1,024-token context was refused a `-ts` that was available, and then told the flag was impossible
+because its full-attention layers cache more than its sliding ones, which they do not at that
+context. The gate is `layersCacheAlike(model, contextTokens)` now: cached _tokens_ rather than
+bytes, since every other factor in `layerBytes` is model-wide, so it needs neither a precision nor a
+runtime. That widens the flag rather than narrowing it, and the packing sentences share the
+predicate — a scenario where `-ts` is exact is a scenario where they have nothing to explain.
+
+And **the tail predicted a comparison bench has not made**. "Plan for the busiest card to hold more
+than the panel shows" reads as arithmetic and is not: llama.cpp's contiguous split sometimes lands
+the same composition the packing did — Gemma 3 12B on two 5090s at 128K packs `24,24` against `4,4`,
+and so does an even contiguous halving — and finding out which would be this module deriving
+llama.cpp's placement rather than formatting bench's. What is left is what bench knows: it packed for
+a light busiest card and llama.cpp is not packing for that at all, so the figure is a floor to plan
+against.
+
+And the third was **a guard that already existed in the function directly above**. `tensorSplit`
+returns nothing
+when no layer is resident — `-ngl 0` already says it — and the packing sentences were written without
+that check, so gpt-oss 120B at BF16 on two 4090s at 128K over 8 users emitted `-ngl 0` under two
+sentences describing how llama.cpp would divide the cards' layers between them. That is this file's
+N+1 rule arriving _inside_ a change made to sweep a class, which is the version of it worth
+remembering: the sweep looked outward at the launchers and not upward at the function it was copying
+a gate from. Both read `gpuLayers` now, so the note and the flag cannot disagree about whether
+anything reached a GPU at all.
 
 **And `llama-bench -d` answers #139's sharpest trap for free.** It runs the test at a stated context
 depth, which is exactly the resident-prefix state `estimatePrefill` charges an agent turn against —
@@ -576,8 +647,8 @@ written down.
 Deliberately absent, and not forgotten: cloud pricing stays out of scope per the settled decision
 below, and fine-tuning memory (LoRA/QLoRA) is a second engine rather than a feature — real demand,
 weak incumbents, and deliberately not attempted before guided mode shipped. Now that it has, that is
-the v3-scale bet. What stands between here and it is **seven** of the eight issues in **Open
-questions** — the five still open from the pass plus #180, #181 and #182, one of them a P1 on the
+the v3-scale bet. What stands between here and it is **six** of the seven issues in **Open
+questions** — the four still open from the pass plus #180, #181 and #182, one of them a P1 on the
 path a reader is most likely to take, and [#174](https://github.com/MrZoller/bench/issues/174) not
 among them: it is open as a _record_ of an answered policy question rather than as work, and
 counting it as a blocker would make a settled decision look like a task.
@@ -1820,8 +1891,8 @@ Correctness follow-ups live in
 [the repository's open issues](https://github.com/MrZoller/bench/issues). This section is for the
 questions those issues cannot settle, and the three tables below are the record of the fourteen
 findings filed rather than patched — six out of the July sweep, all now closed; six out of the v2
-pass, of which #165 is now closed too; and two more out of _documenting_ the v2 pass, which is its
-own entry. Seven of the last two are open, plus #182, which #165 split off rather than fold in.
+pass, of which #165 and #166 are now closed too; and two more out of _documenting_ the v2 pass, which
+is its own entry. Six of the last two are open, plus #182, which #165 split off rather than fold in.
 They are kept because what a finding turns out to need is repeatedly not what the issue said it
 would be.
 
@@ -1857,21 +1928,22 @@ made that visible; the measurements survived and the framings mostly did not.
 
 ### The six filed out of the v2 pass, 1 August 2026
 
-Same rule, same shape, and **five of the six are open — of which four are work.** #165 is fixed, and
-split in two on the way; the rest each carry a measurement; two carry an argument rather than a
-repair; one records a capability gap that is not a defect at all; and #174 is open purely as the
+Same rule, same shape, and **four of the six are open — of which three are work.** #165 is fixed, and
+split in two on the way; #166 is fixed, and the capability gap it recorded turned out to be
+llama.cpp's rather than bench's; the rest each carry a measurement; two carry an argument rather than
+a repair; and #174 is open purely as the
 written argument for a decision already taken, which is why the counts elsewhere in this file exclude
 it from what stands between here and v3. An issue can be a record. Closing it would lose the
 reasoning, and counting it would invent a task.
 
-| filed                                                                                             | what it is                                                                                                                                                                                                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [#165](https://github.com/MrZoller/bench/issues/165) resident layers charge the non-layer tensors | **Fixed**, and it turned out to be two issues rather than one — see below. The count divides `layerWeightBytes`; every byte figure is bit-identical to before it; `-ngl` drops on 7.9% of the catalog's configurations, by a median of 1 layer and never rises. The byte assignment those tensors get is [#182](https://github.com/MrZoller/bench/issues/182) |
-| [#166](https://github.com/MrZoller/bench/issues/166) the assignment discards _which_ layers       | The packing is greedy over individual layers, so a bin is a non-contiguous mixture and the counts alone do not reproduce it — 19 apart on five cards for Gemma 3 12B at 128K. #164 narrowed what the emitter claims instead (no `-ts` for a hybrid model), which is correct and leaves a capability gap on exactly the models where the packing is worth most |
-| [#170](https://github.com/MrZoller/bench/issues/170) tiers graded at scenarios never planned      | `recommend` plans one placement per candidate at the archetype's own scenario and drops it when that is impossible — but long-context's `tight` tier is a 64K prompt and the agent's tiers are 64K and 32K sessions. Same answer today, because `judgeWorkloads` refuses at the top; a structural disagreement about who models the tiers                     |
-| [#172](https://github.com/MrZoller/bench/issues/172) the caveat describes the wrong tier          | Same root. A `tight` recommendation can carry the `good` tier's spill caveat, the fallback can rank by a rate no tier measured, and the serving footer names the reader's concurrency where that archetype grades at its own                                                                                                                                  |
-| [#171](https://github.com/MrZoller/bench/issues/171) the Ollama block and the daemon              | `ollama serve &` does not wait, does not notice an existing daemon still on the default `f16` cache, and configures no `OLLAMA_NUM_PARALLEL`. Both fixes push a copy-pasteable block into daemon lifecycle management, which is a different kind of command from the rest of the panel                                                                        |
-| [#174](https://github.com/MrZoller/bench/issues/174) one adapter on a dual-GPU machine            | Filed as the argument. Preferring the discrete card is the answer for a tool that prices inference, not half of "combine both preferences" — and combining would widen the shortlist to two vendors                                                                                                                                                           |
+| filed                                                                                             | what it is                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [#165](https://github.com/MrZoller/bench/issues/165) resident layers charge the non-layer tensors | **Fixed**, and it turned out to be two issues rather than one — see below. The count divides `layerWeightBytes`; every byte figure is bit-identical to before it; `-ngl` drops on 7.9% of the catalog's configurations, by a median of 1 layer and never rises. The byte assignment those tensors get is [#182](https://github.com/MrZoller/bench/issues/182)                                 |
+| [#166](https://github.com/MrZoller/bench/issues/166) the assignment discards _which_ layers       | **Fixed**, and its second half was answered rather than built. `DeviceShare.layerIndices` records which layers a card holds; the flag the issue hoped for does not exist, because `-ot` overrides where a _weight_ lives while a layer's cache follows the `-ngl`/`-ts` split — see above. The panel states the packing instead: `2,2,2,21,21` layers against `2,2,2,1,1` full-attention ones |
+| [#170](https://github.com/MrZoller/bench/issues/170) tiers graded at scenarios never planned      | `recommend` plans one placement per candidate at the archetype's own scenario and drops it when that is impossible — but long-context's `tight` tier is a 64K prompt and the agent's tiers are 64K and 32K sessions. Same answer today, because `judgeWorkloads` refuses at the top; a structural disagreement about who models the tiers                                                     |
+| [#172](https://github.com/MrZoller/bench/issues/172) the caveat describes the wrong tier          | Same root. A `tight` recommendation can carry the `good` tier's spill caveat, the fallback can rank by a rate no tier measured, and the serving footer names the reader's concurrency where that archetype grades at its own                                                                                                                                                                  |
+| [#171](https://github.com/MrZoller/bench/issues/171) the Ollama block and the daemon              | `ollama serve &` does not wait, does not notice an existing daemon still on the default `f16` cache, and configures no `OLLAMA_NUM_PARALLEL`. Both fixes push a copy-pasteable block into daemon lifecycle management, which is a different kind of command from the rest of the panel                                                                                                        |
+| [#174](https://github.com/MrZoller/bench/issues/174) one adapter on a dual-GPU machine            | Filed as the argument. Preferring the discrete card is the answer for a tool that prices inference, not half of "combine both preferences" — and combining would widen the shortlist to two vendors                                                                                                                                                                                           |
 
 **The six group into three pairs, which is the useful way to read them.** Two are the engine
 exporting a layer _count_ where what matters is which layers and what is in them (#165, #166). Two
@@ -1898,6 +1970,12 @@ both hold — an indivisible block cannot balance as finely as `1/L` of it can �
 load-bearing one, because the bins' bytes are the input to every memory panel, `fits`, `impossible`
 and both speed estimators. So the count's basis was fixed and the byte assignment was left alone,
 which is exactly the scope the issue's title states.
+
+**And #166 did not need the pair either**, which retires the pairing rather than deferring it. Its
+fix records `layerIndices` beside the counts `layerSplitBins` was already tracking, moves no byte and
+changes no packing — so what looked like one root at `layerSplitBins` was two _recordings_ at one
+site. The site was shared and the fixes were not, and that is the second time in this table that a
+correctly identified meeting point implied nothing about how the work divides.
 
 The measurement is what decided it rather than the argument. Assigning the block to one bin moves
 `usedBytesPerDevice` by more than 5% on 10.2% of the catalog's multi-card layer-split configurations,

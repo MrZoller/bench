@@ -28,6 +28,7 @@ import {
   VLLM,
 } from './fixtures';
 import { achievedBandwidth } from './speed';
+import { isSlidingLayer } from './kv';
 import { weightBreakdown } from './weights';
 import { getQuant } from '@/data/quants';
 import { GIB } from './types';
@@ -840,6 +841,68 @@ describe('the layer assignment survives the packing', () => {
     }
   });
 
+  /**
+   * **Which layers, not only how many** (#166).
+   *
+   * The count was the whole of what survived the packing, so the object described a *family* of
+   * assignments rather than the one it had sized — and the members of that family have radically
+   * different loads. This is the partition property that makes the new list a real answer rather
+   * than a plausible one: every layer is somewhere, no layer is in two places, and each list agrees
+   * with the count beside it.
+   */
+  it('says which layers each card holds, and hands every index out exactly once', () => {
+    for (const count of [1, 2, 3, 4, 5, 8]) {
+      const { shares } = gemma(count).assignment;
+      const seen: number[] = [];
+
+      for (const share of shares) {
+        // The count and the list are two spellings of one fact, and a reader may use either.
+        expect(share.layerIndices, `${count} cards`).toHaveLength(share.layers);
+        // In the model's own order, which is what "layers 5, 11 and 17" means — the packing walks
+        // them heaviest-first, so the list would otherwise arrive in load order.
+        expect(
+          [...share.layerIndices].sort((a, b) => a - b),
+          `${count} cards`
+        ).toEqual([...share.layerIndices]);
+        seen.push(...share.layerIndices);
+      }
+
+      expect(
+        seen.sort((a, b) => a - b),
+        `${count} cards`
+      ).toEqual(Array.from({ length: GEMMA_3_12B.layers }, (_, i) => i));
+    }
+  });
+
+  /**
+   * **The finding itself, now provable from the export.** #166's argument is that many assignments
+   * share one set of counts and have radically different loads, so the counts alone do not
+   * reproduce the layout the bytes beside them describe. On this rig the packing inverts them: the
+   * cards holding the *most* layers hold the *fewest* full-attention ones, because one of those
+   * caches ~128x what a sliding layer does at 128K over 8 users. Nothing in `layers` says that, and
+   * the indices say it outright.
+   */
+  it('gives the cards with the most layers the fewest full-attention ones', () => {
+    const shares = [...gemma(5).assignment.shares].sort((a, b) => a.layers - b.layers);
+    const unbounded = shares.map(
+      (s) => s.layerIndices.filter((i) => !isSlidingLayer(GEMMA_3_12B, i)).length
+    );
+
+    // The premise, asserted rather than assumed: the counts really are lopsided here.
+    expect(shares[shares.length - 1].layers - shares[0].layers).toBeGreaterThan(1);
+
+    // The inversion. The lightest-by-count card carries more of the expensive layers than the
+    // heaviest-by-count one, which is the whole reason a count is not a description.
+    expect(unbounded[0]).toBeGreaterThan(unbounded[unbounded.length - 1]);
+    // And between them the cards hold every full-attention layer the model has, so the composition
+    // is a partition of the same stack the counts partition.
+    expect(unbounded.reduce((a, b) => a + b, 0)).toBe(
+      Array.from({ length: GEMMA_3_12B.layers }, (_, i) => i).filter(
+        (i) => !isSlidingLayer(GEMMA_3_12B, i)
+      ).length
+    );
+  });
+
   it('gives a tensor-parallel rank every layer, because it holds a slice of each', () => {
     // The distinction `Assignment.parallelism` exists for. Four vLLM ranks each hold a quarter of
     // every tensor, so a rank's layer count is the model's and its *bytes* are the quarter — where
@@ -856,6 +919,12 @@ describe('the layer assignment survives the packing', () => {
     expect(tp.shares).toHaveLength(1);
     expect(tp.shares[0].deviceCount).toBe(4);
     expect(tp.shares[0].layers).toBe(GEMMA_3_12B.layers);
+    // And *which* layers is every layer, for the same reason — the list is not a layer-split
+    // artefact that goes empty on the other branch. `parallelism` is still what says a rank holds
+    // a slice of each of these rather than all of them whole.
+    expect(tp.shares[0].layerIndices).toEqual(
+      Array.from({ length: GEMMA_3_12B.layers }, (_, i) => i)
+    );
   });
 
   /**

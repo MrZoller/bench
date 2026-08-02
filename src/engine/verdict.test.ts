@@ -48,7 +48,16 @@ const RESIDENT: Placement = {
   // reader of these fixtures is not looking at a rig that contradicts itself.
   assignment: {
     parallelism: 'layer',
-    shares: [{ deviceCount: 1, layers: 1, residentLayers: 1, weightBytes: 1, kvBytes: 1 }],
+    shares: [
+      {
+        deviceCount: 1,
+        layers: 1,
+        layerIndices: [0],
+        residentLayers: 1,
+        weightBytes: 1,
+        kvBytes: 1,
+      },
+    ],
     residentLayers: 1,
   },
 };
