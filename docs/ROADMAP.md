@@ -182,12 +182,23 @@ removes the expertise the entry point assumed.
 than a plan.** Launch first, because its two prerequisites were real and are named below; calibrate
 after it, because `llama-bench` is what calibrate pastes back. What did _not_ hold is merge order —
 calibrate merged second of the four, since a review clears when it clears — and that was free
-because **the dependency is conceptual rather than in code**: launch tells the reader which command
-to run and calibrate reads what it printed, and the two share exactly one thing, the llama.cpp
-spelling of a cache precision. All five branches were cut from `main` rather than stacked, so
-calibrate could not import it and duplicated it under a comment saying the two must be merged when
-both land. **Both have landed and they are still two copies** — the loose end that branching in
-parallel bought, recorded under **Calibrate** below. What follows is the
+because **the dependency runs through the reader rather than through an import**: launch tells them
+which command to run, and calibrate reads what it printed.
+
+**That is a protocol, and it is much wider than it looks — which is the point worth carrying, since
+one end of it is already a P1.** The emitter fixes the prompt length, the cache depth, the
+generation shape, the layer count, the cache precision, the model and quant the command names, and
+the output format; `Calibrate` reconstructs every one of those as the expectation, and
+`describeMismatch` rejects a paste that misses them. Nothing static ties the two together, so a
+change to either side is invisible to the other — which is exactly how
+[#180](https://github.com/MrZoller/bench/issues/180) happened: the two ends disagree about the
+depth, and bench's own command now emits a row bench rejects. **Change the emitter and re-read
+`compare` in the same sitting**, because there is no compiler that will do it for you.
+
+The one thing they duplicate in code is the llama.cpp spelling of a cache precision. All five
+branches were cut from `main` rather than stacked, so calibrate could not import it and copied it
+under a comment saying the two must be merged when both land. **Both have landed and they are still
+two copies** — recorded under **Calibrate** below. What follows is the
 original sequencing note in its own tense, because every claim in it was load-bearing and three of
 them were tested by contact.
 

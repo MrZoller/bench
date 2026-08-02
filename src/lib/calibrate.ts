@@ -31,11 +31,16 @@
  * prose summary of that function which diverged from it in a different way each time, which is the
  * argument for a pointer over a paraphrase.
  *
- * The one property of it worth stating here, because it is easy to assume otherwise: **a check fires
- * only when the paste states the field it compares.** llama-bench's output is sparse and most of
- * those fields are optional in it, so a JSON row carrying neither a model name nor a cache type
- * compares clean — the suite's own `JSON_OUTPUT` fixture is exactly that row. Unstated is not
- * rejected, except where a default makes silence itself a claim.
+ * The one property of it worth stating here, because it is easy to assume otherwise: **the checks on
+ * the paste's own optional metadata fire only when the paste states the field.** llama-bench's
+ * output is sparse and most of those fields are optional in it, so a JSON row carrying neither a
+ * model name nor a cache type compares clean — the suite's own `JSON_OUTPUT` fixture is exactly that
+ * row. Unstated is not rejected, except where a default makes silence itself a claim.
+ *
+ * That rule is about the measurement's fields and nothing else. The guards that read the
+ * **prediction** — a configuration the engine refuses, a runtime `llama-bench` cannot measure, a
+ * concurrency it cannot reproduce — fire whatever the paste contains, because there is no field in
+ * it that could answer them.
  *
  * What this section is about is the four that are **invisible in the numbers**, because those are
  * the ones a reader can get wrong without noticing. **Two of them this module rejects; two it only
