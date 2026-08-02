@@ -318,8 +318,9 @@ a source rather than recalled:
 
 - **`GPUAdapterInfo.architecture` does not identify a Mac.** Apple GPUs report no DeviceID through
   Metal, so Dawn reports the highest supported _common feature family_ instead — `common-1`,
-  `common-2`, `common-3` — and every Apple silicon Mac from the M1 up reports the same string. So it
-  identifies the **vendor and nothing past it**, which is worth more than it sounds: `detect()`
+  `common-2`, `common-3` — and every Apple silicon Mac from the M1 up reports one of those three,
+  which do not partition the product line. So it identifies the **vendor and nothing past it**,
+  which is worth more than it sounds: `detect()`
   prunes on it, and it is the one signal left when the vendor string itself is withheld. What it
   cannot do is say _which_ Mac, on the one platform where a unified-memory row is the headline case —
   `deviceMemory` and a follow-up question do that. ("Narrows nothing at all" is what this bullet said
