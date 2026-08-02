@@ -3,6 +3,7 @@ import { DEVICES } from '@/data/catalog';
 import {
   NOT_SEEDED,
   SEEDS,
+  assertOneBoundedWindow,
   deriveAttention,
   deriveLayerWindows,
   deriveMoe,
@@ -629,6 +630,22 @@ describe('the attention shapes the shipped catalog is built from', () => {
   it('still reads a bare window with nothing else — the Mistral shape — as uniformly sliding', () => {
     expect(deriveLayerWindows('mistralai/bare-window', { sliding_window: 4096 }, 32)).toEqual(
       Array.from({ length: 32 }, () => 4096)
+    );
+  });
+
+  /**
+   * The post-condition, tested directly because no convention above can reach it: all four state
+   * one `sliding_window` and vary only which layers use it, so the shape this refuses is a fifth
+   * one nobody has written. Exercising it through a config would mean writing that convention
+   * first, and the guard exists precisely so that whoever does gets a refusal rather than a note
+   * downstream that silently stops describing the cache split.
+   */
+  it('refuses a stack whose bounded layers do not all cache the same amount', () => {
+    // The premise, so this cannot pass by the guard being unreachable for the wrong reason.
+    expect(() => assertOneBoundedWindow('one/size', [4096, null, 4096, null])).not.toThrow();
+
+    expect(() => assertOneBoundedWindow('two/sizes', [4096, 128, null, 128])).toThrow(
+      /derives 2 distinct sliding-window sizes \(4096, 128\)/
     );
   });
 });

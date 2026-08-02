@@ -315,7 +315,17 @@ function packingNotes(input: LaunchInput): readonly string[] {
   // and these sentences are describing what was packed, which is the same list only where nothing
   // spills — that is to say, on most rigs, which is what makes the two easy to confuse.
   const counts = perDevice.map((s) => s.layers);
-  /** The layers with no window, which are the ones whose cache keeps growing with the context. */
+  /**
+   * The layers with no window, which are the ones whose cache keeps growing with the context.
+   *
+   * A count rather than a per-layer cache figure, which is faithful only because a model has at
+   * most one bounded window size: every sliding layer then holds the same amount, so the count of
+   * unbounded ones fixes the rest of the split. Two sizes at a context between them would make
+   * this understate a card holding the wider ones. That invariant is pinned at both ends of the
+   * catalog pipeline — `assertOneBoundedWindow` in `scripts/build-catalog.ts` refuses to derive a
+   * second size, and `catalog.test.ts` asserts the shipped rows carry one — so a future
+   * architecture that breaks it fails there rather than quietly widening the error here.
+   */
   const unbounded = perDevice.map(
     (s) => s.layerIndices.filter((layer) => !isSlidingLayer(model, layer)).length
   );

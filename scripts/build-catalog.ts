@@ -1277,8 +1277,51 @@ const LAYER_TYPES: Record<string, 'full' | 'sliding'> = {
  *   - `layer_types` — an explicit per-layer array (gpt-oss, recent transformers exports)
  *   - `sliding_window_pattern` — Gemma 3's "every Nth layer is full attention"
  *   - a bare `sliding_window` — applies to every layer (Mistral-style), unless switched off
+ *
+ * All four state one window size and vary only which layers use it, which downstream code relies
+ * on; {@link assertOneBoundedWindow} holds a fifth convention to that or refuses it.
  */
 export function deriveLayerWindows(
+  id: string,
+  config: HfConfig,
+  layers: number
+): (number | null)[] | undefined {
+  const windows = deriveWindows(id, config, layers);
+  if (windows) assertOneBoundedWindow(id, windows);
+  return windows;
+}
+
+/**
+ * At most one distinct bounded window size per model.
+ *
+ * Every convention {@link deriveWindows} reads states a single `sliding_window` and varies only
+ * *which* layers use it, so this holds for everything the script can derive today and the check
+ * can never fire on a shipped seed. It is a post-condition on the whole function rather than a
+ * guard inside one branch precisely for that reason: the shape that breaks it is a fifth
+ * convention nobody has written yet, and it should trip on the way out rather than ship.
+ *
+ * What reads the invariant is `packingNotes` in `src/lib/launch.ts`, which summarises a device's
+ * cache load as a count of *unbounded* layers. That is a complete description of the split only
+ * while the bounded layers all cache the same amount. Two sizes at a context between them — 128
+ * and 4096 at 2,048 tokens — give two cards identical counts and a 16x difference in KV, and the
+ * note would go on claiming its two lists are what the memory panel priced when they no longer
+ * determine it.
+ */
+export function assertOneBoundedWindow(id: string, windows: (number | null)[]): void {
+  const sizes = [...new Set(windows.filter((w): w is number => w !== null))];
+  if (sizes.length > 1) {
+    throw new DerivationError(
+      `${id}: derives ${sizes.length} distinct sliding-window sizes (${sizes.join(', ')}). Every ` +
+        'convention this script reads states one window size and varies only which layers use ' +
+        'it, so a second size is a shape it has not been taught. Downstream a device share is ' +
+        'summarised by how many of its layers are unbounded, which stops describing the cache ' +
+        'split once the bounded layers hold different amounts. Give the shape a derivation, and ' +
+        'a term for what that summary should say instead, before seeding it.'
+    );
+  }
+}
+
+function deriveWindows(
   id: string,
   config: HfConfig,
   layers: number
