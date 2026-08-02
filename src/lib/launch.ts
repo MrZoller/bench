@@ -1,7 +1,7 @@
 import type { ModelSpec, QuantSpec, Rig, RuntimeSpec, UsageSpec } from '@/engine/types';
 import type { Placement } from '@/engine/placement';
 import { effectiveDeviceCount, effectivePromptTokens } from '@/engine/placement';
-import { hasSlidingLayers } from '@/engine/kv';
+import { isSlidingLayer, layersCacheAlike } from '@/engine/kv';
 import { substitutionFor } from '@/data/runtimes';
 
 /**
@@ -48,6 +48,9 @@ import { substitutionFor } from '@/data/runtimes';
  *   - **`mlx_lm.server` has no KV quantization flag.** `--kv-bits` is on `mlx_lm.generate`; the
  *     server's argument list does not carry it, so an 8-bit-cache scenario cannot be served at the
  *     precision it was priced at.
+ *   - **`-ot`/`--override-tensor` moves a layer's weights and not its cache**, which is why there
+ *     is no per-layer placement flag here and why #166 closes with a sentence rather than a
+ *     command. See {@link packingNotes} for the read.
  */
 
 /** Where a launcher's flags were read from, and when. */
@@ -208,23 +211,30 @@ function gpuLayers(input: LaunchInput): number {
  * which is what llama.cpp would have done unaided — and that gate reads the resident counts too,
  * since a packing that assigns equal counts of *unequal* layers is exactly where the flag is needed.
  *
- * **And never on a hybrid model, which is the case the flag looked most useful for** (raised by
- * Codex on #164, P1). `-ts` partitions llama.cpp's ordered `-ngl` suffix into contiguous device
- * ranges; `layerSplitBins` assigns *individual* layers by greedy combined load, so a share can be a
- * non-contiguous mixture of full-attention and sliding layers. On a model where those cache ~128x
- * differently, equal counts do not reproduce equal loads — llama.cpp would hand a card a different
- * set of expensive layers than `planPlacement` priced, and the fit the panel reported would not be
- * the fit the command produces. A count is a faithful description of the packing only where the
- * layers are interchangeable, so that is the only place it is emitted.
+ * **And never where the layers cache different amounts, which is the case the flag looked most
+ * useful for** (raised by Codex on #164, P1). `-ts` partitions llama.cpp's ordered `-ngl` suffix
+ * into contiguous device ranges; `layerSplitBins` assigns *individual* layers by greedy combined
+ * load, so a share can be a non-contiguous mixture of full-attention and sliding layers. Where
+ * those cache ~128x differently, equal counts do not reproduce equal loads — llama.cpp would hand a
+ * card a different set of expensive layers than `planPlacement` priced, and the fit the panel
+ * reported would not be the fit the command produces. A count is a faithful description of the
+ * packing only where the layers are interchangeable, so that is the only place it is emitted.
  *
- * What remains is still worth having: a uniform model over a device count that does not divide it
- * (48 layers over 5 cards is 10,10,10,9,9) is both uneven and exactly expressible, and llama.cpp's
- * memory-proportional default gets it wrong.
+ * **The gate is `layersCacheAlike`, not `hasSlidingLayers`, and the difference is a scenario the
+ * model-level question gets wrong.** Being hybrid is a property of the model; caching *unequal
+ * amounts* is a property of the context. Below its shortest window a hybrid model's layers all hold
+ * the whole context, so the packing hands out equal loads and the flag is exact — Gemma at a
+ * 1,024-token context was refused the flag it could have had, and told why in terms of an imbalance
+ * that does not exist there.
+ *
+ * What remains is still worth having: a model whose layers cache alike, over a device count that
+ * does not divide it (48 layers over 5 cards is 10,10,10,9,9), is both uneven and exactly
+ * expressible, and llama.cpp's memory-proportional default gets it wrong.
  */
 function tensorSplit(input: LaunchInput): string | undefined {
   const { parallelism, shares } = input.placement.assignment;
   if (parallelism !== 'layer' || effectiveDeviceCount(input.rig) <= 1) return undefined;
-  if (hasSlidingLayers(input.model)) return undefined;
+  if (!layersCacheAlike(input.model, input.usage.contextTokens)) return undefined;
 
   const counts = shares.flatMap((s) =>
     Array.from({ length: s.deviceCount }, () => s.residentLayers)
@@ -234,6 +244,121 @@ function tensorSplit(input: LaunchInput): string | undefined {
   if (counts.every((c) => c === 0)) return undefined;
   if (Math.max(...counts) === Math.min(...counts)) return undefined;
   return counts.join(',');
+}
+
+/**
+ * What bench packed, said out loud on the rigs `-ts` has to refuse (#166).
+ *
+ * `tensorSplit` declines wherever the layers do not cache alike, because a count is a faithful
+ * description of a greedy per-layer packing only where the layers are interchangeable. Declining
+ * is right and it is not the whole answer: leaving the flag off does not make llama.cpp reproduce
+ * the assignment, it makes llama.cpp pick a different one — so on precisely the scenarios where the
+ * packing is worth the most, the panel computed a better split than it could express and described
+ * it as "more than the panel above shows".
+ *
+ * It can now say which layers, because `DeviceShare.layerIndices` carries them. That is the whole
+ * of what #166 asked the engine for, and it is what makes these two sentences quantitative: the
+ * counts and the *composition* are two different lists, and the panel had only ever been able to
+ * print the one that does not carry the load.
+ *
+ * ## Why there is no flag to emit instead, which is the part that was worth reading upstream for
+ *
+ * #166 hoped for `-ot`/`--override-tensor`, since it takes a pattern and a buffer type and can
+ * name individual tensors — so a per-layer override list looks expressible in principle. It is
+ * not, and the reason is one level below the flag:
+ *
+ *   - `llama_model::load_tensors` computes `dev_layer[il]` from `n_gpu_layers` and `tensor_split`
+ *     alone — `i_gpu_start = max(n_layer_all + 1 - n_gpu_layers, 0)`, then an `upper_bound` over
+ *     the normalised splits — **before** any override is consulted.
+ *   - The overrides are applied later, in `llama_model_loader::create_tensor`, by
+ *     `std::regex_search` against a *tensor* name. They change where a weight lives and nothing
+ *     else.
+ *   - `llama_kv_cache`'s constructor takes each layer's cache buffer from
+ *     `ggml_backend_dev_buffer_type(model.dev_layer(il))`.
+ *
+ * So `-ot` would move a layer's weights to the card bench chose and leave its KV cache on the card
+ * `-ngl`/`-ts` chose. On a hybrid model the cache is the entire reason the packing is uneven — the
+ * per-layer weights are uniform and a full-attention layer caches up to ~128x a sliding one at
+ * 128K — so the flag moves the half that does not vary and leaves the half that does. A command
+ * built from it would start a placement other than the one the panel priced, which is the first of
+ * this module's three refusals rather than a caveat to print beside it.
+ *
+ * Read on 2 August 2026 from `src/llama-model.cpp`, `src/llama-model-loader.cpp` and
+ * `src/llama-kv-cache.cpp` at ggml-org/llama.cpp master.
+ */
+function packingNotes(input: LaunchInput): readonly string[] {
+  const { model, rig, usage, placement } = input;
+  const { parallelism, shares } = placement.assignment;
+  if (parallelism !== 'layer' || effectiveDeviceCount(rig) <= 1) return [];
+  // The same predicate `tensorSplit` gates on, and it has to be the same one: these sentences
+  // explain a refusal, so a scenario where the flag is exact is a scenario where they have nothing
+  // to explain. Under `hasSlidingLayers` they fired on Gemma at a 1,024-token context — beside a
+  // `-ts` that had just become emittable — and attributed the absent flag to an imbalance that
+  // does not exist below the model's shortest window.
+  if (layersCacheAlike(model, usage.contextTokens)) return [];
+  /**
+   * **Nothing is on a GPU, so there is no split to describe** — the guard `tensorSplit` has in the
+   * function directly above and this one was written without, which is this repo's own N+1 pattern
+   * arriving inside the sweep for it. `gpuLayers` rather than a second reading of the shares, so the note
+   * and the flag beside it cannot disagree about whether anything was offloaded at all: it is 0 on
+   * a `cpu-ram` rig and 0 when the whole rig spilled. gpt-oss 120B at BF16 on two 4090s at 128K
+   * over 8 users is the reachable case — 96% of the weights spill, `18,18` layers packed and none
+   * of them resident, so `-ngl 0` was emitted under two sentences about how llama.cpp would divide
+   * the cards' layers between them.
+   */
+  if (gpuLayers(input) === 0) return [];
+
+  const perDevice = shares.flatMap((s) => Array.from({ length: s.deviceCount }, () => s));
+  if (perDevice.length <= 1) return [];
+
+  // The assignment, not the resident subset of it. `residentLayers` is what a *flag* would carry
+  // and these sentences are describing what was packed, which is the same list only where nothing
+  // spills — that is to say, on most rigs, which is what makes the two easy to confuse.
+  const counts = perDevice.map((s) => s.layers);
+  /**
+   * The layers with no window, which are the ones whose cache keeps growing with the context.
+   *
+   * A count rather than a per-layer cache figure, which is faithful only because a model has at
+   * most one bounded window size: every sliding layer then holds the same amount, so the count of
+   * unbounded ones fixes the rest of the split. Two sizes at a context between them would make
+   * this understate a card holding the wider ones. That invariant is pinned at both ends of the
+   * catalog pipeline — `assertOneBoundedWindow` in `scripts/build-catalog.ts` refuses to derive a
+   * second size, and `catalog.test.ts` asserts the shipped rows carry one — so a future
+   * architecture that breaks it fails there rather than quietly widening the error here.
+   */
+  const unbounded = perDevice.map(
+    (s) => s.layerIndices.filter((layer) => !isSlidingLayer(model, layer)).length
+  );
+
+  /**
+   * Two statements of fact and no prediction, which took two rewrites.
+   *
+   * The obvious first sentence — "the second list is why the first is uneven" — is false on a
+   * hybrid model at a context inside its windows; that is now unreachable, since the gate above
+   * returns before it, but the wording does not depend on the gate either.
+   *
+   * The obvious second one — "plan for that card to hold more than the panel above shows" —
+   * predicts a comparison bench has not made. llama.cpp's contiguous split sometimes lands the same
+   * composition the packing did (Gemma 3 12B on two 5090s at 128K packs `24,24` against `4,4`, and
+   * so does an even contiguous halving), and modelling `upper_bound` over the normalised splits to
+   * find out would be this module deriving llama.cpp's placement rather than formatting bench's.
+   * What is left is what bench actually knows: it packed for a light busiest card and llama.cpp is
+   * not packing for that at all, so the panel's figure is a floor to plan against rather than an
+   * estimate of what the command will produce.
+   */
+  return [
+    `bench packed ${counts.join(',')} layers onto the ${perDevice.length} cards, ` +
+      `${unbounded.join(',')} of them attending over the whole context rather than a fixed ` +
+      `window. It packed by cache weight rather than by layer count, so those two lists together — ` +
+      `not the first one alone — are what the memory panel above priced.`,
+    `llama.cpp cannot be given that assignment. -ts proportions a contiguous run of the -ngl ` +
+      `window and this packing is a non-contiguous mixture; -ot names individual tensors, but it ` +
+      `overrides where a weight lives, and a layer's KV cache follows the device -ngl and -ts put ` +
+      `the layer on. So llama.cpp will divide by device memory instead — an equal number of layers ` +
+      `on identical cards — and which layers land together is then its choice rather than bench's. ` +
+      `Treat the busiest card above as a floor: bench packed to keep it as light as it could, and ` +
+      `llama.cpp is not packing for that at all.`,
+  ];
 }
 
 /**
@@ -407,15 +532,7 @@ function llamaServer(input: LaunchInput): Pair {
     nglNote(input, ngl),
     `-m takes a path on your own disk, which no catalog can supply — the placeholder is the one ` +
       `thing here you are meant to replace.`,
-    ...(split === undefined && hasSlidingLayers(model) && effectiveDeviceCount(input.rig) > 1
-      ? [
-          `bench balanced this rig by cache weight and llama.cpp cannot be told that split. ` +
-            `-ts proportions a contiguous window and this model's layers are not interchangeable — ` +
-            `its full-attention layers cache far more than its sliding ones — so llama.cpp will ` +
-            `divide by device memory instead, which on identical cards is an even split. Expect the ` +
-            `busiest card to hold more than the panel above shows.`,
-        ]
-      : []),
+    ...(split === undefined ? packingNotes(input) : []),
     ...(split === undefined
       ? []
       : [
@@ -471,8 +588,12 @@ function llamaBench(input: LaunchInput): Pair {
     `The lengths are this scenario's own, which is what makes the result comparable with the ` +
       `figures above rather than with llama-bench's defaults of 512 and 128.`,
     nglNote(input, ngl),
+    // The same sweep the `-ts` flag itself needed on this launcher: a measurement run at
+    // llama.cpp's default split times a different placement from the one priced, and that is as
+    // true when bench cannot express its split as when it declines to repeat an even one. Saying
+    // it only on the serving command left the number this panel exists to collect unqualified.
     ...(split === undefined
-      ? []
+      ? packingNotes(input)
       : [
           `-ts is the same split the serving command uses. Measuring against llama.cpp's default ` +
             `even split would time a different placement than the one priced above.`,

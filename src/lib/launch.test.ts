@@ -15,6 +15,7 @@ import {
   RTX_5090,
   VLLM,
 } from '@/engine/fixtures';
+import { isSlidingLayer } from '@/engine/kv';
 import { getQuant } from '@/data/quants';
 import { MODELS } from '@/data/catalog';
 import type { ModelSpec, QuantSpec, RuntimeSpec, UsageSpec } from '@/engine/types';
@@ -252,8 +253,15 @@ describe('llama.cpp: one catalog row, three launchers', () => {
      * caches ~128x a sliding one, so equal counts do not reproduce equal loads: llama.cpp would
      * hand a card a different set of expensive layers than `planPlacement` priced, and the fit the
      * panel reported would not be the fit the command produces.
+     *
+     * **So the flag stays off and the panel says what it packed instead** (#166). This test was
+     * `emits nothing for a hybrid model` and asserted an absence, which is the shape the issue
+     * asked to be replaced: an absence is satisfied by an emitter that has nothing to say as
+     * happily as by one that has been told to be quiet. What is asserted now is the two lists —
+     * the layer counts *and* their composition — that `DeviceShare.layerIndices` made expressible,
+     * because the second is the fact the first was hiding.
      */
-    it('emits nothing for a hybrid model, whose counts do not describe its packing', () => {
+    it('states the packing it cannot flag, layer counts and composition both', () => {
       const gemma = input(
         GEMMA_3_12B,
         getQuant('q4_k_m'),
@@ -263,23 +271,184 @@ describe('llama.cpp: one catalog row, three launchers', () => {
         usage({ contextTokens: 131072, concurrency: 8 })
       );
 
-      // The premise: the packing really is lopsided here, which is what made the flag tempting.
-      const counts = gemma.placement.assignment.shares.map((s) => s.layers);
+      const shares = gemma.placement.assignment.shares;
+      const counts = shares.map((s) => s.layers);
+      const unbounded = shares.map(
+        (s) => s.layerIndices.filter((layer) => !isSlidingLayer(GEMMA_3_12B, layer)).length
+      );
+
+      // The premises, asserted rather than assumed. The packing really is lopsided here — 2,2,2,21,21
+      // against a composition of 2,2,2,1,1, which is the 19-layer spread #166 was filed on — and
+      // without them the assertions below would pass against an even split saying nothing.
       expect(Math.max(...counts) - Math.min(...counts), 'the split is even').toBeGreaterThan(1);
+      expect(new Set(unbounded).size, 'every card holds the same mixture').toBeGreaterThan(1);
 
       const emitted = commands(gemma)['llama-server'].serve;
-      expect(text(emitted)).not.toContain('-ts');
-
-      /**
-       * **And it says so, which omitting the flag does not.** Leaving `-ts` off does not make
-       * llama.cpp reproduce the packing — it makes llama.cpp divide by device memory instead, which
-       * on identical cards is an even split and the wrong one for this model. A silent omission
-       * reads as "bench had nothing to add"; the note says the busiest card will hold more than the
-       * panel shows. (Raised by Codex on #173.)
-       */
       if (!emitted.ok) throw new Error('unreachable');
-      expect(emitted.notes.join(' ')).toMatch(/llama\.cpp cannot be told that split/i);
-      expect(emitted.notes.join(' ')).toMatch(/busiest card to hold more/i);
+      const notes = emitted.notes.join(' ');
+
+      // The positive claim: both lists, in the panel, as the numbers the engine actually packed.
+      expect(notes).toContain(`bench packed ${counts.join(',')} layers`);
+      expect(notes).toContain(`${unbounded.join(',')} of them attending over the whole context`);
+
+      // And why there is no flag for it, which is the half a silent omission cannot say. `-ot`
+      // looks like the answer and is not: it overrides where a *weight* lives, while a layer's KV
+      // cache follows the device `-ngl` and `-ts` put the layer on — and the cache is the entire
+      // reason this packing is uneven.
+      expect(notes).toMatch(/llama\.cpp cannot be given that assignment/i);
+      expect(notes).toMatch(/-ot names individual tensors/i);
+      expect(notes).toMatch(/KV cache follows the device -ngl and -ts put the layer on/i);
+      // A floor to plan against rather than a prediction of what the command produces: llama.cpp's
+      // contiguous split sometimes lands the same composition, and finding out which would be this
+      // module deriving llama.cpp's placement rather than formatting bench's.
+      expect(notes).toMatch(/Treat the busiest card above as a floor/i);
+
+      // The flag itself still stays off, which is what makes the sentences above the whole of what
+      // bench claims here.
+      expect(text(emitted)).not.toContain('-ts');
+    });
+
+    /**
+     * **The same sweep the flag itself needed on this launcher.** `-ts` was missing from
+     * `llama-bench` once already, because a sharded measurement run at llama.cpp's default split
+     * times a placement other than the one priced — and that is as true when bench *cannot* express
+     * its split as when it declines to repeat an even one. The serving command carried the
+     * explanation and the measurement command, whose whole purpose is to produce a number for the
+     * calibration record, carried nothing.
+     */
+    it('qualifies the benchmark run too, since it measures the split it cannot ask for', () => {
+      const gemma = input(
+        GEMMA_3_12B,
+        getQuant('q4_k_m'),
+        LLAMA_CPP,
+        RTX_5090,
+        5,
+        usage({ contextTokens: 131072, concurrency: 8 })
+      );
+      const counts = gemma.placement.assignment.shares.map((s) => s.layers);
+      const measured = commands(gemma)['llama-bench'].measure;
+
+      expect(text(measured)).not.toContain('-ts');
+      if (!measured.ok) throw new Error('unreachable');
+      expect(measured.notes.join(' ')).toContain(`bench packed ${counts.join(',')} layers`);
+      expect(measured.notes.join(' ')).toMatch(/llama\.cpp cannot be given that assignment/i);
+    });
+
+    /**
+     * **The product this flag has already been caught on once.** The ROADMAP's note about `-ts`
+     * records that the suite had a spilled case and a sharded case and never their conjunction,
+     * which is where the defect lived; the packing sentence has the same two axes and a third,
+     * because the model must also be hybrid for it to be emitted at all.
+     *
+     * gpt-oss 120B at Q4_K_M, 128K over 8 users on four 4090s packs 8,8,10,10 layers and keeps
+     * 6,6,7,7 of them resident. The note describes the *assignment*, so it is the first list — a
+     * sentence built from `residentLayers` would offer a subset of the packing as the packing, and
+     * would read as correct on every rig where nothing spills, which is most of them.
+     */
+    it('describes the packing rather than the resident subset when the rig also spills', () => {
+      const spilled = input(
+        GPT_OSS_120B,
+        getQuant('q4_k_m'),
+        LLAMA_CPP,
+        RTX_4090,
+        4,
+        usage({ contextTokens: 131072, concurrency: 8 })
+      );
+      const shares = spilled.placement.assignment.shares;
+      const packed = shares.map((s) => s.layers);
+      const resident = shares.map((s) => s.residentLayers);
+
+      // The premises. Without the second this test passes against the wrong quantity.
+      expect(spilled.placement.offloadFraction, 'nothing spilled').toBeGreaterThan(0);
+      expect(resident.join(','), 'resident equals packed').not.toBe(packed.join(','));
+
+      const emitted = commands(spilled)['llama-server'].serve;
+      if (!emitted.ok) throw new Error('unreachable');
+      expect(emitted.notes.join(' ')).toContain(`bench packed ${packed.join(',')} layers`);
+      expect(emitted.notes.join(' ')).not.toContain(`bench packed ${resident.join(',')} layers`);
+    });
+
+    /**
+     * **Being hybrid is a property of the model; caching unequal amounts is a property of the
+     * context** — and the flag turns on the second. Below its shortest window every one of Gemma's
+     * layers holds the whole context, so the packing hands out equal loads and a count describes it
+     * exactly. `hasSlidingLayers` refused the flag here and then explained the refusal with an
+     * imbalance that does not exist at this context.
+     */
+    it('gives a hybrid model the split once its context is inside every window', () => {
+      const short = input(
+        GEMMA_3_12B,
+        getQuant('q4_k_m'),
+        LLAMA_CPP,
+        RTX_5090,
+        5,
+        // 1,024 is Gemma's own sliding window, so every layer caches 1,024 tokens.
+        usage({ contextTokens: 1024 })
+      );
+      const counts = short.placement.assignment.shares.map((s) => s.residentLayers);
+      const emitted = commands(short)['llama-server'].serve;
+
+      // The premises: 48 layers over five cards is indivisible, so there is a real split to state,
+      // and it is one llama.cpp's memory-proportional default does not produce unaided.
+      expect(new Set(counts).size, 'the split is even, so this proves nothing').toBeGreaterThan(1);
+      expect(counts.reduce((a, b) => a + b, 0)).toBe(GEMMA_3_12B.layers);
+
+      expect(text(emitted)).toContain(`-ts ${counts.join(',')}`);
+      // And no packing sentences, because there is no refusal left to explain.
+      if (!emitted.ok) throw new Error('unreachable');
+      expect(emitted.notes.join(' ')).not.toMatch(/bench packed/i);
+    });
+
+    /**
+     * **The guard `tensorSplit` has and the note was written without.** Where the whole rig spilled
+     * there is nothing on a GPU at all, `-ngl 0` says so, and two sentences about how llama.cpp
+     * will divide the cards' layers between them describe a division that does not happen.
+     * gpt-oss 120B at BF16 on two 4090s at 128K over 8 users is the reachable case — 96% of the
+     * weights spill — and it is a runnable placement rather than a refused one, which is what keeps
+     * the emitter running long enough to say it.
+     */
+    it('says nothing about a packing when the whole rig spilled and -ngl is 0', () => {
+      const spilledOut = input(
+        GPT_OSS_120B,
+        getQuant('bf16'),
+        LLAMA_CPP,
+        RTX_4090,
+        2,
+        usage({ contextTokens: 131072, concurrency: 8 })
+      );
+      const emitted = commands(spilledOut)['llama-server'].serve;
+
+      // The premises. Without them this passes on any rig that simply refuses.
+      expect(spilledOut.placement.impossible, 'refused before the emitter ran').toBe(false);
+      expect(spilledOut.placement.assignment.residentLayers, 'something stayed resident').toBe(0);
+
+      expect(text(emitted)).toContain('-ngl 0');
+      if (!emitted.ok) throw new Error('unreachable');
+      expect(emitted.notes.join(' ')).not.toMatch(/bench packed/i);
+
+      // Both launchers, because both carry the sentences and a guard on one of them is the half-fix
+      // this pair has already been through once.
+      const measured = commands(spilledOut)['llama-bench'].measure;
+      expect(text(measured)).toContain('-ngl 0');
+      if (!measured.ok) throw new Error('unreachable');
+      expect(measured.notes.join(' ')).not.toMatch(/bench packed/i);
+    });
+
+    it('says nothing about a packing on a rig with one card, which packs nothing', () => {
+      // The note is about a split, so a single device has no subject. Gemma is hybrid on every
+      // rig; without this the two sentences above would appear beside a command that is exact.
+      const one = input(
+        GEMMA_3_12B,
+        getQuant('q4_k_m'),
+        LLAMA_CPP,
+        RTX_5090,
+        1,
+        usage({ contextTokens: 131072 })
+      );
+      const emitted = commands(one)['llama-server'].serve;
+
+      if (!emitted.ok) throw new Error('unreachable');
+      expect(emitted.notes.join(' ')).not.toMatch(/bench packed/i);
     });
 
     it('gives the benchmark client the same split as the server', () => {

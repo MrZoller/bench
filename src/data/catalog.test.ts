@@ -944,6 +944,30 @@ describe('generated model catalog', () => {
   });
 
   /**
+   * One bounded window size per model, which is a claim about the catalog and not just about the
+   * generator that writes it — `models.generated.json` is checked in and hand-editable, and the
+   * shape this forbids reads as valid to every other test here.
+   *
+   * `packingNotes` summarises a device's cache load as a count of layers with *no* window, which
+   * describes the split only while every bounded layer caches the same amount. Give one model two
+   * sizes and a context between them — 128 and 4096 at 2,048 tokens — and two cards with equal
+   * counts differ 16x in KV while the note still claims its lists are what the memory panel priced.
+   * The generator refuses this shape (`assertOneBoundedWindow`); this is the same claim at the
+   * other end of the pipeline.
+   */
+  it('gives every sliding-window model a single window size', () => {
+    for (const model of MODELS) {
+      const windows = model.attention.layerWindows;
+      if (!windows) continue;
+
+      // Exactly one, not at most one: an all-null array is refused by the test above, so a model
+      // that reaches here and has no bounded size at all is a failure rather than a vacuous pass.
+      const sizes = new Set(windows.filter((w) => w !== null));
+      expect([...sizes]).toHaveLength(1);
+    }
+  });
+
+  /**
    * The catalogued models are the ones the engine actually runs, so the invariant that keeps
    * decode honest has to hold across all of them, not just the ones spot-checked above.
    */

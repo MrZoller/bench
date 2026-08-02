@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   attentionPairs,
   hasSlidingLayers,
+  isSlidingLayer,
   kvBytesPerSequence,
   kvBytesPerToken,
   kvBytesTotal,
   kvElementBytes,
+  layersCacheAlike,
 } from './kv';
 import {
   DEEPSEEK_V3,
@@ -75,6 +77,47 @@ describe('sliding-window layers — where the cache stops growing', () => {
   it('flags gpt-oss as hybrid and Llama as not', () => {
     expect(hasSlidingLayers(GPT_OSS_120B)).toBe(true);
     expect(hasSlidingLayers(LLAMA_31_8B)).toBe(false);
+  });
+
+  /**
+   * The two questions the same pattern answers, and the reason they are separate functions: one is
+   * per layer and one is over the model, and a caller that needs to read a per-device layer *set*
+   * needs the first. `hasSlidingLayers` is the second asked through the first, so the two cannot
+   * come to disagree about what an absent entry means.
+   */
+  it('agrees with itself about which layers are windowed', () => {
+    const flagged = Array.from({ length: GPT_OSS_120B.layers }, (_, i) =>
+      isSlidingLayer(GPT_OSS_120B, i)
+    );
+    // gpt-oss alternates, so this is a real mixture rather than a constant either way.
+    expect(flagged.filter(Boolean)).toHaveLength(18);
+    expect(hasSlidingLayers(GPT_OSS_120B)).toBe(flagged.some(Boolean));
+
+    // A model with no pattern at all: every layer attends over everything, and the "any" question
+    // has to agree with all of them rather than with the absent array.
+    for (let layer = 0; layer < LLAMA_31_8B.layers; layer++) {
+      expect(isSlidingLayer(LLAMA_31_8B, layer), `layer ${layer}`).toBe(false);
+    }
+  });
+
+  /**
+   * **Being hybrid is a property of the model; caching unequal amounts is a property of the
+   * context.** Below the shortest window every layer holds the whole context, so the layers are
+   * interchangeable however hybrid the model is — which is what makes a per-device layer *count* a
+   * complete description of a packing there, and is the distinction `launch.ts` gates `-ts` on.
+   */
+  it('separates a hybrid model from a scenario whose layers cache unequally', () => {
+    // gpt-oss's window is 128 tokens.
+    expect(layersCacheAlike(GPT_OSS_120B, 64)).toBe(true);
+    expect(layersCacheAlike(GPT_OSS_120B, 128)).toBe(true);
+    expect(layersCacheAlike(GPT_OSS_120B, 129)).toBe(false);
+    expect(layersCacheAlike(GPT_OSS_120B, 131072)).toBe(false);
+
+    // And a uniform model caches alike at every context, which is the case the gate must not
+    // narrow: `-ts` was always emittable there and still is.
+    for (const ctx of [1, 128, 8192, 131072]) {
+      expect(layersCacheAlike(LLAMA_31_8B, ctx), `${ctx}`).toBe(true);
+    }
   });
 
   it('holds ~4.5 GiB at 128K, roughly half what a uniform formula predicts', () => {
