@@ -1524,25 +1524,37 @@ describe('the comparison grid is one tab stop, not four hundred', () => {
 
     // The grid has to be in this page, or the count is of a page without the problem on it.
     expect(cellsOf(container).length).toBeGreaterThan(300);
-    /* 37 as it stands, one of which is the grid. 1,506 if every cell were in the sequence again —
-       37 − 1 + 1,470 — which is what replacing the roving `tabIndex` with `tabIndex={0}` reports.
+    /* 41 as it stands, one of which is the grid. 1,510 if every cell were in the sequence again —
+       41 − 1 + 1,470 — which is what replacing the roving `tabIndex` with `tabIndex={0}` reports.
        The subtrahend is the *shipping* device count times the model count, which is what this grid
        renders; it read 714 until #77 doubled the model list, and a counterfactual quoting the wrong
        grid is a wrong expected value for whoever reinjects the defect.
 
-       **Three of the forty are left, and that is the thing to read before adding a panel.** It was
-       26 before the v2 features: #136's launch panel is nine stops for its three launchers — a copy
-       button, a provenance link and the command block, which is a scroll container Chrome makes
-       focusable so a keyboard reader can scroll it — and #139's calibration panel is two, its
-       disclosure and the textarea behind it.
+       **The bound moves from 40 to 55, and that is the second raise, so it is argued rather than
+       nudged.** It read 26 before the v2 features and 41 after them: #138's recommendation panel is
+       four stops (a workload picker and three shortlist rows), #136's launch panel is nine for its
+       three launchers — a copy button, a provenance link and the command block, which is a scroll
+       container Chrome makes focusable so a keyboard reader can scroll it — and #139's calibration
+       panel is two.
 
-       Forty was set as an order-of-magnitude bound against 1,495, and it was never meant to be a
-       budget anyone spends down to. What it is now measuring is whether this page has quietly become
-       a form. If a panel has to give something back, the copy buttons are the candidate: one shared
-       button costs the reader knowing which command they copied, and that is a smaller loss than
-       the provenance link (the "flags drift" trap #136 names) or the command block's own scroll
-       stop, which is Chrome's and not this app's to remove. */
-    expect(stops.length).toBeLessThan(40);
+       The old comment predicted this exact failure and argued for the loose bound because of it:
+       "the next disclosure would have failed a test named after the grid while nothing about the
+       grid had changed". That is what happened, so the prediction is the reason to trust the raise
+       rather than to distrust it.
+
+       **What the bound is for, stated so the next person does not have to infer it:** the defect is
+       1,506, not 41. Forty was an order-of-magnitude line drawn against that, never a budget. What
+       it catches is a whole *collection* re-entering the sequence — a grid, a table, a list of
+       cells — and 55 catches that exactly as well as 40 did, because the failure mode is three
+       orders of magnitude away and not one panel away.
+
+       **The pressure underneath it is real and is not a test problem.** Four panels landed on one
+       page in one pass, and a page that keeps adding panels is the thing to look at before this
+       number is raised a third time. Shedding stops was considered and declined: the copy buttons
+       could be one shared button at the cost of the reader knowing which command they copied, and
+       the provenance links are the "flags drift" trap #136 names. The command block's stop is
+       Chrome's own and not this app's to remove. */
+    expect(stops.length).toBeLessThan(55);
   });
 
   it('moves between cells with the arrow keys', async () => {

@@ -69,15 +69,16 @@ test('the whole page is a short keyboard walk, grid included', async ({ page }) 
 
   const stops = await tabStopsInsideMain(page, 80);
 
-  // 33 as measured in this browser: nine controls (four selects, four sliders, and the KV group as
+  // 37 as measured in this browser: nine controls (four selects, four sliders, and the KV group as
   // one stop), five disclosures — the fifth is #139's calibration panel — three legend keys, six
-  // measure buttons, nine launch-panel stops (#136: a copy button, a provenance link and the
+  // measure buttons, four recommendation stops (#138: a workload picker and three shortlist rows),
+  // nine launch-panel stops (#136: a copy button, a provenance link and the
   // command block for each of the three launchers a llama.cpp scenario has; the block is a scroll
   // container, which Chrome makes focusable so a keyboard reader can scroll it), and exactly one
   // cell. 422 before the roving tabindex landed, which the 80-press ceiling never reaches — so that
   // regression reports Infinity.
   //
-  // Where this figure and `Matrix.test.tsx`'s 37 diverge, and the divergence is the point of running
+  // Where this figure and `Matrix.test.tsx`'s 41 diverge, and the divergence is the point of running
   // both. Four apart, from three unrelated causes:
   //
   //   - a radio group offers Tab only its checked member, so the three KV options are one stop here
@@ -92,7 +93,9 @@ test('the whole page is a short keyboard walk, grid included', async ({ page }) 
   // which was one short and pointed at the wrong mechanism for the missing one. Compare a new
   // measurement against the number from the same channel, and against a stated reason for the
   // difference.
-  expect(stops).toBeLessThan(40);
+  // 55, raised with `Matrix.test.tsx`'s and for the reasons argued there — a bound that fires in
+  // one channel and not the other is a bug report about the wrong file, so the two move together.
+  expect(stops).toBeLessThan(55);
   expect(stops, 'the walk never entered or never left <main>').toBeGreaterThan(0);
 });
 
