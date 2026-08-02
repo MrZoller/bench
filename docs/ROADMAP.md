@@ -317,9 +317,12 @@ a source rather than recalled:
 
 - **`GPUAdapterInfo.architecture` does not identify a Mac.** Apple GPUs report no DeviceID through
   Metal, so Dawn reports the highest supported _common feature family_ instead — `common-1`,
-  `common-2`, `common-3` — and every Apple silicon Mac from the M1 up reports the same string. On
-  the one platform where a unified-memory row is the headline case, the architecture narrows
-  nothing at all; `deviceMemory` and a follow-up question do the work.
+  `common-2`, `common-3` — and every Apple silicon Mac from the M1 up reports the same string. So it
+  identifies the **vendor and nothing past it**, which is worth more than it sounds: `detect()`
+  prunes on it, and it is the one signal left when the vendor string itself is withheld. What it
+  cannot do is say _which_ Mac, on the one platform where a unified-memory row is the headline case —
+  `deviceMemory` and a follow-up question do that. ("Narrows nothing at all" is what this bullet said
+  until #175, and `detect.ts`'s own docblock said it too.)
 - **`navigator.deviceMemory` is capped at 8 in Chrome and absent in Safari**, so a reading _of_ 8
   rules out nothing at the top — and it does not mean "8 or more" either, which two drafts of this
   bullet claimed. Under the interval below, an uncapped 8 means `(6, 12]` and the clamp only removes

@@ -41,8 +41,10 @@ import { GIB } from '@/engine/types';
  *   - **`GPUAdapterInfo.architecture` does not identify a Mac.** Apple GPUs report no DeviceID
  *     through Metal, so Dawn reports the highest supported *common feature family* instead —
  *     `common-1`, `common-2`, `common-3`. Every Apple silicon Mac from the M1 to the newest reports
- *     the same string, so on the one platform where a unified-memory row is the headline case, the
- *     architecture narrows nothing at all. It is `deviceMemory` and a question that do the work.
+ *     the same string, so it identifies the **vendor** — and it is pruned on as one, which matters
+ *     when the vendor string itself is withheld — while saying nothing about *which* Mac. On the one
+ *     platform where a unified-memory row is the headline case, `deviceMemory` and a follow-up
+ *     question do the rest.
  *   - **`navigator.deviceMemory` is capped at 8 in Chrome and absent in Safari**, so it separates
  *     small machines from large ones and nothing above 8 GiB from anything else. A reading *of* 8
  *     prunes nothing and is *not* a floor of 8 — the clamp only removes the upper end of `(6, 12]`,
@@ -140,7 +142,14 @@ export interface DetectionSignals {
   adapterVendor?: string;
   /** `GPUAdapterInfo.architecture` — see the two tables above for what it is worth. */
   adapterArchitecture?: string;
-  /** `GPUSupportedLimits.maxBufferSize`, in bytes. A lower bound on device memory, never a capacity. */
+  /**
+   * `GPUSupportedLimits.maxBufferSize`, in bytes. **Evidence only — this never prunes.**
+   *
+   * A validation ceiling on a buffer descriptor rather than a promise the allocation succeeds, so
+   * it is not a lower bound on device memory and cannot rule a machine out. The prune that read it
+   * that way was withdrawn for removing the reader's own machine; see the evidence line for the
+   * whole argument.
+   */
   maxBufferBytes?: number;
   /** `navigator.deviceMemory`, in GiB. Capped at 8 in Chrome, absent in Safari. */
   deviceMemoryGiB?: number;

@@ -290,7 +290,7 @@ describe('a measurement of a different job is not evidence about the model', () 
     // A paste carrying no cache precision must not sail past a Q8 prediction — unverifiable is not
     // the same as matching, and markdown is the default output.
     expect(compare(parseLlamaBench(MARKDOWN), prediction({ kvType: 'q8_0' }))[0].mismatch).toMatch(
-      /pasted as markdown/
+      /without a stated cache precision/
     );
     // And an f16 prediction is unaffected, since nothing about it is unverifiable.
     expect(compare(parseLlamaBench(MARKDOWN), prediction())[0].mismatch).toBeUndefined();
@@ -305,6 +305,14 @@ describe('a measurement of a different job is not evidence about the model', () 
     //
     // Reading those columns is #181. When it lands this assertion inverts, which is the point of
     // pinning it: the current behaviour is a known gap rather than an unexamined one.
+    //
+    // **And `ngl` goes with them, which this fixture is what found** (Codex, on #175).
+    // `parseMarkdown` locates `ngl` by *position* — the cell before `test` — because a bare integer
+    // has no distinctive shape. The cache columns sit between the two in llama-bench's own layout,
+    // so the cell before `test` is `type_v` and the layer count is lost on exactly the output the
+    // panel's command produces. `describeMismatch` then skips the layer check, and an offloaded run
+    // compares clean against a resident prediction. Same root as #181 — the parser does not read the
+    // header row — and filed there.
     const withCacheColumns = `
 | model                  |     params | backend | ngl | type_k | type_v |   test |          t/s |
 | ---------------------- | ---------: | ------- | --: | ------ | ------ | -----: | -----------: |
@@ -313,8 +321,9 @@ describe('a measurement of a different job is not evidence about the model', () 
     const parsed = parseLlamaBench(withCacheColumns);
     expect(parsed).toHaveLength(1);
     expect(parsed[0].kvTypes).toBeUndefined();
+    expect(parsed[0].gpuLayers).toBeUndefined();
     expect(compare(parsed, prediction({ kvType: 'q8_0' }))[0].mismatch).toMatch(
-      /pasted as markdown/
+      /without a stated cache precision/
     );
   });
 

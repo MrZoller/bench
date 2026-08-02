@@ -13,8 +13,9 @@
  * ## Parse, don't ask
  *
  * `llama-bench` emits markdown by default and JSON on `-o json`, and **JSON is strongly preferred
- * here** — it carries `build_commit`, which is the version-skew guard #139 names, plus `n_prompt`,
- * `n_gen` and `n_depth` as numbers rather than as a string to re-parse. The markdown reader exists
+ * here** — it carries `build_commit`, which #139 names as the version-skew guard and which nothing
+ * here checks (it is captured for the issue body, see {@link Measurement.buildCommit}), plus
+ * `n_prompt`, `n_gen` and `n_depth` as numbers rather than as a string to re-parse. The markdown reader exists
  * because the default output is markdown and a reader who has already run the tool should not have
  * to run it again.
  *
@@ -51,7 +52,15 @@ export interface Measurement {
   tokensPerSec: number;
   /** The `±` figure, where the format carried one. */
   stddev?: number;
-  /** llama.cpp's own commit, from JSON output only. The version-skew guard. */
+  /**
+   * llama.cpp's own commit, from JSON output only.
+   *
+   * **Captured, never checked.** `describeMismatch` does not read it and there is nothing to read
+   * it against — the catalog pins a runtime, not a commit of one. It rides into the generated issue
+   * body so a human weighing the submission can see it, and its absence is stated there rather than
+   * assumed benign. #139 calls it the version-skew guard; that is the role it plays for a reviewer,
+   * not a rejection this module makes.
+   */
   buildCommit?: string;
   /** `-ngl`, where the format carried it — the layer split the run actually used. */
   gpuLayers?: number;
@@ -527,12 +536,19 @@ function describeMismatch(
      * whether or not llama-bench printed them — and the panel's own measure command passes
      * `-ctk`/`-ctv` explicitly, which makes it print them. So the reader who follows the panel
      * exactly gets told their correctly reproduced run looks like f16. Reading those columns is
-     * #181; until then the sentence below has to describe the paste rather than the format.
+     * #181.
+     *
+     * **The sentence names neither format**, which is the correction after the first one named the
+     * wrong one (Codex again, on #175). A JSON row that simply omits `type_k`/`type_v` lands here
+     * too — the fixture in the test file does exactly that — so "pasted as markdown, re-run with
+     * `-o json`" told a JSON reader to re-run the command they had already run. `Measurement` does
+     * not record which parser produced it, so the honest sentence describes the *absence* and names
+     * the fields.
      */
     reasons.push(
-      `pasted as markdown, which this reader does not take a cache precision from — so it cannot ` +
-        `be told apart from an f16 run, where the figures above assume ${prediction.kvType}. ` +
-        `Re-run with -o json to say for certain`
+      `pasted without a stated cache precision — no type_k/type_v — so it cannot be told apart ` +
+        `from an f16 run, where the figures above assume ${prediction.kvType}. A JSON run stating ` +
+        `those fields is what settles it`
     );
   }
 
