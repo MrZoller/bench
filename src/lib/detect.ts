@@ -44,8 +44,9 @@ import { GIB } from '@/engine/types';
  *     the same string, so on the one platform where a unified-memory row is the headline case, the
  *     architecture narrows nothing at all. It is `deviceMemory` and a question that do the work.
  *   - **`navigator.deviceMemory` is capped at 8 in Chrome and absent in Safari**, so it separates
- *     small machines from large ones and nothing above 8 GiB from anything else. Read as a *floor*
- *     here, never as a capacity.
+ *     small machines from large ones and nothing above 8 GiB from anything else. A reading *of* 8
+ *     is a floor and prunes nothing; a reading *below* 8 is a real ceiling, and the `[r, 2r)` bound
+ *     it implies is applied to unified-memory rows — see the prune itself for why that is sound.
  *   - **The adapter limits are allocation ceilings, not memory.** `maxBufferSize` is the largest
  *     single buffer, which a driver caps well below VRAM — so it is a lower bound on capacity and
  *     nothing more. That is still real narrowing: a card reporting a 4 GiB maximum buffer cannot be
@@ -62,12 +63,17 @@ import { GIB } from '@/engine/types';
 /**
  * Architecture strings, as Chrome actually reports them.
  *
- * **Generated from Dawn's own data file rather than transcribed**, and the transformation matters:
- * `gpu_info.json` stores names like `RDNA 3` and `Gen 12 LP`, and `dawn_gpu_info_generator.py`'s
- * `js_enum_case()` lowercases and joins with a hyphen — *except* after a digit, where it joins with
- * nothing. So `RDNA 3` is `rdna-3` and `Gen 12 LP` is `gen-12lp`, not `gen-12-lp`. A hand-written
- * table would have got the Intel rows wrong, and a web search returned both `rdna-3` and `rdna4`
- * for the same field.
+ * **Transcribed from Dawn's own data file through its generator's rule**, which is the part that
+ * matters: `gpu_info.json` stores names like `RDNA 3` and `Gen 12 LP`, and
+ * `dawn_gpu_info_generator.py`'s `js_enum_case()` lowercases and joins with a hyphen — *except*
+ * after a digit, where it joins with nothing. So `RDNA 3` is `rdna-3` and `Gen 12 LP` is
+ * `gen-12lp`, not `gen-12-lp`. Reading the names without applying that transform gets every Intel
+ * row wrong, and a web search returned both `rdna-3` and `rdna4` for the same field.
+ *
+ * **There is no generator script for this, and calling it "generated" over-claimed** (raised by
+ * Codex on #175). The model catalog is regenerable by anyone with `npm run catalog`; this is a
+ * literal table. To refresh it: re-read `gpu_info.json` at the URL below, apply `js_enum_case()` by
+ * hand, and move the read date.
  *
  * This maps architecture to **vendor only**, which is all it can honestly do. Dawn's architecture is
  * a silicon generation and `devices.json` has no generation column — adding one would mean asserting

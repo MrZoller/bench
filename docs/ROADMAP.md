@@ -39,9 +39,13 @@ for recommend, #168 for detect, #169 for calibrate — and what each turned out 
 **v2 — guided mode**, below. Six findings were filed rather than patched under the merge rule; they
 are in **Open questions**, and three of the six share one root.
 
-What remains is a naming decision and those six issues, not planned work: the site serves from the
-Pages project URL, and a zoller.ai subdomain is one repository variable away. See **Deployment**,
-below.
+What remains is a naming decision, those six issues, and **two loose ends that are on `main` and in
+no issue at all** — a `LLAMA_KV_TYPES` mapping duplicated between `Calibrate.tsx` and `launch.ts`
+under a comment saying the two must be merged once both land, and the emitted `llama-bench` command
+asking for `-o md` while the parser prefers JSON. Both are described under **Calibrate**, below, and
+both are named here because a handoff summary listing six issues reads as a complete inventory. The
+naming decision is the smallest of the three: the site serves from the Pages project URL, and a
+zoller.ai subdomain is one repository variable away. See **Deployment**, below.
 
 | Phase                              | State             | Notes                                                                                                |
 | ---------------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------- |
@@ -302,9 +306,12 @@ a source rather than recalled:
   `common-2`, `common-3` — and every Apple silicon Mac from the M1 up reports the same string. On
   the one platform where a unified-memory row is the headline case, the architecture narrows
   nothing at all; `deviceMemory` and a follow-up question do the work.
-- **`navigator.deviceMemory` is capped at 8 in Chrome and absent in Safari**, so it separates small
-  machines from large ones and nothing above 8 GiB from anything else. Read as a floor, never as a
-  capacity.
+- **`navigator.deviceMemory` is capped at 8 in Chrome and absent in Safari**, so a reading _of_ 8
+  means "8 or more" and rules out nothing at the top. A reading _below_ 8 is a real ceiling, and the
+  detector uses it as one: the spec reports RAM rounded **down** to a power of two, so `r` means
+  `[r, 2r)` and `capacity <= 2r` is the widest sound bound. It prunes `unified-soc` rows only, since
+  a discrete card's VRAM is unrelated to host RAM. "A floor, never a capacity" is true of the capped
+  reading alone, and this bullet said it of every reading until Codex caught it on #175.
 - **The adapter limits narrow nothing, and that is the second review's correction rather than the
   first draft's claim.** `maxBufferSize` looks like a sound floor — the largest single buffer a
   driver will hand out, capped well under total memory, so a device below it is impossible. It is a
@@ -315,12 +322,19 @@ a source rather than recalled:
   #175** — the handoff document quietly re-proposing a prune the feature had already withdrawn is
   the specific way a file like this does damage.
 
-**The architecture table is generated from Dawn's own data file rather than transcribed**, and the
-transformation is the reason. `gpu_info.json` stores `RDNA 3` and `Gen 12 LP`, and
-`dawn_gpu_info_generator.py`'s `js_enum_case()` lowercases and joins with a hyphen _except after a
-digit_, where it joins with nothing: `rdna-3` but `gen-12lp`, not `gen-12-lp`. A hand-written table
-gets every Intel row wrong, and a web search returned both `rdna-3` and `rdna4` for the same field.
-The same rule as the model catalog, on a smaller surface: derived, never typed.
+**The architecture table is transcribed from Dawn's own data file _through its generator's rule_**,
+which is what makes it right and is not the same claim as the model catalog's. `gpu_info.json`
+stores `RDNA 3` and `Gen 12 LP`, and `dawn_gpu_info_generator.py`'s `js_enum_case()` lowercases and
+joins with a hyphen _except after a digit_, where it joins with nothing: `rdna-3` but `gen-12lp`,
+not `gen-12-lp`. Reading the names without the transform gets every Intel row wrong, and a web
+search returned both `rdna-3` and `rdna4` for the same field.
+
+**There is no script, and the roadmap called it "generated" until Codex asked where the generator
+was** (#175). `models.generated.json` has `scripts/build-catalog.ts` and is regenerable by anyone;
+this is thirty-odd literal entries in `detect.ts` with the source URL and a read date in the
+docblock. Refreshing it means re-reading `gpu_info.json`, applying `js_enum_case()` by hand, and
+moving the date — which is a procedure worth stating rather than a rule worth invoking, because
+"derived, never typed" promises reproducibility this table does not have.
 
 **The rule that keeps the panel honest is one line — a filter that would leave nothing is a filter
 that is wrong about this machine.** Every prune is applied only if something survives it, and one
@@ -428,10 +442,14 @@ this paragraph did exactly that.)
 The fourth is the machine, which `llama-bench` does not name reliably, and which is why the scenario
 URL is a required field in the issue template.
 
-**The model check is the parameter count, not the name.** llama.cpp writes an architecture where the
-catalog writes a product, so the two never agree past the first word: comparing labels catches a
-DeepSeek paste against a Llama prediction and misses Qwen3 8B against Qwen3 32B. A parameter count
-is the same quantity in both, derived on both sides rather than named.
+**The model is checked twice, and the parameter count is the half that carries the hard case.**
+llama.cpp writes an architecture where the catalog writes a product, so the two never agree past the
+first word — which is exactly how far the name check goes, matching on the leading token. That
+catches a DeepSeek paste against a Llama prediction, including the markdown rows where no parameter
+column was printed, and it misses Qwen3 8B against Qwen3 32B entirely. The count is what separates
+sizes inside a family: the same quantity on both sides, derived rather than named, flagged past 10%
+because the two counters differ slightly and a wrong model is wrong by a factor. Neither subsumes
+the other, and this paragraph said the count replaced the name until Codex caught it on #175.
 
 **A `-pg` row is dropped rather than read as prefill**, and the first version read it on a comment
 that was simply wrong. `llama-bench` computes a row's rate as `(n_prompt + n_gen) / time`, so a
