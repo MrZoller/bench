@@ -41,9 +41,12 @@ two more (#180, #181) came out of reviewing _this section_ a day later; they are
 questions**, and two of the first six share one root.
 
 What remains is a naming decision, **eight open issues of which seven are work** — the six filed
-during the pass plus [#180](https://github.com/MrZoller/bench/issues/180) and
+during the pass, less [#165](https://github.com/MrZoller/bench/issues/165) which is fixed, plus
+[#180](https://github.com/MrZoller/bench/issues/180) and
 [#181](https://github.com/MrZoller/bench/issues/181), which came out of reviewing this very
-document, less #174, which is open as a record of a decision already made rather than as a task —
+document, plus [#182](https://github.com/MrZoller/bench/issues/182), which is the half of #165 that
+its own verification note said not to fold in, less #174, which is open as a record of a decision
+already made rather than as a task —
 and **two loose ends that are on `main` and in no issue at all**: a `LLAMA_KV_TYPES`
 mapping duplicated between `Calibrate.tsx` and `launch.ts` under a comment saying the two must be
 merged once both land, and the emitted `llama-bench` command asking for `-o md` while the parser
@@ -574,10 +577,10 @@ Deliberately absent, and not forgotten: cloud pricing stays out of scope per the
 below, and fine-tuning memory (LoRA/QLoRA) is a second engine rather than a feature — real demand,
 weak incumbents, and deliberately not attempted before guided mode shipped. Now that it has, that is
 the v3-scale bet. What stands between here and it is **seven** of the eight issues in **Open
-questions** — the six from the pass plus #180 and #181, one of them a P1 on the path a reader is
-most likely to take, and [#174](https://github.com/MrZoller/bench/issues/174) not among them: it is
-open as a _record_ of an answered policy question rather than as work, and counting it as a blocker
-would make a settled decision look like a task.
+questions** — the five still open from the pass plus #180, #181 and #182, one of them a P1 on the
+path a reader is most likely to take, and [#174](https://github.com/MrZoller/bench/issues/174) not
+among them: it is open as a _record_ of an answered policy question rather than as work, and
+counting it as a blocker would make a settled decision look like a task.
 
 ## Deployment
 
@@ -1817,9 +1820,10 @@ Correctness follow-ups live in
 [the repository's open issues](https://github.com/MrZoller/bench/issues). This section is for the
 questions those issues cannot settle, and the three tables below are the record of the fourteen
 findings filed rather than patched — six out of the July sweep, all now closed; six out of the v2
-pass; and two more out of _documenting_ the v2 pass, which is its own entry. The eight from the last
-two are open. They are kept because what a finding turns out to need is repeatedly not what the issue
-said it would be.
+pass, of which #165 is now closed too; and two more out of _documenting_ the v2 pass, which is its
+own entry. Seven of the last two are open, plus #182, which #165 split off rather than fold in.
+They are kept because what a finding turns out to need is repeatedly not what the issue said it
+would be.
 
 The pointer names the open issues rather than a range on purpose. It read "#12–#20" while six newer
 correctness issues sat in the table underneath it, so a maintainer following the sentence walked past
@@ -1853,20 +1857,21 @@ made that visible; the measurements survived and the framings mostly did not.
 
 ### The six filed out of the v2 pass, 1 August 2026
 
-Same rule, same shape, and **all six are open — but only five are work.** Each carries its
-measurement; two carry an argument rather than a repair; one records a capability gap that is not a
-defect at all; and #174 is open purely as the written argument for a decision already taken, which
-is why the counts elsewhere in this file exclude it from what stands between here and v3. An issue
-can be a record. Closing it would lose the reasoning, and counting it would invent a task.
+Same rule, same shape, and **five of the six are open — of which four are work.** #165 is fixed, and
+split in two on the way; the rest each carry a measurement; two carry an argument rather than a
+repair; one records a capability gap that is not a defect at all; and #174 is open purely as the
+written argument for a decision already taken, which is why the counts elsewhere in this file exclude
+it from what stands between here and v3. An issue can be a record. Closing it would lose the
+reasoning, and counting it would invent a task.
 
-| filed                                                                                             | what it is                                                                                                                                                                                                                                                                                                                                                        |
-| ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [#165](https://github.com/MrZoller/bench/issues/165) resident layers charge the non-layer tensors | `layerSplitBins` takes `perLayerWeight = totalWeightBytes / model.layers`, and the total includes embeddings and any `nonLanguageParams` — Llama 3.2 3B's 128,256-token vocabulary is ~394M of 3.2B, over 12%, charged evenly across 28 layers that do not hold it. Invisible while the bins were read as bytes; #163 exported them as a count and #136 prints it |
-| [#166](https://github.com/MrZoller/bench/issues/166) the assignment discards _which_ layers       | The packing is greedy over individual layers, so a bin is a non-contiguous mixture and the counts alone do not reproduce it — 19 apart on five cards for Gemma 3 12B at 128K. #164 narrowed what the emitter claims instead (no `-ts` for a hybrid model), which is correct and leaves a capability gap on exactly the models where the packing is worth most     |
-| [#170](https://github.com/MrZoller/bench/issues/170) tiers graded at scenarios never planned      | `recommend` plans one placement per candidate at the archetype's own scenario and drops it when that is impossible — but long-context's `tight` tier is a 64K prompt and the agent's tiers are 64K and 32K sessions. Same answer today, because `judgeWorkloads` refuses at the top; a structural disagreement about who models the tiers                         |
-| [#172](https://github.com/MrZoller/bench/issues/172) the caveat describes the wrong tier          | Same root. A `tight` recommendation can carry the `good` tier's spill caveat, the fallback can rank by a rate no tier measured, and the serving footer names the reader's concurrency where that archetype grades at its own                                                                                                                                      |
-| [#171](https://github.com/MrZoller/bench/issues/171) the Ollama block and the daemon              | `ollama serve &` does not wait, does not notice an existing daemon still on the default `f16` cache, and configures no `OLLAMA_NUM_PARALLEL`. Both fixes push a copy-pasteable block into daemon lifecycle management, which is a different kind of command from the rest of the panel                                                                            |
-| [#174](https://github.com/MrZoller/bench/issues/174) one adapter on a dual-GPU machine            | Filed as the argument. Preferring the discrete card is the answer for a tool that prices inference, not half of "combine both preferences" — and combining would widen the shortlist to two vendors                                                                                                                                                               |
+| filed                                                                                             | what it is                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [#165](https://github.com/MrZoller/bench/issues/165) resident layers charge the non-layer tensors | **Fixed**, and it turned out to be two issues rather than one — see below. The count divides `layerWeightBytes`; every byte figure is bit-identical to before it; `-ngl` drops on 7.9% of the catalog's configurations, by a median of 1 layer and never rises. The byte assignment those tensors get is [#182](https://github.com/MrZoller/bench/issues/182) |
+| [#166](https://github.com/MrZoller/bench/issues/166) the assignment discards _which_ layers       | The packing is greedy over individual layers, so a bin is a non-contiguous mixture and the counts alone do not reproduce it — 19 apart on five cards for Gemma 3 12B at 128K. #164 narrowed what the emitter claims instead (no `-ts` for a hybrid model), which is correct and leaves a capability gap on exactly the models where the packing is worth most |
+| [#170](https://github.com/MrZoller/bench/issues/170) tiers graded at scenarios never planned      | `recommend` plans one placement per candidate at the archetype's own scenario and drops it when that is impossible — but long-context's `tight` tier is a 64K prompt and the agent's tiers are 64K and 32K sessions. Same answer today, because `judgeWorkloads` refuses at the top; a structural disagreement about who models the tiers                     |
+| [#172](https://github.com/MrZoller/bench/issues/172) the caveat describes the wrong tier          | Same root. A `tight` recommendation can carry the `good` tier's spill caveat, the fallback can rank by a rate no tier measured, and the serving footer names the reader's concurrency where that archetype grades at its own                                                                                                                                  |
+| [#171](https://github.com/MrZoller/bench/issues/171) the Ollama block and the daemon              | `ollama serve &` does not wait, does not notice an existing daemon still on the default `f16` cache, and configures no `OLLAMA_NUM_PARALLEL`. Both fixes push a copy-pasteable block into daemon lifecycle management, which is a different kind of command from the rest of the panel                                                                        |
+| [#174](https://github.com/MrZoller/bench/issues/174) one adapter on a dual-GPU machine            | Filed as the argument. Preferring the discrete card is the answer for a tool that prices inference, not half of "combine both preferences" — and combining would widen the shortlist to two vendors                                                                                                                                                           |
 
 **The six group into three pairs, which is the useful way to read them.** Two are the engine
 exporting a layer _count_ where what matters is which layers and what is in them (#165, #166). Two
@@ -1882,6 +1887,39 @@ pair is a pair only in this table** — a daemon's lifecycle and a dual-GPU poli
 the sentence they are listed in, #174 is already answered rather than open work, and coupling them
 would be the same over-generalisation this file keeps warning about, arriving in the paragraph that
 warns about it. (Caught by Codex on #175.)
+
+**The first of those pairs then did not need fixing as a pair, and #165 split in half instead.** The
+half that shipped is the one its own verification note demanded, and it touched `layerSplitBins`
+without touching what #166 is about — so the pairing was right about where the two meet and wrong
+about what that implies for sequencing. The issue asked for two things that turn out to be
+incompatible: charge the fixed
+tensors to the bin that holds them, _and_ do not move the busiest bin's byte totals. They cannot
+both hold — an indivisible block cannot balance as finely as `1/L` of it can — and the second is the
+load-bearing one, because the bins' bytes are the input to every memory panel, `fits`, `impossible`
+and both speed estimators. So the count's basis was fixed and the byte assignment was left alone,
+which is exactly the scope the issue's title states.
+
+The measurement is what decided it rather than the argument. Assigning the block to one bin moves
+`usedBytesPerDevice` by more than 5% on 10.2% of the catalog's multi-card layer-split configurations,
+by up to 27.9%, and flips `fits` on 0.60% of them and `impossible` on 0.12% — a change to what the
+product answers, wearing a layer count's clothes. What shipped instead is bit-identical on 2.4M
+sampled byte figures and changes `-ngl` on 7.9% of configurations, **every one of them downward**, by
+a median of 1 layer and at most 8. The remainder is [#182](https://github.com/MrZoller/bench/issues/182),
+and it is blocked on reading `llama-model.cpp` rather than on the arithmetic: which device holds
+`token_embd` under a layer split, and what that means for a **tied** model where one tensor is both
+the lookup and the output projection — which is Gemma 3 4B, the row where the block is largest at
+25% of the file.
+
+Two things found on the way there are worth keeping even though neither is #165. **`weightBytesPerDevice`
+is unstable by construction on hybrid models**: it is the busiest-by-_combined_-load bin's weights,
+and Gemma 3 12B on three 4090s at 128K/8 users puts three bins within 1% of each other on load with
+completely different composition — so a 0.9 GB block moves one sliding layer and changes which card
+the entire readout describes. That is why most of #182's `weightBytesPerDevice` tail (max +833%) is
+identity flipping rather than bytes moving, and why a test resting on which bin is busiest needs a
+margin rather than a coin flip. And **the fixed tensors are a large fraction of exactly the small
+models**: 25.4% of Gemma 3 4B, 21.4% of Ministral 3 3B, 15.2% of Qwen3 8B, 12.3% of Llama 3.2 3B —
+so "the vocabulary is a rounding error" is true for the models nobody has trouble running and false
+for the ones people run on the hardware they already own.
 
 **And the review pattern held exactly as this file predicted.** Codex ran four rounds on some of
 these pull requests, and from round three onward the findings were largely defects in the _previous

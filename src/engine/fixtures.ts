@@ -42,6 +42,39 @@ export const LLAMA_31_8B: ModelSpec = {
   source: 'https://huggingface.co/NousResearch/Meta-Llama-3.1-8B-Instruct/raw/main/config.json',
 };
 
+/**
+ * The same architecture small enough that its vocabulary stops being a rounding error.
+ *
+ * 128,256 tokens at 3,072 hidden is 394.0M parameters against a 3.21B total, and the table is
+ * tied, so **12.3% of this file is in no layer at all** — the row #165 was filed against, and
+ * deliberately not the catalog's worst: Qwen3 8B is 15.2% untied, Ministral 3 3B 21.4% and Gemma 3
+ * 4B 25.4% once their towers are counted. A per-layer figure taken from the whole file calls each
+ * of these 28 layers a layer plus 14.1M parameters of embedding it does not hold, which is a layer
+ * or two of error in a count somebody pastes into a shell.
+ *
+ * Figures are the generated catalog's own, at the revision named below.
+ */
+export const LLAMA_32_3B: ModelSpec = {
+  id: 'unsloth/Llama-3.2-3B-Instruct',
+  name: 'Llama 3.2 3B Instruct',
+  org: 'Meta',
+  totalParams: 3_212_749_824,
+  activeParams: 3_212_749_824,
+  // Tied, so the table is the output projection and decode runs the whole matmul every step —
+  // nothing comes out of the per-token basis, and all of it stays outside the repeating stack.
+  activeDenseParams: 3_212_749_824,
+  tiedEmbeddings: true,
+  expertParams: 0,
+  layers: 28,
+  hiddenSize: 3072,
+  vocabSize: 128256,
+  // 24 query heads x 128 = 3072, equal to hidden size.
+  attention: { core: { kind: 'gqa', kvHeads: 8, headDim: 128 }, projectionWidth: 3072 },
+  maxContext: 131072,
+  source:
+    'https://huggingface.co/unsloth/Llama-3.2-3B-Instruct/tree/006f5dcd1393c3add266de40994ba96225e9689d',
+};
+
 /** Dense GQA at a size where the 32 GB consumer ceiling starts to bite. */
 export const QWEN3_32B: ModelSpec = {
   id: 'Qwen/Qwen3-32B',

@@ -26,6 +26,23 @@ export interface WeightBreakdown {
   expertBytes: number;
   /** Everything else: attention, embeddings, norms, router, shared experts, dense FFN layers. */
   denseBytes: number;
+  /**
+   * Weights that sit outside the repeating stack — see {@link fixedParams}.
+   *
+   * A subset of `denseBytes`, orthogonal to the expert/dense split: that one asks what *rate* a
+   * tensor is charged at, this one asks how many devices it divides across. The answer is one,
+   * which is the whole reason the field exists.
+   */
+  fixedBytes: number;
+  /**
+   * The repeating transformer blocks — `totalBytes - fixedBytes`, and the only part of the file
+   * that is `layers` of anything.
+   *
+   * **This, not `totalBytes`, is what a per-layer figure divides.** Charging `totalBytes / layers`
+   * calls a layer "a layer plus a share of the embeddings", which is right as a byte total and
+   * wrong the moment anything reads it back as a count (#165).
+   */
+  layerBytes: number;
   totalBytes: number;
   /** Blended bits per weight across the whole model. For display; never use it to size a subset. */
   effectiveBpw: number;
@@ -40,12 +57,46 @@ export function weightBreakdown(model: ModelSpec, quant: QuantSpec): WeightBreak
   const denseBytes = (dense * denseBpw) / 8;
   const totalBytes = expertBytes + denseBytes;
 
+  // Fixed tensors are never routed experts, so `denseBpw` is their rate and `denseBytes` their
+  // ceiling. The clamp is defensive rather than reachable: it keeps `layerBytes` non-negative on a
+  // row whose vocabulary and tower somehow outweigh its own dense half.
+  const fixedBytes = Math.min(denseBytes, (fixedParams(model) * denseBpw) / 8);
+
   return {
     expertBytes,
     denseBytes,
+    fixedBytes,
+    layerBytes: totalBytes - fixedBytes,
     totalBytes,
     effectiveBpw: (totalBytes * 8) / model.totalParams,
   };
+}
+
+/**
+ * Parameters that live outside every repeating layer, and therefore outside any per-layer figure.
+ *
+ * Three tensors, none of which a layer split divides:
+ *   - the **input embedding** table, `vocab x hidden`;
+ *   - the **output projection**, a second table of the same size — unless it is tied, in which
+ *     case there is one table doing both jobs and it must not be counted twice;
+ *   - **non-text towers**, which are resident and are not part of the language stack.
+ *
+ * The same three corrections `activeDenseParams` is built from, read for a different purpose:
+ * there the question is what a token *reads*, here it is what a device *holds whole*. They pull
+ * apart on the tie — a tied table is read every step and still occupies exactly one device.
+ *
+ * These are not a rounding error on the models people run smallest. Llama 3.2 3B carries a
+ * 128,256-token vocabulary at 3,072 hidden against 3.2B total, so the shared table is over 12% of
+ * the weights, and Gemma 3 4B's vocabulary and vision tower together are 25% — charged evenly
+ * across 34 layers that hold none of it.
+ *
+ * `tiedEmbeddings` is read as untied unless it says otherwise, matching the generator's own
+ * convention, and the failure direction is the safe one: over-stating the fixed block understates
+ * the per-layer weight, which reports *fewer* resident layers rather than more.
+ */
+export function fixedParams(model: ModelSpec): number {
+  const table = outputProjectionParams(model);
+  return (model.tiedEmbeddings === true ? table : 2 * table) + (model.nonLanguageParams ?? 0);
 }
 
 export function weightBytes(model: ModelSpec, quant: QuantSpec): number {
