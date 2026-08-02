@@ -188,12 +188,21 @@ which command to run, and calibrate reads what it printed.
 **That is a protocol, and it is much wider than it looks — which is the point worth carrying, since
 one end of it is already a P1.** The emitter fixes the prompt length, the cache depth, the
 generation shape, the layer count, the cache precision, the model and quant the command names, and
-the output format; `Calibrate` reconstructs every one of those as the expectation, and
-`describeMismatch` rejects a paste that misses them. Nothing static ties the two together, so a
-change to either side is invisible to the other — which is exactly how
+the output format, and `Calibrate` reconstructs those as its expectation.
+
+**What it _validates_ is a strict subset of what it reconstructs, and the gap is not a bug.** The
+depth and the prompt length are checked outright; the layer count, cache precision, model and
+backend only when the paste states them; the decode length is deliberately not checked at all, since
+a per-token rate does not depend on how many tokens were asked for; and the output format is not
+part of the comparison, because both parse. Do not read the protocol as a set of guards —
+`describeMismatch` is the guards, and it is narrower than the list above by design.
+
+The danger is the part with no guard on either side. Nothing static ties the two modules together,
+so a change to either is invisible to the other — which is exactly how
 [#180](https://github.com/MrZoller/bench/issues/180) happened: the two ends disagree about the
-depth, and bench's own command now emits a row bench rejects. **Change the emitter and re-read
-`compare` in the same sitting**, because there is no compiler that will do it for you.
+depth, which _is_ checked, so bench's own command now emits a row bench rejects. **Change the
+emitter and re-read `compare` in the same sitting**, because there is no compiler that will do it
+for you.
 
 The one thing they duplicate in code is the llama.cpp spelling of a cache precision. All five
 branches were cut from `main` rather than stacked, so calibrate could not import it and copied it
