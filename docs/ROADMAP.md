@@ -1774,11 +1774,16 @@ argument rather than a repair, and one records a capability gap that is not a de
 exporting a layer _count_ where what matters is which layers and what is in them (#165, #166). Two
 are one root stated twice — the sweep plans one scenario per candidate while the verdict layer
 models a tier structure (#170, #172). And two are decisions rather than defects: how far a
-copy-pasteable block should go in managing a daemon, and whether detection should ever widen. **Each
-pair wants fixing as a pair**, which is why neither was patched inside a feature branch: the first
-meets at `layerSplitBins`, where a per-layer figure that is not per-layer feeds both a count and a
-command; the second meets at the seam between `recommend` and `judgeWorkloads`, and moving that seam
-inside a PR about a panel is how a root cause gets its third patch.
+copy-pasteable block should go in managing a daemon, and whether detection should ever widen.
+
+**The first two pairs want fixing as pairs**, which is why neither was patched inside a feature
+branch: the first meets at `layerSplitBins`, where a per-layer figure that is not per-layer feeds
+both a count and a command; the second meets at the seam between `recommend` and `judgeWorkloads`,
+and moving that seam inside a PR about a panel is how a root cause gets its third patch. **The third
+pair is a pair only in this table** — a daemon's lifecycle and a dual-GPU policy share nothing but
+the sentence they are listed in, #174 is already answered rather than open work, and coupling them
+would be the same over-generalisation this file keeps warning about, arriving in the paragraph that
+warns about it. (Caught by Codex on #175.)
 
 **And the review pattern held exactly as this file predicted.** Codex ran four rounds on some of
 these pull requests, and from round three onward the findings were largely defects in the _previous
