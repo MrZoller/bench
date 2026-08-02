@@ -1,7 +1,7 @@
 import type { DeviceSpec, ModelSpec, QuantSpec, Rig, RuntimeSpec, UsageSpec } from './types';
 import { activationBytes } from './activations';
 import { kvBytesTotal, layerKvBytes } from './kv';
-import { weightBytes } from './weights';
+import { weightBreakdown, type WeightBreakdown } from './weights';
 
 /**
  * Where the bytes actually land.
@@ -120,6 +120,11 @@ export interface DeviceShare {
    * layer split the devices hold different amounts, so a rig-wide ratio applied to a per-device
    * layer count is the #14 defect one level up — and here it would be shipped as a number the
    * reader pastes into a shell.
+   *
+   * **And the bytes it is a share of are the *repeating* ones**, not `weightBytes` (#165). The
+   * embedding table, the output projection and any vision tower are on the rig and are in no layer,
+   * so a count taken against the whole share calls a fraction of them layers — which was the same
+   * defect one level further down, with the operands swapped again.
    *
    * Floored, because the rounding has a safe direction: too few layers on the device is slow, and
    * one too many is an out-of-memory error on load.
@@ -401,12 +406,17 @@ export function clampUsageToContext(usage: UsageSpec, contextTokens: number): Us
  * while the speed panel charged one eighth of it.
  */
 /**
- * How many ways the *weights* divide.
+ * How many ways the *repeating stack* divides.
  *
  * Tensor parallelism splits every tensor, so any degree works. A layer split hands out whole
  * layers, so the busiest card holds `ceil(layers / shards)` of them — the same ceiling `kvShards`
  * applies, because under a layer split the two quantities travel together and rounding only one
  * of them up describes a machine that does not exist.
+ *
+ * **`planPlacement` reaches this only on the branch `layerSplitBins` does not cover** — tensor
+ * parallelism, where every tensor really is sliced, and the single-device case, where the answer is
+ * 1 either way. The layer arm survives because `kvShards` delegates to it, and a cache genuinely
+ * does divide by whole layers. So the tensors that divide by nothing (#165) never reach it.
  */
 export function weightShards(model: ModelSpec, shards: number, runtime?: RuntimeSpec): number {
   if (shards <= 1) return 1;
@@ -433,6 +443,16 @@ export function kvShards(model: ModelSpec, shards: number, runtime?: RuntimeSpec
 interface DeviceLoad {
   weightBytes: number;
   kvBytes: number;
+  /**
+   * Of `weightBytes`, the part belonging to the repeating layers — so the remainder is this bin's
+   * share of the embedding table, the output projection and any vision tower.
+   *
+   * The only basis a layer *count* may be taken against, and it is not `weightBytes`: the two
+   * diverge by the fixed tensors' share of the file, which is 12.3% on Llama 3.2 3B and 25% on
+   * Gemma 3 4B. Tracked during the packing rather than derived afterwards, for the same reason
+   * `layers` is.
+   */
+  layerWeightBytes: number;
   /**
    * Whole layers in this bin.
    *
@@ -471,15 +491,31 @@ const loadOf = (d: { weightBytes: number; kvBytes: number }) => d.weightBytes + 
  * stay resident. Returning a single load left `offloadFraction` a per-device number that both speed
  * estimators then charged against the whole model's active weights — every stage billed for host-bus
  * time on an overflow that happened at one of them.
+ *
+ * **The weights are still divided by the layer count, and `layerWeightBytes` is what stops that
+ * being read as a layer count** (#165). `weightBytes` here is `totalWeightBytes / layers` per layer,
+ * which charges every bin a share of tensors no layer holds — the embedding table, the output
+ * projection where it is untied, any vision tower. As a byte total that is right in aggregate and
+ * approximate per bin; as a *count* it is neither, so the count is taken against the repeating
+ * bytes that `weightBreakdown` separates out.
+ *
+ * **Assigning the fixed block to one bin instead was measured and deferred**, and the measurement is
+ * the reason. Those tensors really do sit whole on one device, so seeding a bin with them is the
+ * physically faithful packing — but it moves `usedBytesPerDevice` by more than 5% on a tenth of the
+ * catalog's multi-card configurations, by up to 28%, and flips `fits` on 0.6% of them. That is a
+ * change to what the product answers, not to a layer count, and it turns on which device llama.cpp
+ * puts `token_embd` and a *tied* output tensor on — a question this file would have to read from
+ * upstream rather than reason about. Filed rather than folded in.
  */
 function layerSplitBins(
   model: ModelSpec,
-  totalWeightBytes: number,
+  weights: WeightBreakdown,
   usage: UsageSpec,
   shards: number,
   runtime: RuntimeSpec
 ): DeviceLoad[] {
-  const perLayerWeight = totalWeightBytes / model.layers;
+  const perLayerWeight = weights.totalBytes / model.layers;
+  const perLayerRepeating = weights.layerBytes / model.layers;
   const sequences = Math.max(1, usage.concurrency);
 
   const layers = Array.from({ length: model.layers }, (_, i) => ({
@@ -495,6 +531,7 @@ function layerSplitBins(
   const devices = Math.max(1, Math.min(Math.floor(shards), model.layers));
   const bins: DeviceLoad[] = Array.from({ length: devices }, () => ({
     weightBytes: 0,
+    layerWeightBytes: 0,
     kvBytes: 0,
     layers: 0,
   }));
@@ -505,6 +542,7 @@ function layerSplitBins(
       if (loadOf(bins[d]) < loadOf(bins[lightest])) lightest = d;
     }
     bins[lightest].weightBytes += layer.weightBytes;
+    bins[lightest].layerWeightBytes += perLayerRepeating;
     bins[lightest].kvBytes += layer.kvBytes;
     bins[lightest].layers += 1;
   }
@@ -522,7 +560,8 @@ export function planPlacement(
   const usage = normalizeUsage(rawUsage);
   const rig = normalizeRig(rawRig);
 
-  const totalWeightBytes = weightBytes(model, quant);
+  const weights = weightBreakdown(model, quant);
+  const totalWeightBytes = weights.totalBytes;
   const totalKvBytes = kvBytesTotal(
     model,
     usage.contextTokens,
@@ -555,11 +594,17 @@ export function planPlacement(
    * querystring.
    */
   const layerSplit = runtime.parallelism === 'layer' && shards > 1;
+  // One divisor for the whole file and for the repeating part of it, because this branch is the one
+  // case where every tensor really is sliced the same way — a tensor-parallel rank holds its
+  // fraction of the embedding table exactly as it holds its fraction of a layer — and the
+  // single-device case, where the divisor is 1 and there is nothing to say.
+  const uniformShards = weightShards(model, shards, runtime);
   const bins: DeviceLoad[] = layerSplit
-    ? layerSplitBins(model, totalWeightBytes, usage, shards, runtime)
+    ? layerSplitBins(model, weights, usage, shards, runtime)
     : [
         {
-          weightBytes: totalWeightBytes / weightShards(model, shards, runtime),
+          weightBytes: totalWeightBytes / uniformShards,
+          layerWeightBytes: weights.layerBytes / uniformShards,
           kvBytes: totalKvBytes / kvShards(model, shards, runtime),
           // Every layer, in both cases this branch covers, and for two different reasons: one
           // device holds all of them whole, and a tensor-parallel rank holds a slice of each. The
@@ -616,18 +661,38 @@ export function planPlacement(
    * The same overflow read as a layer count, which is what a launch command needs.
    *
    * **Every quantity in the expression belongs to the same bin**, and that is the point rather
-   * than an implementation detail: `spilled / bin.weightBytes` is this device's own share of its
-   * own weights, and multiplying it by this device's own layer count keeps the whole derivation
-   * inside one device. Reaching for `offloadFraction` here — a rig-wide ratio — and applying it to
-   * a per-device layer count is the #14 defect with the operands swapped, and it would ship as a
-   * number the reader pastes into a shell rather than as a figure on a panel.
+   * than an implementation detail: the spill is this device's own share of its own weights, and
+   * multiplying it by this device's own layer count keeps the whole derivation inside one device.
+   * Reaching for `offloadFraction` here — a rig-wide ratio — and applying it to a per-device layer
+   * count is the #14 defect with the operands swapped, and it would ship as a number the reader
+   * pastes into a shell rather than as a figure on a panel.
    *
-   * Floored: too few layers on the device costs speed, one too many costs an OOM on load.
+   * **And the denominator is `layerWeightBytes`, not `weightBytes`** (#165). A bin's `weightBytes`
+   * is `layers x totalWeightBytes / layers`, which is a layer plus a share of the embedding table,
+   * the output projection and any vision tower — so the ratio reserves for those tensors in
+   * proportion to how much of the stack stays resident rather than in full, and over-counts `-ngl`
+   * on precisely the large-vocabulary models where they are worth counting. Llama 3.2 3B at Q4_K_M
+   * against a 2 GiB ceiling reported 7 of 28 layers where 4 is what the card can hold. The two
+   * readings agree exactly whenever nothing spills, which is most of the catalog.
+   *
+   * **The whole spill is charged against the layers**, which is the conservative of two defensible
+   * readings and deliberately so. llama.cpp sheds the output tensor before any layer — that is what
+   * an `-ngl` short of `layers + 1` *means* — so a device over budget really does keep more layers
+   * than this reports. Taking the generous reading needs a second rule rather than a different
+   * denominator, because it lets a spilling device report every layer resident, which `launch.ts`
+   * turns into `layers + 1`: an instruction to put back the very tensor that had to leave. One safe
+   * direction and one rule beat two of each — the cost here is a slower command, and the cost there
+   * is an OOM on load.
+   *
+   * Floored, for the same reason.
    */
   const residentLayersOf = (bin: DeviceLoad) => {
-    if (bin.layers <= 0 || bin.weightBytes <= 0) return bin.layers;
-    const resident = bin.weightBytes - spilledOf(bin);
-    return Math.max(0, Math.min(bin.layers, Math.floor((resident / bin.weightBytes) * bin.layers)));
+    if (bin.layers <= 0 || bin.layerWeightBytes <= 0) return bin.layers;
+    const resident = bin.layerWeightBytes - spilledOf(bin);
+    return Math.max(
+      0,
+      Math.min(bin.layers, Math.floor((resident / bin.layerWeightBytes) * bin.layers))
+    );
   };
 
   const shares: DeviceShare[] = bins.map((bin) => ({

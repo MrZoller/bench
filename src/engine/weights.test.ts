@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   activeWeightBytes,
   effectiveActiveParams,
+  fixedParams,
   outputProjectionParams,
   prefillComputeParams,
   weightBreakdown,
@@ -13,6 +14,7 @@ import {
   GPT_OSS_120B,
   GPT_OSS_20B,
   LLAMA_31_8B,
+  LLAMA_32_3B,
   QWEN3_32B,
 } from './fixtures';
 import { getQuant } from '@/data/quants';
@@ -225,6 +227,63 @@ describe('per-token basis excludes what a text token does not read', () => {
     const routed = effectiveActiveParams(withoutCounts, 1) - GPT_OSS_20B.activeDenseParams;
 
     expect(routed / GPT_OSS_20B.expertParams).toBeCloseTo(4 / 32, 3);
+  });
+});
+
+/**
+ * What repeats and what does not (#165).
+ *
+ * A per-layer figure divides `layerBytes`, never `totalBytes`. The two are the same question only
+ * for a model whose vocabulary is small against its depth, which is not the shape of anything
+ * people run at the small end — and the consumer of the difference is a layer *count*, which ends
+ * up in a shell command.
+ */
+describe('the fixed tensors are separated from the repeating stack', () => {
+  const quant = getQuant('q4_k_m');
+
+  it('adds back up, whatever the model', () => {
+    for (const model of [LLAMA_31_8B, LLAMA_32_3B, QWEN3_32B, GEMMA_3_12B, GPT_OSS_120B]) {
+      const { fixedBytes, layerBytes, totalBytes, denseBytes } = weightBreakdown(model, quant);
+
+      expect(fixedBytes + layerBytes, model.name).toBeCloseTo(totalBytes, 0);
+      expect(fixedBytes, model.name).toBeGreaterThan(0);
+      // Fixed tensors are never routed experts, so they cannot exceed the dense half.
+      expect(fixedBytes, model.name).toBeLessThanOrEqual(denseBytes);
+    }
+  });
+
+  it('counts one vocabulary table when it is tied and two when it is not', () => {
+    // The same correction `activeDenseParams` makes, asked for a different reason: there the
+    // question is what a token reads, here it is what a device holds whole. A tied table is read
+    // every step *and* occupies exactly one device, so the two answers differ on the tie.
+    const table = (m: typeof LLAMA_31_8B) => m.vocabSize * m.hiddenSize;
+
+    expect(fixedParams(LLAMA_32_3B)).toBe(table(LLAMA_32_3B));
+    expect(fixedParams(LLAMA_31_8B)).toBe(2 * table(LLAMA_31_8B));
+    // And a tower is resident without being in any layer, so it is fixed too.
+    expect(fixedParams(GEMMA_3_12B)).toBe(table(GEMMA_3_12B) + GEMMA_3_12B.nonLanguageParams!);
+  });
+
+  it('is 12% of Llama 3.2 3B, which is a layer or two of a 28-layer count', () => {
+    // The figure #165 was filed on: 128,256 x 3,072 tied against 3.21B total. Charging it evenly
+    // across the layers makes each "layer" 14% heavier than a layer, so a byte budget that holds
+    // 28 of the real thing is read as holding 24.
+    const { fixedBytes, layerBytes, totalBytes } = weightBreakdown(LLAMA_32_3B, quant);
+
+    expect(fixedBytes / totalBytes).toBeCloseTo(0.123, 3);
+    expect(totalBytes / LLAMA_32_3B.layers / (layerBytes / LLAMA_32_3B.layers)).toBeCloseTo(
+      1.14,
+      2
+    );
+  });
+
+  it('leaves every byte total exactly where it was', () => {
+    // The split is a partition, not a re-sizing. Nothing that reads a weight total may move.
+    expect(weightBytes(LLAMA_31_8B, getQuant('bf16'))).toBe(LLAMA_31_8B.totalParams * 2);
+    for (const model of [LLAMA_32_3B, GEMMA_3_12B, GPT_OSS_120B]) {
+      const b = weightBreakdown(model, quant);
+      expect(b.totalBytes, model.name).toBe(b.expertBytes + b.denseBytes);
+    }
   });
 });
 

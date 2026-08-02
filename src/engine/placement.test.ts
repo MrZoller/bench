@@ -17,6 +17,7 @@ import {
   GEMMA_3_12B,
   GPT_OSS_120B,
   LLAMA_31_8B,
+  LLAMA_32_3B,
   LLAMA_CPP,
   MAC_STUDIO_M3_ULTRA_256,
   MLX,
@@ -27,6 +28,7 @@ import {
   VLLM,
 } from './fixtures';
 import { achievedBandwidth } from './speed';
+import { weightBreakdown } from './weights';
 import { getQuant } from '@/data/quants';
 import { GIB } from './types';
 import type { DeviceSpec, UsageSpec } from './types';
@@ -999,6 +1001,98 @@ describe('the layer assignment survives the packing', () => {
       expect(mac.impossible).toBe(true);
       expect(mac.offloadFraction).toBe(0);
       expect(mac.assignment.residentLayers).toBe(GPT_OSS_120B.layers);
+    });
+  });
+
+  /**
+   * The count is taken against the layers, not against the file (#165).
+   *
+   * `layerSplitBins` charges every layer `totalWeightBytes / layers`, which is a layer plus a share
+   * of tensors no layer holds — the embedding table, the output projection where it is untied, any
+   * vision tower. As a byte total that is right in aggregate and it stays; as a *layer count* it is
+   * a different quantity, and #163 exported these bins as a layer count while #136 printed it as
+   * `-ngl`. So the count divides `layerWeightBytes` and the bytes are untouched.
+   */
+  describe('a layer count is taken against the layers', () => {
+    const quant = getQuant('q4_k_m');
+
+    /**
+     * Llama 3.2 3B is the row #165 was filed against: 12.3% of the file is a tied 128,256 x 3,072
+     * table, spread across 28 layers that do not hold it. Not the catalog's largest such share —
+     * Gemma 3 4B is 25.4% with its tower — so the gap this shows is a floor rather than a headline.
+     * The ceiling is stated rather than found, because a 3B model does not spill on anything anyone
+     * sells, and the spilled branch is the only one where the two bases differ at all.
+     */
+    it('reports a count the device can actually load, where the whole-file basis did not', () => {
+      const { layerBytes, fixedBytes } = weightBreakdown(LLAMA_32_3B, quant);
+      const perLayer = layerBytes / LLAMA_32_3B.layers;
+
+      const p = planPlacement(
+        LLAMA_32_3B,
+        quant,
+        usage(8192),
+        { device: { ...RTX_4090, allocatableBytes: 2 * GIB }, count: 1 },
+        LLAMA_CPP
+      );
+      const share = p.assignment.shares[0];
+
+      expect(p.fits).toBe(false);
+      expect(p.impossible).toBe(false);
+
+      // What the card has left for weights once the cache and the overhead are on it, and what the
+      // reported count asks of that: this many real layers, beside the table it also holds.
+      const budget = p.allocatableBytesPerDevice - share.kvBytes - p.activationBytesPerDevice;
+      expect(share.residentLayers * perLayer + fixedBytes).toBeLessThanOrEqual(budget);
+
+      // The same overflow read against the whole share, which is what this used to do. It asks the
+      // card for 0.62 GiB where the card has 0.50, and `-ngl` is where that lands.
+      const spilled = p.offloadFraction * p.totalWeightBytes;
+      const wholeFileBasis = Math.floor(
+        ((share.weightBytes - spilled) / share.weightBytes) * share.layers
+      );
+      expect(wholeFileBasis).toBeGreaterThan(share.residentLayers);
+      expect(wholeFileBasis * perLayer + fixedBytes).toBeGreaterThan(budget);
+    });
+
+    it('leaves every byte figure exactly where it was', () => {
+      // The scope line. #165 is a defect in a *count*, and the bins' byte totals are the input to
+      // every memory panel, `fits`, `impossible` and both speed estimators — so a fix that moved
+      // them would be a change to what the product answers wearing a layer count's clothes.
+      // Assigning the fixed tensors to one bin, which is where they physically are, does exactly
+      // that: measured over the catalog's multi-card configurations it moves `usedBytesPerDevice`
+      // by more than 5% on a tenth of them, by up to 28%, and flips `fits` on 0.6%. Filed instead.
+      for (const count of [1, 2, 3, 4, 5, 8]) {
+        const p = gemma(count);
+        const held = p.assignment.shares.reduce((sum, s) => sum + s.deviceCount * s.weightBytes, 0);
+        expect(held, `${count} cards`).toBeCloseTo(p.totalWeightBytes, 0);
+
+        // Every bin's weights are still a whole number of `totalWeightBytes / layers`, which is the
+        // property the byte side has always had and the one the count may not be read from.
+        const perBinLayer = p.totalWeightBytes / GEMMA_3_12B.layers;
+        for (const s of p.assignment.shares) {
+          expect(s.weightBytes / perBinLayer, `${count} cards`).toBeCloseTo(s.layers, 6);
+        }
+      }
+    });
+
+    it('leaves a fully resident rig reporting every layer, on either parallelism', () => {
+      // The two bases agree exactly whenever nothing spills, which is most of the catalog most of
+      // the time — so this fix must be invisible there, and the tensor-parallel branch untouched.
+      for (const runtime of [LLAMA_CPP, VLLM]) {
+        for (const count of [1, 2, 4]) {
+          const p = planPlacement(
+            LLAMA_32_3B,
+            getQuant(runtime === VLLM ? 'fp8' : 'q4_k_m'),
+            usage(8192),
+            { device: RTX_5090, count },
+            runtime
+          );
+          if (p.unsupported) continue;
+
+          expect(p.fits, `${runtime.id} x${count}`).toBe(true);
+          expect(p.assignment.residentLayers, `${runtime.id} x${count}`).toBe(LLAMA_32_3B.layers);
+        }
+      }
     });
   });
 
