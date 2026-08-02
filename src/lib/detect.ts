@@ -45,12 +45,14 @@ import { GIB } from '@/engine/types';
  *     architecture narrows nothing at all. It is `deviceMemory` and a question that do the work.
  *   - **`navigator.deviceMemory` is capped at 8 in Chrome and absent in Safari**, so it separates
  *     small machines from large ones and nothing above 8 GiB from anything else. A reading *of* 8
- *     is a floor and prunes nothing; a reading *below* 8 is a real ceiling, and the `[r, 2r)` bound
- *     it implies is applied to unified-memory rows — see the prune itself for why that is sound.
- *   - **The adapter limits are allocation ceilings, not memory.** `maxBufferSize` is the largest
- *     single buffer, which a driver caps well below VRAM — so it is a lower bound on capacity and
- *     nothing more. That is still real narrowing: a card reporting a 4 GiB maximum buffer cannot be
- *     an 8 GiB card's smaller sibling.
+ *     prunes nothing and is *not* a floor of 8 — the clamp only removes the upper end of `(6, 12]`,
+ *     so it means "more than 6, unbounded above". A reading *below* 8 is a real ceiling, and the
+ *     prune it drives is at the bound itself, with the interval arithmetic written there.
+ *   - **The adapter limits are a validation ceiling, and they narrow nothing.** `maxBufferSize` is
+ *     the largest single buffer a driver will accept a descriptor for — not a promise the
+ *     allocation succeeds, so it cannot rule a machine out. It is reported as evidence; the prune
+ *     that once read it was withdrawn for removing the reader's own machine, and the reasoning is
+ *     kept at the site.
  *
  * ## Everything degrades to the picker, quietly
  *
@@ -391,7 +393,7 @@ export function detect(signals: DetectionSignals, devices: readonly DeviceSpec[]
   /**
    * `deviceMemory` prunes upward only, and the cap is why.
    *
-   * Chrome clamps it to 8, so a reading of 8 means "8 or more" and rules out nothing at the top.
+   * Chrome clamps it to 8, so a reading of 8 is unbounded above and rules out nothing at the top.
    * A reading *below* 8 is a real ceiling on system RAM, which on a unified-memory machine is also
    * a ceiling on the GPU's memory. Applied only there, since a discrete card's VRAM is unrelated to
    * how much RAM the host has.

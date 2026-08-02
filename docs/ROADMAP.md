@@ -321,9 +321,12 @@ a source rather than recalled:
   the one platform where a unified-memory row is the headline case, the architecture narrows
   nothing at all; `deviceMemory` and a follow-up question do the work.
 - **`navigator.deviceMemory` is capped at 8 in Chrome and absent in Safari**, so a reading _of_ 8
-  means "8 or more" and rules out nothing at the top. A reading _below_ 8 is a real ceiling and the
-  detector uses it as one, pruning `unified-soc` rows only, since a discrete card's VRAM is
-  unrelated to host RAM. **The rounding is to the _nearest_ power of two, ties going down** — the
+  rules out nothing at the top — and it does not mean "8 or more" either, which two drafts of this
+  bullet claimed. Under the interval below, an uncapped 8 means `(6, 12]` and the clamp only removes
+  the upper end, so the reading means **more than 6 GiB, unbounded above**: it is not a floor of 8,
+  and a future lower-bound prune written from the old wording would exclude real 6–8 GiB machines.
+  A reading _below_ 8 is a real ceiling and the detector uses it as one, pruning `unified-soc` rows
+  only, since a discrete card's VRAM is unrelated to host RAM. **The rounding is to the _nearest_ power of two, ties going down** — the
   spec picks the lower bound when `mem − lower ≤ upper − mem` — so a reading of `r` means the
   machine has somewhere in `(0.75r, 1.5r]`, and `r` is not a floor: a 3.5 GiB machine reports 4. The
   shipped prune is `capacity <= 2r`, which is therefore **loose rather than tight, deliberately**:
@@ -524,7 +527,9 @@ written down.
 Deliberately absent, and not forgotten: cloud pricing stays out of scope per the settled decision
 below, and fine-tuning memory (LoRA/QLoRA) is a second engine rather than a feature — real demand,
 weak incumbents, and deliberately not attempted before guided mode shipped. Now that it has, that is
-the v3-scale bet, and the thing standing between here and it is the six issues in **Open questions**.
+the v3-scale bet, and what stands between here and it is the eight issues in **Open questions** —
+the six from the pass plus #180 and #181, one of which is a P1 on the path a reader is most likely
+to take.
 
 ## Deployment
 
