@@ -25,11 +25,17 @@
  *
  * ## What a measurement has to carry before it means anything
  *
- * A measurement that cannot name its scenario is worth nothing to calibration. {@link compare}
- * rejects a long list of ways that happens — incompatible runtime, quantization, cache precision,
- * model identity and size, backend, layer placement, concurrency, and a configuration the engine
- * refuses outright — and {@link describeMismatch} is the enumeration; do not read this section as
- * that list.
+ * A measurement that cannot name its scenario is worth little to calibration, so {@link compare}
+ * marks the ways that happens instead of reporting a delta against them. **{@link describeMismatch}
+ * is that list, and this section deliberately does not restate it** — four rounds of #175 went on a
+ * prose summary of that function which diverged from it in a different way each time, which is the
+ * argument for a pointer over a paraphrase.
+ *
+ * The one property of it worth stating here, because it is easy to assume otherwise: **a check fires
+ * only when the paste states the field it compares.** llama-bench's output is sparse and most of
+ * those fields are optional in it, so a JSON row carrying neither a model name nor a cache type
+ * compares clean — the suite's own `JSON_OUTPUT` fixture is exactly that row. Unstated is not
+ * rejected, except where a default makes silence itself a claim.
  *
  * What this section is about is the four that are **invisible in the numbers**, because those are
  * the ones a reader can get wrong without noticing. **Two of them this module rejects; two it only

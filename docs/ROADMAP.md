@@ -452,11 +452,16 @@ divide the work, which is why neither is a patch.
 
 ### Calibrate, and what a measurement has to carry
 
-`compare` rejects a long list of scenario mismatches — runtime, quantization, cache precision, model
-identity and size, backend, layer placement, concurrency, a configuration the engine refuses
-outright — and `describeMismatch` is where that list lives. What is worth recording here is the
-handful that are **invisible in the numbers**, since those are the ones a reader gets wrong without
-noticing.
+`compare` marks a long list of scenario mismatches rather than reporting a delta against them, and
+`describeMismatch` is where that list lives — deliberately not restated here or in the module
+docblock, since four rounds of #175 went on a paraphrase of that one function that diverged from it
+differently each time. **A check fires only when the paste states the field it compares**, which is
+the property worth carrying: llama-bench's output is sparse, so a row naming neither the model nor
+the cache type compares clean, and unstated is not rejected except where a default makes silence
+itself a claim.
+
+What is worth recording here is the handful of causes **invisible in the numbers**, since those are
+the ones a reader gets wrong without noticing.
 
 **Two of those are rejected**: a different prompt length and a different depth. A `pp512` paste
 against a prediction made at 16,384 tokens is not a disagreement about the model, it is two different
@@ -1853,9 +1858,13 @@ argument for the merge rule rather than against it, provided the root causes are
 
 ### Two more filed out of documenting it, which is the finding about the documenting
 
-Writing the four sections above took four review rounds of its own and produced **thirteen findings,
-none of them false**, on a pull request that changed one comment and a Markdown file. Every one had
-the same shape: **a claim about the code that the code did not support** — an adapter limit
+Writing the four sections above took **more than ten review rounds and over twenty findings, none of
+them false**, on a pull request that changed one comment and a Markdown file. (The count is stated
+as a floor on purpose: every version of this paragraph carrying an exact total was made stale by the
+next round, which is its own small lesson about self-referential numbers in a document under
+review.)
+
+Most had one shape: **a claim about the code that the code did not support** — an adapter limit
 described as narrowing when the feature had withdrawn that prune in review, a `compare` credited
 with checking a build commit it never reads, a table called "generated" with no generator in the
 repository, a memory reading called a floor when the spec rounds to the nearest power of two. Prose
@@ -1863,7 +1872,15 @@ _about_ code is not checked by the test suite, the build, or the reader, and it 
 someone who cannot easily tell it from the code. That is the argument for reviewing a documentation
 change exactly as hard as a functional one, and it is why this section exists at all.
 
-Two of the thirteen were not about the prose. They are defects the prose walked into:
+**The later rounds taught something the early ones did not, and it is the more useful half.** Once
+the false claims were gone, four consecutive rounds each found a _new_ imprecision created by the
+previous round's fix, all in one paragraph — a summary of `describeMismatch`. Rewording it again was
+never going to converge: a paraphrase of a function with many conditional branches is a second
+implementation that no test covers. It is a pointer now, carrying only the one property a reader
+cannot infer (a check fires only when the paste states the field), which is what a summary of code
+should be whenever the code is the thing that can be read instead.
+
+Two of the findings were not about the prose at all. They are defects the prose walked into:
 
 | filed                                                                                       | what it is                                                                                                                                                                                                                                                                                                                                                              |
 | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
