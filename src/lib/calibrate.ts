@@ -25,17 +25,26 @@
  *
  * ## What a measurement has to carry before it means anything
  *
- * A measurement that cannot name its scenario is unusable for calibration, and three of the four
- * ways that happens are invisible in the numbers themselves:
+ * A measurement that cannot name its scenario is worth nothing to calibration, and four things can
+ * separate the two. **Two of them this module rejects; two it only records** — a distinction worth
+ * keeping straight, since describing a recorded field as a check is advertising a guard that does
+ * not exist (Codex spent two rounds on it in #175).
+ *
+ * Rejected — {@link compare} marks these and reports no delta against them:
  *
  *   - **A different prompt length.** Prefill is quadratic in the prompt, so `pp512` against a
  *     prediction made at 16,384 tokens is not a disagreement about the model — it is two different
- *     jobs. {@link compare} marks that rather than reporting a delta.
+ *     jobs.
  *   - **A different depth.** `estimatePrefill` charges an agent turn's attention against a resident
  *     prefix, so a standalone `pp` run measures a different workload than the prediction. `-d` is
  *     what reproduces it, and `n_depth` is what says whether it was used.
+ *
+ * Recorded — nothing here compares them, because there is nothing to compare them against:
+ *
  *   - **A different build.** A llama.cpp from six months ago is a different runtime for calibration
- *     purposes. `build_commit` is captured when the paste carries it and its absence is stated.
+ *     purposes, and the catalog pins a runtime rather than a commit of one. `build_commit` is
+ *     captured when the paste carries it and its absence is stated, for a human weighing the
+ *     submission. See {@link Measurement.buildCommit}.
  *   - **A different machine.** `llama-bench` names the model file and the backend but not the host
  *     reliably, so the scenario URL is what ties a measurement to a device row — which is why the
  *     issue template makes that field non-optional.

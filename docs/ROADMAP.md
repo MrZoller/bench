@@ -451,22 +451,22 @@ divide the work, which is why neither is a patch.
 
 ### Calibrate, and what a measurement has to carry
 
-**Three of the four ways a measurement becomes unusable are invisible in the numbers themselves** —
-a different prompt length, a different depth, a different build. `compare` marks the first two as a
-scenario mismatch rather than reporting a delta against them: a `pp512` paste against a prediction
-made at 16,384 tokens is not a disagreement about the model, it is two different jobs, and reporting
-the gap as evidence is how a calibration record fills with noise.
+**Two things make a measurement mean something other than what it appears to, and both are invisible
+in the numbers**: a different prompt length and a different depth. `compare` marks each as a scenario
+mismatch rather than reporting a delta against it — a `pp512` paste against a prediction made at
+16,384 tokens is not a disagreement about the model, it is two different jobs, and reporting the gap
+as evidence is how a calibration record fills with noise.
 
-**The build is captured rather than checked, and the distinction is worth stating because #139 calls
-it a guard.** `describeMismatch` never examines `buildCommit` — there is no expected build to
-compare against, since the catalog pins a runtime and not a commit of one. What the field does is
-ride into the issue body, where a human weighing a submission can see it, and its absence is stated
-rather than assumed benign. Calling that a rejection would be advertising a check that does not
-exist, which is the failure this whole module is written against. (Caught by Codex on #175, where
-this paragraph did exactly that.)
-
-The fourth is the machine, which `llama-bench` does not name reliably, and which is why the scenario
-URL is a required field in the issue template.
+**Two more are recorded rather than rejected, and saying otherwise is a claim about a check that does
+not exist.** The **build** is one: `describeMismatch` never examines `buildCommit`, because there is
+no expected build to compare against — the catalog pins a runtime, not a commit of one — so a paste
+from a six-month-old llama.cpp is comparable and submittable, with the commit riding into the issue
+body for a human to weigh and its absence stated rather than assumed benign. The **machine** is the
+other, since `llama-bench` does not name the host reliably, which is why the scenario URL is a
+required field in the template. #139 calls the first of those a version-skew guard; it guards a
+reviewer's judgement, not this module's arithmetic. Two rounds on #175 went on that distinction —
+first the claim that `compare` rejected build skew, then this sentence still counting it among the
+ways a measurement becomes _unusable_ while the paragraph under it explained that it does not.
 
 **The model is checked twice, and the parameter count is the half that carries the hard case.**
 llama.cpp writes an architecture where the catalog writes a product, so the two never agree past the
