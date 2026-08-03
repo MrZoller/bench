@@ -1345,7 +1345,7 @@ describe('the expert count', () => {
  */
 /**
  * Re-asking a refusal, which nothing in the shipped table can currently trigger
- * ([#103](https://github.com/MrZoller/bench/issues/103)).
+ * ([#103](https://github.com/MrZoller/headroom/issues/103)).
  *
  * Every entry was checked on the same day, so the six-month window will not open on any of them for
  * months — and an unreachable branch is one nobody notices breaking, which this repo has written

@@ -206,7 +206,7 @@ describe('the controls come before the figures they drive', () => {
  *
  * Reading order is what the suite above pins. **Heading navigation is the mechanism a screen-reader
  * user actually uses to skip around a page this tall** — 3,043px at 1440 and 4,887px on a phone — and
- * the full outline was `h1 bench`, `h2 Memory budget`, three `h3` tiles, and four more `h2`s. Both
+ * the full outline was `h1 headroom`, `h2 Memory budget`, three `h3` tiles, and four more `h2`s. Both
  * control panels carried an `aria-label` and no heading at all, so all nine inputs the tool takes were
  * unreachable that way: a reader could jump to five panels of output and to none of the controls that
  * produce them. Landmark navigation did reach them, which is a second, less-used mechanism and puts
@@ -377,7 +377,7 @@ describe('the heading outline reaches every control and mis-parents nothing', ()
    * The predicate is what heading navigation actually gives a reader: they land on a heading, and the
    * controls they then meet before the next one are the controls that heading covers. So a control is
    * reachable when the heading immediately before it in document order is inside its own panel. Before
-   * the fix that heading was the masthead's `h1 bench` for all nine inputs, which is the failure
+   * the fix that heading was the masthead's `h1 headroom` for all nine inputs, which is the failure
    * stated exactly — the outline's only entry above the memory budget was the page's title.
    */
   it('puts a heading in front of every control the tool takes', () => {

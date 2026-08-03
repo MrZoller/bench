@@ -401,7 +401,7 @@ describe('the ramp keys itself as a ranking, not a verdict', () => {
 
   /**
    * The ramp has to be **spent**, and per measure — which is the assertion
-   * [#97](https://github.com/MrZoller/bench/issues/97) was filed for.
+   * [#97](https://github.com/MrZoller/headroom/issues/97) was filed for.
    *
    * "Grades the region instead of painting one flat colour", above, is this claim for the measure
    * the panel opens on, and it is the only measure it was ever made for. Latency failed it badly

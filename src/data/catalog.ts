@@ -301,7 +301,7 @@ export function modelsByPopularity(): readonly CatalogModel[] {
  * sorts it (#79) — and column order is popularity, from the one helper that defines it.
  *
  * **It is also the grid's one seam, and that is the second reason it is a function**
- * ([#101](https://github.com/MrZoller/bench/issues/101)). The Matrix is models × devices and
+ * ([#101](https://github.com/MrZoller/headroom/issues/101)). The Matrix is models × devices and
  * `App.test.tsx` renders the whole page per test, so both catalog axes are load-bearing inputs to
  * the unit suite's wall clock: #78 and #77 together took the grid from 408 cells to 1,470 and that
  * file from 42s to about fourteen minutes on CI, and two pull requests that touched no component

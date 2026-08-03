@@ -480,7 +480,7 @@ test.describe('at 200% text size', () => {
   });
   /**
    * The Matrix readout, filled, at 200% — the case neither suite covered
-   * ([#102](https://github.com/MrZoller/bench/issues/102)).
+   * ([#102](https://github.com/MrZoller/headroom/issues/102)).
    *
    * `min-h` is `5rem` below `sm`, `2.5rem` at `sm` and `1.25rem` at `lg`, measured against the
    * widest sentence at a 16px root. At a 32px root the reservation doubles — and so do the glyphs, so

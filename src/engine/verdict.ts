@@ -26,7 +26,7 @@ import type { Placement } from './placement';
  * all — and they are the vocabulary every surface renders with a reserved status colour.
  *
  * **There was an `unmeasured` arm and it is gone, root cause first**
- * ([#96](https://github.com/MrZoller/bench/issues/96)). It was added because `fail` was doing two
+ * ([#96](https://github.com/MrZoller/headroom/issues/96)). It was added because `fail` was doing two
  * jobs: multi-user serving at one concurrent user read `○ No` in critical red — the same token as
  * "Will not run" — on a Spark that would serve several users perfectly well, purely because nobody
  * had touched the slider (#75). That diagnosis was right and the fix was one level too shallow. The
@@ -272,7 +272,7 @@ export interface GradedScenario {
 /**
  * Every scenario an archetype is graded at, largest first — the tier structure, stated as an
  * interface rather than left as an internal of this file
- * ([#170](https://github.com/MrZoller/bench/issues/170)).
+ * ([#170](https://github.com/MrZoller/headroom/issues/170)).
  *
  * **The caller this exists for is `recommend`, and the defect is that a tier never got to speak.**
  * The sweep plans one placement per candidate at the archetype's own scenario and drops the
@@ -356,7 +356,7 @@ export function gradedScenarios(
 
 /**
  * The user counts an archetype's tiers declare for themselves, `good` first — empty for the six that
- * inherit the reader's ([#172](https://github.com/MrZoller/bench/issues/172)).
+ * inherit the reader's ([#172](https://github.com/MrZoller/headroom/issues/172)).
  *
  * The companion to `gradedScenarios` on the axis that one deliberately does not express, and it
  * exists for the same reason: **a caller describing this sweep has to be able to ask what the grades
@@ -437,7 +437,7 @@ export interface VerdictInputs {
     cachedPrefixTokens: number,
     /**
      * How many sequences share the machine — the slider's, for the six archetypes that inherit it,
-     * and the tier's own for serving ([#96](https://github.com/MrZoller/bench/issues/96)).
+     * and the tier's own for serving ([#96](https://github.com/MrZoller/headroom/issues/96)).
      *
      * Serving is the one archetype whose *defining* parameter is this one, and taking it from the
      * slider is what produced three separate defects at one root: a red `fail` for an unconfigured
@@ -629,7 +629,7 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
   const completionTtft = ttftOf('completion');
   /**
    * Serving, measured at **its own** concurrency rather than the slider's
-   * ([#96](https://github.com/MrZoller/bench/issues/96)).
+   * ([#96](https://github.com/MrZoller/headroom/issues/96)).
    *
    * This was the one archetype taking its defining parameter from outside itself, and the asymmetry
    * produced three defects at one root before it was fixed at the root. At one user the row read

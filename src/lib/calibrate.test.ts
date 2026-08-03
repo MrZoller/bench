@@ -150,7 +150,7 @@ describe('a measurement of a different job is not evidence about the model', () 
      * The temptation this refuses. Rescaling `pp512` to a 16,384-token prediction would produce a
      * plausible delta, and it would be wrong twice: prefill is quadratic so the rescaling is a model
      * rather than an observation, and the whole point of the surface is that the reader can check
-     * bench's arithmetic instead of taking more of it on trust.
+     * Headroom's arithmetic instead of taking more of it on trust.
      */
     const [pair] = compare(parseLlamaBench(JSON_OUTPUT), prediction({ promptTokens: 16384 }));
 
@@ -261,7 +261,7 @@ describe('a measurement of a different job is not evidence about the model', () 
      * Where the two halves of this project disagreed with each other. llama.cpp counts the output
      * tensor a position past the repeating blocks, so #136's emitter passes `layers + 1` for a
      * fully-resident placement, and readers type `-ngl 99` for the same thing. Comparing against
-     * the layer count alone would have marked a run that followed bench's own command.
+     * the layer count alone would have marked a run that followed Headroom's own command.
      */
     for (const ngl of [32, 33, 99]) {
       const run = JSON.stringify([
@@ -484,8 +484,8 @@ describe('the submission carries the scenario, not a description of it', () => {
   const url = (over: Parameters<typeof submissionUrl>[0] | undefined = undefined) =>
     submissionUrl(
       over ?? {
-        repoUrl: 'https://github.com/MrZoller/bench',
-        scenarioUrl: 'https://mrzoller.github.io/bench/?m=x&d=rtx-5090',
+        repoUrl: 'https://github.com/MrZoller/headroom',
+        scenarioUrl: 'https://mrzoller.github.io/headroom/?m=x&d=rtx-5090',
         deviceName: 'GeForce RTX 5090',
         deviceCount: 1,
         modelName: 'Llama 3.1 8B Instruct',
@@ -498,7 +498,7 @@ describe('the submission carries the scenario, not a description of it', () => {
   it('puts the scenario link in the body, since it is the reproducible half', () => {
     // `llama-bench` names the model file and the backend but not the host reliably, so the URL is
     // what ties a measurement to a device row.
-    expect(bodyOf(url())).toContain('https://mrzoller.github.io/bench/?m=x&d=rtx-5090');
+    expect(bodyOf(url())).toContain('https://mrzoller.github.io/headroom/?m=x&d=rtx-5090');
   });
 
   it('carries both figures and the error, as a table a maintainer can read', () => {
@@ -513,7 +513,7 @@ describe('the submission carries the scenario, not a description of it', () => {
     // to be able to tell them apart.
     const body = bodyOf(
       url({
-        repoUrl: 'https://github.com/MrZoller/bench',
+        repoUrl: 'https://github.com/MrZoller/headroom',
         scenarioUrl: 'https://example.test/?d=rtx-5090',
         deviceName: 'GeForce RTX 5090',
         deviceCount: 1,
@@ -531,7 +531,7 @@ describe('the submission carries the scenario, not a description of it', () => {
     // The scenario link keeps the count, but the title and the Machine field are what a maintainer
     // groups by — an eight-card run filed as "RTX 5090" is grouped with the single-card ones.
     const href = url({
-      repoUrl: 'https://github.com/MrZoller/bench',
+      repoUrl: 'https://github.com/MrZoller/headroom',
       scenarioUrl: 'https://example.test/?d=rtx-5090&n=8',
       deviceName: 'GeForce RTX 5090',
       deviceCount: 8,
@@ -555,7 +555,7 @@ describe('the submission carries the scenario, not a description of it', () => {
 
     const body = bodyOf(
       url({
-        repoUrl: 'https://github.com/MrZoller/bench',
+        repoUrl: 'https://github.com/MrZoller/headroom',
         scenarioUrl: 'https://example.test/?d=rtx-5090',
         deviceName: 'GeForce RTX 5090',
         deviceCount: 1,
@@ -572,7 +572,7 @@ describe('the submission carries the scenario, not a description of it', () => {
     // No backend and no telemetry: the reader opens a GitHub form and sees exactly what they are
     // about to post. Same shape the weekly catalog refresh already proved out.
     const href = url();
-    expect(href.startsWith('https://github.com/MrZoller/bench/issues/new?')).toBe(true);
+    expect(href.startsWith('https://github.com/MrZoller/headroom/issues/new?')).toBe(true);
     expect(new URL(href).searchParams.get('labels')).toBe('calibration');
     expect(new URL(href).searchParams.get('title')).toContain('Llama 3.1 8B Instruct');
   });

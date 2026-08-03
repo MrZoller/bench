@@ -36,7 +36,7 @@ import { DisclosureToggle } from './DisclosureToggle';
  * silently.
  */
 
-const REPO_URL = 'https://github.com/MrZoller/bench';
+const REPO_URL = 'https://github.com/MrZoller/headroom';
 
 /**
  * The cache precision in llama.cpp's own spelling, which is what a paste will carry.

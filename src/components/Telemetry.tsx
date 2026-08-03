@@ -254,7 +254,7 @@ export function Telemetry({
    * The strip's own heading, and the fix for a claim this layout was built to refuse (#74).
    *
    * Each tile is an `h3` and the section carried an `aria-label`, so the nearest `h2` above them was
-   * the *memory budget's* — and the outline read `h1 bench → h2 Memory budget → h3 Capacity`, which
+   * the *memory budget's* — and the outline read `h1 headroom → h2 Memory budget → h3 Capacity`, which
    * says capacity is a subsection of the budget. It is not. The docstring at the top of this file is
    * explicit that these are three independent axes and that collapsing them into one score is the
    * move this panel exists to avoid; the outline collapsed two of them under the third's neighbour.

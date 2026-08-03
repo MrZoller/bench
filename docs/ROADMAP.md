@@ -1,6 +1,6 @@
 # Roadmap
 
-Where `bench` stands, what's left, and the decisions that would be expensive to re-derive.
+Where Headroom stands, what's left, and the decisions that would be expensive to re-derive.
 
 This file exists because the working plan lived outside the repo and would have been lost.
 Keep it current: it is the handoff document between sessions, and the place to look before
@@ -9,7 +9,7 @@ re-litigating a settled question.
 ## The thesis
 
 Most VRAM calculators sort hardware by one number and apply one KV-cache formula to every
-model. Both shortcuts break on the machines and models people actually care about. `bench`
+model. Both shortcuts break on the machines and models people actually care about. Headroom
 computes rather than approximates, and reports **capacity, decode speed, and time-to-first-token
 as three separate answers** rather than collapsing them into "will it fit".
 
@@ -29,9 +29,28 @@ Three things are the moat, in order:
 ## Status
 
 **All eight phases are done, and the site is live** at
-<https://mrzoller.github.io/bench/> as of 28 July 2026. The repository went public to get there —
-Pages is not available on a private repo without a paid plan — which also restored the branch
-ruleset that had been convention rather than enforcement since the start.
+<https://mrzoller.github.io/bench/> as of 28 July 2026, and at
+<https://mrzoller.github.io/headroom/> once the rename below lands. The repository went public to
+get there — Pages is not available on a private repo without a paid plan — which also restored the
+branch ruleset that had been convention rather than enforcement since the start.
+
+**The project is Headroom now, and the half that is not in any commit is what to watch** (#176).
+Everything inside the repository says so as of 3 August 2026 — package name, wordmark, page title,
+the live URL it advertises, and every `github.com/MrZoller/…` link outside `CHANGELOG.md`, whose
+entries are history and were left alone. What is left is a repository rename and one repository
+variable, **in that order**, and neither is in the pull request: the URL above answers only once
+`MrZoller/bench` has become `MrZoller/headroom`. **Deployment**, below, is where the order and the
+window between the two steps are written down.
+
+**Lowercase `headroom` was left alone everywhere, and that is the rule rather than an oversight.**
+It is a real quantity in this codebase — leftover VRAM, the margin over a threshold, the slack in a
+test timeout — and it means that in `placement.ts`, in the verdict copy and in `vite.config.ts`'s
+timeout rationale exactly as it did before the rename. The product name is capitalised for the same
+reason: `Headroom packed 9,9,9,9 layers` and `2x headroom over the observed worst case` are
+different words, and case is what keeps them from having to be told apart by context. The hero
+surface is still **the Bench** — a workbench, a sibling of the Envelope and the Matrix rather than
+the product's namesake — so `Bench.tsx`, `#bench-detail` and "the cell the Bench above is set to"
+are all unchanged.
 
 **The v2 guided-mode milestone is done too**, closed 1 August 2026. Launch commands, detect,
 recommend and calibrate shipped in one pass as five pull requests — #163 and #173 for launch, #167
@@ -41,14 +60,14 @@ two more (#180, #181) came out of reviewing _this section_ a day later; they are
 questions**, and two of the first six share one root.
 
 What remains is a naming decision, **three open issues, all of them work** — the six filed
-during the pass, less [#165](https://github.com/MrZoller/bench/issues/165),
-[#166](https://github.com/MrZoller/bench/issues/166),
-[#170](https://github.com/MrZoller/bench/issues/170),
-[#171](https://github.com/MrZoller/bench/issues/171) and
-[#172](https://github.com/MrZoller/bench/issues/172), which are fixed, plus
-[#180](https://github.com/MrZoller/bench/issues/180) and
-[#181](https://github.com/MrZoller/bench/issues/181), which came out of reviewing this very
-document, plus [#182](https://github.com/MrZoller/bench/issues/182), which is the half of #165 that
+during the pass, less [#165](https://github.com/MrZoller/headroom/issues/165),
+[#166](https://github.com/MrZoller/headroom/issues/166),
+[#170](https://github.com/MrZoller/headroom/issues/170),
+[#171](https://github.com/MrZoller/headroom/issues/171) and
+[#172](https://github.com/MrZoller/headroom/issues/172), which are fixed, plus
+[#180](https://github.com/MrZoller/headroom/issues/180) and
+[#181](https://github.com/MrZoller/headroom/issues/181), which came out of reviewing this very
+document, plus [#182](https://github.com/MrZoller/headroom/issues/182), which is the half of #165 that
 its own verification note said not to fold in, less #174, which is closed as a record of a decision
 already made rather than as a task —
 and **two loose ends that are on `main` and in no issue at all**: a `LLAMA_KV_TYPES`
@@ -183,7 +202,7 @@ _established_ now, not whether it is nominal.
 ## v2 — guided mode, and what building it settled
 
 Four features, filed under the
-[`v2 — guided mode` milestone](https://github.com/MrZoller/bench/milestone/1) and **all four shipped
+[`v2 — guided mode` milestone](https://github.com/MrZoller/headroom/milestone/1) and **all four shipped
 on 1 August 2026**. The design for each lived in its issue while it was open; what is kept here is
 what building it settled, because a closed issue is the one place nobody looks.
 
@@ -191,12 +210,12 @@ The common thread: the moat is correctness, and correctness is invisible to a fi
 every alternative _looks_ the same at a glance. Each of these either makes the accuracy legible or
 removes the expertise the entry point assumed.
 
-| Feature                                                         | Issue                                                | Shipped                                                                                                 | Why it was on the list                                                                                                                                                                |
-| --------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Launch commands — emit the runnable command for the placement   | [#136](https://github.com/MrZoller/bench/issues/136) | [#163](https://github.com/MrZoller/bench/pull/163) + [#173](https://github.com/MrZoller/bench/pull/173) | The engine already computes the layer split; competitors never did, so they structurally cannot print one. Surface it, then format it                                                 |
-| Detect — one-click "what can my machine run"                    | [#137](https://github.com/MrZoller/bench/issues/137) | [#168](https://github.com/MrZoller/bench/pull/168)                                                      | The 43-row picker assumes knowledge most visitors don't have. WebGPU narrows it — sometimes to a handful, on a redacting browser only to a vendor — and a guess stays visibly a guess |
-| Recommend — rank the catalog for a device + workload            | [#138](https://github.com/MrZoller/bench/issues/138) | [#167](https://github.com/MrZoller/bench/pull/167)                                                      | The question people arrive with. The Matrix holds the answer as 1,470 cells; this returns the decision                                                                                |
-| Calibrate — predicted-vs-measured, submitted via issue template | [#139](https://github.com/MrZoller/bench/issues/139) | [#169](https://github.com/MrZoller/bench/pull/169)                                                      | Two anchors become a measured lattice, and a public "we said 44, users measured 41" record is the argument no competitor can copy                                                     |
+| Feature                                                         | Issue                                                   | Shipped                                                                                                       | Why it was on the list                                                                                                                                                                |
+| --------------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Launch commands — emit the runnable command for the placement   | [#136](https://github.com/MrZoller/headroom/issues/136) | [#163](https://github.com/MrZoller/headroom/pull/163) + [#173](https://github.com/MrZoller/headroom/pull/173) | The engine already computes the layer split; competitors never did, so they structurally cannot print one. Surface it, then format it                                                 |
+| Detect — one-click "what can my machine run"                    | [#137](https://github.com/MrZoller/headroom/issues/137) | [#168](https://github.com/MrZoller/headroom/pull/168)                                                         | The 43-row picker assumes knowledge most visitors don't have. WebGPU narrows it — sometimes to a handful, on a redacting browser only to a vendor — and a guess stays visibly a guess |
+| Recommend — rank the catalog for a device + workload            | [#138](https://github.com/MrZoller/headroom/issues/138) | [#167](https://github.com/MrZoller/headroom/pull/167)                                                         | The question people arrive with. The Matrix holds the answer as 1,470 cells; this returns the decision                                                                                |
+| Calibrate — predicted-vs-measured, submitted via issue template | [#139](https://github.com/MrZoller/headroom/issues/139) | [#169](https://github.com/MrZoller/headroom/pull/169)                                                         | Two anchors become a measured lattice, and a public "we said 44, users measured 41" record is the argument no competitor can copy                                                     |
 
 **The sequencing was part of the record, and it held — including the part that was a warning rather
 than a plan.** Launch first, because its two prerequisites were real and are named below; calibrate
@@ -219,8 +238,8 @@ part of the comparison, because both parse. Do not read the protocol as a set of
 
 The danger is the part with no guard on either side. Nothing static ties the two modules together,
 so a change to either is invisible to the other — which is exactly how
-[#180](https://github.com/MrZoller/bench/issues/180) happened: the two ends disagree about the
-depth, which _is_ checked, so bench's own command now emits a row bench rejects. **Change the
+[#180](https://github.com/MrZoller/headroom/issues/180) happened: the two ends disagree about the
+depth, which _is_ checked, so Headroom's own command now emits a row Headroom rejects. **Change the
 emitter and re-read `compare` in the same sitting**, because there is no compiler that will do it
 for you.
 
@@ -308,7 +327,7 @@ llama.cpp puts the last `ngl` layers on GPUs and splits _those_ by these proport
 flags are read together, and the first version gave them counts from two different scopes: resident
 for `-ngl`, assigned for `-ts`. llama.cpp then re-derives a per-device split that is neither.
 gpt-oss-120b at Q8_0, 128K over 8 users on four 4090s packs 9,9,9,9 layers and keeps 3,3,4,4 of them
-resident — so the emitted pair asked llama.cpp to spread fourteen layers _evenly_ over cards bench
+resident — so the emitted pair asked llama.cpp to spread fourteen layers _evenly_ over cards Headroom
 had sized for three and four. That is an OOM on load, in copy-pasteable form, which is exactly what
 the issue's `-ngl` trap warns about, one flag over.
 
@@ -320,7 +339,7 @@ product**, which is where the defect lived; the issue's own verification note as
 one, a sharded one" and the conjunction is what was missing. Both are now one test, mutation-checked.
 
 **Then the hybrid case turned out to have no flag at all, and that is a llama.cpp fact rather than a
-bench limitation** (#166). `-ts` was narrowed in #164 to refuse any model with sliding layers,
+Headroom limitation** (#166). `-ts` was narrowed in #164 to refuse any model with sliding layers,
 because it proportions a _contiguous_ run of the `-ngl` window while `layerSplitBins` assigns
 individual layers by greedy combined load. #166 filed the remaining capability gap and named
 `-ot`/`--override-tensor` as the way to close it: it takes a pattern and a buffer type and can name
@@ -337,7 +356,7 @@ the argument parser:
 - `llama_kv_cache`'s constructor takes each layer's cache buffer from
   `ggml_backend_dev_buffer_type(model.dev_layer(il))`.
 
-So `-ot` moves a layer's weights to the card bench chose and leaves its **cache** on the card
+So `-ot` moves a layer's weights to the card Headroom chose and leaves its **cache** on the card
 `-ngl`/`-ts` chose — and on a hybrid model the cache is the entire reason the packing is uneven,
 since the per-layer weights are uniform and a full-attention layer caches up to ~128x a sliding one
 at 128K. The flag moves the half that does not vary. A command built from it would start a placement
@@ -353,7 +372,7 @@ second list is the fact the first one was hiding.
 
 And it went on **both** llama.cpp launchers rather than the serving one, which is where the same
 class was already half-covered: a `llama-bench` run at llama.cpp's default split times a placement
-other than the one priced, and that is as true when bench cannot express its split as when it
+other than the one priced, and that is as true when Headroom cannot express its split as when it
 declines to repeat an even one — so the number the calibration record collects was the one arriving
 unqualified.
 
@@ -371,11 +390,11 @@ bytes, since every other factor in `layerBytes` is model-wide, so it needs neith
 runtime. That widens the flag rather than narrowing it, and the packing sentences share the
 predicate — a scenario where `-ts` is exact is a scenario where they have nothing to explain.
 
-And **the tail predicted a comparison bench has not made**. "Plan for the busiest card to hold more
+And **the tail predicted a comparison Headroom has not made**. "Plan for the busiest card to hold more
 than the panel shows" reads as arithmetic and is not: llama.cpp's contiguous split sometimes lands
 the same composition the packing did — Gemma 3 12B on two 5090s at 128K packs `24,24` against `4,4`,
 and so does an even contiguous halving — and finding out which would be this module deriving
-llama.cpp's placement rather than formatting bench's. What is left is what bench knows: it packed for
+llama.cpp's placement rather than formatting Headroom's. What is left is what Headroom knows: it packed for
 a light busiest card and llama.cpp is not packing for that at all, so the figure is a floor to plan
 against.
 
@@ -406,17 +425,17 @@ against a prediction charged at full depth, and the comparison would have report
 disagreement about the model.
 
 **The two panels then disagree about _which_ depth, and neither knows it**
-([#180](https://github.com/MrZoller/bench/issues/180), a P1 from Codex on #175). The emitter puts
+([#180](https://github.com/MrZoller/headroom/issues/180), a P1 from Codex on #175). The emitter puts
 `prompt + prefix` in the cache; `Calibrate` expects `contextTokens`, under a docblock arguing that
 this is what `estimateDecode` charges every step's cache read at; and `describeMismatch` rejects a
-depth off by more than 10%. So on the default 8K-prompt/32K-context scenario **bench's own measure
-command produces a row bench marks unusable** — the likeliest path a reader takes through this
+depth off by more than 10%. So on the default 8K-prompt/32K-context scenario **Headroom's own measure
+command produces a row Headroom marks unusable** — the likeliest path a reader takes through this
 feature. It is filed rather than patched because calibrate's expectation is not reachable by any
 command at all (`-d 32768 -n 512` does not fit a 32K window), which makes it a question about what
 `estimateDecode` should charge rather than about either panel's arithmetic.
 
 **And the Ollama block stopped managing a daemon**
-([#171](https://github.com/MrZoller/bench/issues/171), from Codex on #164), **which is one issue
+([#171](https://github.com/MrZoller/headroom/issues/171), from Codex on #164), **which is one issue
 answered in two directions at once.** It emitted `OLLAMA_KV_CACHE_TYPE=<type> ollama serve &` ahead
 of the Modelfile whenever the scenario used a quantized cache — a line that neither waits for the
 daemon nor notices an existing one. `ollama serve` fails to bind against a server already listening,
@@ -534,7 +553,7 @@ explaining there is nothing to answer.
 adapter and the vendor prune then removes the other GPU's rows, and the review asked for both
 preferences to be queried and combined. Preferring the discrete card is not half of that — for a
 tool that prices inference it is the answer, and combining them would _widen_ the shortlist to two
-vendors, which is the opposite of what the panel does. Filed as [#174](https://github.com/MrZoller/bench/issues/174),
+vendors, which is the opposite of what the panel does. Filed as [#174](https://github.com/MrZoller/headroom/issues/174),
 as the argument rather than as a bug.
 
 ### Recommend, and the printed rule that was false on 347 configurations
@@ -551,7 +570,7 @@ reader on a grade contradicting the one that sent them there.
 `FALLBACK_RULE`, `QUANT_RULE` — because a ranked list with an unstated basis is an opinion wearing
 the chassis of a measurement, which is the failure this codebase is organised against. Two of those
 sentences are load-bearing in a way worth restating. The within-tier order is **parameter count,
-which is a capability _proxy_ and says so**: bench knows what runs, not what is good, and importing
+which is a capability _proxy_ and says so**: Headroom knows what runs, not what is good, and importing
 benchmark scores would be a new curation surface with a freshness problem. And the fallback is a
 different question with its own rule — when nothing clears the bar, "the biggest that loads" is the
 wrong answer, because a 671B at 0.3 tok/s is not more useful than an 8B at 40 that merely missed a
@@ -590,8 +609,8 @@ a tier structure.** Long-context's `tight` tier is graded at a 64K prompt agains
 the agent's tiers carry 64K and 32K sessions against a ~16.5K turn — so a candidate can be dropped
 before the tier that would have graded it ever runs, a spill caveat can describe the `good` tier's
 scenario on a row that only earned `tight`, and the fallback can rank by a decode rate no tier ever
-measured. [#170](https://github.com/MrZoller/bench/issues/170) and
-[#172](https://github.com/MrZoller/bench/issues/172); fixing them means changing how the two layers
+measured. [#170](https://github.com/MrZoller/headroom/issues/170) and
+[#172](https://github.com/MrZoller/headroom/issues/172); fixing them means changing how the two layers
 divide the work, which is why neither is a patch.
 
 **#170 is fixed, and it is the layers dividing the work differently rather than a repair.**
@@ -667,7 +686,7 @@ the panel's own command asks for — the cell before `test` is `q8_0` and the la
 `describeMismatch` then skips the placement check, so an offloaded run compares clean against a
 fully-resident prediction, which is a wrong number entering the record rather than an unverifiable
 one. Same root as the cache columns and filed with them in
-[#181](https://github.com/MrZoller/bench/issues/181): the parser never reads the header row. A fix
+[#181](https://github.com/MrZoller/headroom/issues/181): the parser never reads the header row. A fix
 that adds `type_k`/`type_v` and leaves `ngl` positional would close the quieter half and leave the
 louder one.
 
@@ -678,7 +697,7 @@ otherwise is how it survived two reviews**. `parseMarkdown` has no branch for `t
 all, so no markdown paste ever carries a cache precision, including the one the panel's own
 `-ctk q8_0 -ctv q8_0 -o md` produces with the columns printed. The reader who follows the panel
 exactly is told their correct run looks like f16. Reading those columns is
-[#181](https://github.com/MrZoller/bench/issues/181); the current behaviour is now pinned by a test
+[#181](https://github.com/MrZoller/headroom/issues/181); the current behaviour is now pinned by a test
 that inverts when it lands.
 
 **The band is judged on the rounded percent**, per the rule this file already carries for thresholds:
@@ -713,7 +732,7 @@ below, and fine-tuning memory (LoRA/QLoRA) is a second engine rather than a feat
 weak incumbents, and deliberately not attempted before guided mode shipped. Now that it has, that is
 the v3-scale bet. What stands between here and it is **#180, #181 and #182**. The six issues in
 **Open questions** are all resolved as of 3 August 2026 — five fixed, and
-[#174](https://github.com/MrZoller/bench/issues/174) closed as a _record_ of an answered policy
+[#174](https://github.com/MrZoller/headroom/issues/174) closed as a _record_ of an answered policy
 question rather than as work. What is left is #180 and #181, which came out of reviewing this very
 document, and #182, which is the half of #165 its own verification note said not to fold in — a
 different provenance from the other two, and worth keeping straight. One of the three is a P1 on the
@@ -759,17 +778,26 @@ explanation instead of a broken-looking one.
 Two settings are repository variables rather than committed values, because they describe where
 the site is served rather than what it is, and both fail _quietly_ when wrong:
 
-| Variable              | Default | What it is for                                                                               |
-| --------------------- | ------- | -------------------------------------------------------------------------------------------- |
-| `PAGES_BASE_PATH`     | `/`     | Vite's `base`. A Pages _project_ site serves from `/bench/`; a custom domain serves from `/` |
-| `PAGES_CUSTOM_DOMAIN` | unset   | Written to `dist/CNAME` each deploy, since Pages drops the domain otherwise                  |
+| Variable              | Default | What it is for                                                                                |
+| --------------------- | ------- | --------------------------------------------------------------------------------------------- |
+| `PAGES_BASE_PATH`     | `/`     | Vite's `base`. A Pages _project_ site serves from `/<repo>/`; a custom domain serves from `/` |
+| `PAGES_CUSTOM_DOMAIN` | unset   | Written to `dist/CNAME` each deploy, since Pages drops the domain otherwise                   |
 
-`PAGES_BASE_PATH` is set to `/bench/` today, because a Pages _project_ site serves from the repo
-name. Attaching a custom domain means setting `PAGES_CUSTOM_DOMAIN` **and** returning
-`PAGES_BASE_PATH` to `/` — changing one without the other is the failure mode this pair exists to
-make visible, since a wrong `base` produces a blank page with 404s in the console rather than a
-build error. Verified after the first deploy: the served HTML references `/bench/assets/…` and both
-assets return 200.
+`PAGES_BASE_PATH` holds the repo's own name, because a Pages _project_ site serves from it.
+Attaching a custom domain means setting `PAGES_CUSTOM_DOMAIN` **and** returning `PAGES_BASE_PATH`
+to `/` — changing one without the other is the failure mode this pair exists to make visible, since
+a wrong `base` produces a blank page with 404s in the console rather than a build error. Verified
+after the first deploy: the served HTML referenced `/bench/assets/…` and both assets returned 200.
+
+**The rename to Headroom made that variable load-bearing a second way** (#176). The base is not in
+`vite.config.ts` — it is `process.env.BASE_PATH || '/'`, fed from this variable by `deploy.yml`, and
+`/` is the default because `npm run dev`, `npm run preview` and the Playwright suite all assume it.
+So renaming the project could not change the base by editing code, and the code change is
+deliberately not the thing that moves the site. The order that works is: merge the rename, rename the
+repository to `MrZoller/headroom`, then set `PAGES_BASE_PATH` to `/headroom/`. Between the second
+step and the third the site is built for `/bench/` and served from `/headroom/`, which is the blank
+page with 404s described above — the window is one settings change wide, and it is the reason the
+repo rename is not part of the pull request that renames everything else.
 
 ## Decisions already made
 
@@ -805,7 +833,7 @@ Settled, with reasons. Reopen only with new information.
   conversations. Capping
   completion at chat's grade would restore the appearance of a ladder by reporting a failure that
   is not happening. The claim was dropped instead; the thresholds stay independent.
-- **A qualifier attaches to a claim, not to a subject** ([#160](https://github.com/MrZoller/bench/issues/160)).
+- **A qualifier attaches to a claim, not to a subject** ([#160](https://github.com/MrZoller/headroom/issues/160)).
   The narrow Matrix readout shows a tapped spilled cell as "spills 66% to host RAM" and carries no
   host-RAM caveat, and it stays that way. `HOST_RAM_UNCHECKED` exists because `planPlacement` sizes a
   spill with no host-RAM input at all, so any surface saying a spilled configuration **loads** is
@@ -1086,7 +1114,7 @@ reading the test that guards them.
   row is short — since #64 it is `headerBand`, and both of its lengths are `rem`). The general form
   is the thing to keep: a length measured from text belongs in the same units as the text. (#42, #44.)
 
-- **A rotation costs two lengths, and `headerHeight` only ever charged for one** ([#64](https://github.com/MrZoller/bench/issues/64)).
+- **A rotation costs two lengths, and `headerHeight` only ever charged for one** ([#64](https://github.com/MrZoller/headroom/issues/64)).
   `sin(45)` and `cos(45)` are the same number, so the Matrix's device labels leaned as far sideways
   as they stood tall — 246px of reserved band at every viewport, and 142px of the same quantity
   leaking out of a scroll container the grid otherwise fitted _exactly_ at both 1440 and 1024. The
@@ -1219,7 +1247,7 @@ reading the test that guards them.
   tool is worth one more minute of checking than a positive one, because nothing later contradicts
   it. (#41.)
 
-- **A grid of buttons is one tab stop, not four hundred** ([#52](https://github.com/MrZoller/bench/issues/52)).
+- **A grid of buttons is one tab stop, not four hundred** ([#52](https://github.com/MrZoller/headroom/issues/52)).
   The Matrix is 408 cells, each a `<button>` with a full-sentence `aria-label`, and it sits _above_
   the Usage panel in DOM order — so reaching the context slider that drives every figure on the page
   took 422 presses of Tab, and a screen-reader user heard 408 sentences on the way. The ARIA grid
@@ -1322,7 +1350,7 @@ reading the test that guards them.
   is 287px of measurement rather than of slack.
 
 - **A focus indicator is a mark of its own, never a colour swap and never a channel a resting state
-  already uses** ([#67](https://github.com/MrZoller/bench/issues/67)). The four primary selects —
+  already uses** ([#67](https://github.com/MrZoller/headroom/issues/67)). The four primary selects —
   Model, Hardware, Quantization, Runtime — removed the outline and replaced it with a 1px border
   colour change measuring **1.95:1 against the unfocused edge**, where SC 2.4.13 asks for 3:1 at a
   2px minimum. `--color-control-border` had been raised to `#646d88` specifically so a control's
@@ -1424,7 +1452,7 @@ reading the test that guards them.
   touch-target exemption list is guarded against below.
 
 - **`aria-describedby` is an IDREF _list_, and resolving it as one id fails in the direction that
-  passes** ([#74](https://github.com/MrZoller/bench/issues/74)). Specs handed the whole attribute to
+  passes** ([#74](https://github.com/MrZoller/headroom/issues/74)). Specs handed the whole attribute to
   `getElementById`, which returns `null` the moment a control carries two ids — so appending a second
   description to a picker would have reported a control that _has_ a note as having none, and every
   "no note runs past two lines" budget in `config-notes.spec.ts` is satisfied by zero lines. The
@@ -1457,7 +1485,7 @@ reading the test that guards them.
   reservation escapes it. That is evidence of the reservation working, not evidence that the inputs
   differ, which are the two halves this entry exists to separate. What it needs is a natural height
   measured with the reservation lifted, and an assertion that the line counts genuinely differ. It
-  belongs with [#102](https://github.com/MrZoller/bench/issues/102), which reworks that reservation
+  belongs with [#102](https://github.com/MrZoller/headroom/issues/102), which reworks that reservation
   for a 32px root and has to measure the unreserved wrapping anyway.
 
 - **Reflow tests measure the panel; the page is a different question.** The Matrix readout was moved to
@@ -1502,7 +1530,7 @@ reading the test that guards them.
   an exception list is the one part of a sweep that fails open.
 
 - **A row that declares its own grid is a table that measures its columns once per row**
-  ([#70](https://github.com/MrZoller/bench/issues/70)). The workload strip put
+  ([#70](https://github.com/MrZoller/headroom/issues/70)). The workload strip put
   its three column tracks on each `<li>`, so every row was its own grid container and the middle
   `auto` track was sized from that row's own label — the reason column, the third one, started at
   444, 446, 457, 475, 495, 499 and 503px at 1440. Columns 1 and 2 lined up because the first track is
@@ -1547,7 +1575,7 @@ reading the test that guards them.
   two disclosure tables are real `<table>`s, which is this fix by other means.
 
 - **A bar that scales to its own overflow stops measuring anything, and the answer is words rather
-  than a broken axis** ([#73](https://github.com/MrZoller/bench/issues/73)). `scale = max(used,
+  than a broken axis** ([#73](https://github.com/MrZoller/headroom/issues/73)). `scale = max(used,
 ceiling)` keeps an over-budget stack on screen, which is right and stays. What it means is that the
   ceiling's _position_ is a function of the overshoot: DeepSeek V3 at Q4_K_M on one 5090 at 128K and
   8 users draws 448 GiB against a 31 GiB ceiling, so the rule lands 6.9% from the left edge and the
@@ -1759,7 +1787,7 @@ ceiling)` keeps an over-budget stack on screen, which is right and stays. What i
   by ~4B) and inference never loads them. Detected via `num_nextn_predict_layers` and _refused_,
   not estimated; the seed list carries the published figure with a written reason.
 - **There is a third attention family in the wild, and the generator refuses it rather than
-  flattening it into GQA** ([#76](https://github.com/MrZoller/bench/issues/76)). `deriveAttention`
+  flattening it into GQA** ([#76](https://github.com/MrZoller/headroom/issues/76)). `deriveAttention`
   knew two, and any model whose layer stack mixes attention with linear or state-space layers fell
   through to the GQA branch and was catalogued as if _every_ layer cached keys and values.
   Qwen3-Next-80B is 12 attention layers of 48, so it derived at 96.0 KiB/token against a true 24.0 —
@@ -1825,7 +1853,7 @@ ceiling)` keeps an over-budget stack on screen, which is right and stays. What i
   exactly that reason. And unlike the linear stacks, Llama 4's split _is_ derivable (`no_rope_layers`
   is 48 entries of 1/0, one global layer every fourth); what is not derivable is how many tokens a
   chunked layer's cache holds, because the mask is block-diagonal rather than trailing and residency
-  comes from the runtime's chunked-cache implementation. That is what [#77](https://github.com/MrZoller/bench/issues/77)
+  comes from the runtime's chunked-cache implementation. That is what [#77](https://github.com/MrZoller/headroom/issues/77)
   needs to settle before Scout can be seeded — the refusal is what makes that visible instead of
   shipping a 3.4x row.
 
@@ -1880,7 +1908,7 @@ ceiling)` keeps an over-budget stack on screen, which is right and stays. What i
   removed — arithmetic on literals beside a refusal is documentation, not a test.
 
 - **Three list orders were deliberate, load-bearing and stated nowhere**
-  ([#79](https://github.com/MrZoller/bench/issues/79)). Nothing sorts `devices.json`, `QUANTS` or
+  ([#79](https://github.com/MrZoller/headroom/issues/79)). Nothing sorts `devices.json`, `QUANTS` or
   `RUNTIMES` — every surface renders the file as written — so the order was a convention living only
   in whoever last edited it. That is a silent-breakage shape rather than a cosmetic one: a plausible
   "tidy the list" edit regroups it against itself and no test, type or review notices. The order is
@@ -1955,7 +1983,7 @@ ceiling)` keeps an over-budget stack on screen, which is right and stays. What i
 ## Open questions
 
 Correctness follow-ups live in
-[the repository's open issues](https://github.com/MrZoller/bench/issues). This section is for the
+[the repository's open issues](https://github.com/MrZoller/headroom/issues). This section is for the
 questions those issues cannot settle, and the three tables below are the record of the fourteen
 findings filed rather than patched — six out of the July sweep, all now closed; six out of the v2
 pass, of which #165, #166, #170, #171 and #172 are now closed too, and #174 closed as a record
@@ -1978,14 +2006,14 @@ have been the third patch at one root cause, and each issue carried its numbers 
 re-derived. **All six are fixed**, the last of them on 1 August 2026. What each one turned out to
 need is the part worth keeping, because in four of the six the filed framing was not quite the fix:
 
-| filed                                                                                               | what it needed                                                                                                                                                                                                                                                                                                                                                                                                   |
-| --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [#90](https://github.com/MrZoller/bench/issues/90) cpu-ram compute basis, catalogued/peak 0.41–1.12 | **Fixed.** The theoretical vector peak, since `computeEfficiency` already owns the discount — the same #51 rule on the compute axis, and the five rows were being discounted twice. The open question resolved against the wider figure: llama.cpp accumulates in fp32 lanes, so AVX512-FP16 is not the rate. Decode is bandwidth-only, so the EPYC anchor is untouched at 5.94 tok/s; prefill moves up to 2.5×. |
-| [#96](https://github.com/MrZoller/bench/issues/96) serving graded at the slider's concurrency       | **Fixed**, and the ungraded state went with it: once each tier is graded at its own user count the question is always asked, so `Fitness` has three arms. The narrow capacity symptom was the least of it — the sentence quoting `runnableContextTokens` at the reader's concurrency disproved its own verdict on the two rigs the issue named.                                                                  |
-| [#97](https://github.com/MrZoller/bench/issues/97) TTFT ramp collapses                              | **Fixed.** 29 of 46 → 4,5,6,7,12,9,3 on the Envelope; 1,025 of 1,269 → 29,57,86,263,323,304,207 on the Matrix. The domain's floor was half of it: a zero anchor is right only where zero is a reading, and no cell answers in zero seconds. Mirroring the _placement_ rather than the ramp index was off by one bucket at every boundary.                                                                        |
-| [#101](https://github.com/MrZoller/bench/issues/101) the unit suite                                 | **Fixed** by rendering fewer cells: 155s → 24s locally, and CI's build job 7m9s → 1m38s. The property the issue asked for is asserted rather than hoped for — `App.test.tsx` renders a fixed twelve cells whatever the catalog does next. The timeout stayed at 30s deliberately, with the runner ratio written down.                                                                                            |
-| [#102](https://github.com/MrZoller/bench/issues/102) readout on touch, and at 200%                  | **Fixed.** The issue's cheapest option does not exist — this panel has no table behind a disclosure, it _is_ the table. Two taps instead, keyed on whether the reader has been shown the figures rather than on a pointer type, which a contact-only stylus breaks. 280px against 160px reserved at 320px/200%, fixed by dropping the model from the narrow form and keeping the machine.                        |
-| [#103](https://github.com/MrZoller/bench/issues/103) `NOT_SEEDED` never revalidated                 | **Fixed** with the issue's own first step — an expiry, plus the structured reason it said to think about first. Three rounds went on one mistake: claiming a mechanical check made a cause exempt from the calendar. It never does. Every cause has a window now, and the checks are what make the windows long.                                                                                                 |
+| filed                                                                                                  | what it needed                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [#90](https://github.com/MrZoller/headroom/issues/90) cpu-ram compute basis, catalogued/peak 0.41–1.12 | **Fixed.** The theoretical vector peak, since `computeEfficiency` already owns the discount — the same #51 rule on the compute axis, and the five rows were being discounted twice. The open question resolved against the wider figure: llama.cpp accumulates in fp32 lanes, so AVX512-FP16 is not the rate. Decode is bandwidth-only, so the EPYC anchor is untouched at 5.94 tok/s; prefill moves up to 2.5×. |
+| [#96](https://github.com/MrZoller/headroom/issues/96) serving graded at the slider's concurrency       | **Fixed**, and the ungraded state went with it: once each tier is graded at its own user count the question is always asked, so `Fitness` has three arms. The narrow capacity symptom was the least of it — the sentence quoting `runnableContextTokens` at the reader's concurrency disproved its own verdict on the two rigs the issue named.                                                                  |
+| [#97](https://github.com/MrZoller/headroom/issues/97) TTFT ramp collapses                              | **Fixed.** 29 of 46 → 4,5,6,7,12,9,3 on the Envelope; 1,025 of 1,269 → 29,57,86,263,323,304,207 on the Matrix. The domain's floor was half of it: a zero anchor is right only where zero is a reading, and no cell answers in zero seconds. Mirroring the _placement_ rather than the ramp index was off by one bucket at every boundary.                                                                        |
+| [#101](https://github.com/MrZoller/headroom/issues/101) the unit suite                                 | **Fixed** by rendering fewer cells: 155s → 24s locally, and CI's build job 7m9s → 1m38s. The property the issue asked for is asserted rather than hoped for — `App.test.tsx` renders a fixed twelve cells whatever the catalog does next. The timeout stayed at 30s deliberately, with the runner ratio written down.                                                                                            |
+| [#102](https://github.com/MrZoller/headroom/issues/102) readout on touch, and at 200%                  | **Fixed.** The issue's cheapest option does not exist — this panel has no table behind a disclosure, it _is_ the table. Two taps instead, keyed on whether the reader has been shown the figures rather than on a pointer type, which a contact-only stylus breaks. 280px against 160px reserved at 320px/200%, fixed by dropping the model from the narrow form and keeping the machine.                        |
+| [#103](https://github.com/MrZoller/headroom/issues/103) `NOT_SEEDED` never revalidated                 | **Fixed** with the issue's own first step — an expiry, plus the structured reason it said to think about first. Three rounds went on one mistake: claiming a mechanical check made a cause exempt from the calendar. It never does. Every cause has a window now, and the checks are what make the windows long.                                                                                                 |
 
 **The shape of that is the thing to keep, more than any of the six.** In four, the filed framing was
 a correct description of the symptom and the wrong description of the fix — the cheapest option
@@ -1998,7 +2026,7 @@ made that visible; the measurements survived and the framings mostly did not.
 
 Same rule, same shape, and **all six are now resolved, but one of them was never work.** #165 is
 fixed, and split in two on the way; #166 is fixed, and the capability gap it recorded turned out to
-be llama.cpp's rather than bench's; #170 is fixed, and moved the seam it was filed about; #171 is
+be llama.cpp's rather than Headroom's; #170 is fixed, and moved the seam it was filed about; #171 is
 fixed, and its two halves were answered in opposite directions; #172 is fixed, and two thirds of it
 were already closed by #170 before anyone looked — verified against `main` rather than taken on
 report. #174 is **closed as answered rather than fixed**, being the written argument for a decision
@@ -2011,14 +2039,14 @@ closed issue stays readable. An open issue that is not a task is a worse record 
 next to the reasoning, because every later count has to remember to except it — as the sentence at
 the top of this file had to.
 
-| filed                                                                                             | what it is                                                                                                                                                                                                                                                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [#165](https://github.com/MrZoller/bench/issues/165) resident layers charge the non-layer tensors | **Fixed**, and it turned out to be two issues rather than one — see below. The count divides `layerWeightBytes`; every byte figure is bit-identical to before it; `-ngl` drops on 7.9% of the catalog's configurations, by a median of 1 layer and never rises. The byte assignment those tensors get is [#182](https://github.com/MrZoller/bench/issues/182)                                                 |
-| [#166](https://github.com/MrZoller/bench/issues/166) the assignment discards _which_ layers       | **Fixed**, and its second half was answered rather than built. `DeviceShare.layerIndices` records which layers a card holds; the flag the issue hoped for does not exist, because `-ot` overrides where a _weight_ lives while a layer's cache follows the `-ngl`/`-ts` split — see above. The panel states the packing instead: `2,2,2,21,21` layers against `2,2,2,1,1` full-attention ones                 |
-| [#170](https://github.com/MrZoller/bench/issues/170) tiers graded at scenarios never planned      | **Fixed**, and the seam moved rather than the arithmetic. `gradedScenarios` states the tier structure and the sweep walks it, largest first, stopping at the first scenario the machine can plan — 269 long-context rows across the 43 shipped devices are now graded at the reduced tier, 161 of them `tight`, and no row that already had an answer changed it                                              |
-| [#172](https://github.com/MrZoller/bench/issues/172) the caveat describes the wrong tier          | **Fixed**, and two of its three findings were already closed by #170 — verified rather than assumed, then pinned by tests that did not exist. The third is the axis `gradedScenarios` deliberately does not express: `declaredConcurrency` states serving's four users and two, and the footer names those rather than the reader's own                                                                       |
-| [#171](https://github.com/MrZoller/bench/issues/171) the Ollama block and the daemon              | **Fixed**, and the two halves went opposite ways. The block emits no `ollama serve` at all now, and the cache precision is stated as a requirement the reader's own daemon has to meet; concurrency is a refusal, since `OLLAMA_NUM_PARALLEL` is a daemon setting and `llama-server` takes the same quantity as `-np N` on the one command                                                                    |
-| [#174](https://github.com/MrZoller/bench/issues/174) one adapter on a dual-GPU machine            | **Closed as answered**, not fixed. Preferring the discrete card is the answer for a tool that prices inference, not half of "combine both preferences" — and combining would widen the shortlist to two vendors with no ranking rule between them. The third state it floats — _"your browser reports two GPUs; which one do you want to price?"_ — stays unbuilt for want of a count of how often it matters |
+| filed                                                                                                | what it is                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [#165](https://github.com/MrZoller/headroom/issues/165) resident layers charge the non-layer tensors | **Fixed**, and it turned out to be two issues rather than one — see below. The count divides `layerWeightBytes`; every byte figure is bit-identical to before it; `-ngl` drops on 7.9% of the catalog's configurations, by a median of 1 layer and never rises. The byte assignment those tensors get is [#182](https://github.com/MrZoller/headroom/issues/182)                                              |
+| [#166](https://github.com/MrZoller/headroom/issues/166) the assignment discards _which_ layers       | **Fixed**, and its second half was answered rather than built. `DeviceShare.layerIndices` records which layers a card holds; the flag the issue hoped for does not exist, because `-ot` overrides where a _weight_ lives while a layer's cache follows the `-ngl`/`-ts` split — see above. The panel states the packing instead: `2,2,2,21,21` layers against `2,2,2,1,1` full-attention ones                 |
+| [#170](https://github.com/MrZoller/headroom/issues/170) tiers graded at scenarios never planned      | **Fixed**, and the seam moved rather than the arithmetic. `gradedScenarios` states the tier structure and the sweep walks it, largest first, stopping at the first scenario the machine can plan — 269 long-context rows across the 43 shipped devices are now graded at the reduced tier, 161 of them `tight`, and no row that already had an answer changed it                                              |
+| [#172](https://github.com/MrZoller/headroom/issues/172) the caveat describes the wrong tier          | **Fixed**, and two of its three findings were already closed by #170 — verified rather than assumed, then pinned by tests that did not exist. The third is the axis `gradedScenarios` deliberately does not express: `declaredConcurrency` states serving's four users and two, and the footer names those rather than the reader's own                                                                       |
+| [#171](https://github.com/MrZoller/headroom/issues/171) the Ollama block and the daemon              | **Fixed**, and the two halves went opposite ways. The block emits no `ollama serve` at all now, and the cache precision is stated as a requirement the reader's own daemon has to meet; concurrency is a refusal, since `OLLAMA_NUM_PARALLEL` is a daemon setting and `llama-server` takes the same quantity as `-np N` on the one command                                                                    |
+| [#174](https://github.com/MrZoller/headroom/issues/174) one adapter on a dual-GPU machine            | **Closed as answered**, not fixed. Preferring the discrete card is the answer for a tool that prices inference, not half of "combine both preferences" — and combining would widen the shortlist to two vendors with no ranking rule between them. The third state it floats — _"your browser reports two GPUs; which one do you want to price?"_ — stays unbuilt for want of a count of how often it matters |
 
 **The six group into three pairs, which is the useful way to read them.** Two are the engine
 exporting a layer _count_ where what matters is which layers and what is in them (#165, #166). Two
@@ -2059,7 +2087,7 @@ The measurement is what decided it rather than the argument. Assigning the block
 by up to 27.9%, and flips `fits` on 0.60% of them and `impossible` on 0.12% — a change to what the
 product answers, wearing a layer count's clothes. What shipped instead is bit-identical on 2.4M
 sampled byte figures and changes `-ngl` on 7.9% of configurations, **every one of them downward**, by
-a median of 1 layer and at most 8. The remainder is [#182](https://github.com/MrZoller/bench/issues/182),
+a median of 1 layer and at most 8. The remainder is [#182](https://github.com/MrZoller/headroom/issues/182),
 and it is blocked on reading `llama-model.cpp` rather than on the arithmetic: which device holds
 `token_embd` under a layer split, and what that means for a **tied** model where one tensor is both
 the lookup and the output projection — which is Gemma 3 4B, the row where the block is largest at
@@ -2116,7 +2144,7 @@ from the tier bars rather than from the planned window. What moves on the agent 
 _carries_ — the rate, the wait and the spill now come from the session the verdict was already
 about, which is the 28 caveats and the nine fallback picks below.
 
-It also retires the stopgap in the middle of [#172](https://github.com/MrZoller/bench/issues/172).
+It also retires the stopgap in the middle of [#172](https://github.com/MrZoller/headroom/issues/172).
 The `Math.max` over `WORKLOAD_BARS` that #167 added — the spill fraction read at the archetype's
 _widest_ bar — is gone, and the caveat and the decode rate now come from the one scenario the
 candidate was graded at. 28 agent rows of 2,533 lose a host-RAM caveat, every one of them a model
@@ -2213,14 +2241,14 @@ should be whenever the code is the thing that can be read instead.
 
 Two of the findings were not about the prose at all. They are defects the prose walked into:
 
-| filed                                                                                                           | what it is                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [#180](https://github.com/MrZoller/bench/issues/180) the emitted decode depth is unusable                       | **P1.** `llamaBench()` emits `-d prompt+prefix`; `Calibrate` expects `contextTokens`; `describeMismatch` rejects a depth off by 10%. The panel's own command produces a row the panel marks unusable, and calibrate's expectation is not reachable by any command — `-d 32768 -n 512` does not fit a 32K window, so the question is what `estimateDecode` should charge                                                                                       |
-| [#181](https://github.com/MrZoller/bench/issues/181) markdown loses the cache precision **and the layer count** | `parseMarkdown` never reads the header row. It has no branch for `type_k`/`type_v`, so every markdown paste reads as f16 — including the one the panel's own `-ctk q8_0 -ctv q8_0 -o md` produces with the columns printed — and it finds `ngl` by position, which those same columns displace, so the placement check is skipped and an offloaded run compares clean against a resident prediction. One fix for both; a cache-only fix leaves the worse half |
+| filed                                                                                                              | what it is                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [#180](https://github.com/MrZoller/headroom/issues/180) the emitted decode depth is unusable                       | **P1.** `llamaBench()` emits `-d prompt+prefix`; `Calibrate` expects `contextTokens`; `describeMismatch` rejects a depth off by 10%. The panel's own command produces a row the panel marks unusable, and calibrate's expectation is not reachable by any command — `-d 32768 -n 512` does not fit a 32K window, so the question is what `estimateDecode` should charge                                                                                       |
+| [#181](https://github.com/MrZoller/headroom/issues/181) markdown loses the cache precision **and the layer count** | `parseMarkdown` never reads the header row. It has no branch for `type_k`/`type_v`, so every markdown paste reads as f16 — including the one the panel's own `-ctk q8_0 -ctv q8_0 -o md` produces with the columns printed — and it finds `ngl` by position, which those same columns displace, so the placement check is skipped and an offloaded run compares clean against a resident prediction. One fix for both; a cache-only fix leaves the worse half |
 
 ### Standing questions
 
-- **MLX has no native quantization entries** ([#18](https://github.com/MrZoller/bench/issues/18)).
+- **MLX has no native quantization entries** ([#18](https://github.com/MrZoller/headroom/issues/18)).
   Other catalogued formats stand in _by width_ — Q4_K_M's 4.85 bpw against MLX's ~4.5, and the
   non-GGUF INT8 at a flat 8.0 — so every figure for an
   Apple-silicon configuration derives from a format MLX does not load. The alternative, BF16 only,
@@ -2337,7 +2365,7 @@ Two of the findings were not about the prose at all. They are defects the prose 
   Three conventions worth writing down, since all three look like bugs and are not:
 
   - **A raiseable allocation ceiling states how far it raises, and it is never physical capacity**
-    ([#53](https://github.com/MrZoller/bench/issues/53)). `allocatableTunable` and
+    ([#53](https://github.com/MrZoller/headroom/issues/53)). `allocatableTunable` and
     `maxAllocatableGiB` only mean anything together, and the pairing went unenforced: every Apple
     row declared the first and omitted the second, so `maxAllocatablePerDevice` fell back to
     capacity and all six claimed 100% of RAM could be wired to the GPU. The app offered the owner
@@ -2359,7 +2387,7 @@ Two of the findings were not about the prose at all. They are defects the prose 
     `CLASS_BANDWIDTH_UTILIZATION`, which exist to model it — folding it into the catalog would
     double-count it and quietly break the calibration anchors.
 
-    **This rule was written down here and broken in the same week** ([#51](https://github.com/MrZoller/bench/issues/51)).
+    **This rule was written down here and broken in the same week** ([#51](https://github.com/MrZoller/headroom/issues/51)).
     The Ryzen row carried `measuredBandwidthGBs: 213` against its 256 rating, and
     `effectiveBandwidth()` preferred it — so the constants discounted an already-discounted
     figure and every Strix Halo throughput number read 16.8% under the treatment the other 24
@@ -2374,7 +2402,7 @@ Two of the findings were not about the prose at all. They are defects the prose 
   The `rumored` row (M5 Ultra) is still press-rumour grade and must stay visibly labelled in the UI.
 
 - ~~The catalog was accurate about 25 machines and silent about the ones the audience owns.~~
-  **43 rows since [#78](https://github.com/MrZoller/bench/issues/78).** Coverage is a different
+  **43 rows since [#78](https://github.com/MrZoller/headroom/issues/78).** Coverage is a different
   property from accuracy and fails where accuracy checks cannot look: a machine that is absent is not
   wrong about anything. Three vendors' consumer lines and the whole sub-$1000 tier were missing — the
   cheapest catalogued GPU was the 5080 at $999, AMD appeared only as datacenter Instinct parts, Intel

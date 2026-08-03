@@ -1,8 +1,8 @@
 /**
- * Design tokens — the single source of truth for bench's visual language.
+ * Design tokens — the single source of truth for Headroom's visual language.
  *
  * A dark instrument-panel chassis: a sibling to `~/code/wavefront`, not a clone. Wavefront runs
- * a phosphor-green accent; bench runs violet, so the two read as the same family without being
+ * a phosphor-green accent; Headroom runs violet, so the two read as the same family without being
  * mistaken for each other.
  *
  * These are mirrored as CSS custom properties in `index.css` — keep the two in sync. Canvas code
@@ -161,7 +161,7 @@ export const magnitudeRamp = [...sequential].reverse();
  * own grid, and the brightest step is the one that does not imply a deficit that was never measured.
  *
  * **`direction` is where "larger is better" is finally said, and it is required rather than
- * defaulted** ([#97](https://github.com/MrZoller/bench/issues/97)). It used to be said by the
+ * defaulted** ([#97](https://github.com/MrZoller/headroom/issues/97)). It used to be said by the
  * caller, by handing this function `1 / seconds` for the one measure that runs the other way — and
  * composing a reciprocal with a logarithm is the defect, not a style: `log1p(1/t) ≈ 1/t` for any
  * latency above about a second, so the log did nothing and the scale was harmonic, collapsing 63% of

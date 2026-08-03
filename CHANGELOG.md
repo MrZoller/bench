@@ -51,6 +51,21 @@ bug, and on the one accessibility axis with no spec behind it.
   headline over 8 on Blackwell and 4 on Ada — is written down next to the rows that use it, with the
   headline figure each worked example starts from.
 
+### Changed
+
+- **The project is Headroom** ([#176](https://github.com/MrZoller/headroom/issues/176)). Same tool
+  and the same numbers under a new name: the package, the wordmark, the page title, the README, and
+  every `github.com/MrZoller/…` link outside this file. The site answers at
+  <https://mrzoller.github.io/headroom/> once the repository itself is renamed — a deliberately
+  separate step, with the `PAGES_BASE_PATH` repository variable following it, since Vite's `base` is
+  fed from that variable rather than committed. Entries above this one still name the old repository
+  on purpose: they are history, and GitHub redirects the links.
+
+  **Lowercase `headroom` still means leftover VRAM.** It was a load-bearing word here before it was
+  the product's name — `headroomBytes`, "headroom left after weights, cache and overhead", the
+  Envelope's colour ramp — so nothing measuring spare capacity was renamed or capitalised, and the
+  hero surface is still the Bench.
+
 ### Fixed
 
 - **Three architectures the generator would have catalogued at 2x, 13x and a constant**

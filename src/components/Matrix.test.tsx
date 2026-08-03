@@ -92,7 +92,7 @@ describe('the Matrix stays informative', () => {
 
   /**
    * The ramp has to be **spent** on this grid too, and it was the worse of the two surfaces
-   * ([#97](https://github.com/MrZoller/bench/issues/97)).
+   * ([#97](https://github.com/MrZoller/headroom/issues/97)).
    *
    * The Matrix has offered "How responsive" for longer than the Envelope has, and its domain was
    * floored at zero — which for a reciprocal reduces the placement to `t_fastest / t`, so a cell ten
@@ -216,7 +216,7 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
   const legend = () => [...matrix().querySelectorAll<HTMLElement>(':scope > div')].at(-1)!;
 
   /**
-   * The narrow form, and the two halves of [#102](https://github.com/MrZoller/bench/issues/102) it
+   * The narrow form, and the two halves of [#102](https://github.com/MrZoller/headroom/issues/102) it
    * belongs to.
    *
    * The readout's reservation is in `rem`, so at a 32px root it doubles — and the glyphs double with

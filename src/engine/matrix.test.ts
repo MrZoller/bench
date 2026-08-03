@@ -167,7 +167,7 @@ describe('the model-by-device grid', () => {
   });
 
   /**
-   * The domain's floor, which is the half [#97](https://github.com/MrZoller/bench/issues/97)
+   * The domain's floor, which is the half [#97](https://github.com/MrZoller/headroom/issues/97)
    * changed.
    *
    * A zero floor anchors the ramp's *worst* end, and it is right wherever zero is a reading a cell
@@ -179,7 +179,7 @@ describe('the model-by-device grid', () => {
    */
   /**
    * A latency nobody could take is off the scale, at both ends
-   * ([#97](https://github.com/MrZoller/bench/issues/97), raised in review on it).
+   * ([#97](https://github.com/MrZoller/headroom/issues/97), raised in review on it).
    *
    * `estimatePrefill` answers `Infinity` by design when a device states no compute rate — pinned in
    * `index.test.ts` — and under the old reciprocal orientation that became `1 / Infinity = 0`, the

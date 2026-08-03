@@ -3,8 +3,8 @@ import { comparisonGrid } from '@/data/catalog';
 
 /**
  * The bounded comparison grid every app-level suite renders by default, and the opt-in back to
- * the real one ([#101](https://github.com/MrZoller/bench/issues/101),
- * [#115](https://github.com/MrZoller/bench/issues/115)).
+ * the real one ([#101](https://github.com/MrZoller/headroom/issues/101),
+ * [#115](https://github.com/MrZoller/headroom/issues/115)).
  *
  * The Matrix is models × devices and the app-level tests render the whole page, so every test
  * pays for the whole grid — 1,470 buttons, each with a full-sentence `aria-label` that

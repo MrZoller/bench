@@ -40,7 +40,7 @@ import {
  * the two orderings below are exported as sentences (`RANKING_RULE`, `FALLBACK_RULE`) and rendered
  * beside the shortlist, and the quant policy is stated too (`QUANT_RULE`).
  *
- * **bench deliberately knows nothing about which model is *better***, only which runs. The honest
+ * **Headroom deliberately knows nothing about which model is *better***, only which runs. The honest
  * within-tier ordering is therefore a capability *proxy*, and parameter count is the defensible one:
  * it is already derived from each repo's safetensors index, where benchmark scores are not in the
  * catalog at all and importing them would be a new curation surface with a freshness problem. That
@@ -61,7 +61,7 @@ const TIER_RANK: Record<Fitness, number> = { good: 0, tight: 1, fail: 2 };
 export const RANKING_RULE =
   'Ranked by verdict first, then by parameter count, then by how little the weights are ' +
   'compressed, then by decode rate. Parameter count is a proxy for capability and not a ' +
-  'measurement of it — bench knows what runs, not what is good.';
+  'measurement of it — Headroom knows what runs, not what is good.';
 
 /**
  * And the other ordering, which is a different question and therefore a different rule.
@@ -153,7 +153,7 @@ export interface Shortlist {
   pairsConsidered: number;
   /**
    * The user counts these grades were taken at, where the archetype declares its own — and empty
-   * where it inherits the reader's ([#172](https://github.com/MrZoller/bench/issues/172)).
+   * where it inherits the reader's ([#172](https://github.com/MrZoller/headroom/issues/172)).
    *
    * Carried rather than looked up beside the shortlist, on the rule this whole seam is about: the
    * surface describing a sweep must not rebuild the tier structure to caption it. The footer named
@@ -347,7 +347,7 @@ type GradedUsage = UsageSpec & { promptTokens: number };
  * The largest scenario this archetype is graded at that this machine can actually plan.
  *
  * **The sweep asks the verdict layer about tiers rather than reconstructing them here**
- * ([#170](https://github.com/MrZoller/bench/issues/170)). It used to plan exactly one placement per
+ * ([#170](https://github.com/MrZoller/headroom/issues/170)). It used to plan exactly one placement per
  * candidate, at the archetype's own `typicalPromptTokens + RESPONSE_ALLOWANCE`, and several
  * archetypes are *graded* at scenarios that one never names: long-context's `tight` tier is a
  * 65,536-token prompt against its 131,072-token job, and the agent's two tiers carry 64K and 32K

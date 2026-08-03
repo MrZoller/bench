@@ -314,7 +314,7 @@ describe('workload verdicts', () => {
 
 /**
  * Serving answers the archetype's own question, at the archetype's own concurrency
- * ([#96](https://github.com/MrZoller/bench/issues/96)).
+ * ([#96](https://github.com/MrZoller/headroom/issues/96)).
  *
  * This is the third and last fix at one root. Serving was the only archetype taking its defining
  * parameter from the slider rather than declaring it, and that asymmetry produced a red `fail` for

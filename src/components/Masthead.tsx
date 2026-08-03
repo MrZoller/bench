@@ -225,7 +225,7 @@ export function Masthead() {
             reserved for what changes or responds, and a title does neither.
           */}
           <h1 className="hero-wordmark text-[clamp(2rem,10vw,5rem)] leading-none font-semibold tracking-[-0.03em]">
-            bench
+            headroom
           </h1>
           <p className="mt-3 text-sm text-[var(--color-text-muted)]">
             What runs on your hardware, and how comfortably.

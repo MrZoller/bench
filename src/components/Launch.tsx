@@ -10,7 +10,7 @@ import { CopyButton } from './CopyButton';
 /**
  * The command that runs the configuration above (#136).
  *
- * The panel every other one on this page was leading to: bench says a configuration works, and
+ * The panel every other one on this page was leading to: Headroom says a configuration works, and
  * then stops one step short of the thing the reader came for. The gap between "fits, 42 tok/s" and
  * a serving process is exactly the part people fumble — the offload count, the context flag, the
  * cache-type flags, vLLM's shard count — and every one of those is an answer the engine has

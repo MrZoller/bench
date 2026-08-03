@@ -505,7 +505,7 @@ describe('the masthead', () => {
   it('renders the wordmark and tagline with no 2D context available', () => {
     render(<App />);
 
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('bench');
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('headroom');
     expect(screen.getByText(/What runs on your hardware/i)).toBeInTheDocument();
   });
 

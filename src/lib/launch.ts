@@ -107,7 +107,7 @@ export interface LaunchInput {
 }
 
 /**
- * The checkpoint bench can actually name for a model at a format, or nothing.
+ * The checkpoint Headroom can actually name for a model at a format, or nothing.
  *
  * **The catalog knows exactly one artifact per model: its own repo, at its own checkpoint
  * format.** `nativeQuant` is the `quantization_config.quant_method` the generator read from
@@ -159,7 +159,7 @@ function noRoomToAnswer(contextTokens: number): string {
 function noArtifact(model: ModelSpec, quant: QuantSpec, launcher: string): string {
   const native = model.nativeQuant ?? 'bf16';
   return (
-    `bench has no ${quant.label} checkpoint to name for ${model.name}. The catalog carries the ` +
+    `Headroom has no ${quant.label} checkpoint to name for ${model.name}. The catalog carries the ` +
     `source repo — ${model.id}, which ships at ${native.toUpperCase()} — and no per-format ` +
     `artifact, so ${launcher} would have to be pointed at a conversion published elsewhere. ` +
     `Naming the source repo here would start a different model than the one priced above.`
@@ -208,7 +208,7 @@ function gpuLayers(input: LaunchInput): number {
  *
  * It is reachable and it OOMs. Ministral 3 3B at Q8_0, 131,072 tokens over 4 users on four RTX
  * 5080s packs 7,7,6,6 layers and keeps 2,2,6,6 of them resident — so `-ngl 16 -ts 7,7,6,6` asks
- * llama.cpp to spread sixteen layers slightly-in-favour-of the two cards bench sized for two, which
+ * llama.cpp to spread sixteen layers slightly-in-favour-of the two cards Headroom sized for two, which
  * are the constrained cards precisely because their cache already fills them. `-ts 2,2,6,6` is the
  * split that was actually sized.
  *
@@ -254,7 +254,7 @@ function tensorSplit(input: LaunchInput): string | undefined {
 }
 
 /**
- * What bench packed, said out loud on the rigs `-ts` has to refuse (#166).
+ * What Headroom packed, said out loud on the rigs `-ts` has to refuse (#166).
  *
  * `tensorSplit` declines wherever the layers do not cache alike, because a count is a faithful
  * description of a greedy per-layer packing only where the layers are interchangeable. Declining
@@ -283,7 +283,7 @@ function tensorSplit(input: LaunchInput): string | undefined {
  *   - `llama_kv_cache`'s constructor takes each layer's cache buffer from
  *     `ggml_backend_dev_buffer_type(model.dev_layer(il))`.
  *
- * So `-ot` would move a layer's weights to the card bench chose and leave its KV cache on the card
+ * So `-ot` would move a layer's weights to the card Headroom chose and leave its KV cache on the card
  * `-ngl`/`-ts` chose. On a hybrid model the cache is the entire reason the packing is uneven — the
  * per-layer weights are uniform and a full-attention layer caches up to ~128x a sliding one at
  * 128K — so the flag moves the half that does not vary and leaves the half that does. A command
@@ -345,16 +345,16 @@ function packingNotes(input: LaunchInput): readonly string[] {
    * returns before it, but the wording does not depend on the gate either.
    *
    * The obvious second one — "plan for that card to hold more than the panel above shows" —
-   * predicts a comparison bench has not made. llama.cpp's contiguous split sometimes lands the same
+   * predicts a comparison Headroom has not made. llama.cpp's contiguous split sometimes lands the same
    * composition the packing did (Gemma 3 12B on two 5090s at 128K packs `24,24` against `4,4`, and
    * so does an even contiguous halving), and modelling `upper_bound` over the normalised splits to
-   * find out would be this module deriving llama.cpp's placement rather than formatting bench's.
-   * What is left is what bench actually knows: it packed for a light busiest card and llama.cpp is
+   * find out would be this module deriving llama.cpp's placement rather than formatting Headroom's.
+   * What is left is what Headroom actually knows: it packed for a light busiest card and llama.cpp is
    * not packing for that at all, so the panel's figure is a floor to plan against rather than an
    * estimate of what the command will produce.
    */
   return [
-    `bench packed ${counts.join(',')} layers onto the ${perDevice.length} cards, ` +
+    `Headroom packed ${counts.join(',')} layers onto the ${perDevice.length} cards, ` +
       `${unbounded.join(',')} of them attending over the whole context rather than a fixed ` +
       `window. It packed by cache weight rather than by layer count, so those two lists together — ` +
       `not the first one alone — are what the memory panel above priced.`,
@@ -362,8 +362,8 @@ function packingNotes(input: LaunchInput): readonly string[] {
       `window and this packing is a non-contiguous mixture; -ot names individual tensors, but it ` +
       `overrides where a weight lives, and a layer's KV cache follows the device -ngl and -ts put ` +
       `the layer on. So llama.cpp will divide by device memory instead — an equal number of layers ` +
-      `on identical cards — and which layers land together is then its choice rather than bench's. ` +
-      `Treat the busiest card above as a floor: bench packed to keep it as light as it could, and ` +
+      `on identical cards — and which layers land together is then its choice rather than Headroom's. ` +
+      `Treat the busiest card above as a floor: Headroom packed to keep it as light as it could, and ` +
       `llama.cpp is not packing for that at all.`,
   ];
 }
@@ -544,7 +544,7 @@ function llamaServer(input: LaunchInput): Pair {
       ? []
       : [
           `-ts proportions the -ngl window, not the model: llama.cpp puts the last ${ngl} layers ` +
-            `on GPUs and splits those by these ratios. ${split} is the split bench sized, against ` +
+            `on GPUs and splits those by these ratios. ${split} is the split Headroom sized, against ` +
             `a default that divides by device memory and therefore evenly on identical cards — ` +
             `which is the wrong answer for a model whose layers cache different amounts.`,
         ]),
@@ -597,7 +597,7 @@ function llamaBench(input: LaunchInput): Pair {
     nglNote(input, ngl),
     // The same sweep the `-ts` flag itself needed on this launcher: a measurement run at
     // llama.cpp's default split times a different placement from the one priced, and that is as
-    // true when bench cannot express its split as when it declines to repeat an even one. Saying
+    // true when Headroom cannot express its split as when it declines to repeat an even one. Saying
     // it only on the serving command left the number this panel exists to collect unqualified.
     ...(split === undefined
       ? packingNotes(input)
@@ -716,7 +716,7 @@ function ollama(input: LaunchInput): Pair {
     };
   }
 
-  const tag = `bench-${slug(model.name)}-${slug(quant.label)}`;
+  const tag = `headroom-${slug(model.name)}-${slug(quant.label)}`;
   /**
    * **Ollama's cache precision is a daemon setting, not a Modelfile parameter** (raised by Codex on
    * #164). `OLLAMA_KV_CACHE_TYPE` is read when the server starts and defaults to `f16`, so a
@@ -777,7 +777,7 @@ function ollama(input: LaunchInput): Pair {
         // failure. A footgun the previous fix introduced while fixing another. (Codex, #173.)
         `(`,
         `set -e`,
-        // A bench-specific filename, never the bare `Modelfile` this first wrote to. `cat >`
+        // A Headroom-specific filename, never the bare `Modelfile` this first wrote to. `cat >`
         // truncates unconditionally, and the directory an Ollama user runs this from is exactly the
         // one likely to already hold a Modelfile of their own — a copy-pasteable block that
         // silently destroys their file (raised by Codex on #164). `set -C` refuses to clobber even
@@ -1056,7 +1056,7 @@ function nglNote(input: LaunchInput, ngl: number): string {
     return `-ngl ${ngl} is all ${model.layers} layers plus one: llama.cpp counts the output tensor a position past the repeating blocks, so ${model.layers} would leave it on the host.`;
   }
   return (
-    `-ngl ${ngl} of ${model.layers} layers is the split bench sized, not a fraction of the model: ` +
+    `-ngl ${ngl} of ${model.layers} layers is the split Headroom sized, not a fraction of the model: ` +
     `${percentish(placement.offloadFraction)} of the weights spill to host RAM, and which layers ` +
     `stay is what decides whether that is ${ngl} or ${ngl + 2}.`
   );

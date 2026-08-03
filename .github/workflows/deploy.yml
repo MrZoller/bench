@@ -66,8 +66,8 @@ jobs:
 
       # `PAGES_BASE_PATH` is a repository variable, and `/` is the right default because that is
       # what a custom domain serves from. A Pages *project* site is served from `/<repo>/`
-      # instead, so set the variable to `/bench/` if the site is reachable at
-      # `<owner>.github.io/bench` rather than at a domain of its own. Getting this wrong produces
+      # instead, so set the variable to `/headroom/` if the site is reachable at
+      # `<owner>.github.io/headroom` rather than at a domain of its own. Getting this wrong produces
       # a blank page rather than an error, which is why it is stated here rather than inferred.
       - name: Build
         env:
