@@ -371,6 +371,113 @@ describe('a spilled recommendation is marked as one', () => {
   });
 });
 
+/**
+ * The sweep asks the verdict layer about tiers (#170).
+ *
+ * `grade()` used to plan exactly one placement per candidate, at the archetype's own scenario, and
+ * drop the candidate when that placement was `impossible`. Several archetypes are *graded* at
+ * working sizes that scenario never names — long-context's tight tier is a 64K prompt against its
+ * 128K job — so the tier that would have accepted a machine never ran.
+ *
+ * The answer was not wrong, and that is worth stating precisely: `judgeWorkloads` refuses at the top
+ * when the selected placement is impossible, so dropping the candidate and grading it `fail` say the
+ * same thing. What neither says is the useful one. A reader asking what this machine can do for long
+ * context was told nothing rather than "this one, at half the window".
+ */
+describe('a tier is reached at the scenario the tier is about', () => {
+  /**
+   * The placement the sweep plans for one of long-context's two tier prompts — the prompt plus room
+   * to answer, capped by the model, which is the window `gradedScenarios` states for it.
+   *
+   * `512` restated rather than imported, like every other test that needs it: the allowance is
+   * `verdict.ts`'s internal convention and this fails if the two ever disagree.
+   */
+  const placementAt = (c: Candidate, device: DeviceSpec, promptTokens: number) =>
+    planPlacement(
+      c.model,
+      c.quant,
+      {
+        contextTokens: Math.min(c.model.maxContext, promptTokens + 512),
+        concurrency: 1,
+        promptTokens,
+        kvPrecision: 'fp16',
+      },
+      { device, count: 1 },
+      c.runtime
+    );
+
+  it('keeps a long-context candidate whose reduced tier admits the machine', () => {
+    const list = recommend(sweep(RTX_5090, { workloadId: 'long-context' }));
+
+    /**
+     * The case the issue names, found rather than assumed: configurations sized *between* the two
+     * tier prompts, where the 128K request cannot be placed at all and the 64K one can. On a 5090
+     * the shipped catalog has a dozen — the large MoEs and the 70Bs, whose cache at 128K is over
+     * the card's ceiling however much of the weights spill.
+     */
+    const halfWindow = list.ranked.filter(
+      (c) =>
+        placementAt(c, RTX_5090, 131072).impossible && !placementAt(c, RTX_5090, 65536).impossible
+    );
+
+    expect(
+      halfWindow.length,
+      'no configuration sits between the two tier prompts, so this asserts nothing'
+    ).toBeGreaterThan(0);
+
+    // Present rather than absent, and *graded* rather than merely present: the tight tier is what
+    // accepts these machines, and it is the tier the reader came for.
+    const tight = halfWindow.filter((c) => c.fitness === 'tight');
+    expect(
+      tight.length,
+      'every candidate between the tiers failed, so no tier spoke'
+    ).toBeGreaterThan(0);
+
+    for (const c of tight) {
+      // And the sentence describes the job the machine does, not the one it cannot: the reduced
+      // tier is a smaller job, so the reason quotes the 64K it reads rather than the 128K it holds
+      // nowhere. Timing the full request here is the defect `verdict.ts` fixed one layer down.
+      expect(c.reason, `${c.model.id} ${c.quant.id}`).toMatch(/\b64K\b/);
+    }
+  });
+
+  it('carries that scenario, for every archetype, and it is one the machine can place', () => {
+    /**
+     * The row is a deep link — clicking it loads the configuration into the Bench at the scenario
+     * it was graded at. Rebuilding the archetype's own request there would send a candidate earned
+     * at a tier's reduced window to a placement the Bench cannot make, and the verdict strip under
+     * it would read `No` for the very workload the reader picked. That is #167's defect arriving
+     * through the door #170 opened, so the scenario travels with the candidate and this is what
+     * says it is a real one.
+     */
+    for (const workload of WORKLOADS) {
+      const list = recommend(sweep(RTX_5090, { workloadId: workload.id }));
+      expect(list.ranked.length, workload.id).toBeGreaterThan(0);
+
+      for (const c of list.ranked) {
+        const placement = planPlacement(
+          c.model,
+          c.quant,
+          {
+            contextTokens: c.contextTokens,
+            concurrency: 1,
+            promptTokens: c.promptTokens,
+            kvPrecision: 'fp16',
+          },
+          { device: RTX_5090, count: 1 },
+          c.runtime
+        );
+
+        const where = `${workload.id}: ${c.model.id} ${c.quant.id} ${c.runtime.id}`;
+        expect(placement.impossible, where).toBe(false);
+        expect(c.contextTokens, where).toBeLessThanOrEqual(c.model.maxContext);
+        // The prompt is part of the window, never larger than it.
+        expect(c.promptTokens, where).toBeLessThanOrEqual(c.contextTokens);
+      }
+    }
+  });
+});
+
 describe('the grade comes from the verdict layer, not from a second set of thresholds', () => {
   it('carries the verdict’s own sentence unrewritten', () => {
     const list = recommend(sweep(RTX_5090));

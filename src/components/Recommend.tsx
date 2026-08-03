@@ -6,7 +6,7 @@ import {
   recommend,
   type Candidate,
 } from '@/engine/recommend';
-import { RESPONSE_ALLOWANCE, WORKLOADS, type Fitness } from '@/engine/verdict';
+import { WORKLOADS, type Fitness } from '@/engine/verdict';
 import { MODELS, useConfig, type Config } from '@/store/config';
 import { getDevice } from '@/data/catalog';
 import { QUANTS } from '@/data/quants';
@@ -98,9 +98,11 @@ export function Recommend() {
    * Memoised on the four inputs the sweep actually reads, not on the whole config.
    *
    * The sweep is ~20ms over the shipped catalog — cheap for a selection change and not for a slider
-   * frame — and context, prompt and concurrency are none of its business: every candidate is graded
-   * at its archetype's own scenario, which is the point. Keying on `config` would re-run the whole
-   * sweep on every drag of a slider that cannot change the answer.
+   * frame — and the context and prompt sliders are none of its business: every candidate is graded
+   * at a scenario of its archetype's own, which is the point. That is the largest of the archetype's
+   * graded scenarios this machine can plan (#170) — the declared request for six of the seven, a
+   * session tier for the agent — and the reader's context setting in none of them. Keying on
+   * `config` would re-run the whole sweep on every drag of a slider that cannot change the answer.
    */
   const shortlist = useMemo(
     () =>
@@ -130,25 +132,27 @@ export function Recommend() {
    */
   const load = (candidate: Candidate) => {
     /**
-     * **The archetype's own context and prompt travel with the row** (raised by Codex on #167).
+     * **The scenario the row was graded at travels with the row** (raised by Codex on #167).
      *
      * Every candidate is graded at the scenario its workload really sends, and the row's caption
      * promises "its own numbers" — but spreading `config` kept whatever the sliders happened to
      * hold, so clicking a row scrolled to a budget bar and a verdict strip describing a different
      * job. Worse where the preserved context makes the candidate impossible: the workload the
      * reader just chose from would then read `No` on the strip below.
+     *
+     * **Read from the candidate rather than rebuilt from the archetype** (#170). That is not
+     * tidying: a candidate can be graded at a *tier's* scenario rather than the archetype's — a
+     * long-context row earned at the 64K prompt its tight tier admits, on a machine that cannot
+     * hold 128K — and reconstructing the archetype's full request here would land the reader on
+     * exactly the impossible configuration the paragraph above is about, by the other door.
      */
-    const contextTokens = Math.min(
-      candidate.model.maxContext,
-      shortlist.workload.typicalPromptTokens + RESPONSE_ALLOWANCE
-    );
     replace({
       ...config,
       modelId: candidate.model.id,
       quantId: candidate.quant.id,
       runtimeId: candidate.runtime.id,
-      contextTokens,
-      promptTokens: Math.min(contextTokens, shortlist.workload.typicalPromptTokens),
+      contextTokens: candidate.contextTokens,
+      promptTokens: candidate.promptTokens,
     } as Partial<Config>);
     // Optional on the method as well as the element, and the motion preference read here rather
     // than left to CSS — both for the reasons the Matrix's own cell handler records at length.

@@ -1,14 +1,14 @@
-import type { DeviceSpec, KvPrecision, ModelSpec, QuantSpec, RuntimeSpec } from './types';
-import { estimateScenario } from './index';
+import type {
+  DeviceSpec,
+  KvPrecision,
+  ModelSpec,
+  QuantSpec,
+  RuntimeSpec,
+  UsageSpec,
+} from './types';
+import { estimateScenario, type ScenarioEstimate } from './index';
 import { maxContextThatFits } from './placement';
-import {
-  judgeWorkloads,
-  RESPONSE_ALLOWANCE,
-  WORKLOAD_BARS,
-  WORKLOADS,
-  type Fitness,
-  type Workload,
-} from './verdict';
+import { gradedScenarios, judgeWorkloads, WORKLOADS, type Fitness, type Workload } from './verdict';
 
 /**
  * The question people actually arrive with (#138).
@@ -92,8 +92,22 @@ export interface Candidate {
   fitness: Fitness;
   /** The verdict layer's own sentence, naming the bar cleared or missed. Never rewritten here. */
   reason: string;
-  /** Per-user decode at the archetype's own scenario, not at some slider's. */
+  /**
+   * The scenario this candidate was actually graded at — the archetype's, never the reader's.
+   *
+   * The archetype's own request wherever the machine can plan it, and otherwise the largest of its
+   * tiers' scenarios that it can: see `planGraded`. **Carried rather than re-derived**, because the
+   * panel's deep link has to name it too and a second derivation of a tier ladder is what
+   * `gradedScenarios` exists to stop — it loads the row into the Bench at this scenario, and
+   * reconstructing the archetype's full request there would land a long-context recommendation
+   * earned at half the window on a configuration the Bench cannot place, which is the defect #167
+   * fixed on the other axis.
+   */
+  contextTokens: number;
+  promptTokens: number;
+  /** Per-user decode at that scenario. */
   tokensPerSec: number;
+  /** And the wait for that scenario's own prompt, which is why the two travel together. */
   ttftSeconds: number;
   /**
    * Whether this configuration only runs by spilling weights to host RAM.
@@ -281,17 +295,88 @@ function bestQuant(
 }
 
 /**
- * One configuration, graded at the archetype's own scenario.
+ * A scenario whose prompt is stated rather than inferred.
+ *
+ * `UsageSpec.promptTokens` is optional — `effectivePromptTokens` defaults it to 90% of the window —
+ * and every scenario the sweep plans names its own, so the row can carry it without a fallback that
+ * would silently describe a different request.
+ */
+type GradedUsage = UsageSpec & { promptTokens: number };
+
+/**
+ * The largest scenario this archetype is graded at that this machine can actually plan.
+ *
+ * **The sweep asks the verdict layer about tiers rather than reconstructing them here**
+ * ([#170](https://github.com/MrZoller/bench/issues/170)). It used to plan exactly one placement per
+ * candidate, at the archetype's own `typicalPromptTokens + RESPONSE_ALLOWANCE`, and several
+ * archetypes are *graded* at scenarios that one never names: long-context's `tight` tier is a
+ * 65,536-token prompt against its 131,072-token job, and the agent's two tiers carry 64K and 32K
+ * sessions against a ~16.5K turn. `gradedScenarios` is that structure, and this walks it.
+ *
+ * **Largest first, stopping at the first entry that plans**, which keeps `judgeWorkloads`' own
+ * top-level refusal exactly where it is: it fires when *no* tier's scenario loads, rather than being
+ * weakened into admitting candidates whose headline scenario is impossible.
+ *
+ * **Six of the seven plan the same window they planned before**, on any machine: their first entry
+ * *is* the archetype's declared request — the five whose tiers state no working size have only that
+ * entry, and long-context's `good` bar is that request rather than a second copy of it. The *prompt*
+ * moves on some of those rows, and in one direction only: `gradedScenarios` clamps it to a window
+ * the model has truncated, so a long-context row on a 40K model is no longer timed reading a 128K
+ * prompt it has nowhere to put. That changes `ttftSeconds`, which no ordering here reads and no
+ * surface prints, and nothing else. **The agent is the one whose window moves**, and it moves by
+ * design: its first entry is the 64K session its tiers
+ * endorse rather than its ~16.5K turn, so the placement now describes the session the verdict is
+ * about. Its *grade* does not move with it — `judgeWorkloads` takes that archetype's capacity from
+ * `runnableContextTokens` and its session from the tier bars, so it was already grading at 64K while
+ * the row's own figures came from the turn. What changes is that the two now agree.
+ *
+ * The one scenario returned is then everything the candidate is described by — the refusal basis,
+ * the `usage` `judgeWorkloads` grades against, the figures the row carries, and the placement the
+ * spill caveat is read from. Still one scenario per candidate; the correction is *which* one.
+ * Keeping two would reintroduce the defect the verdict layer's own history is a list of, where a
+ * grade and the figures printed beside it come from different working sets.
+ *
+ * `undefined` when nothing loads at any of them: `unsupported` for a pairing the runtime cannot
+ * open — which no scenario rescues, since it is a property of the model, the format and the runtime
+ * — and `impossible` for one whose cache alone is over the ceiling at every tier. Both are absences
+ * rather than low rankings, because a shortlist entry is a recommendation.
+ */
+function planGraded(
+  model: ModelSpec,
+  quant: QuantSpec,
+  runtime: RuntimeSpec,
+  workload: Workload,
+  inputs: RecommendInputs
+): { usage: GradedUsage; selected: ScenarioEstimate } | undefined {
+  const rig = { device: inputs.device, count: inputs.deviceCount };
+
+  // The model's ceiling goes *into* the question rather than onto the answer. Clamping the returned
+  // windows here would grade an archetype at a size no tier states — see `gradedScenarios`.
+  for (const tier of gradedScenarios(workload.id, model.maxContext)) {
+    const usage = {
+      contextTokens: tier.contextTokens,
+      concurrency: inputs.concurrency,
+      promptTokens: tier.promptTokens,
+      kvPrecision: inputs.kvPrecision,
+    };
+    const selected = estimateScenario({ model, quant, usage, rig, runtime });
+
+    if (selected.placement.unsupported !== undefined) return undefined;
+    if (selected.placement.impossible) continue;
+    return { usage, selected };
+  }
+
+  return undefined;
+}
+
+/**
+ * One configuration, graded at the scenario `planGraded` settled on.
  *
  * The grade comes from `judgeWorkloads` rather than from a second set of thresholds here, which is
  * the same rule the Matrix and the Bench already follow: the bar a verdict names has to be the bar
  * it was tested against. Six of the seven archetypes are discarded, which is the cost of not owning
  * a copy of the grading logic — and the engine is closed-form arithmetic, so it is a cost worth
  * paying to keep one definition of `good`.
- *
- * `undefined` when nothing loads: `unsupported` for a pairing the runtime cannot open, `impossible`
- * for one whose cache alone is over the ceiling. Both are absences rather than low rankings,
- * because a shortlist entry is a recommendation.
  */
 function grade(
   model: ModelSpec,
@@ -301,48 +386,11 @@ function grade(
   inputs: RecommendInputs
 ): Candidate | undefined {
   const rig = { device: inputs.device, count: inputs.deviceCount };
-  /**
-   * The archetype's own scenario, which is what makes this comparable with the Bench's verdict
-   * strip rather than merely similar to it. `typicalPromptTokens` plus room to answer is the window
-   * the verdict layer's own `needs` uses; going through `evaluateAt` with the archetype's numbers
-   * is what `judgeWorkloads` then does per tier.
-   */
-  const usage = {
-    contextTokens: Math.min(model.maxContext, workload.typicalPromptTokens + RESPONSE_ALLOWANCE),
-    concurrency: inputs.concurrency,
-    promptTokens: workload.typicalPromptTokens,
-    kvPrecision: inputs.kvPrecision,
-  };
+  const planned = planGraded(model, quant, runtime, workload, inputs);
+  if (planned === undefined) return undefined;
 
+  const { usage, selected } = planned;
   const scenario = { model, quant, usage, rig, runtime };
-  const selected = estimateScenario(scenario);
-  if (selected.placement.unsupported !== undefined || selected.placement.impossible)
-    return undefined;
-
-  /**
-   * The largest working set this archetype can be *graded* at, which is not always the one it is
-   * measured at.
-   *
-   * The agent tiers recommend a machine for a 32K or 64K session while the turn itself is ~16.5K,
-   * and long-context's tiers state their own prompts. So a candidate whose turn keeps every weight
-   * resident can spill at the session the verdict is actually about — and the row would then omit
-   * the host-RAM qualifier on a configuration that only runs by spilling. The spill is taken at the
-   * widest of the two, which errs towards showing the caveat. Raised by Codex on #167.
-   */
-  const bars = WORKLOAD_BARS[workload.id as keyof typeof WORKLOAD_BARS] as
-    { good?: { session?: number; prompt?: number } } | undefined;
-  const gradedContext = Math.min(
-    model.maxContext,
-    Math.max(
-      usage.contextTokens,
-      bars?.good?.session ?? 0,
-      (bars?.good?.prompt ?? 0) + RESPONSE_ALLOWANCE
-    )
-  );
-  const graded =
-    gradedContext > usage.contextTokens
-      ? estimateScenario({ ...scenario, usage: { ...usage, contextTokens: gradedContext } })
-      : selected;
 
   const verdicts = judgeWorkloads({
     selectedPlacement: selected.placement,
@@ -367,10 +415,22 @@ function grade(
     runtime,
     fitness: verdict.fitness,
     reason: verdict.reason,
+    contextTokens: usage.contextTokens,
+    promptTokens: usage.promptTokens,
     tokensPerSec: selected.decode.perUserTokensPerSec,
     ttftSeconds: selected.prefill.ttftSeconds,
-    // From the widest scenario this archetype is graded at, not from the turn — see `gradedContext`.
-    offloadFraction: Math.max(selected.placement.offloadFraction, graded.placement.offloadFraction),
+    /**
+     * From the scenario this candidate is graded at, which is the whole point of `planGraded`
+     * returning one.
+     *
+     * An agent whose ~16.5K turn keeps every weight resident can spill at the 64K session its tier
+     * endorses, and a row taking the fraction from the turn omitted the host-RAM qualifier on a
+     * configuration that only runs by spilling. That was patched on #167 by widening the reading to
+     * the archetype's largest bar; the walk supersedes the widening, and is exact where it was
+     * conservative — a candidate that reaches only the reduced tier is now described by the
+     * placement of the tier it reached, rather than by one the machine cannot hold.
+     */
+    offloadFraction: selected.placement.offloadFraction,
   };
 }
 
