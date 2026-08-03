@@ -8,7 +8,14 @@ import type {
 } from './types';
 import { estimateScenario, type ScenarioEstimate } from './index';
 import { maxContextThatFits } from './placement';
-import { gradedScenarios, judgeWorkloads, WORKLOADS, type Fitness, type Workload } from './verdict';
+import {
+  declaredConcurrency,
+  gradedScenarios,
+  judgeWorkloads,
+  WORKLOADS,
+  type Fitness,
+  type Workload,
+} from './verdict';
 
 /**
  * The question people actually arrive with (#138).
@@ -144,6 +151,22 @@ export interface Shortlist {
   runnersUp: readonly Candidate[];
   /** How many model × runtime pairs were considered, so the surface can say what it looked at. */
   pairsConsidered: number;
+  /**
+   * The user counts these grades were taken at, where the archetype declares its own — and empty
+   * where it inherits the reader's ([#172](https://github.com/MrZoller/bench/issues/172)).
+   *
+   * Carried rather than looked up beside the shortlist, on the rule this whole seam is about: the
+   * surface describing a sweep must not rebuild the tier structure to caption it. The footer named
+   * `RecommendInputs.concurrency` under every archetype, and serving is graded at four users and two
+   * whatever that says — so the one list whose subject *is* user count was captioned with a number no
+   * tier used, on the panel that most reads as a measurement.
+   *
+   * **What it does not claim is the reader's setting stopping to matter here.** `planGraded` still
+   * plans at `inputs.concurrency` for every archetype, so for serving that setting decides whether a
+   * row loads at all and what its spill caveat describes, while these counts decide the grade. Two
+   * different questions, and the caption says which is which rather than implying one answer.
+   */
+  declaredConcurrency: readonly number[];
 }
 
 export interface RecommendInputs {
@@ -158,8 +181,15 @@ export interface RecommendInputs {
    * Inherited by the six archetypes that do not declare their own, exactly as `Workloads.tsx` hands
    * it to `judgeWorkloads`. Hardcoding 1 here let the shortlist and the verdict strip grade the same
    * configuration's *batch* row differently on one page — `batchAggregate` reads `usage.concurrency`
-   * — so clicking a row landed the reader on a contradicting grade. Serving is unaffected either
-   * way: it declares its own user count per tier.
+   * — so clicking a row landed the reader on a contradicting grade.
+   *
+   * **Serving's grade is unaffected either way, and the row's figures are not**, which the first
+   * version of this note flattened into "serving is unaffected". Its tiers declare four users and
+   * two and `judgeWorkloads` re-evaluates at them whatever arrives here — so the verdict and its
+   * sentence never move with this value — but the scenario planned here is still the reader's, so
+   * this is what decides whether a serving candidate loads at all and what its spill caveat
+   * describes. `Shortlist.declaredConcurrency` is how the surface says which of the two a caption is
+   * about.
    */
   concurrency: number;
   workloadId: string;
@@ -253,7 +283,17 @@ export function recommend(inputs: RecommendInputs): Shortlist {
     runnersUp.push(c);
   }
 
-  return { workload, ranked, best, fallback, runnersUp, pairsConsidered };
+  return {
+    workload,
+    ranked,
+    best,
+    fallback,
+    runnersUp,
+    pairsConsidered,
+    // Asked of the verdict layer rather than read off `WORKLOAD_BARS` here — the same rule
+    // `gradedScenarios` is here for, on the axis that one does not express.
+    declaredConcurrency: declaredConcurrency(workload.id),
+  };
 }
 
 /**
