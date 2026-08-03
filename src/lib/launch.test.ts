@@ -902,10 +902,17 @@ describe('what review found, kept as tests', () => {
     expect(text(commands(resident).vllm.serve)).not.toContain('--cpu-offload-gb');
   });
 
-  it('starts the Ollama daemon with the cache precision, which its Modelfile cannot carry', () => {
-    // `OLLAMA_KV_CACHE_TYPE` is read at server startup and defaults to f16, so a long-context
-    // configuration that fits only because 8 bits halves the cache would OOM against a Modelfile
-    // that cannot say otherwise.
+  it('states the Ollama daemon’s cache precision as a requirement rather than commanding it', () => {
+    /**
+     * `OLLAMA_KV_CACHE_TYPE` is read at server startup and defaults to f16, so a long-context
+     * configuration that fits only because 8 bits halves the cache would OOM against a Modelfile
+     * that cannot say otherwise. The first version therefore emitted
+     * `OLLAMA_KV_CACHE_TYPE=q8_0 ollama serve &` — which does not wait for the daemon and does not
+     * notice an existing one, so the block carried on against a server still on f16 (#171). The
+     * honest fix for that is a readiness poll and a running-daemon check, and this block's value is
+     * that it is one readable invocation. So the requirement is stated, and the block does not
+     * manage a daemon at all.
+     */
     const q8 = input(
       LLAMA_31_8B,
       getQuant('q4_k_m'),
@@ -915,15 +922,88 @@ describe('what review found, kept as tests', () => {
       usage({ kvPrecision: 'q8' })
     );
     const emitted = commands(q8).ollama.serve;
-
-    expect(text(emitted)).toContain('OLLAMA_KV_CACHE_TYPE=q8_0');
     if (!emitted.ok) throw new Error('unreachable');
-    expect(emitted.notes.join(' ')).toMatch(/daemon setting rather than a Modelfile parameter/i);
 
-    // And nothing extra on the default precision, where the daemon already does the right thing.
-    expect(
-      text(commands(input(LLAMA_31_8B, getQuant('q4_k_m'), LLAMA_CPP)).ollama.serve)
-    ).not.toContain('OLLAMA_KV_CACHE_TYPE');
+    const note = emitted.notes.join(' ');
+    expect(note).toContain('OLLAMA_KV_CACHE_TYPE=q8_0');
+    expect(note).toMatch(/daemon setting rather than a Modelfile parameter/i);
+    expect(note).toMatch(/server startup/i);
+    expect(note).toMatch(/already-running daemon will not pick it up/i);
+    expect(note).toMatch(/defaulting to f16/i);
+    // The reader has to know the figures describe *that* daemon, or the note is trivia.
+    expect(note).toMatch(/figures above are sized for a q8_0 cache/i);
+
+    // And the block itself neither starts a server nor sets the variable — the two halves that
+    // would make it a lifecycle script rather than a command.
+    expect(emitted.text).not.toContain('ollama serve');
+    expect(emitted.text).not.toContain('OLLAMA_KV_CACHE_TYPE');
+
+    // Nothing at all on the default precision, where the daemon already does the right thing —
+    // neither in the block nor as a note about a variable this scenario does not need.
+    const f16 = commands(input(LLAMA_31_8B, getQuant('q4_k_m'), LLAMA_CPP)).ollama.serve;
+    if (!f16.ok) throw new Error('unreachable');
+    expect(f16.text).not.toContain('ollama serve');
+    expect(f16.text).not.toContain('OLLAMA_KV_CACHE_TYPE');
+    expect(f16.notes.join(' ')).not.toContain('OLLAMA_KV_CACHE_TYPE');
+  });
+
+  it('refuses the Ollama form when the scenario prices more than one user', () => {
+    /**
+     * `planPlacement` charges KV and activations for every simultaneous user, and the Modelfile
+     * carries only `num_ctx`. Ollama's parallelism is `OLLAMA_NUM_PARALLEL`, read by the daemon at
+     * startup — so a Modelfile this surface can write sizes memory for one user against a panel
+     * that priced eight (#171). Same polarity as the MLX cache-precision refusal: a command that
+     * cannot reproduce the placement is not a command.
+     */
+    const many = input(
+      LLAMA_31_8B,
+      getQuant('q4_k_m'),
+      LLAMA_CPP,
+      RTX_5090,
+      1,
+      usage({ concurrency: 8 })
+    );
+
+    const refused = reason(commands(many).ollama.serve);
+    expect(refused).toContain('OLLAMA_NUM_PARALLEL');
+    // And it points at the launcher that does take the count on the one command, rather than
+    // leaving the reader with a surface and no way to use it.
+    expect(refused).toContain('llama-server');
+    expect(refused).toContain('-np 8');
+
+    // The sibling launcher still emits, which is what makes the refusal navigation rather than a
+    // dead end: the same scenario has a command, on the surface that can express it.
+    expect(text(commands(many)['llama-server'].serve)).toContain('-np 8');
+
+    // The measurement half is untouched by the user count — it refuses for its own reason.
+    expect(reason(commands(many).ollama.measure)).toMatch(/no benchmark client/i);
+  });
+
+  it('still emits the Ollama block for a single user, quantized cache and all', () => {
+    // The refusal is keyed on concurrency alone. A quantized cache at one user is the case the
+    // note exists for, and it must not have been swept up by the parallelism refusal.
+    const one = input(
+      LLAMA_31_8B,
+      getQuant('q4_k_m'),
+      LLAMA_CPP,
+      RTX_5090,
+      1,
+      usage({ concurrency: 1, kvPrecision: 'q8' })
+    );
+    const emitted = commands(one).ollama.serve;
+    if (!emitted.ok) throw new Error('unreachable');
+
+    expect(emitted.text).toMatch(/ollama create .+ && ollama run /);
+    expect(emitted.notes.join(' ')).toContain('OLLAMA_KV_CACHE_TYPE=q8_0');
+
+    // The quantized-cache branch is the one the `ollama serve &` line was removed from, so the
+    // four fixes it sat above are asserted here as well as on the f16 block: the subshell, `set -e`,
+    // `set -C` and the bench-specific filename.
+    const lines = emitted.text.split('\n');
+    expect(lines[0]).toBe('(');
+    expect(lines[1]).toBe('set -e');
+    expect(emitted.text.trimEnd().endsWith(')')).toBe(true);
+    expect(emitted.text).toMatch(/\(set -C; cat > bench-[a-z0-9-]+\.Modelfile\)/);
   });
 
   it('does not run a stale Modelfile after refusing to overwrite one', () => {

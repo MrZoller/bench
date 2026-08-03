@@ -40,10 +40,11 @@ for recommend, #168 for detect, #169 for calibrate — and what each turned out 
 two more (#180, #181) came out of reviewing _this section_ a day later; they are in **Open
 questions**, and two of the first six share one root.
 
-What remains is a naming decision, **six open issues of which five are work** — the six filed
+What remains is a naming decision, **five open issues of which four are work** — the six filed
 during the pass, less [#165](https://github.com/MrZoller/bench/issues/165),
-[#166](https://github.com/MrZoller/bench/issues/166) and
-[#170](https://github.com/MrZoller/bench/issues/170), which are fixed, plus
+[#166](https://github.com/MrZoller/bench/issues/166),
+[#170](https://github.com/MrZoller/bench/issues/170) and
+[#171](https://github.com/MrZoller/bench/issues/171), which are fixed, plus
 [#180](https://github.com/MrZoller/bench/issues/180) and
 [#181](https://github.com/MrZoller/bench/issues/181), which came out of reviewing this very
 document, plus [#182](https://github.com/MrZoller/bench/issues/182), which is the half of #165 that
@@ -399,6 +400,40 @@ command produces a row bench marks unusable** — the likeliest path a reader ta
 feature. It is filed rather than patched because calibrate's expectation is not reachable by any
 command at all (`-d 32768 -n 512` does not fit a 32K window), which makes it a question about what
 `estimateDecode` should charge rather than about either panel's arithmetic.
+
+**And the Ollama block stopped managing a daemon**
+([#171](https://github.com/MrZoller/bench/issues/171), from Codex on #164), **which is one issue
+answered in two directions at once.** It emitted `OLLAMA_KV_CACHE_TYPE=<type> ollama serve &` ahead
+of the Modelfile whenever the scenario used a quantized cache — a line that neither waits for the
+daemon nor notices an existing one. `ollama serve` fails to bind against a server already listening,
+so on the machine most likely to be running Ollama it started nothing and everything after it ran
+against a daemon still on the default `f16`. That is the placement the panel did not price. The issue
+was filed rather than patched because fixing it honestly means a readiness poll, a running-daemon
+check and possibly a `pkill`, in a block whose whole value is that it is one readable invocation
+people run without reading.
+
+**The two halves resolved opposite ways, and the split is the transferable part.** The cache
+precision is _stated_: the line is gone, the block starts no server at all, and the note says to
+start your own daemon with `OLLAMA_KV_CACHE_TYPE=<type>` — read once at startup, defaulting to
+`f16`, not picked up by a daemon already running. Concurrency is _refused_: `planPlacement` charges
+KV and activations for `usage.concurrency` users while the Modelfile carries only `num_ctx`, and
+Ollama takes parallelism as `OLLAMA_NUM_PARALLEL` on the daemon — so every Modelfile this surface can
+write sizes memory for one user against a panel that priced several. `llama-server` takes the same
+quantity as `-np N` on the one command, which is where the refusal points.
+
+**What decides between the two is whether the reader can act on the sentence.** "Restart your daemon
+with this variable" is a complete instruction, and the emitted block is still true after it. "Your
+Modelfile will be sized for one user" is a caveat printed beside a copy button for a command that
+stays wrong however carefully it is read — which is the shape the MLX cache-precision refusal was
+already settled against on #164. The polarity is not a judgement about how severe the gap is.
+
+**The subshell and `set -e` stay, and that is not a leftover.** They were never about the daemon:
+`set -e` is there because a heredoc cannot be `&&`-chained to what follows it, so a `set -C`
+noclobber refusal would otherwise fall through to an `ollama create` against the reader's _old_
+Modelfile, and the subshell is there so `set -e` does not survive into their interactive shell. Two
+separate Codex findings on #164 and #173, at the same four lines. Deleting a line from the top of a
+block does not retire the guards under it, and the tests now assert both on the quantized-cache
+branch specifically, since that is the branch the removal touched.
 
 One thing to watch that is not a bug yet: **`RuntimeSpec.preallocFraction` is 0.9 and vLLM's own
 `gpu_memory_utilization` default has moved to 0.92.** The emitter states `--gpu-memory-utilization
@@ -1900,9 +1935,9 @@ Correctness follow-ups live in
 [the repository's open issues](https://github.com/MrZoller/bench/issues). This section is for the
 questions those issues cannot settle, and the three tables below are the record of the fourteen
 findings filed rather than patched — six out of the July sweep, all now closed; six out of the v2
-pass, of which #165, #166 and #170 are now closed too; and two more out of _documenting_ the v2 pass,
-which is its own entry. Five of the last two are open, plus #182, which #165 split off rather than
-fold in.
+pass, of which #165, #166, #170 and #171 are now closed too; and two more out of _documenting_ the v2
+pass, which is its own entry. Four of those last eight are open, plus #182, which #165 split off
+rather than fold in.
 They are kept because what a finding turns out to need is repeatedly not what the issue said it
 would be.
 
@@ -1938,11 +1973,11 @@ made that visible; the measurements survived and the framings mostly did not.
 
 ### The six filed out of the v2 pass, 1 August 2026
 
-Same rule, same shape, and **three of the six are open — of which two are work.** #165 is fixed, and
+Same rule, same shape, and **two of the six are open — of which one is work.** #165 is fixed, and
 split in two on the way; #166 is fixed, and the capability gap it recorded turned out to be
-llama.cpp's rather than bench's; #170 is fixed, and moved the seam it was filed about; the rest each
-carry a measurement; two carry an argument rather than
-a repair; and #174 is open purely as the
+llama.cpp's rather than bench's; #170 is fixed, and moved the seam it was filed about; #171 is fixed,
+and its two halves were answered in opposite directions. What is left carries a measurement and an
+argument — #172 is the work, and #174 is open purely as the
 written argument for a decision already taken, which is why the counts elsewhere in this file exclude
 it from what stands between here and v3. An issue can be a record. Closing it would lose the
 reasoning, and counting it would invent a task.
@@ -1953,7 +1988,7 @@ reasoning, and counting it would invent a task.
 | [#166](https://github.com/MrZoller/bench/issues/166) the assignment discards _which_ layers       | **Fixed**, and its second half was answered rather than built. `DeviceShare.layerIndices` records which layers a card holds; the flag the issue hoped for does not exist, because `-ot` overrides where a _weight_ lives while a layer's cache follows the `-ngl`/`-ts` split — see above. The panel states the packing instead: `2,2,2,21,21` layers against `2,2,2,1,1` full-attention ones |
 | [#170](https://github.com/MrZoller/bench/issues/170) tiers graded at scenarios never planned      | **Fixed**, and the seam moved rather than the arithmetic. `gradedScenarios` states the tier structure and the sweep walks it, largest first, stopping at the first scenario the machine can plan — 269 long-context rows across the 43 shipped devices are now graded at the reduced tier, 161 of them `tight`, and no row that already had an answer changed it                              |
 | [#172](https://github.com/MrZoller/bench/issues/172) the caveat describes the wrong tier          | Same root. A `tight` recommendation can carry the `good` tier's spill caveat, the fallback can rank by a rate no tier measured, and the serving footer names the reader's concurrency where that archetype grades at its own                                                                                                                                                                  |
-| [#171](https://github.com/MrZoller/bench/issues/171) the Ollama block and the daemon              | `ollama serve &` does not wait, does not notice an existing daemon still on the default `f16` cache, and configures no `OLLAMA_NUM_PARALLEL`. Both fixes push a copy-pasteable block into daemon lifecycle management, which is a different kind of command from the rest of the panel                                                                                                        |
+| [#171](https://github.com/MrZoller/bench/issues/171) the Ollama block and the daemon              | **Fixed**, and the two halves went opposite ways. The block emits no `ollama serve` at all now, and the cache precision is stated as a requirement the reader's own daemon has to meet; concurrency is a refusal, since `OLLAMA_NUM_PARALLEL` is a daemon setting and `llama-server` takes the same quantity as `-np N` on the one command                                                    |
 | [#174](https://github.com/MrZoller/bench/issues/174) one adapter on a dual-GPU machine            | Filed as the argument. Preferring the discrete card is the answer for a tool that prices inference, not half of "combine both preferences" — and combining would widen the shortlist to two vendors                                                                                                                                                                                           |
 
 **The six group into three pairs, which is the useful way to read them.** Two are the engine
@@ -1969,7 +2004,9 @@ and moving that seam inside a PR about a panel is how a root cause gets its thir
 pair is a pair only in this table** — a daemon's lifecycle and a dual-GPU policy share nothing but
 the sentence they are listed in, #174 is already answered rather than open work, and coupling them
 would be the same over-generalisation this file keeps warning about, arriving in the paragraph that
-warns about it. (Caught by Codex on #175.)
+warns about it. (Caught by Codex on #175.) **And the daemon half then answered itself in two
+directions**, which is the last of the pairing arguments to come apart: one issue, one file, and a
+note on one half against a refusal on the other. See **Launch commands**, above.
 
 **The first of those pairs then did not need fixing as a pair, and #165 split in half instead.** The
 half that shipped is the one its own verification note demanded, and it touched `layerSplitBins`
