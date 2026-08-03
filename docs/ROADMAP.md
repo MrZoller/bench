@@ -40,7 +40,7 @@ for recommend, #168 for detect, #169 for calibrate — and what each turned out 
 two more (#180, #181) came out of reviewing _this section_ a day later; they are in **Open
 questions**, and two of the first six share one root.
 
-What remains is a naming decision, **four open issues of which three are work** — the six filed
+What remains is a naming decision, **three open issues, all of them work** — the six filed
 during the pass, less [#165](https://github.com/MrZoller/bench/issues/165),
 [#166](https://github.com/MrZoller/bench/issues/166),
 [#170](https://github.com/MrZoller/bench/issues/170),
@@ -49,7 +49,7 @@ during the pass, less [#165](https://github.com/MrZoller/bench/issues/165),
 [#180](https://github.com/MrZoller/bench/issues/180) and
 [#181](https://github.com/MrZoller/bench/issues/181), which came out of reviewing this very
 document, plus [#182](https://github.com/MrZoller/bench/issues/182), which is the half of #165 that
-its own verification note said not to fold in, less #174, which is open as a record of a decision
+its own verification note said not to fold in, less #174, which is closed as a record of a decision
 already made rather than as a task —
 and **two loose ends that are on `main` and in no issue at all**: a `LLAMA_KV_TYPES`
 mapping duplicated between `Calibrate.tsx` and `launch.ts` under a comment saying the two must be
@@ -711,11 +711,14 @@ written down.
 Deliberately absent, and not forgotten: cloud pricing stays out of scope per the settled decision
 below, and fine-tuning memory (LoRA/QLoRA) is a second engine rather than a feature — real demand,
 weak incumbents, and deliberately not attempted before guided mode shipped. Now that it has, that is
-the v3-scale bet. What stands between here and it is **five** of the six issues in **Open
-questions** — the three still open from the pass plus #180, #181 and #182, one of them a P1 on the
-path a reader is most likely to take, and [#174](https://github.com/MrZoller/bench/issues/174) not
-among them: it is open as a _record_ of an answered policy question rather than as work, and
-counting it as a blocker would make a settled decision look like a task.
+the v3-scale bet. What stands between here and it is **#180, #181 and #182**. The six issues in
+**Open questions** are all resolved as of 3 August 2026 — five fixed, and
+[#174](https://github.com/MrZoller/bench/issues/174) closed as a _record_ of an answered policy
+question rather than as work. What is left is #180 and #181, which came out of reviewing this very
+document, and #182, which is the half of #165 its own verification note said not to fold in — a
+different provenance from the other two, and worth keeping straight. One of the three is a P1 on the
+path a reader is most likely to take. Counting #174 as a blocker would have made a settled decision
+look like a task, which is why no count here ever did.
 
 ## Deployment
 
@@ -1955,9 +1958,9 @@ Correctness follow-ups live in
 [the repository's open issues](https://github.com/MrZoller/bench/issues). This section is for the
 questions those issues cannot settle, and the three tables below are the record of the fourteen
 findings filed rather than patched — six out of the July sweep, all now closed; six out of the v2
-pass, of which #165, #166, #170, #171 and #172 are now closed too; and two more out of _documenting_
-the v2 pass, which is its own entry. Three of those last eight are open, plus #182, which #165 split
-off rather than fold in.
+pass, of which #165, #166, #170, #171 and #172 are now closed too, and #174 closed as a record
+rather than as work; and two more out of _documenting_ the v2 pass, which is its own entry. Two of
+those last eight are open, plus #182, which #165 split off rather than fold in.
 They are kept because what a finding turns out to need is repeatedly not what the issue said it
 would be.
 
@@ -1993,23 +1996,29 @@ made that visible; the measurements survived and the framings mostly did not.
 
 ### The six filed out of the v2 pass, 1 August 2026
 
-Same rule, same shape, and **one of the six is open, and it is not work.** #165 is fixed, and split
-in two on the way; #166 is fixed, and the capability gap it recorded turned out to be llama.cpp's
-rather than bench's; #170 is fixed, and moved the seam it was filed about; #171 is fixed, and its two
-halves were answered in opposite directions; #172 is fixed, and two thirds of it were already closed
-by #170 before anyone looked. What is left is #174, open purely as the
-written argument for a decision already taken, which is why the counts elsewhere in this file exclude
-it from what stands between here and v3. An issue can be a record. Closing it would lose the
-reasoning, and counting it would invent a task.
+Same rule, same shape, and **all six are now resolved, but one of them was never work.** #165 is
+fixed, and split in two on the way; #166 is fixed, and the capability gap it recorded turned out to
+be llama.cpp's rather than bench's; #170 is fixed, and moved the seam it was filed about; #171 is
+fixed, and its two halves were answered in opposite directions; #172 is fixed, and two thirds of it
+were already closed by #170 before anyone looked — verified against `main` rather than taken on
+report. #174 is **closed as answered rather than fixed**, being the written argument for a decision
+already taken, which is why the counts elsewhere in this file never counted it against v3.
 
-| filed                                                                                             | what it is                                                                                                                                                                                                                                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [#165](https://github.com/MrZoller/bench/issues/165) resident layers charge the non-layer tensors | **Fixed**, and it turned out to be two issues rather than one — see below. The count divides `layerWeightBytes`; every byte figure is bit-identical to before it; `-ngl` drops on 7.9% of the catalog's configurations, by a median of 1 layer and never rises. The byte assignment those tensors get is [#182](https://github.com/MrZoller/bench/issues/182)                                 |
-| [#166](https://github.com/MrZoller/bench/issues/166) the assignment discards _which_ layers       | **Fixed**, and its second half was answered rather than built. `DeviceShare.layerIndices` records which layers a card holds; the flag the issue hoped for does not exist, because `-ot` overrides where a _weight_ lives while a layer's cache follows the `-ngl`/`-ts` split — see above. The panel states the packing instead: `2,2,2,21,21` layers against `2,2,2,1,1` full-attention ones |
-| [#170](https://github.com/MrZoller/bench/issues/170) tiers graded at scenarios never planned      | **Fixed**, and the seam moved rather than the arithmetic. `gradedScenarios` states the tier structure and the sweep walks it, largest first, stopping at the first scenario the machine can plan — 269 long-context rows across the 43 shipped devices are now graded at the reduced tier, 161 of them `tight`, and no row that already had an answer changed it                              |
-| [#172](https://github.com/MrZoller/bench/issues/172) the caveat describes the wrong tier          | **Fixed**, and two of its three findings were already closed by #170 — verified rather than assumed, then pinned by tests that did not exist. The third is the axis `gradedScenarios` deliberately does not express: `declaredConcurrency` states serving's four users and two, and the footer names those rather than the reader's own                                                       |
-| [#171](https://github.com/MrZoller/bench/issues/171) the Ollama block and the daemon              | **Fixed**, and the two halves went opposite ways. The block emits no `ollama serve` at all now, and the cache precision is stated as a requirement the reader's own daemon has to meet; concurrency is a refusal, since `OLLAMA_NUM_PARALLEL` is a daemon setting and `llama-server` takes the same quantity as `-np N` on the one command                                                    |
-| [#174](https://github.com/MrZoller/bench/issues/174) one adapter on a dual-GPU machine            | Filed as the argument. Preferring the discrete card is the answer for a tool that prices inference, not half of "combine both preferences" — and combining would widen the shortlist to two vendors                                                                                                                                                                                           |
+This paragraph used to say the opposite — that closing it would lose the reasoning, so it should stay
+open as a record. Chris closed it on 3 August 2026, and the objection does not survive contact: the
+argument lives here, in the entry below and in the two paragraphs above about `readSignals`, and a
+closed issue stays readable. An open issue that is not a task is a worse record than a closed one
+next to the reasoning, because every later count has to remember to except it — as the sentence at
+the top of this file had to.
+
+| filed                                                                                             | what it is                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [#165](https://github.com/MrZoller/bench/issues/165) resident layers charge the non-layer tensors | **Fixed**, and it turned out to be two issues rather than one — see below. The count divides `layerWeightBytes`; every byte figure is bit-identical to before it; `-ngl` drops on 7.9% of the catalog's configurations, by a median of 1 layer and never rises. The byte assignment those tensors get is [#182](https://github.com/MrZoller/bench/issues/182)                                                 |
+| [#166](https://github.com/MrZoller/bench/issues/166) the assignment discards _which_ layers       | **Fixed**, and its second half was answered rather than built. `DeviceShare.layerIndices` records which layers a card holds; the flag the issue hoped for does not exist, because `-ot` overrides where a _weight_ lives while a layer's cache follows the `-ngl`/`-ts` split — see above. The panel states the packing instead: `2,2,2,21,21` layers against `2,2,2,1,1` full-attention ones                 |
+| [#170](https://github.com/MrZoller/bench/issues/170) tiers graded at scenarios never planned      | **Fixed**, and the seam moved rather than the arithmetic. `gradedScenarios` states the tier structure and the sweep walks it, largest first, stopping at the first scenario the machine can plan — 269 long-context rows across the 43 shipped devices are now graded at the reduced tier, 161 of them `tight`, and no row that already had an answer changed it                                              |
+| [#172](https://github.com/MrZoller/bench/issues/172) the caveat describes the wrong tier          | **Fixed**, and two of its three findings were already closed by #170 — verified rather than assumed, then pinned by tests that did not exist. The third is the axis `gradedScenarios` deliberately does not express: `declaredConcurrency` states serving's four users and two, and the footer names those rather than the reader's own                                                                       |
+| [#171](https://github.com/MrZoller/bench/issues/171) the Ollama block and the daemon              | **Fixed**, and the two halves went opposite ways. The block emits no `ollama serve` at all now, and the cache precision is stated as a requirement the reader's own daemon has to meet; concurrency is a refusal, since `OLLAMA_NUM_PARALLEL` is a daemon setting and `llama-server` takes the same quantity as `-np N` on the one command                                                                    |
+| [#174](https://github.com/MrZoller/bench/issues/174) one adapter on a dual-GPU machine            | **Closed as answered**, not fixed. Preferring the discrete card is the answer for a tool that prices inference, not half of "combine both preferences" — and combining would widen the shortlist to two vendors with no ranking rule between them. The third state it floats — _"your browser reports two GPUs; which one do you want to price?"_ — stays unbuilt for want of a count of how often it matters |
 
 **The six group into three pairs, which is the useful way to read them.** Two are the engine
 exporting a layer _count_ where what matters is which layers and what is in them (#165, #166). Two
