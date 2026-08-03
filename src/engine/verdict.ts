@@ -354,6 +354,39 @@ export function gradedScenarios(
   return [...scenarios.values()].sort((a, b) => b.contextTokens - a.contextTokens);
 }
 
+/**
+ * The user counts an archetype's tiers declare for themselves, `good` first — empty for the six that
+ * inherit the reader's ([#172](https://github.com/MrZoller/bench/issues/172)).
+ *
+ * The companion to `gradedScenarios` on the axis that one deliberately does not express, and it
+ * exists for the same reason: **a caller describing this sweep has to be able to ask what the grades
+ * were taken at, rather than reaching into `WORKLOAD_BARS` and rebuilding the tier structure at the
+ * call site.** The recommendation panel's footer named the reader's own concurrency under a serving
+ * shortlist whose every grade came from four users and two — so the one archetype whose *subject* is
+ * user count had its list captioned with a number no tier used.
+ *
+ * **A list rather than a single count**, because both tiers are graded on every candidate: `good` at
+ * four users and `tight` at two, and a caption naming one of them would be describing half the sweep.
+ * Empty rather than `[1]` or `[reader]` for the other six, so a caller can tell "this archetype
+ * declares its own" from "this archetype happens to be graded at one user" without comparing numbers
+ * — the six really do inherit, and `RecommendInputs.concurrency` is the value they inherit.
+ *
+ * **Not folded into `GradedScenario`**, which is a working size and would then have to carry a user
+ * count too. That would not be a wider interface, it would be a different decision: a caller planning
+ * at four users plans the *load gate* at four users as well, and the reader's own configuration
+ * staying authoritative over what loads is stated in `judgeWorkloads`' top-level refusal and argued
+ * there. This says what the grades used. It does not move what the sweep plans.
+ */
+export function declaredConcurrency(id: string): readonly number[] {
+  // `workload` first, on the same reasoning as `gradedScenarios`: an id this file does not know
+  // throws here rather than reading a property off `undefined` two lines down.
+  workload(id);
+  const bars = WORKLOAD_BARS[id as keyof typeof WORKLOAD_BARS];
+  // `good` before `tight`, which for a lower-bound bar is also largest first — the same ordering
+  // `gradedScenarios` hands back, so a caller printing either reads them in one direction.
+  return [bars.good, bars.tight].flatMap((tier) => ('users' in tier ? [tier.users] : []));
+}
+
 export interface VerdictInputs {
   /**
    * The selected configuration's placement, used for one thing only: deciding whether anything

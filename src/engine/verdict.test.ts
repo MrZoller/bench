@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  declaredConcurrency,
   gradedScenarios,
   judgeWorkloads,
   WORKLOADS,
@@ -1822,6 +1823,67 @@ describe('the scenarios an archetype is graded at', () => {
 
   it('refuses an archetype it does not have', () => {
     expect(() => gradedScenarios('telepathy')).toThrow(/Unknown workload/);
+  });
+
+  /**
+   * The same structure on the axis `gradedScenarios` deliberately leaves out (#172).
+   *
+   * Serving's tiers differ in *users* rather than in working size, and a caller describing this
+   * sweep needs to be able to say so — the recommendation panel's footer named the reader's own
+   * concurrency under a serving shortlist whose every grade came from four users and two.
+   */
+  describe('and the user counts they are graded at', () => {
+    it('states serving’s two, in tier order', () => {
+      expect(declaredConcurrency('serving')).toEqual([
+        WORKLOAD_BARS.serving.good.users,
+        WORKLOAD_BARS.serving.tight.users,
+      ]);
+    });
+
+    it('is empty for the six that inherit the reader’s, rather than restating it', () => {
+      // Empty rather than `[usage.concurrency]`, so a caller can tell "declares its own" from
+      // "happens to be graded at one user" without comparing numbers.
+      for (const w of WORKLOADS.filter((w) => w.id !== 'serving')) {
+        expect(declaredConcurrency(w.id), w.id).toEqual([]);
+      }
+    });
+
+    it('refuses an archetype it does not have', () => {
+      expect(() => declaredConcurrency('telepathy')).toThrow(/Unknown workload/);
+    });
+
+    /**
+     * **The contract rather than a restatement of the table**, in both directions: every count this
+     * states is one `judgeWorkloads` really grades at, and every count it grades at is either this
+     * or the reader's own. A caption resting on the first half would be false if a tier moved; a
+     * caller trusting the second would miss an archetype that started declaring its own.
+     */
+    it('names exactly the user counts judgeWorkloads does not take from the reader', () => {
+      const inherited = 9;
+      const asked: number[] = [];
+      judgeWorkloads({
+        selectedPlacement: RESIDENT,
+        usage: {
+          contextTokens: 4096,
+          concurrency: inherited,
+          promptTokens: 512,
+          kvPrecision: 'fp16',
+        },
+        maxContextTokens: 200_000,
+        runnableContextTokens: 200_000,
+        evaluateAt: (_prompt, _context, _prefix, concurrency) => {
+          asked.push(concurrency);
+          return { placement: RESIDENT, ...STUB_SPEED };
+        },
+      });
+
+      const declared = WORKLOADS.flatMap((w) => declaredConcurrency(w.id));
+      expect(new Set(asked)).toEqual(new Set([inherited, ...declared]));
+      // And the declared half really was reached, or the equality above holds because nothing
+      // declared anything.
+      expect(declared.length).toBeGreaterThan(0);
+      for (const users of declared) expect(asked, `${users} users`).toContain(users);
+    });
   });
 
   /**

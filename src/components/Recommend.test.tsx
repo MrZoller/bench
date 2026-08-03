@@ -59,6 +59,31 @@ describe('the shortlist', () => {
     ).toBeInTheDocument();
   });
 
+  it('names the user counts the archetype declares, where it declares its own', async () => {
+    /**
+     * Serving's tiers are graded at four users and two whatever the slider says, so a footer
+     * printing the reader's own count over that list named a number no grade in it used — on the
+     * one archetype whose whole subject is user count (#172).
+     *
+     * The setting is still named, because it has not stopped mattering: the sweep plans every
+     * placement at it, so it decides which rows load at all. What changed is that the sentence says
+     * which of the two questions it answers.
+     */
+    const user = userEvent.setup();
+    useConfig.getState().replace({ ...DEFAULT_CONFIG, concurrency: 12 });
+    render(<Recommend />);
+    await user.selectOptions(within(panel()).getByLabelText(/ranked for/i), 'serving');
+
+    expect(
+      within(panel()).getByText(/at the 4 and 2 users multi-user serving declares for itself/)
+    ).toBeInTheDocument();
+    expect(
+      within(panel()).getByText(/user count above decides what loads here, not what grades/)
+    ).toBeInTheDocument();
+    // And not the reader's, in the position that used to claim the grades came from it.
+    expect(within(panel()).queryByText(/cache at 12 users/)).not.toBeInTheDocument();
+  });
+
   it('names the cache width per precision, not as a two-way split', () => {
     // The first version's ternary mapped every non-FP16 precision to "8-bit", so a Q4 selection
     // made the footer misstate an axis the ranking used.

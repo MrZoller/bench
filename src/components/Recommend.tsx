@@ -74,6 +74,21 @@ const CACHE_WIDTHS: Record<string, string> = {
   q4: '4-bit',
 };
 
+/** A user count in words, since one of them is not plural-agnostic. */
+const usersWord = (n: number) => (n === 1 ? 'one user' : `${n} users`);
+
+/**
+ * The user counts an archetype declares, listed — `[4, 2]` reads "4 and 2".
+ *
+ * Both tiers, because both are graded on every candidate and naming one would describe half the
+ * sweep. Written as a list rather than as a pair so the sentence does not have to be rewritten if a
+ * third tier is ever declared; the engine hands them over in tier order.
+ */
+const userCounts = (counts: readonly number[]) =>
+  counts.length < 2
+    ? counts.join('')
+    : `${counts.slice(0, -1).join(', ')} and ${counts[counts.length - 1]}`;
+
 export function Recommend() {
   const headingId = useId();
   const config = useConfig();
@@ -225,10 +240,39 @@ export function Recommend() {
               non-FP16 precision to "8-bit", so selecting Q4 under llama.cpp made the footer
               misstate an axis the ranking used — a regression introduced by the fix for the
               runtime-specific label it replaced. Raised by Codex on #167. */}
-          {device.name} with a {CACHE_WIDTHS[config.kvPrecision]} cache at{' '}
-          {deferredConcurrency === 1 ? 'one user' : `${deferredConcurrency} users`}, each graded at
-          the prompt its own workload sends. Change the hardware, the cache or the user count above
-          and the list moves.
+          {device.name} with a {CACHE_WIDTHS[config.kvPrecision]} cache
+          {/**
+           * **The user count is the sweep's only axis an archetype can override, so the caption asks
+           * which one it got** (#172).
+           *
+           * Six inherit the reader's setting and this reads as it always did. Serving does not: its
+           * tiers are graded at four users and two, so a footer saying "at 12 users" over a serving
+           * shortlist named a number every grade in that list ignored — on the one archetype whose
+           * whole subject is user count, and on the panel that most reads as a measurement.
+           *
+           * The setting is still named rather than dropped, because it has not stopped mattering
+           * here: the sweep plans every placement at it, so it decides which serving rows load at
+           * all and what their host-RAM caveats describe. Saying which of the two questions it
+           * answers is the honest version — the alternative, printing one count and letting the
+           * reader assume it did both jobs, is the defect in the other direction.
+           *
+           * Read off the shortlist rather than from `WORKLOAD_BARS`, so this cannot state a tier
+           * structure the sweep did not use.
+           */}
+          {shortlist.declaredConcurrency.length === 0 ? (
+            <>
+              {' '}
+              at {usersWord(deferredConcurrency)}, each graded at the prompt its own workload sends.
+            </>
+          ) : (
+            <>
+              , each graded at the prompt its own workload sends — and at the{' '}
+              {userCounts(shortlist.declaredConcurrency)} users{' '}
+              {shortlist.workload.label.toLowerCase()} declares for itself. The user count above
+              decides what loads here, not what grades.
+            </>
+          )}{' '}
+          Change the hardware, the cache or the user count above and the list moves.
         </p>
       </div>
     </section>

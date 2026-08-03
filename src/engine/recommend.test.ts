@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { recommend, type Candidate, type RecommendInputs } from './recommend';
 import { planPlacement } from './placement';
-import { WORKLOADS } from './verdict';
+import { estimateScenario } from './index';
+import { WORKLOADS, WORKLOAD_BARS } from './verdict';
 import { MODELS, getDevice } from '@/data/catalog';
 import { QUANTS, getQuant } from '@/data/quants';
 import { RUNTIMES } from '@/data/runtimes';
@@ -315,6 +316,47 @@ describe('"nothing" is a wrong answer when something runs', () => {
     ).toBeGreaterThan(fastestRanked);
   });
 
+  /**
+   * And it ranks by a rate that was actually measured somewhere (#172).
+   *
+   * `FALLBACK_RULE` promises the fastest configuration that loads, and the rate deciding that used
+   * to come from the archetype's own turn — ~16.5K tokens for an agent — while the verdict layer had
+   * evaluated the candidate at a 32K or 64K session. Decode slows as the cache grows, so the two are
+   * different numbers on the same row, and the ordering was over one the reader is never shown and
+   * no tier ever graded.
+   */
+  it('ranks by the rate at the tier the candidate was graded at, not at the archetype’s turn', () => {
+    const list = recommend(sweep(small, { workloadId: 'agent' }));
+    const fallback = list.fallback;
+    expect(fallback).toBeDefined();
+
+    const rateAt = (contextTokens: number, promptTokens: number) =>
+      estimateScenario({
+        model: fallback!.model,
+        quant: fallback!.quant,
+        runtime: fallback!.runtime,
+        usage: { contextTokens, promptTokens, concurrency: 1, kvPrecision: 'fp16' },
+        rig: { device: small, count: 1 },
+      }).decode.perUserTokensPerSec;
+
+    // The scenario the candidate carries is the one its rate was measured at — the agent's 64K
+    // session here, since this machine can plan it.
+    expect(fallback!.contextTokens).toBe(WORKLOAD_BARS.agent.good.session);
+    expect(fallback!.tokensPerSec).toBe(rateAt(fallback!.contextTokens, fallback!.promptTokens));
+
+    /**
+     * The falsifiable half: the archetype's own turn is a *different* rate on this configuration —
+     * 11.6 tok/s against 6.7 — so an ordering taken there is an ordering over a speed no tier
+     * measured. Asserted as a direction rather than a band, because it is one: a smaller window
+     * decodes at least as fast, which `verdict.test.ts` pins over the whole catalog.
+     */
+    const turn = Math.min(fallback!.model.maxContext, 16384 + 512);
+    expect(
+      rateAt(turn, 16384),
+      'the turn and the session measure the same rate here, so this asserts nothing'
+    ).toBeGreaterThan(fallback!.tokensPerSec);
+  });
+
   it('does not offer a fallback when something already clears', () => {
     const list = recommend(sweep(RTX_5090));
     expect(list.best).toBeDefined();
@@ -474,6 +516,173 @@ describe('a tier is reached at the scenario the tier is about', () => {
         // The prompt is part of the window, never larger than it.
         expect(c.promptTokens, where).toBeLessThanOrEqual(c.contextTokens);
       }
+    }
+  });
+});
+
+/**
+ * And every figure beside it describes *that* tier (#172).
+ *
+ * The same root as #170 one step further on: the sweep models one scenario per candidate and the
+ * verdict layer models a tier structure, so wherever the two disagree a figure ends up attached to a
+ * configuration the reader is not being recommended. The three the issue names are a `tight` row
+ * carrying the `good` tier's spill caveat, a fallback ranked by a rate no tier measured — pinned
+ * above, beside the rule it belongs to — and a footer naming the reader's user count over a serving
+ * list graded at four users and two.
+ */
+describe('a figure describes the tier that earned it', () => {
+  /** The placement at one stated window, which is what a spill caveat is read from. */
+  const spillAt = (c: Candidate, device: DeviceSpec, contextTokens: number) =>
+    planPlacement(
+      c.model,
+      c.quant,
+      { contextTokens, concurrency: 1, promptTokens: c.promptTokens, kvPrecision: 'fp16' },
+      { device, count: 1 },
+      c.runtime
+    );
+
+  it('takes a tight agent’s spill from the 32K session it earned, not the 64K one', () => {
+    let checked = 0;
+    let widerDiffers = 0;
+    let widerWouldCaveat = 0;
+
+    /**
+     * Three cards rather than one, and mid-range ones: the rows this is about are configurations
+     * that hold a 32K session and not a 64K one, which on a 5090 is a handful and on a 5070 is most
+     * of the interesting catalog.
+     */
+    for (const deviceId of ['rtx-5090', 'rtx-5080', 'rtx-5070']) {
+      const device = getDevice(deviceId);
+      const list = recommend(sweep(device, { workloadId: 'agent' }));
+      const tight = list.ranked.filter(
+        (c) => c.fitness === 'tight' && c.contextTokens === WORKLOAD_BARS.agent.tight.session
+      );
+
+      for (const c of tight) {
+        checked += 1;
+        const where = `${deviceId}: ${c.model.id} ${c.quant.id} ${c.runtime.id}`;
+        // The claim: the caveat is read from the session this candidate was graded at.
+        expect(c.offloadFraction, where).toBe(
+          spillAt(c, device, WORKLOAD_BARS.agent.tight.session).offloadFraction
+        );
+
+        /**
+         * And the reading it is not: the `good` tier's session capped by the model, which is what
+         * the stopgap `Math.max` took. Capped, because that is what made it worse rather than
+         * merely wider — on a 40,960-token model it read a window no tier states at all.
+         */
+        const wider = spillAt(
+          c,
+          device,
+          Math.min(c.model.maxContext, WORKLOAD_BARS.agent.good.session)
+        );
+        if (wider.offloadFraction !== c.offloadFraction) widerDiffers += 1;
+        if (c.offloadFraction === 0 && wider.offloadFraction > 0) widerWouldCaveat += 1;
+      }
+    }
+
+    expect(
+      checked,
+      'nothing was tight at the reduced session, so this asserts nothing'
+    ).toBeGreaterThan(0);
+    expect(
+      widerDiffers,
+      'the two readings agree on every row, so the tier the figure comes from is untested'
+    ).toBeGreaterThan(0);
+    /**
+     * The half that is the reader's problem rather than a number's. These rows keep every weight
+     * resident at the session they were graded at and spill at one they were not, so the wider
+     * reading put "Runs only by spilling weights to host RAM" — with its unchecked host-RAM
+     * qualifier — on a recommendation that does no such thing.
+     */
+    expect(
+      widerWouldCaveat,
+      'no row gains or loses the caveat between the two readings, so the caveat is untested'
+    ).toBeGreaterThan(0);
+  });
+
+  it('measures every candidate’s rate at the scenario it carries', () => {
+    // The general form of the fallback's rule: a row's figures and its grade come from one
+    // scenario, so a rate printed or ranked on is one that was really measured there.
+    for (const workloadId of ['agent', 'long-context', 'serving']) {
+      const list = recommend(sweep(RTX_5090, { workloadId }));
+      expect(list.ranked.length, workloadId).toBeGreaterThan(0);
+
+      for (const c of list.ranked) {
+        const at = estimateScenario({
+          model: c.model,
+          quant: c.quant,
+          runtime: c.runtime,
+          usage: {
+            contextTokens: c.contextTokens,
+            promptTokens: c.promptTokens,
+            concurrency: 1,
+            kvPrecision: 'fp16',
+          },
+          rig: { device: RTX_5090, count: 1 },
+        });
+        const where = `${workloadId}: ${c.model.id} ${c.quant.id} ${c.runtime.id}`;
+        expect(c.tokensPerSec, where).toBe(at.decode.perUserTokensPerSec);
+        expect(c.ttftSeconds, where).toBe(at.prefill.ttftSeconds);
+        expect(c.offloadFraction, where).toBe(at.placement.offloadFraction);
+      }
+    }
+  });
+
+  /**
+   * The third finding, which is a caption rather than a number.
+   *
+   * Serving is the one archetype whose *subject* is user count, and its tiers declare four and two —
+   * so a footer printing the reader's own setting under that list stated a count no grade in it
+   * used. The panel reads this field; `Recommend.test.tsx` asserts the sentence.
+   */
+  it('states the user counts serving is graded at, rather than the reader’s', () => {
+    const list = recommend(sweep(RTX_5090, { workloadId: 'serving', concurrency: 12 }));
+
+    expect(list.declaredConcurrency).toEqual([
+      WORKLOAD_BARS.serving.good.users,
+      WORKLOAD_BARS.serving.tight.users,
+    ]);
+    // Not decoration: the sentence beside the row names the good tier's own count, at a reader
+    // setting three times it.
+    expect(list.best!.reason).toContain(`${WORKLOAD_BARS.serving.good.users} users`);
+  });
+
+  it('grades a serving row the same whatever the reader’s user count says', () => {
+    /**
+     * Which is what makes printing that count a misstatement rather than a redundancy. One pairing
+     * at one format, so the comparison is of a grade rather than of two shortlists that may not
+     * contain the same rows — the sweep still *plans* at the reader's count, so a high one changes
+     * what loads at all.
+     */
+    const top = recommend(sweep(RTX_5090, { workloadId: 'serving' })).best!;
+    const alone = (concurrency: number) =>
+      recommend(
+        sweep(RTX_5090, {
+          workloadId: 'serving',
+          concurrency,
+          models: [top.model],
+          runtimes: [top.runtime],
+          quantsFor: () => [getQuant(top.quant.id)],
+        })
+      ).ranked;
+
+    const one = alone(1);
+    const twelve = alone(12);
+    expect(one).toHaveLength(1);
+    expect(twelve, 'the pairing stopped loading, so the grades are not comparable').toHaveLength(1);
+    expect(twelve[0].fitness).toBe(one[0].fitness);
+    expect(twelve[0].reason).toBe(one[0].reason);
+  });
+
+  it('declares nothing for the six archetypes that inherit the reader’s count', () => {
+    // The footer's other branch, and the reason the field is empty rather than `[concurrency]`:
+    // these six really are graded at whatever the reader set, and the caption says so.
+    for (const workload of WORKLOADS.filter((w) => w.id !== 'serving')) {
+      expect(
+        recommend(sweep(RTX_5090, { workloadId: workload.id })).declaredConcurrency,
+        workload.id
+      ).toEqual([]);
     }
   });
 });
