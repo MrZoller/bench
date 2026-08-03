@@ -133,12 +133,25 @@ was specific to one push rather than a backlog. A silent push is not a queue pos
 longer does not help. Treat a quiet half-hour as a skipped push rather than a slow one — one nudge per
 push, per `watch-pr`.
 
-The corollary is a detection rule, because the skipped push is invisible from the surface a reader
-naturally checks. #107 carried a `+1` reaction from the connector and nothing else: no 👀, no review,
-no comment. A reaction is not a verdict and 👀 is the only one that means a run is in flight, so
-"the bot has touched this PR" and "the bot has reviewed this head" are separate questions. Ask the
-second one, against both the reviews API and the issue comments, and compare the SHA as a prefix —
-the no-findings form abbreviates it to ten characters.
+**A 👍 from the connector is a clean verdict, and this file said otherwise for a week.** Checks
+green plus 👍 plus no unresolved threads means the PR is ready to merge, with no posted review to
+wait for. Do not nudge a 👍. The rule this replaces — "a reaction is not a verdict, and 👀 is the
+only one that means a run is in flight" — was generalised from #107 and cost a real merge: #183 sat
+waiting for a comment that was never going to come, because its 👍 was read as the signature of a
+skipped push. Chris settled it on 2 August 2026, and settled it in the broad form deliberately.
+
+The mechanism that makes it safe is the reaction's `created_at`, which must postdate the head
+commit. That is what distinguishes #183 from #107 in practice: on #186 the 👍 landed three minutes
+after the push it was answering. It is not a guarantee — GitHub's reaction content for 👍 **is**
+`+1`, so the two are one signal rather than two, and #107 carried exactly that reaction with no 👀,
+no review and no comment while genuinely unreviewed for 27 hours. Under this rule #107 would have
+been merged unreviewed. That trade is accepted knowingly: the alternative reading stalls every clean
+PR behind a comment the connector often does not post.
+
+When there is no reaction at all, the question is still "has _this head_ been reviewed" rather than
+"has the bot touched this PR" — ask it against both the reviews API and the issue comments, and
+compare the SHA as a prefix, since the no-findings form abbreviates it to ten characters. #107
+remains the case for the nudge timing above; it is no longer a detection rule about reactions.
 
 **The tooling gaps were worktree-shaped.** Running agents in git worktrees needs a symlinked
 `node_modules`, and `.gitignore` listed `node_modules/` with a trailing slash — which matches a
@@ -2230,11 +2243,14 @@ Two of the findings were not about the prose at all. They are defects the prose 
     arrived within about two minutes of a nudge, and one push sat 27 hours in silence on a healthy
     connector. **A quiet half-hour is a skipped push, not a queue position** — nudge once.
   - "It signals no findings with a 👍 reaction, so merge-readiness needs the reaction's `created_at`
-    to postdate the head commit" is the right mechanism attached to the wrong reaction. 👍 is indeed
-    the no-findings form, but `+1` also arrives on pushes that were never reviewed at all, and 👀 is
-    the only reaction meaning a run is in flight. **Ask whether _this head_ was reviewed**, against
-    both the reviews API and the issue comments, comparing the SHA as a prefix — the no-findings
-    form abbreviates it to ten characters. A reaction alone does not answer that question.
+    to postdate the head commit" was **correct, and this file was wrong to correct it.** The
+    replacement — that `+1` also arrives on unreviewed pushes, so a reaction never answers the
+    question — treated 👍 and `+1` as two signals when GitHub's reaction content for 👍 _is_ `+1`,
+    and it stalled #183 waiting for a comment that never came. Restored as written, and stated in
+    full in **The post-release sweep** above. **Ask whether _this head_ was reviewed** remains the
+    right question when no reaction is present — against both the reviews API and the issue
+    comments, comparing the SHA as a prefix, since the no-findings form abbreviates it to ten
+    characters.
 
 - ~~`main` is unprotected.~~ **Enforced since 28 July 2026**, when the repo went public. The
   ruleset requires a pull request, squash merges only, both CI checks green, and every review
