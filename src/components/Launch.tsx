@@ -153,9 +153,17 @@ function Form({
   kind: 'Serve' | 'Measure';
 }) {
   if (!emission.ok) {
-    // The complementary refusal: this launcher is simply the other kind of binary. Muted, because
-    // it is navigation rather than a problem — the command it points at is on this same panel.
-    return <p className="text-xs text-[var(--color-text-muted)]">{emission.reason}</p>;
+    /* The complementary refusal: this launcher is simply the other kind of binary. Muted, because
+       it is navigation rather than a problem — the command it points at is on this same panel.
+
+       **`break-words`, because a refusal names the setting it cannot express.** These reasons carry
+       environment variables — `OLLAMA_NUM_PARALLEL`, `OLLAMA_KV_CACHE_TYPE` — and an underscore is
+       not a break opportunity, so one token sets this paragraph's min-content width. At the reflow
+       project's 200% text size that token is ~305px inside a 320px viewport, and the document
+       scrolls sideways: `reflow.spec.ts` caught it at 334 against 321 on CI's Liberation Sans while
+       macOS's SF, ~5% narrower, cleared it by under a pixel and passed locally. `overflow-wrap`
+       breaks only a word that cannot otherwise fit, so nothing that already fits moves. */
+    return <p className="text-xs break-words text-[var(--color-text-muted)]">{emission.reason}</p>;
   }
 
   return (
@@ -204,7 +212,13 @@ function Form({
            could be read as agreeing when they do not — a cache precision the server cannot be told,
            a concurrency the benchmark client cannot reproduce — and a caveat nobody opens is a
            caveat nobody has. */
-        <ul className="flex list-none flex-col gap-1 text-xs leading-relaxed text-[var(--color-text-muted)]">
+        /* `break-words` here for the same reason as the refusal above, and this is the wider of the
+           two: a note that tells the reader to start their daemon with `OLLAMA_KV_CACHE_TYPE=q8_0`
+           carries a 366px token at 200% text, which overflowed a 320px viewport long before this
+           change and by more after it. No `SCENARIOS` entry in `reflow.spec.ts` pairs llama.cpp with
+           a quantized KV cache, so the sweep never rendered it and CI stayed silent — the overflow
+           was real on `main` regardless. */
+        <ul className="flex list-none flex-col gap-1 text-xs leading-relaxed break-words text-[var(--color-text-muted)]">
           {emission.notes.map((note) => (
             <li key={note} className="flex gap-2">
               <span aria-hidden="true">·</span>
