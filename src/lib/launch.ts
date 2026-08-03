@@ -51,6 +51,13 @@ import { substitutionFor } from '@/data/runtimes';
  *   - **`-ot`/`--override-tensor` moves a layer's weights and not its cache**, which is why there
  *     is no per-layer placement flag here and why #166 closes with a sentence rather than a
  *     command. See {@link packingNotes} for the read.
+ *
+ * A fourth kind of refusal is deliberately not on the list of three, because it is a property of
+ * the *surface* rather than of the placement: `mlx_lm.server` has no cache-precision flag, and
+ * Ollama's Modelfile has no parallelism parameter. Each turns away its own serving form for a
+ * scenario the panel still answers — a sibling launcher for Ollama, since `llama-server` takes both
+ * as flags, and the launcher's own measurement form for MLX, since `mlx_lm.generate` does take
+ * `--kv-bits`. See {@link mlx} and {@link ollama}.
  */
 
 /** Where a launcher's flags were read from, and when. */
@@ -665,6 +672,50 @@ function llamaBench(input: LaunchInput): Pair {
 
 function ollama(input: LaunchInput): Pair {
   const { model, quant, usage } = input;
+
+  // Ollama's measurement form, which is the same refusal in every scenario: there is no client to
+  // emit, and the one that measures this engine is already on this panel.
+  const measure: Emission = {
+    ok: false,
+    reason:
+      `Ollama ships no benchmark client. It runs llama.cpp, so the llama-bench command in this ` +
+      `panel measures the same engine on the same GGUF — that is the form to submit.`,
+  };
+
+  /**
+   * **Ollama takes parallelism as a daemon setting, so a multi-user scenario has no Modelfile**
+   * (#171, from Codex on #164).
+   *
+   * `planPlacement` charges KV and activations for `usage.concurrency` simultaneous users, and the
+   * Modelfile carries only `num_ctx`. Ollama's parallelism is `OLLAMA_NUM_PARALLEL`, read by the
+   * server at startup — so every Modelfile this surface can write sizes memory for one user
+   * against a panel that priced several, and the block would be a command for a placement other
+   * than the one above it.
+   *
+   * The same polarity as the MLX serve refusal below: where the surface cannot be told the thing
+   * the figures rest on, there is no command rather than a command with a warning beside it. It
+   * points at `llama-server` because that is the launcher which takes the count as a flag on the
+   * one invocation. The alternative was to emit the daemon configuration, which is the direction
+   * #171's other half is answered in — with a sentence rather than a command. See the cache note
+   * below.
+   */
+  if (usage.concurrency > 1) {
+    return {
+      serve: {
+        ok: false,
+        reason:
+          `The figures above price ${usage.concurrency} simultaneous users, and Ollama takes ` +
+          `parallelism as a daemon setting — OLLAMA_NUM_PARALLEL, read at server startup — rather ` +
+          `than as a Modelfile parameter. A Modelfile carrying only num_ctx would size the cache ` +
+          `for one user against figures that priced ${usage.concurrency}, which is a different ` +
+          `placement from the one above. Use the llama-server command above, which takes the ` +
+          `count as a flag on the one command (-np ${usage.concurrency}), or set the concurrency ` +
+          `to one to get an Ollama block.`,
+      },
+      measure,
+    };
+  }
+
   const tag = `bench-${slug(model.name)}-${slug(quant.label)}`;
   /**
    * **Ollama's cache precision is a daemon setting, not a Modelfile parameter** (raised by Codex on
@@ -672,8 +723,15 @@ function ollama(input: LaunchInput): Pair {
    * Modelfile cannot carry it — and a long-context configuration that fits only because an 8-bit
    * cache halves it would consume two to four times the modelled cache and OOM.
    *
-   * The command therefore starts the daemon with the variable set rather than assuming the
-   * reader's already-running one has it, which is the only form that reproduces the placement.
+   * **It is stated as a requirement rather than commanded** (#171). The block used to emit
+   * `OLLAMA_KV_CACHE_TYPE=<type> ollama serve &` ahead of the Modelfile, which neither waits for
+   * the daemon nor notices an existing one: `ollama serve` fails to bind when a server is already
+   * listening, and everything after it then ran against *that* server, still on the default `f16`.
+   * Fixing that honestly means a readiness poll, a check for a running daemon, possibly a `pkill` —
+   * daemon lifecycle management, in a block whose whole value is that it is one readable
+   * invocation, and which people run without reading. So the note states which daemon the figures
+   * describe and leaves the restart to the reader, who is the only one who knows what else is
+   * talking to it.
    */
   const kv = LLAMA_KV_TYPE[usage.kvPrecision];
   const quantizedCache = usage.kvPrecision !== 'fp16';
@@ -695,9 +753,10 @@ function ollama(input: LaunchInput): Pair {
       `old file's settings.`,
     ...(quantizedCache
       ? [
-          `OLLAMA_KV_CACHE_TYPE is a daemon setting rather than a Modelfile parameter, and it ` +
-            `defaults to f16 — so the block restarts the server with it. An already-running daemon ` +
-            `will not pick it up, and the figures above are sized for a ${kv} cache.`,
+          `Start your daemon with OLLAMA_KV_CACHE_TYPE=${kv} before running this. It is a daemon ` +
+            `setting rather than a Modelfile parameter — read once at server startup, defaulting ` +
+            `to f16 — so an already-running daemon will not pick it up and has to be restarted. ` +
+            `The figures above are sized for a ${kv} cache.`,
         ]
       : []),
   ];
@@ -718,13 +777,6 @@ function ollama(input: LaunchInput): Pair {
         // failure. A footgun the previous fix introduced while fixing another. (Codex, #173.)
         `(`,
         `set -e`,
-        ...(quantizedCache
-          ? [
-              `# The cache precision is read by the daemon at startup, not from the Modelfile.`,
-              `OLLAMA_KV_CACHE_TYPE=${kv} ollama serve &`,
-              ``,
-            ]
-          : []),
         // A bench-specific filename, never the bare `Modelfile` this first wrote to. `cat >`
         // truncates unconditionally, and the directory an Ollama user runs this from is exactly the
         // one likely to already hold a Modelfile of their own — a copy-pasteable block that
@@ -744,12 +796,7 @@ function ollama(input: LaunchInput): Pair {
       ].join('\n'),
       notes,
     },
-    measure: {
-      ok: false,
-      reason:
-        `Ollama ships no benchmark client. It runs llama.cpp, so the llama-bench command in this ` +
-        `panel measures the same engine on the same GGUF — that is the form to submit.`,
-    },
+    measure,
   };
 }
 

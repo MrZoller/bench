@@ -85,6 +85,22 @@ describe('the launch panel', () => {
     }
   });
 
+  it('drops the Ollama command at a concurrency it cannot express, without alarm', () => {
+    // #171: Ollama takes parallelism as a daemon setting, so a Modelfile this surface can write
+    // sizes memory for one user against a panel that priced eight. The serving form refuses — but
+    // llama-server emits the same scenario one heading up, so this is navigation and not a
+    // problem, and it must not render as a third warning box on a page with nothing wrong on it.
+    renderAt({ runtimeId: 'llama.cpp', concurrency: 8 });
+
+    expect(within(panel()).queryByRole('note')).not.toBeInTheDocument();
+    expect(within(panel()).getByText(/OLLAMA_NUM_PARALLEL/)).toBeInTheDocument();
+    // Two commands rather than three: llama-server serves it, llama-bench measures it, Ollama has
+    // nothing to copy.
+    expect(within(panel()).getAllByRole('button', { name: /^copy the .+ command$/i })).toHaveLength(
+      2
+    );
+  });
+
   it('renders the notes rather than hiding them behind a disclosure', () => {
     // Each note is a place the command and the panel above it could be read as agreeing when they
     // do not, and a caveat nobody opens is a caveat nobody has.
