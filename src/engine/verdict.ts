@@ -50,8 +50,15 @@ export type Fitness = 'good' | 'tight' | 'fail';
  * `UsageSpec.contextTokens` covers prompt *and* generation, so a 32,768-token document on a
  * model capped at 32,768 leaves nowhere to reply from. Small, because these archetypes ask
  * short questions of long inputs — but not zero, which is what the fit checks assumed.
+ *
+ * **Private to this file, which it now is rather than merely claims to be** (#170). It is an
+ * internal convention and not part of the contract — `verdict.test.ts` says so and restates the
+ * literal for that reason — but it was exported, and the one importer used it to rebuild an
+ * archetype's window at a call site. The window a caller wants is `gradedScenarios`, which knows
+ * which tier the figure belongs to; an allowance on its own only lets a caller assemble a scenario
+ * this file never graded.
  */
-export const RESPONSE_ALLOWANCE = 512;
+const RESPONSE_ALLOWANCE = 512;
 
 /**
  * The session sizes the two agent tiers recommend a machine for — and therefore have to grade it
@@ -244,6 +251,109 @@ const BARS = WORKLOAD_BARS;
  */
 const LONG_CONTEXT_TIGHT_NEEDS = BARS['long-context'].tight.prompt + RESPONSE_ALLOWANCE;
 
+/**
+ * What an archetype needs to hold: its prompt plus room to answer. Every fit check reads this one
+ * function, so a boundary cannot be stated differently in a condition and in its reason — which is
+ * exactly how long-context ended up testing 65,536 in one place and 66,048 in the other.
+ *
+ * At module scope rather than inside `judgeWorkloads` because `gradedScenarios` needs the same
+ * derivation, and a second copy of it is the failure this file is a list of.
+ */
+function needs(id: string): number {
+  return workload(id).typicalPromptTokens + RESPONSE_ALLOWANCE;
+}
+
+/** One tier's working size: the prompt it is timed on, and the window that prompt is planned in. */
+export interface GradedScenario {
+  promptTokens: number;
+  contextTokens: number;
+}
+
+/**
+ * Every scenario an archetype is graded at, largest first — the tier structure, stated as an
+ * interface rather than left as an internal of this file
+ * ([#170](https://github.com/MrZoller/bench/issues/170)).
+ *
+ * **The caller this exists for is `recommend`, and the defect is that a tier never got to speak.**
+ * The sweep plans one placement per candidate at the archetype's own scenario and drops the
+ * candidate when that placement is `impossible` — but long-context's `tight` tier is graded at a
+ * 65,536-token prompt against its 131,072-token job, deliberately, and the agent's tiers carry 64K
+ * and 32K *sessions* against its ~16.5K turn. So a machine holding 64K of cache and not 128K had
+ * its long-context candidates dropped before the tier that would have accepted them ever ran, and a
+ * reader asking what the machine can do for long context was told nothing rather than "this one, at
+ * half the window".
+ *
+ * That is a *silence* rather than a wrong grade, and the distinction is worth keeping straight: the
+ * top-level refusal below returns `fail` for all seven when the selected placement is impossible, so
+ * dropping the candidate and grading it `fail` produce the same answer. What neither does is plan
+ * the smaller scenario the tier is about.
+ *
+ * The alternative was to plan the refusal at the archetype's *smallest* tier, which is cheap and
+ * wrong in the other direction — it admits candidates whose headline scenario is impossible, and the
+ * top-level refusal is then re-argued at every call site. A caller walks this list instead and stops
+ * at the first entry that plans, which leaves that refusal exactly as it is: it fires when *no*
+ * tier's scenario loads.
+ *
+ * **A pair rather than a window**, because the two bars that carry a working size mean different
+ * things and only this file knows which. A `session` figure is already a whole window —
+ * `UsageSpec.contextTokens` counts prompt *and* generation, which is what those figures were
+ * derived as — and the turn arriving into it is still the archetype's own, which is why both agent
+ * tiers name a 16K prompt. A `prompt` figure is a request, so it needs `RESPONSE_ALLOWANCE` on top
+ * of it for the window and is itself the prompt. Handing back only the window would leave a caller
+ * to reconstruct the prompt by subtraction, which is the second copy of the tier structure this
+ * exists to avoid, and it would put the long-context tight tier's placement at a 128K prompt inside
+ * a 64K window — a scenario that contradicts itself.
+ *
+ * The archetype's own scenario is always in the list, so the five archetypes whose tiers differ only
+ * in rate and latency return exactly one entry and a walk over it is what a single evaluation was.
+ * Serving's tiers differ in *users* rather than in working size, which this deliberately does not
+ * express: that archetype declares its concurrency per tier inside `judgeWorkloads`, and the
+ * top-level refusal is documented as deliberately keeping the reader's own configuration
+ * authoritative there.
+ *
+ * **`maxContextTokens` is taken here rather than clamped by the caller, and the two kinds of entry
+ * answer it differently.** A caller with a model in hand cannot apply one rule to both without
+ * knowing which is which, and applying `Math.min` to all of them *invents a working size no tier
+ * states*: a model capped at 40,960 turned the agent's 64K session into a 40K one, and every agent
+ * sentence on those rows then quoted a session figure this file had never named. A tier is a stated
+ * size — a model that cannot hold it is simply not graded at it, and `judgeWorkloads`' own capacity
+ * bars read `runnableContextTokens`, which is already capped by the model. The archetype's own
+ * request is the opposite case and is truncated instead, prompt with it: it is the headline job, the
+ * row has to exist to say the machine cannot do it, and "the largest version of this job the model
+ * can hold" is what that row has always been graded at.
+ */
+export function gradedScenarios(
+  id: string,
+  maxContextTokens = Infinity
+): readonly GradedScenario[] {
+  // `workload` first: it throws on an id this file does not know, where the bars lookup would hand
+  // back `undefined` and fail three lines later as a property access on nothing.
+  const promptTokens = workload(id).typicalPromptTokens;
+  const declared = Math.min(maxContextTokens, needs(id));
+  // Keyed on the window, so the archetype's own scenario and a tier stating the same request are
+  // one entry rather than two identical placements — long-context's `good` bar *is* its declared
+  // prompt, which is stated where `WORKLOAD_BARS` sits below `WORKLOADS` for exactly that reason.
+  const scenarios = new Map<number, GradedScenario>([
+    [declared, { promptTokens: Math.min(declared, promptTokens), contextTokens: declared }],
+  ]);
+  const bars = WORKLOAD_BARS[id as keyof typeof WORKLOAD_BARS];
+
+  const offer = (scenario: GradedScenario) => {
+    if (scenario.contextTokens <= maxContextTokens) scenarios.set(scenario.contextTokens, scenario);
+  };
+
+  for (const tier of [bars.good, bars.tight]) {
+    if ('session' in tier) offer({ promptTokens, contextTokens: tier.session });
+    if ('prompt' in tier)
+      offer({
+        promptTokens: tier.prompt,
+        contextTokens: tier.prompt + RESPONSE_ALLOWANCE,
+      });
+  }
+
+  return [...scenarios.values()].sort((a, b) => b.contextTokens - a.contextTokens);
+}
+
 export interface VerdictInputs {
   /**
    * The selected configuration's placement, used for one thing only: deciding whether anything
@@ -387,13 +497,7 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
   /** Says whose throughput `batchAggregate` is, whenever it is more than one worker's. */
   const batchWorkers = () => (usage.concurrency > 1 ? ` across ${usage.concurrency} workers` : '');
 
-  /**
-   * What an archetype needs to hold: its prompt plus room to answer. Every fit check reads this
-   * one function, so a boundary cannot be stated differently in a condition and in its reason —
-   * which is exactly how long-context ended up testing 65,536 in one place and 66,048 in the
-   * other.
-   */
-  const needs = (id: string) => workload(id).typicalPromptTokens + RESPONSE_ALLOWANCE;
+  /** Through `needs`, which is now module scope so `gradedScenarios` can read the same boundary. */
   const fits = (id: string) => runnableContextTokens >= needs(id);
 
   /**

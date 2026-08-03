@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  gradedScenarios,
   judgeWorkloads,
   WORKLOADS,
   WORKLOAD_BARS,
@@ -1731,6 +1732,148 @@ describe('every numeric good bar is at least as strict as its own tight bar', ()
         expect(goodBar).toBeGreaterThanOrEqual(tight[axis]);
       }
     }
+  });
+});
+
+/**
+ * The tier structure, now that a caller can ask about it (#170).
+ *
+ * `gradedScenarios` exists because the recommender planned one placement per candidate at the
+ * archetype's own scenario, while several archetypes are *graded* at working sizes that scenario
+ * never names — so a long-context candidate was dropped before the tier that would have accepted it
+ * ever ran. What makes it an interface rather than a getter is that the two bars carrying a working
+ * size mean different things: a `session` is already a window, a `prompt` is a request. These pin
+ * that, and the last one pins the property the whole thing exists for.
+ */
+describe('the scenarios an archetype is graded at', () => {
+  /** Restated rather than imported, for the reason the neighbouring suite restates it. */
+  const RESPONSE_TOKENS = 512;
+
+  it('offers every archetype its own declared request', () => {
+    for (const w of WORKLOADS) {
+      expect(gradedScenarios(w.id), w.id).toContainEqual({
+        promptTokens: w.typicalPromptTokens,
+        contextTokens: w.typicalPromptTokens + RESPONSE_TOKENS,
+      });
+    }
+  });
+
+  it('offers long-context both of its tiers, the reduced one as its own prompt', () => {
+    // The tight tier is a smaller *job* — 64K — and not the same job judged leniently, which is why
+    // it carries a prompt of its own rather than the archetype's 128K inside a smaller window.
+    expect(gradedScenarios('long-context')).toEqual([
+      { promptTokens: 131072, contextTokens: 131072 + RESPONSE_TOKENS },
+      { promptTokens: 65536, contextTokens: 65536 + RESPONSE_TOKENS },
+    ]);
+  });
+
+  it('offers the agent both sessions, at the turn that arrives into them', () => {
+    // The other direction: both figures are *windows*, larger than the archetype's own scenario, and
+    // the prompt stays the ~16K turn. Adding an allowance to these would be a 512-token error at the
+    // boundary where a machine either holds the session or does not.
+    expect(gradedScenarios('agent')).toEqual([
+      { promptTokens: 16384, contextTokens: WORKLOAD_BARS.agent.good.session },
+      { promptTokens: 16384, contextTokens: WORKLOAD_BARS.agent.tight.session },
+      { promptTokens: 16384, contextTokens: 16384 + RESPONSE_TOKENS },
+    ]);
+  });
+
+  it('drops a tier the model cannot hold rather than shrinking it', () => {
+    /**
+     * The correction that cost the most to find. Clamping every window with the model's own ceiling
+     * — which is what the archetype's declared request has always done — invents a working size no
+     * tier states: at 40,960 the agent's 64K session became a 40K one, and 315 agent rows began
+     * quoting a session figure this file had never named. A tier is a stated size, and the capacity
+     * bars already read `runnableContextTokens`, which the model caps.
+     */
+    expect(gradedScenarios('agent', 40960)).toEqual([
+      { promptTokens: 16384, contextTokens: WORKLOAD_BARS.agent.tight.session },
+      { promptTokens: 16384, contextTokens: 16384 + RESPONSE_TOKENS },
+    ]);
+
+    // The archetype's own request is the opposite case and is truncated, prompt with it: that row
+    // has to exist to say the machine cannot do the job, which is what it has always been for.
+    expect(gradedScenarios('long-context', 40960)).toEqual([
+      { promptTokens: 40960, contextTokens: 40960 },
+    ]);
+    expect(gradedScenarios('rag', 8192)).toEqual([{ promptTokens: 8192, contextTokens: 8192 }]);
+  });
+
+  it('runs largest first, and never states a window its own prompt cannot fit in', () => {
+    // At no ceiling — a truncated declared request closes on the window by definition, and the
+    // case above is where that is asserted.
+    for (const w of WORKLOADS) {
+      const scenarios = gradedScenarios(w.id);
+      expect(scenarios.length, w.id).toBeGreaterThan(0);
+
+      for (const [i, scenario] of scenarios.entries()) {
+        // Room to answer in, on every entry — the boundary this file has been burned by twice.
+        expect(scenario.contextTokens, `${w.id} at ${i}`).toBeGreaterThanOrEqual(
+          scenario.promptTokens + RESPONSE_TOKENS
+        );
+        if (i > 0) {
+          expect(scenario.contextTokens, `${w.id} at ${i}`).toBeLessThan(
+            scenarios[i - 1].contextTokens
+          );
+        }
+      }
+    }
+  });
+
+  it('refuses an archetype it does not have', () => {
+    expect(() => gradedScenarios('telepathy')).toThrow(/Unknown workload/);
+  });
+
+  /**
+   * **The one that is the contract rather than a restatement of the table.**
+   *
+   * A caller walks this list to find a scenario the machine can plan, and then hands that placement
+   * back as the refusal basis. If the list omits a window `judgeWorkloads` goes on to grade at, the
+   * caller can refuse a candidate whose tier would have accepted it — which is exactly the defect
+   * #170 was filed for, in its next form. So every scenario this layer asks the engine for has to be
+   * one the sweep could have planned.
+   *
+   * Two ceilings, because a run only asks about the tiers that rig can reach: a machine holding
+   * everything is never measured at the agent's reduced session, and one holding little is never
+   * measured at the full long-context window.
+   */
+  it('asks the engine for no scenario the sweep could not have planned', () => {
+    const asked: { promptTokens: number; contextTokens: number }[] = [];
+    for (const runnableContextTokens of [1e9, 40000]) {
+      const engine = stubEngine(runnableContextTokens);
+      judgeWorkloads({
+        selectedPlacement: RESIDENT,
+        // The smallest window `normalizeUsage` accepts, so every figure below is the archetype's
+        // own rather than a floor this test happened to set.
+        usage: { contextTokens: 1, concurrency: 1, promptTokens: 1, kvPrecision: 'fp16' },
+        maxContextTokens: runnableContextTokens,
+        runnableContextTokens,
+        evaluateAt: (promptTokens, contextTokens) => {
+          asked.push({ promptTokens, contextTokens });
+          return engine(promptTokens, contextTokens);
+        },
+      });
+    }
+
+    const planned = new Set(
+      WORKLOADS.flatMap((w) =>
+        gradedScenarios(w.id).map((s) => `${s.promptTokens}:${s.contextTokens}`)
+      )
+    );
+    expect(asked.length).toBeGreaterThan(WORKLOADS.length);
+    for (const scenario of asked) {
+      expect(
+        planned,
+        `judgeWorkloads grades at ${scenario.promptTokens} in ${scenario.contextTokens}, which no archetype offers`
+      ).toContain(`${scenario.promptTokens}:${scenario.contextTokens}`);
+    }
+
+    // And both of the tiers that only one of the two ceilings reaches, or the sweep above proved
+    // nothing about the archetypes this exists for.
+    expect(asked).toContainEqual({ promptTokens: 131072, contextTokens: 131584 });
+    expect(asked).toContainEqual({ promptTokens: 65536, contextTokens: 66048 });
+    expect(asked).toContainEqual({ promptTokens: 16384, contextTokens: 65536 });
+    expect(asked).toContainEqual({ promptTokens: 16384, contextTokens: 32768 });
   });
 });
 

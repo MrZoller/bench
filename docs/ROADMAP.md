@@ -40,9 +40,10 @@ for recommend, #168 for detect, #169 for calibrate — and what each turned out 
 two more (#180, #181) came out of reviewing _this section_ a day later; they are in **Open
 questions**, and two of the first six share one root.
 
-What remains is a naming decision, **seven open issues of which six are work** — the six filed
-during the pass, less [#165](https://github.com/MrZoller/bench/issues/165) and
-[#166](https://github.com/MrZoller/bench/issues/166), which are fixed, plus
+What remains is a naming decision, **six open issues of which five are work** — the six filed
+during the pass, less [#165](https://github.com/MrZoller/bench/issues/165),
+[#166](https://github.com/MrZoller/bench/issues/166) and
+[#170](https://github.com/MrZoller/bench/issues/170), which are fixed, plus
 [#180](https://github.com/MrZoller/bench/issues/180) and
 [#181](https://github.com/MrZoller/bench/issues/181), which came out of reviewing this very
 document, plus [#182](https://github.com/MrZoller/bench/issues/182), which is the half of #165 that
@@ -544,6 +545,14 @@ measured. [#170](https://github.com/MrZoller/bench/issues/170) and
 [#172](https://github.com/MrZoller/bench/issues/172); fixing them means changing how the two layers
 divide the work, which is why neither is a patch.
 
+**#170 is fixed, and it is the layers dividing the work differently rather than a repair.**
+`gradedScenarios` is `verdict.ts` stating its tier structure as an interface, and `planGraded` is the
+sweep walking it largest-first for a scenario this machine can plan. One scenario decides everything
+about the candidate — the grade, the figures and the spill caveat — and the candidate carries it, so
+the deep link that loads the row into the Bench lands on the configuration the row was graded at
+rather than rebuilding the archetype's request. See **Open questions** for the measurement and for
+what it leaves of #172.
+
 ### Calibrate, and what a measurement has to carry
 
 `compare` marks a long list of scenario mismatches rather than reporting a delta against them, and
@@ -647,8 +656,8 @@ written down.
 Deliberately absent, and not forgotten: cloud pricing stays out of scope per the settled decision
 below, and fine-tuning memory (LoRA/QLoRA) is a second engine rather than a feature — real demand,
 weak incumbents, and deliberately not attempted before guided mode shipped. Now that it has, that is
-the v3-scale bet. What stands between here and it is **six** of the seven issues in **Open
-questions** — the four still open from the pass plus #180, #181 and #182, one of them a P1 on the
+the v3-scale bet. What stands between here and it is **five** of the six issues in **Open
+questions** — the three still open from the pass plus #180, #181 and #182, one of them a P1 on the
 path a reader is most likely to take, and [#174](https://github.com/MrZoller/bench/issues/174) not
 among them: it is open as a _record_ of an answered policy question rather than as work, and
 counting it as a blocker would make a settled decision look like a task.
@@ -1891,8 +1900,9 @@ Correctness follow-ups live in
 [the repository's open issues](https://github.com/MrZoller/bench/issues). This section is for the
 questions those issues cannot settle, and the three tables below are the record of the fourteen
 findings filed rather than patched — six out of the July sweep, all now closed; six out of the v2
-pass, of which #165 and #166 are now closed too; and two more out of _documenting_ the v2 pass, which
-is its own entry. Six of the last two are open, plus #182, which #165 split off rather than fold in.
+pass, of which #165, #166 and #170 are now closed too; and two more out of _documenting_ the v2 pass,
+which is its own entry. Five of the last two are open, plus #182, which #165 split off rather than
+fold in.
 They are kept because what a finding turns out to need is repeatedly not what the issue said it
 would be.
 
@@ -1928,9 +1938,10 @@ made that visible; the measurements survived and the framings mostly did not.
 
 ### The six filed out of the v2 pass, 1 August 2026
 
-Same rule, same shape, and **four of the six are open — of which three are work.** #165 is fixed, and
+Same rule, same shape, and **three of the six are open — of which two are work.** #165 is fixed, and
 split in two on the way; #166 is fixed, and the capability gap it recorded turned out to be
-llama.cpp's rather than bench's; the rest each carry a measurement; two carry an argument rather than
+llama.cpp's rather than bench's; #170 is fixed, and moved the seam it was filed about; the rest each
+carry a measurement; two carry an argument rather than
 a repair; and #174 is open purely as the
 written argument for a decision already taken, which is why the counts elsewhere in this file exclude
 it from what stands between here and v3. An issue can be a record. Closing it would lose the
@@ -1940,7 +1951,7 @@ reasoning, and counting it would invent a task.
 | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [#165](https://github.com/MrZoller/bench/issues/165) resident layers charge the non-layer tensors | **Fixed**, and it turned out to be two issues rather than one — see below. The count divides `layerWeightBytes`; every byte figure is bit-identical to before it; `-ngl` drops on 7.9% of the catalog's configurations, by a median of 1 layer and never rises. The byte assignment those tensors get is [#182](https://github.com/MrZoller/bench/issues/182)                                 |
 | [#166](https://github.com/MrZoller/bench/issues/166) the assignment discards _which_ layers       | **Fixed**, and its second half was answered rather than built. `DeviceShare.layerIndices` records which layers a card holds; the flag the issue hoped for does not exist, because `-ot` overrides where a _weight_ lives while a layer's cache follows the `-ngl`/`-ts` split — see above. The panel states the packing instead: `2,2,2,21,21` layers against `2,2,2,1,1` full-attention ones |
-| [#170](https://github.com/MrZoller/bench/issues/170) tiers graded at scenarios never planned      | `recommend` plans one placement per candidate at the archetype's own scenario and drops it when that is impossible — but long-context's `tight` tier is a 64K prompt and the agent's tiers are 64K and 32K sessions. Same answer today, because `judgeWorkloads` refuses at the top; a structural disagreement about who models the tiers                                                     |
+| [#170](https://github.com/MrZoller/bench/issues/170) tiers graded at scenarios never planned      | **Fixed**, and the seam moved rather than the arithmetic. `gradedScenarios` states the tier structure and the sweep walks it, largest first, stopping at the first scenario the machine can plan — 269 long-context rows across the 43 shipped devices are now graded at the reduced tier, 161 of them `tight`, and no row that already had an answer changed it                              |
 | [#172](https://github.com/MrZoller/bench/issues/172) the caveat describes the wrong tier          | Same root. A `tight` recommendation can carry the `good` tier's spill caveat, the fallback can rank by a rate no tier measured, and the serving footer names the reader's concurrency where that archetype grades at its own                                                                                                                                                                  |
 | [#171](https://github.com/MrZoller/bench/issues/171) the Ollama block and the daemon              | `ollama serve &` does not wait, does not notice an existing daemon still on the default `f16` cache, and configures no `OLLAMA_NUM_PARALLEL`. Both fixes push a copy-pasteable block into daemon lifecycle management, which is a different kind of command from the rest of the panel                                                                                                        |
 | [#174](https://github.com/MrZoller/bench/issues/174) one adapter on a dual-GPU machine            | Filed as the argument. Preferring the discrete card is the answer for a tool that prices inference, not half of "combine both preferences" — and combining would widen the shortlist to two vendors                                                                                                                                                                                           |
@@ -1998,6 +2009,60 @@ margin rather than a coin flip. And **the fixed tensors are a large fraction of 
 models**: 25.4% of Gemma 3 4B, 21.4% of Ministral 3 3B, 15.2% of Qwen3 8B, 12.3% of Llama 3.2 3B —
 so "the vocabulary is a rounding error" is true for the models nobody has trouble running and false
 for the ones people run on the hardware they already own.
+
+**The second pair did meet where the table said it does, and #170 is the half that moved the seam.**
+`gradedScenarios` states the tier structure — a `(prompt, window)` for each tier, largest first — and
+`recommend` walks it, stopping at the first scenario the machine can plan. That is the option the
+issue named as the honest one, and the reason the cheap one was refused is worth keeping: planning
+the refusal at the archetype's _smallest_ tier admits candidates whose headline scenario is
+impossible, and `judgeWorkloads`' top-level refusal would then have to be re-argued at every call
+site. Walking downwards leaves that refusal exactly where it is — it fires when _no_ tier's scenario
+loads.
+
+**The issue's own premise was false and the issue said so, which is the part worth carrying.** The
+finding it was filed from claimed the verdict layer "would grade the configuration `tight`"; it would
+not, because `judgeWorkloads` refuses at the top and returns `fail` for all seven, so dropping the
+candidate and grading it `fail` are the same answer. The defect was **silence**, not a wrong grade:
+the tier that admits the machine never ran, so a reader asking what a 64K-capable card can do for
+long context was told nothing rather than "this one, at half the window". A correctness issue can be
+about what is not said.
+
+The measurement, over the 43 shipped devices at one card, an fp16 cache and one user: **269
+long-context rows are now graded at the reduced tier, 161 of them `tight`.** 208 are pairings that
+had no row at all, and the other 61 replace a narrower format that had won its pairing by default —
+every one of those 61 a swap to a **wider** format, which is `QUANT_RULE` working rather than a
+second effect, since the wider format was being dropped for a scenario the machine could not plan.
+**Nothing that already had an answer changed its grade or its sentence**, on any archetype — and the
+reason is two reasons rather than one, which is worth stating because the shorter version is false.
+For six of the seven the first entry in the list _is_ the declared request, so a machine that can
+plan it plans the same window it planned before. The agent's first entry is the 64K session its tiers
+endorse, and it is now planned there instead of at its ~16.5K turn; its grade holds still anyway,
+because `judgeWorkloads` takes that archetype's capacity from `runnableContextTokens` and its session
+from the tier bars rather than from the planned window. What moves on the agent is what the row
+_carries_ — the rate, the wait and the spill now come from the session the verdict was already
+about, which is the 28 caveats and the nine fallback picks below.
+
+It also retires the stopgap in the middle of [#172](https://github.com/MrZoller/bench/issues/172).
+The `Math.max` over `WORKLOAD_BARS` that #167 added — the spill fraction read at the archetype's
+_widest_ bar — is gone, and the caveat and the decode rate now come from the one scenario the
+candidate was graded at. 28 agent rows of 2,533 lose a host-RAM caveat, every one of them a model
+whose own window is under the 64K session that widening read: the caveat described a placement the
+row was never graded at. Nine agent fallback picks move with the rate, which is that issue's second
+finding. What is left of #172 is its third, the serving footer naming the reader's concurrency where
+that archetype grades at its own.
+
+**The model's own ceiling is where this got interesting, and it is the thing to re-read before
+touching `gradedScenarios`.** A first version clamped every returned window with
+`Math.min(model.maxContext, …)` at the call site, which is what the archetype's own scenario has
+always done — and on a model capped at 40,960 it turned the agent's 64K session into a 40K one, so
+315 agent rows started quoting a session figure the verdict layer had never named and six changed
+grade. A tier is a _stated_ size: a model that cannot hold it is not graded at it, and the capacity
+bars already read `runnableContextTokens`, which the model caps. The archetype's own request is the
+opposite case and its window is truncated as it always was, because that row has to exist to say the
+machine cannot do the job — with its _prompt_ truncated alongside it now, which is new and is the one
+figure on those rows that moves: a long-context row on a 40K model was being timed reading a 128K
+prompt the window cannot hold. Two kinds of entry, two answers to one ceiling — which is why the
+ceiling is an argument to `gradedScenarios` rather than a `Math.min` in the caller.
 
 **And the review pattern held exactly as this file predicted.** Codex ran four rounds on some of
 these pull requests, and from round three onward the findings were largely defects in the _previous
