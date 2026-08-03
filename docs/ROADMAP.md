@@ -40,7 +40,7 @@ for recommend, #168 for detect, #169 for calibrate — and what each turned out 
 two more (#180, #181) came out of reviewing _this section_ a day later; they are in **Open
 questions**, and two of the first six share one root.
 
-What remains is a naming decision, **four open issues of which three are work** — the six filed
+What remains is a naming decision, **three open issues, all of them work** — the six filed
 during the pass, less [#165](https://github.com/MrZoller/bench/issues/165),
 [#166](https://github.com/MrZoller/bench/issues/166),
 [#170](https://github.com/MrZoller/bench/issues/170),
@@ -714,9 +714,11 @@ weak incumbents, and deliberately not attempted before guided mode shipped. Now 
 the v3-scale bet. What stands between here and it is **#180, #181 and #182**. The six issues in
 **Open questions** are all resolved as of 3 August 2026 — five fixed, and
 [#174](https://github.com/MrZoller/bench/issues/174) closed as a _record_ of an answered policy
-question rather than as work — so what is left from that pass is the three that reviewing this very
-document turned up, one of them a P1 on the path a reader is most likely to take. Counting #174 as a
-blocker would have made a settled decision look like a task, which is why no count here ever did.
+question rather than as work. What is left is #180 and #181, which came out of reviewing this very
+document, and #182, which is the half of #165 its own verification note said not to fold in — a
+different provenance from the other two, and worth keeping straight. One of the three is a P1 on the
+path a reader is most likely to take. Counting #174 as a blocker would have made a settled decision
+look like a task, which is why no count here ever did.
 
 ## Deployment
 
@@ -1956,9 +1958,9 @@ Correctness follow-ups live in
 [the repository's open issues](https://github.com/MrZoller/bench/issues). This section is for the
 questions those issues cannot settle, and the three tables below are the record of the fourteen
 findings filed rather than patched — six out of the July sweep, all now closed; six out of the v2
-pass, of which #165, #166, #170, #171 and #172 are now closed too; and two more out of _documenting_
-the v2 pass, which is its own entry. Three of those last eight are open, plus #182, which #165 split
-off rather than fold in.
+pass, of which #165, #166, #170, #171 and #172 are now closed too, and #174 closed as a record
+rather than as work; and two more out of _documenting_ the v2 pass, which is its own entry. Two of
+those last eight are open, plus #182, which #165 split off rather than fold in.
 They are kept because what a finding turns out to need is repeatedly not what the issue said it
 would be.
 
