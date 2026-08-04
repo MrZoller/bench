@@ -11,7 +11,7 @@ import { FALLBACK_QUANT_ID, quantApplies } from '@/lib/quantChoice';
 import { canonicalDeviceId, getDevice, getModel, MODELS, DEVICES } from '@/data/catalog';
 import { getQuant } from '@/data/quants';
 import { getRuntime, RUNTIMES } from '@/data/runtimes';
-import { searchToConfig } from './url';
+import { locationToConfig } from './url';
 import { DEFAULT_CONFIG, type Config } from './scenario';
 
 export { DEFAULT_CONFIG, type Config };
@@ -131,14 +131,28 @@ export const useConfig = create<ConfigStore>((set) => ({
 }));
 
 /**
- * The scenario the page was opened with.
+ * The scenario the page was opened with — the whole address, not just its query.
  *
- * Guarded for a non-browser environment because the store is imported by tests and, later, by
- * any prerender step — neither has a `location`.
+ * Guarded for a non-browser environment because the store is imported by tests and by the
+ * prerender step, neither of which has a `location`. **The guard is also the reason prerendering
+ * needed a seam** (#178): this store is a module-level singleton whose initial state is evaluated
+ * at import time, so under `renderToString` it is always the default and a naive prerender writes
+ * every device page with the default device's figures. `scripts/prerender.ts` calls `replace`
+ * before each route instead, which runs the same `coerce` this does.
+ *
+ * The client half is the half that has to match. A visitor landing on `/rtx-5090/` has no query
+ * at all, so reading only `location.search` here would hydrate the default scenario over markup
+ * rendered for an RTX 5090 — a whole-tree mismatch, and React would discard the prerendered page.
+ * Reading the path is what closes that. It cannot move to an effect: the singleton is built at
+ * import time, and a first paint of the wrong scenario is the same mismatch one tick later.
  */
 function readInitialConfig(): Config {
   if (typeof window === 'undefined') return DEFAULT_CONFIG;
-  return searchToConfig(window.location.search);
+  return locationToConfig(
+    window.location.pathname,
+    window.location.search,
+    import.meta.env.BASE_URL
+  );
 }
 
 /**

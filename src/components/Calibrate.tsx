@@ -11,6 +11,7 @@ import {
 } from '@/lib/calibrate';
 import { useConfig, type Config } from '@/store/config';
 import { configToShareSearch } from '@/store/url';
+import { scenarioLink } from '@/lib/siteUrl';
 import { getDevice, getModel } from '@/data/catalog';
 import { getQuant } from '@/data/quants';
 import { DisclosureToggle } from './DisclosureToggle';
@@ -145,11 +146,13 @@ export function Calibrate({ evaluation }: { evaluation: Evaluation }) {
     device.vendor,
   ]);
 
+  // `scenarioLink` rather than `window.location`: a `useMemo` body runs during render, so reading
+  // the browser here threw under `renderToString` and blocked prerendering the page (#178).
   const href = useMemo(
     () =>
       submissionUrl({
         repoUrl: REPO_URL,
-        scenarioUrl: `${window.location.origin}${window.location.pathname}${configToShareSearch(config as Config)}`,
+        scenarioUrl: scenarioLink(configToShareSearch(config as Config)),
         deviceName: device.name,
         deviceCount: config.deviceCount,
         modelName: model.name,

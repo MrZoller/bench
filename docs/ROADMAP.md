@@ -89,6 +89,17 @@ zoller.ai subdomain is one repository variable away. See **Deployment**, below.
 | 7. URL state, responsive, a11y     | **done** (#6)     | Querystring round-trips a scenario. Browser pass in `e2e/` (#19); reflow and hit targets (#35, #29)  |
 | 8. Weekly catalog refresh + deploy | **done**          | Refresh opens a PR on a _substantive_ diff. Deployed to Pages, 28 July 2026 — see below              |
 
+**The site now serves real HTML, on four routes** ([#178](https://github.com/MrZoller/headroom/issues/178),
+Phase 2). `npm run build` renders `/`, `/rtx-5090/`, `/dgx-spark/` and `/epyc-9654/` to files
+carrying their own figures — the fit verdict, the memory breakdown, prefill and decode — against
+860 bytes of empty shell before it, for **+0.4 s** of build time. The route list is derived in
+`src/data/routes.ts` and read by both the prerenderer and the browser, so the pages that get built
+and the scenario a visitor lands on cannot disagree. Phase 3 scales it to the full tiered list and
+adds `sitemap.xml`, model pages and the JavaScript-off browser check; what Phase 2 settled is under
+**Things that took real work to get right**, and the finding worth reading first is that the plan's
+injection seam was wrong in a way that produced four correct-looking files with one machine's
+numbers in all of them.
+
 **Correctness debt is tracked as issues, not here.** #9 and #10, which graded a configuration as
 working when it is not, are fixed — together with #11, which printed a figure measured at a
 different scenario from the one its sentence described. Filed as three bugs, one class; written up
@@ -838,13 +849,24 @@ Its preflight job stays, and is still worth having: it checks whether Pages exis
 deploy with a notice rather than failing red. A fork with no Pages gets a green run and an
 explanation instead of a broken-looking one.
 
-Two settings are repository variables rather than committed values, because they describe where
-the site is served rather than what it is, and both fail _quietly_ when wrong:
+Three settings are repository variables rather than committed values, because they describe where
+the site is served rather than what it is, and all three fail _quietly_ when wrong:
 
 | Variable              | Default | What it is for                                                                                |
 | --------------------- | ------- | --------------------------------------------------------------------------------------------- |
 | `PAGES_BASE_PATH`     | `/`     | Vite's `base`. A Pages _project_ site serves from `/<repo>/`; a custom domain serves from `/` |
+| `PAGES_SITE_ORIGIN`   | unset   | The origin prerendered pages write into `<link rel="canonical">`, `og:url` and the share link |
 | `PAGES_CUSTOM_DOMAIN` | unset   | Written to `dist/CNAME` each deploy, since Pages drops the domain otherwise                   |
+
+`PAGES_SITE_ORIGIN` arrived with prerendering (#178) and is the same class of setting as the base
+path, which is why it is a variable and not a constant: a built page states its own canonical URL,
+and that claim needs an origin that no amount of reading the code can supply. Inferring
+`<owner>.github.io` would be right until a custom domain is attached and then wrong without saying
+so — the failure this pair exists to make visible. **Unset is a supported value.** A fork, a local
+build and CI's own `build` job all run without it: the canonical link is then written root-relative,
+which is valid and resolves against the page's own address, and `og:url` is omitted rather than
+invented. Setting it is what turns both absolute. It moves together with `PAGES_CUSTOM_DOMAIN` and
+`PAGES_BASE_PATH` — a custom domain means all three change at once.
 
 `PAGES_BASE_PATH` holds the repo's own name, because a Pages _project_ site serves from it.
 Attaching a custom domain means setting `PAGES_CUSTOM_DOMAIN` **and** returning `PAGES_BASE_PATH`
@@ -1070,6 +1092,34 @@ reading the test that guards them.
   to ~10% over, while EPYC stayed within 1% — proof the old fit was partly absorbing those errors.
   The knobs were left alone deliberately. Re-centring right after removing what a fudge factor was
   masking is how the next error gets hidden. All three sit inside the ±30% band the tests assert.
+
+**Prerendering** (#178, Phase 2)
+
+- **Zustand's server snapshot is `getInitialState()`, and it is a closure over the state the store
+  was built from.** The plan for #178 proposed `useConfig.getState().replace(config)` as the seam
+  for injecting a route's scenario and verified it by printing `getState()` — which does change.
+  The markup does not: `useStore` passes `api.getInitialState` to `useSyncExternalStore` as the
+  third argument, React calls exactly that one on the server, and it returns the object built at
+  import time, which on a build machine is always `DEFAULT_CONFIG`. Three device pages came out
+  within 45 bytes of each other and every one of them was a DGX Spark. **Page size is the check
+  that cannot see this**, which is why the Phase 2 slice is three devices in three classes and the
+  verification is a diff of the figures. `src/entry-server.tsx` updates the state object both
+  halves share; assigning `useConfig.getInitialState` instead does nothing, silently, because
+  `create()` returns `Object.assign(hook, api)` and the hook only carries a copy.
+- **A prerendered page rewrites its own URL unless the "bare or complete" rule gets a baseline.**
+  `configToSearch` returned `''` only for `DEFAULT_CONFIG`, so on `/rtx-5090/` — where the device
+  differs from the default by construction — it returned all nine fields and `useUrlSync` replaced
+  the pretty path with a query within 400 ms of hydrating. The baseline is an argument now, and it
+  is the route's own scenario. The rule itself did not move: a query that is present is still
+  complete, and a bare one still claims nothing beyond the address it sits on.
+- **The client half of a prerendered route is `readInitialConfig`, and it cannot move to an
+  effect.** The store is a module-level singleton whose initial state is evaluated at import time,
+  so a first paint of the wrong scenario is the same whole-tree mismatch one tick later. It reads
+  the path and the query together, query winning.
+- **`404.html` is the shell, never a prerendered page**, or every unknown URL on the site claims to
+  be an RTX 5090. And `main.tsx` branches on an explicit `data-prerendered` marker rather than on
+  `hasChildNodes()`, because the shell's whitespace is a child node and hydrating an empty
+  container is itself a mismatch.
 
 **Tests**
 

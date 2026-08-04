@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { configToSearch, configToShareSearch, sameScenario, searchToConfig } from './url';
+import {
+  configToSearch,
+  configToShareSearch,
+  locationToConfig,
+  pathBaseline,
+  sameScenario,
+  searchToConfig,
+} from './url';
 import { DEFAULT_CONFIG, type Config } from './config';
 
 /**
@@ -132,5 +139,71 @@ describe('scenario URLs', () => {
   it('compares scenarios by value, for deciding whether the URL needs rewriting', () => {
     expect(sameScenario(DEFAULT_CONFIG, { ...DEFAULT_CONFIG })).toBe(true);
     expect(sameScenario(DEFAULT_CONFIG, { ...DEFAULT_CONFIG, concurrency: 4 })).toBe(false);
+  });
+});
+
+/**
+ * A path route carries one of the nine fields and a querystring carries all nine, so the two can
+ * both speak about the same page. These are the rules for when they do.
+ */
+describe('a path and a query together', () => {
+  it('reads the scenario a path names', () => {
+    expect(locationToConfig('/rtx-5090/', '', '/')).toEqual({
+      ...DEFAULT_CONFIG,
+      deviceId: 'rtx-5090',
+    });
+  });
+
+  it('lets the query win, because the query is the complete encoding', () => {
+    // The path is an entry point that names one field; the query names an exact scenario, and it
+    // is the form every link already handed out takes. Precedence the other way would change
+    // what those links mean.
+    expect(locationToConfig('/rtx-5090/', '?d=dgx-spark', '/').deviceId).toBe('dgx-spark');
+  });
+
+  it('lets a query override one field without discarding the path for the rest', () => {
+    const config = locationToConfig('/rtx-5090/', '?u=4', '/');
+    expect(config.deviceId).toBe('rtx-5090');
+    expect(config.concurrency).toBe(4);
+  });
+
+  it('falls back to the defaults for a path it does not recognise', () => {
+    // 404.html answers at any unmatched path and has to boot as something usable.
+    expect(locationToConfig('/nope/whatever/', '', '/')).toEqual(DEFAULT_CONFIG);
+  });
+
+  it('reads a path under a base path', () => {
+    expect(locationToConfig('/headroom/rtx-5090/', '', '/headroom/').deviceId).toBe('rtx-5090');
+  });
+});
+
+/**
+ * The property #178 turned on: a prerendered page must not rewrite its own pretty URL into a
+ * nine-field query on the first effect tick.
+ */
+describe('the baseline a bare query is measured against', () => {
+  it('is the route the address names', () => {
+    expect(pathBaseline('/rtx-5090/', '/')).toEqual({ ...DEFAULT_CONFIG, deviceId: 'rtx-5090' });
+    expect(pathBaseline('/', '/')).toEqual(DEFAULT_CONFIG);
+  });
+
+  it('leaves a prerendered page bare while it still shows that page scenario', () => {
+    const onRoute = { ...DEFAULT_CONFIG, deviceId: 'rtx-5090' };
+    expect(configToSearch(onRoute, pathBaseline('/rtx-5090/', '/'))).toBe('');
+  });
+
+  it('writes the whole scenario the moment it diverges from the path', () => {
+    // And the caller keeps the path, so the address becomes `/rtx-5090/?…&d=dgx-spark&…`: one
+    // source of truth, no history churn, and the query decides.
+    const diverged = { ...DEFAULT_CONFIG, deviceId: 'dgx-spark' };
+    const search = configToSearch(diverged, pathBaseline('/rtx-5090/', '/'));
+
+    expect(new URLSearchParams(search.slice(1)).get('d')).toBe('dgx-spark');
+    expect([...new URLSearchParams(search.slice(1)).keys()]).toHaveLength(9);
+  });
+
+  it('still measures against the defaults when nothing passes a baseline', () => {
+    expect(configToSearch(DEFAULT_CONFIG)).toBe('');
+    expect(configToSearch({ ...DEFAULT_CONFIG, deviceId: 'rtx-5090' })).not.toBe('');
   });
 });

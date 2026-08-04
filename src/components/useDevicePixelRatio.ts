@@ -56,6 +56,24 @@ function getSnapshot(): number {
   return window.devicePixelRatio || 1;
 }
 
+/**
+ * The ratio a server has to assume, and 1 is the only honest answer: nothing on a build machine
+ * knows what display the page will be opened on.
+ *
+ * Required rather than optional. `useSyncExternalStore` throws `Missing getServerSnapshot, which
+ * is required for server-rendered content` under `renderToString`, and both canvas-bearing
+ * components call this during their initial render — so without it the prerender of every page
+ * failed before it reached a figure (#178).
+ *
+ * Assuming 1 cannot produce a hydration mismatch, which is the property that makes this safe
+ * rather than merely quiet: `dpr` is read only inside the draw effects, never into markup. A
+ * retina visitor hydrates against identical HTML and then re-runs the draw at the real ratio,
+ * which is exactly what a display change already does.
+ */
+function getServerSnapshot(): number {
+  return 1;
+}
+
 export function useDevicePixelRatio(): number {
-  return useSyncExternalStore(subscribe, getSnapshot);
+  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 }
