@@ -1,6 +1,12 @@
 import { useEffect, useRef } from 'react';
 import { useConfig, type Config } from './config';
-import { configToSearch, configToShareSearch, sameScenario, searchToConfig } from './url';
+import {
+  configToSearch,
+  configToShareSearch,
+  locationToConfig,
+  pathBaseline,
+  sameScenario,
+} from './url';
 
 /**
  * Keeps the address bar and the store in step, in both directions.
@@ -83,9 +89,22 @@ export function useUrlSync(): void {
     const write = () => {
       if (cancelled || typeof window === 'undefined') return;
       const current = useConfig.getState() as Config;
+      /**
+       * What this address already says without a query, which is what a bare query is allowed to
+       * mean (#178).
+       *
+       * Read from `location` on every write rather than captured once, so it cannot go stale
+       * against a path that changed — and so nothing here has to assume the path never does.
+       *
+       * The consequence when the scenario diverges from the path is deliberate: picking another
+       * device on `/rtx-5090/` writes `/rtx-5090/?d=dgx-spark&…` and *keeps the path*. The
+       * alternative — rewriting the path to match — is history churn for a URL that is already
+       * unambiguous, because the query wins over the path wherever both speak.
+       */
+      const baseline = pathBaseline(window.location.pathname, import.meta.env.BASE_URL);
       const search = arrivedExplicit.current
         ? configToShareSearch(current)
-        : configToSearch(current);
+        : configToSearch(current, baseline);
       /**
        * The fragment is carried through, not rebuilt.
        *
@@ -156,7 +175,13 @@ export function useUrlSync(): void {
       // Following a second link into the same page, or editing the URL by hand, is a fresh
       // arrival — so it re-establishes whether this address carries an explicit scenario.
       arrivedExplicit.current = window.location.search.length > 1;
-      const fromUrl = searchToConfig(window.location.search);
+      // The whole address, because a second link into this page can carry a path route as well as
+      // a query — and the store has to read a `popstate` the same way it read the first arrival.
+      const fromUrl = locationToConfig(
+        window.location.pathname,
+        window.location.search,
+        import.meta.env.BASE_URL
+      );
       if (!sameScenario(fromUrl, useConfig.getState() as Config)) replace(fromUrl);
     };
     window.addEventListener('popstate', onPop);

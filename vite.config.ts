@@ -18,6 +18,23 @@ export default defineConfig({
    * because that is what `npm run dev`, `npm run preview` and the Playwright suite all assume.
    */
   base: process.env.BASE_PATH || '/',
+  define: {
+    /**
+     * Where the built site is served *from*, as opposed to where in it the pages sit.
+     *
+     * The same shape of input as `base` above and set the same way — a repository variable read by
+     * the deploy workflow — because it is the same class of setting: it describes the deployment
+     * rather than the code, it cannot be inferred (`<owner>.github.io` is a guess that is wrong the
+     * moment a custom domain is attached), and it fails quietly rather than loudly when it is
+     * wrong. Prerendered pages need it for their canonical and `og:url` links, and the share button
+     * needs it to write a URL without reading `window` during a render.
+     *
+     * Empty by default, and every consumer has to handle empty: `npm run dev`, `npm run preview`,
+     * the Playwright suite and any fork all run without it, and a build that failed on an unset
+     * publishing address would fail in all four.
+     */
+    __SITE_ORIGIN__: JSON.stringify(process.env.SITE_ORIGIN ?? ''),
+  },
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {

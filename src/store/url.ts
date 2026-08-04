@@ -1,7 +1,8 @@
+import { configFromPath } from '@/data/routes';
 import { DEFAULT_CONFIG, type Config } from './scenario';
 
 /**
- * The scenario, in the querystring.
+ * The scenario, in the URL.
  *
  * A link has to reproduce exactly what the sender was looking at — that is the whole
  * distribution mechanism for a tool like this, and it is also how someone asks "is this right?"
@@ -9,8 +10,9 @@ import { DEFAULT_CONFIG, type Config } from './scenario';
  *
  * Two properties the encoding has to hold:
  *
- *   - **A querystring is complete or absent.** Either the scenario is exactly the default and
- *     the URL is bare, or every one of the nine fields is written out. Nothing in between.
+ *   - **A querystring is complete or absent.** Either the scenario is exactly what the rest of
+ *     the URL already says and the query is bare, or every one of the nine fields is written out.
+ *     Nothing in between.
  *
  *     The tempting version writes only what differs, which is shorter and reads nicely. It is
  *     also wrong the first time a default changes: a link shared today as `?d=rtx-5090` would
@@ -19,11 +21,30 @@ import { DEFAULT_CONFIG, type Config } from './scenario';
  *     cannot depend on a deployment constant. Nine short fields is roughly 90 characters —
  *     cheap insurance against a link that quietly means something else later.
  *
- *     A bare URL is exempt because it makes no claim: it means "however the app opens", which
- *     stays true whatever the defaults become.
+ *     A bare query is exempt because it makes no claim beyond the address it sits on: it means
+ *     "however the app opens *here*", which stays true whatever the defaults become.
+ *
+ *     **That last sentence used to say "however the app opens", full stop, and #178 is why it now
+ *     says where.** The rule was stated against `DEFAULT_CONFIG` because until path routes existed
+ *     the address carried nothing else. It does now: a prerendered `/rtx-5090/` means the default
+ *     scenario *on an RTX 5090*, and the original argument transfers to it whole — a path is not
+ *     a deployment constant the way a default is, because it is written into the address the
+ *     reader is already looking at and cannot come to mean something else while their link sits
+ *     in a thread. Leaving the comparison at `DEFAULT_CONFIG` was the version that broke: on every
+ *     prerendered page the device differs from the default, so {@link configToSearch} returned all
+ *     nine fields and `useUrlSync` rewrote `/rtx-5090/` to `/rtx-5090/?m=…&d=rtx-5090&…` within
+ *     400ms of hydrating — a pretty URL erasing itself while the reader watched. So the baseline
+ *     became an argument rather than a constant, and that is the only thing that moved. A query
+ *     that is present is still complete; nothing is ever written as a diff.
  *   - **Reading is total.** Every value arrives from a URL a stranger may have edited by hand,
  *     so nothing here throws or trusts; the store's `coerce` is the single validation point and
  *     this layer's job is only to hand it strings.
+ *
+ * **Path and query, when both say something: the query wins.** `/rtx-5090/?d=dgx-spark` renders
+ * the Spark. The path carries one of the nine fields and is an entry point; the query carries all
+ * nine and names an exact scenario, and every link already handed out is a query. Precedence in
+ * the other direction would quietly change what those links mean, which is the one thing this
+ * whole module exists to prevent. {@link locationToConfig} is where it is applied, once.
  */
 
 /** Short keys, because these end up in a link someone pastes into a message. */
@@ -64,12 +85,18 @@ function encodeAll(config: Config): string {
  * Nothing is omitted for matching the default, because the reader has no way to tell an omitted
  * field from one the sender never touched — and the default it would fall back to is whatever
  * ships on the day the link is opened, not the day it was written.
+ *
+ * `baseline` is what the address already says without a query — `DEFAULT_CONFIG` on the root, and
+ * the route's own scenario on a prerendered path (#178). It decides only whether the query may be
+ * empty; it never selects which fields get written, because a query that is present is complete.
+ * Defaulted rather than required so every caller that has no path to speak of keeps the behaviour
+ * it had.
  */
-export function configToSearch(config: Config): string {
-  const isDefault = (Object.keys(KEYS) as (keyof Config)[]).every(
-    (key) => config[key] === DEFAULT_CONFIG[key]
+export function configToSearch(config: Config, baseline: Config = DEFAULT_CONFIG): string {
+  const saysNothingNew = (Object.keys(KEYS) as (keyof Config)[]).every(
+    (key) => config[key] === baseline[key]
   );
-  return isDefault ? '' : encodeAll(config);
+  return saysNothingNew ? '' : encodeAll(config);
 }
 
 /**
@@ -94,8 +121,21 @@ export function configToShareSearch(config: Config): string {
  * which runs over the result. Doing it in one place is what stops the two disagreeing.
  */
 export function searchToConfig(search: string): Config {
+  return { ...DEFAULT_CONFIG, ...searchToPartialConfig(search) };
+}
+
+/**
+ * The fields the querystring actually named, and no others.
+ *
+ * The same read as {@link searchToConfig} without the defaults poured in, which is what a caller
+ * needs when something else in the URL has already spoken. Spreading a full `Config` over a path's
+ * scenario would overwrite the path's device with the default device and silently invert the
+ * precedence rule the module docblock states; a partial spreads as an override, which is the
+ * behaviour that rule describes.
+ */
+export function searchToPartialConfig(search: string): Partial<Config> {
   const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search);
-  const config: Config = { ...DEFAULT_CONFIG };
+  const config: Partial<Config> = {};
 
   for (const key of Object.keys(KEYS) as (keyof Config)[]) {
     const raw = params.get(KEYS[key]);
@@ -120,6 +160,35 @@ export function searchToConfig(search: string): Config {
 }
 
 /**
+ * The scenario a whole address names — path and query together, query winning.
+ *
+ * One function rather than a rule each caller applies, because there are two callers that must
+ * never disagree: the store reads it once at import time to decide what the page opens as, and
+ * `useUrlSync` reads it again on `popstate`, when someone edits the URL or follows a second link
+ * into the same page. Two spreads in two files is how a back button comes to show a different
+ * scenario than a reload of the same address.
+ *
+ * `base` is the site's base path — `import.meta.env.BASE_URL` in the browser — because a route is
+ * only a route below it, and nothing here may assume what it is.
+ */
+export function locationToConfig(pathname: string, search: string, base: string): Config {
+  return {
+    ...DEFAULT_CONFIG,
+    ...configFromPath(pathname, base),
+    ...searchToPartialConfig(search),
+  };
+}
+
+/**
+ * The scenario an address names *without* its query: the baseline a bare query is measured
+ * against, and what {@link configToSearch} is given so a prerendered page's pretty URL survives
+ * its own first effect tick.
+ */
+export function pathBaseline(pathname: string, base: string): Config {
+  return { ...DEFAULT_CONFIG, ...configFromPath(pathname, base) };
+}
+
+/**
  * Whether two configs describe the same scenario.
  *
  * Used to avoid pushing history entries for a URL that already says what it needs to — dragging
@@ -127,4 +196,45 @@ export function searchToConfig(search: string): Config {
  */
 export function sameScenario(a: Config, b: Config): boolean {
   return (Object.keys(KEYS) as (keyof Config)[]).every((key) => a[key] === b[key]);
+}
+
+/**
+ * Whether the markup already in `#root` may be hydrated, or has to be replaced.
+ *
+ * **Two checks, because there are two questions and one answer cannot cover both.** `hasMarker` —
+ * the `data-prerendered` attribute `scripts/prerender.ts` writes — says *whether there is markup*.
+ * The comparison says *whether it is the right markup*. Neither implies the other, and dropping
+ * either one reintroduces a whole-tree re-render:
+ *
+ *   - Without the marker, `dist/404.html` hydrates an empty container. It is the bare shell and
+ *     Pages serves it at every unmatched path, where the address names no route — so `addressed`
+ *     and `prerendered` are both `DEFAULT_CONFIG` and compare *equal*. The comparison alone would
+ *     wave through precisely the page that has nothing to hydrate.
+ *   - Without the comparison, every shared link mismatches. {@link configToShareSearch} writes the
+ *     root path with a complete nine-field query, so a link naming an RTX 5090 lands on
+ *     prerendered `/` — which is a DGX Spark page — with the marker present and the wrong scenario
+ *     inside it. React would hydrate, mismatch, and throw ~822 KiB of correct-looking markup away.
+ *     What the visitor sees is not a blank shell but a fully-painted page of *another machine's*
+ *     figures, swapping under them a moment later. For a tool whose output is numbers that is
+ *     worse than the empty shell prerendering replaced.
+ *
+ * **The comparison is raw against raw, and that is the safe direction.** `pathBaseline` returns an
+ * uncoerced config while the store holds `coerce`d state, so this is not quite the comparison the
+ * hydrate actually turns on. It does not need to be: `coerce` is deterministic and idempotent, so
+ * equal raw configs stay equal through it — a `true` here is always right. Two raw configs that
+ * differ *might* coerce to the same scenario, and those cases return `false` and render from
+ * scratch. The error is therefore only ever to under-hydrate, which costs a render on a page that
+ * was going to be correct either way, and never to over-hydrate, which is the failure with a
+ * user-visible artifact.
+ */
+export function shouldHydrate(
+  pathname: string,
+  search: string,
+  base: string,
+  hasMarker: boolean
+): boolean {
+  if (!hasMarker) return false;
+  const addressed = locationToConfig(pathname, search, base);
+  const prerendered = pathBaseline(pathname, base);
+  return sameScenario(addressed, prerendered);
 }

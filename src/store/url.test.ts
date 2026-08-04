@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { configToSearch, configToShareSearch, sameScenario, searchToConfig } from './url';
+import {
+  configToSearch,
+  configToShareSearch,
+  locationToConfig,
+  pathBaseline,
+  sameScenario,
+  searchToConfig,
+  shouldHydrate,
+} from './url';
 import { DEFAULT_CONFIG, type Config } from './config';
 
 /**
@@ -132,5 +140,148 @@ describe('scenario URLs', () => {
   it('compares scenarios by value, for deciding whether the URL needs rewriting', () => {
     expect(sameScenario(DEFAULT_CONFIG, { ...DEFAULT_CONFIG })).toBe(true);
     expect(sameScenario(DEFAULT_CONFIG, { ...DEFAULT_CONFIG, concurrency: 4 })).toBe(false);
+  });
+});
+
+/**
+ * A path route carries one of the nine fields and a querystring carries all nine, so the two can
+ * both speak about the same page. These are the rules for when they do.
+ */
+describe('a path and a query together', () => {
+  it('reads the scenario a path names', () => {
+    expect(locationToConfig('/rtx-5090/', '', '/')).toEqual({
+      ...DEFAULT_CONFIG,
+      deviceId: 'rtx-5090',
+    });
+  });
+
+  it('lets the query win, because the query is the complete encoding', () => {
+    // The path is an entry point that names one field; the query names an exact scenario, and it
+    // is the form every link already handed out takes. Precedence the other way would change
+    // what those links mean.
+    expect(locationToConfig('/rtx-5090/', '?d=dgx-spark', '/').deviceId).toBe('dgx-spark');
+  });
+
+  it('lets a query override one field without discarding the path for the rest', () => {
+    const config = locationToConfig('/rtx-5090/', '?u=4', '/');
+    expect(config.deviceId).toBe('rtx-5090');
+    expect(config.concurrency).toBe(4);
+  });
+
+  it('falls back to the defaults for a path it does not recognise', () => {
+    // 404.html answers at any unmatched path and has to boot as something usable.
+    expect(locationToConfig('/nope/whatever/', '', '/')).toEqual(DEFAULT_CONFIG);
+  });
+
+  it('reads a path under a base path', () => {
+    expect(locationToConfig('/headroom/rtx-5090/', '', '/headroom/').deviceId).toBe('rtx-5090');
+  });
+});
+
+/**
+ * The property #178 turned on: a prerendered page must not rewrite its own pretty URL into a
+ * nine-field query on the first effect tick.
+ */
+describe('the baseline a bare query is measured against', () => {
+  it('is the route the address names', () => {
+    expect(pathBaseline('/rtx-5090/', '/')).toEqual({ ...DEFAULT_CONFIG, deviceId: 'rtx-5090' });
+    expect(pathBaseline('/', '/')).toEqual(DEFAULT_CONFIG);
+  });
+
+  it('leaves a prerendered page bare while it still shows that page scenario', () => {
+    const onRoute = { ...DEFAULT_CONFIG, deviceId: 'rtx-5090' };
+    expect(configToSearch(onRoute, pathBaseline('/rtx-5090/', '/'))).toBe('');
+  });
+
+  it('writes the whole scenario the moment it diverges from the path', () => {
+    // And the caller keeps the path, so the address becomes `/rtx-5090/?…&d=dgx-spark&…`: one
+    // source of truth, no history churn, and the query decides.
+    const diverged = { ...DEFAULT_CONFIG, deviceId: 'dgx-spark' };
+    const search = configToSearch(diverged, pathBaseline('/rtx-5090/', '/'));
+
+    expect(new URLSearchParams(search.slice(1)).get('d')).toBe('dgx-spark');
+    expect([...new URLSearchParams(search.slice(1)).keys()]).toHaveLength(9);
+  });
+
+  it('still measures against the defaults when nothing passes a baseline', () => {
+    expect(configToSearch(DEFAULT_CONFIG)).toBe('');
+    expect(configToSearch({ ...DEFAULT_CONFIG, deviceId: 'rtx-5090' })).not.toBe('');
+  });
+});
+
+/**
+ * Whether the markup on the page is the markup this address asked for.
+ *
+ * `main.tsx` shipped branching on the `data-prerendered` attribute alone, which says only that
+ * markup exists. Every link the share button hands out is the root path plus a complete
+ * nine-field query, so the common arrival is a query naming one device on a file rendered for
+ * another — marker present, scenario wrong, whole tree discarded. These are the cases that come
+ * apart, tested here rather than through a DOM entry point because the decision is arithmetic
+ * over a URL and nothing about it needs a document.
+ */
+describe('deciding whether to hydrate', () => {
+  const shared = configToShareSearch;
+  const onRtx: Config = { ...DEFAULT_CONFIG, deviceId: 'rtx-5090' };
+
+  it('hydrates the root arrived at bare', () => {
+    expect(shouldHydrate('/', '', '/', true)).toBe(true);
+  });
+
+  it('hydrates the root when the query spells out the scenario it already renders', () => {
+    // The highest-volume share of all: someone copies a link without touching a control, so the
+    // query is nine fields of `DEFAULT_CONFIG` on the page that was rendered from it.
+    expect(shouldHydrate('/', shared(DEFAULT_CONFIG), '/', true)).toBe(true);
+  });
+
+  it('does not hydrate the root when the query names another device', () => {
+    // The finding. `/` is a DGX Spark page; this address is an RTX 5090, and hydrating would
+    // paint the Spark's figures and then swap them.
+    expect(shouldHydrate('/', shared(onRtx), '/', true)).toBe(false);
+  });
+
+  it('hydrates a device route arrived at bare', () => {
+    expect(shouldHydrate('/rtx-5090/', '', '/', true)).toBe(true);
+  });
+
+  it('does not hydrate a device route whose query overrides the path', () => {
+    expect(shouldHydrate('/rtx-5090/', '?d=dgx-spark', '/', true)).toBe(false);
+  });
+
+  it("hydrates a device route whose query is that route's own scenario", () => {
+    expect(shouldHydrate('/rtx-5090/', shared(onRtx), '/', true)).toBe(true);
+  });
+
+  it('does not hydrate a device route over a query differing in one untouched field', () => {
+    // Not only the device: any of the nine puts the markup out of date, and `ctx` changes every
+    // figure on the page without changing the machine it names.
+    expect(shouldHydrate('/rtx-5090/', shared({ ...onRtx, contextTokens: 8192 }), '/', true)).toBe(
+      false
+    );
+  });
+
+  /**
+   * The outer guard, and it is not redundant with the comparison.
+   *
+   * `404.html` is the bare shell served at every unmatched path, where the address names no route
+   * — so both sides of the comparison are `DEFAULT_CONFIG` and it says "same scenario" about a
+   * container with nothing in it. Only the marker can tell those apart, which is why it stays.
+   */
+  it('never hydrates without the marker, whatever the address says', () => {
+    for (const [pathname, search] of [
+      ['/', ''],
+      ['/', shared(DEFAULT_CONFIG)],
+      ['/', shared(onRtx)],
+      ['/rtx-5090/', ''],
+      ['/rtx-5090/', '?d=dgx-spark'],
+      ['/rtx-5090/', shared(onRtx)],
+      ['/nope/whatever/', ''],
+    ]) {
+      expect(shouldHydrate(pathname, search, '/', false)).toBe(false);
+    }
+  });
+
+  it('reads the address below a base path, like everything else here', () => {
+    expect(shouldHydrate('/headroom/rtx-5090/', '', '/headroom/', true)).toBe(true);
+    expect(shouldHydrate('/headroom/rtx-5090/', '?d=dgx-spark', '/headroom/', true)).toBe(false);
   });
 });

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useConfig, type Config } from '@/store/config';
 import { configToShareSearch } from '@/store/url';
+import { scenarioLink } from '@/lib/siteUrl';
 import { CATALOG_GENERATED_AT } from '@/data/catalog';
 import { colors, space, withAlpha } from '@/design/tokens';
 import { CopyButton } from './CopyButton';
@@ -281,10 +282,12 @@ function ShareLink() {
    * control afterwards left the still-visible input offering the previous scenario, so a manual
    * copy shared something the user was no longer looking at. That is the same class of bug the
    * full encoding exists to prevent — a link that means something other than it appears to.
+   *
+   * The origin comes from {@link scenarioLink} rather than from `window`, because this expression
+   * runs during render and a prerender has no `window` — see that module for why the value is a
+   * build-time constant instead of a deferred read.
    */
-  const href = `${window.location.origin}${window.location.pathname}${configToShareSearch(
-    config as Config
-  )}`;
+  const href = scenarioLink(configToShareSearch(config as Config));
 
   /**
    * The confirmation, the overlapping-click guard, the per-attempt timer and the

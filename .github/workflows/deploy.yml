@@ -69,9 +69,20 @@ jobs:
       # instead, so set the variable to `/headroom/` if the site is reachable at
       # `<owner>.github.io/headroom` rather than at a domain of its own. Getting this wrong produces
       # a blank page rather than an error, which is why it is stated here rather than inferred.
+      #
+      # `PAGES_SITE_ORIGIN` is the second half of the same address and arrived with prerendering
+      # (#178): every built page now carries a `<link rel="canonical">` and an `og:url`, and both
+      # want an absolute URL that no amount of reading the code can supply. Same treatment as the
+      # base path — a repository variable, stated rather than inferred, because `<owner>.github.io`
+      # is a guess that is wrong the moment a custom domain is attached and wrong quietly.
+      #
+      # Empty is a supported value and not a failure: a fork, and this job on a repository where
+      # nobody has set it, still build. The canonical link is then written root-relative — valid,
+      # and resolved against the page's own address — and `og:url` is omitted rather than invented.
       - name: Build
         env:
           BASE_PATH: ${{ vars.PAGES_BASE_PATH || '/' }}
+          SITE_ORIGIN: ${{ vars.PAGES_SITE_ORIGIN }}
         run: npm run build
 
       # A `CNAME` in the published directory is what tells Pages to answer on a custom domain, and
