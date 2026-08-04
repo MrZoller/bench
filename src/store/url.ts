@@ -197,3 +197,44 @@ export function pathBaseline(pathname: string, base: string): Config {
 export function sameScenario(a: Config, b: Config): boolean {
   return (Object.keys(KEYS) as (keyof Config)[]).every((key) => a[key] === b[key]);
 }
+
+/**
+ * Whether the markup already in `#root` may be hydrated, or has to be replaced.
+ *
+ * **Two checks, because there are two questions and one answer cannot cover both.** `hasMarker` —
+ * the `data-prerendered` attribute `scripts/prerender.ts` writes — says *whether there is markup*.
+ * The comparison says *whether it is the right markup*. Neither implies the other, and dropping
+ * either one reintroduces a whole-tree re-render:
+ *
+ *   - Without the marker, `dist/404.html` hydrates an empty container. It is the bare shell and
+ *     Pages serves it at every unmatched path, where the address names no route — so `addressed`
+ *     and `prerendered` are both `DEFAULT_CONFIG` and compare *equal*. The comparison alone would
+ *     wave through precisely the page that has nothing to hydrate.
+ *   - Without the comparison, every shared link mismatches. {@link configToShareSearch} writes the
+ *     root path with a complete nine-field query, so a link naming an RTX 5090 lands on
+ *     prerendered `/` — which is a DGX Spark page — with the marker present and the wrong scenario
+ *     inside it. React would hydrate, mismatch, and throw ~822 KiB of correct-looking markup away.
+ *     What the visitor sees is not a blank shell but a fully-painted page of *another machine's*
+ *     figures, swapping under them a moment later. For a tool whose output is numbers that is
+ *     worse than the empty shell prerendering replaced.
+ *
+ * **The comparison is raw against raw, and that is the safe direction.** `pathBaseline` returns an
+ * uncoerced config while the store holds `coerce`d state, so this is not quite the comparison the
+ * hydrate actually turns on. It does not need to be: `coerce` is deterministic and idempotent, so
+ * equal raw configs stay equal through it — a `true` here is always right. Two raw configs that
+ * differ *might* coerce to the same scenario, and those cases return `false` and render from
+ * scratch. The error is therefore only ever to under-hydrate, which costs a render on a page that
+ * was going to be correct either way, and never to over-hydrate, which is the failure with a
+ * user-visible artifact.
+ */
+export function shouldHydrate(
+  pathname: string,
+  search: string,
+  base: string,
+  hasMarker: boolean
+): boolean {
+  if (!hasMarker) return false;
+  const addressed = locationToConfig(pathname, search, base);
+  const prerendered = pathBaseline(pathname, base);
+  return sameScenario(addressed, prerendered);
+}

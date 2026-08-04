@@ -29,7 +29,8 @@ vi.mock('@/data/catalog', async (importOriginal) => {
 });
 
 import { boundGridByDefault } from '@/test/grid';
-import { useConfig } from '@/store/config';
+import { DEFAULT_CONFIG, useConfig } from '@/store/config';
+import { configToShareSearch, locationToConfig, shouldHydrate } from '@/store/url';
 import { prerenderRoutes, renderRoute } from './entry-server';
 
 boundGridByDefault();
@@ -110,6 +111,49 @@ describe('hydration', () => {
     container.innerHTML = html;
     document.body.appendChild(container);
     Object.assign(useConfig.getInitialState(), { deviceId: 'epyc-9654' });
+
+    const recoverable: unknown[] = [];
+    await act(async () => {
+      mounted.push(
+        hydrateRoot(
+          container,
+          <StrictMode>
+            <App />
+          </StrictMode>,
+          { onRecoverableError: (error) => void recoverable.push(error) }
+        )
+      );
+    });
+
+    expect(recoverable.length).toBeGreaterThan(0);
+  });
+
+  /**
+   * The same mismatch as the control above, arrived at rather than staged — and it is the arrival
+   * the site actually gets.
+   *
+   * `configToShareSearch` writes the root path with all nine fields, so every link the share
+   * button and the calibration issue hand out lands on prerendered `/` — a DGX Spark page —
+   * carrying a query that may name any device at all. The attribute `main.tsx` used to branch on
+   * says markup is present and nothing about which scenario it holds, so React hydrated, mismatched
+   * and discarded the whole tree: the visitor watched a fully-painted wrong-device page swap.
+   *
+   * This is the case `shouldHydrate` exists for, asserted from the URL end so the guard cannot be
+   * deleted later on the grounds that nothing demonstrates the failure.
+   */
+  it('notices when a shared link addresses a scenario the markup was not rendered for', async () => {
+    const arrival = locationToConfig(
+      '/',
+      configToShareSearch({ ...DEFAULT_CONFIG, deviceId: 'rtx-5090' }),
+      '/'
+    );
+    expect(shouldHydrate('/', configToShareSearch(arrival), '/', true)).toBe(false);
+
+    const html = renderRoute({});
+    const container = document.createElement('div');
+    container.innerHTML = html;
+    document.body.appendChild(container);
+    Object.assign(useConfig.getInitialState(), arrival);
 
     const recoverable: unknown[] = [];
     await act(async () => {
