@@ -486,7 +486,9 @@ function describeMismatch(
   if (backend !== undefined) {
     if (backend.includes('METAL') && prediction.deviceVendor !== 'Apple') {
       reasons.push(
-        `run on Metal, which is Apple silicon, where the figures above are for a ${prediction.deviceVendor} device`
+        // No article in front of the vendor: this branch runs when the vendor is not Apple, which
+        // leaves NVIDIA, AMD, Intel and Generic — and "a" was wrong on the first three.
+        `run on Metal, which is Apple silicon, where the figures above are for ${prediction.deviceVendor} hardware`
       );
     } else if (backend === 'CPU' && prediction.deviceClass === 'discrete-gpu') {
       reasons.push(`run on the CPU where the figures above are for a graphics card`);
