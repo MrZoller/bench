@@ -199,6 +199,69 @@ size and the scale-plus-bias dtypes, so the width is 8.5 bits and the catalog sa
 forced the contract question the marker always carried (#45) — the field asks whether a width is
 _established_ now, not whether it is nominal.
 
+### The copy pass, and the class it actually found, 3 August 2026
+
+[#177](https://github.com/MrZoller/headroom/issues/177) asked for three phases over the UI copy —
+inventory, mechanics, voice — on the premise that a lot of it "reads like it was written by an LLM".
+**That premise no longer holds, and the evidence is worth recording so the question is not reopened
+from the issue text.** A sweep of every user-facing string under `src/` and in `index.html` — 259 of
+them across 24 files, covering JSX text, string constants, `aria-label`s, captions, placeholders,
+option notes and the meta description — returns **zero** hits for the banned vocabulary: no
+_powerful_, _seamless_, _robust_, _comprehensive_, _intuitive_, _effortless_; no
+leverage/empower/unlock/streamline; no "It's not just X, it's Y"; no "Whether you're X or Y"; no
+emoji. There are no double spaces, no missing spaces after punctuation and no doubled terminal
+stops anywhere in the copy. The eighteen-issue sweep above and the v2 pass had already taken it.
+
+**What a real inventory finds instead is grammar that only breaks on some data**, which is a class
+no amount of reading the source catches — every one of these renders correctly at the default
+scenario. Three sentences put an indefinite article in front of an interpolation and let the value
+decide which article is right. `Your browser reports a ${vendor} GPU.` in `detect.ts` is the sharp
+one: `vendorFromString` returns NVIDIA, AMD, Intel or Apple and every one of the four wants "an", so
+the string was wrong on **every value it can hold**, on the most common path through the detection
+panel. Its sibling reads a WebGPU adapter architecture, where `ampere` and the `xe-*` family want
+"an" and `blackwell` and `gcn-1` want "a". `calibrate.ts`'s Metal mismatch is the same shape against
+the catalog's own vendors: its branch is guarded on the prediction _not_ being Apple, so 32 of the
+43 rows reach it and it was wrong on 31 of those — `desktop-ddr5-dual-channel`, whose vendor is
+`Generic`, is the only row the article was right for. The fix is to move the article in front of the
+noun, where the interpolation cannot reach it — "a GPU from NVIDIA", "a GPU on ampere", "for NVIDIA
+hardware" — rather than to add an a/an helper, because a helper is interpolation logic and this pass
+was not allowed to change any.
+
+**Six more sites in the same shape are left open on purpose**, because each needs the sentence
+restructured rather than a preposition moved, and the call is whether the helper is wanted after
+all. Three of them are wrong on values reachable today: `A ${wait(chatTtft)} wait` in `verdict.ts`
+(at 8, 11, 18 and 80–89 seconds), and `a ${params}B model` and `a ${k}/${v} cache` in `calibrate.ts`
+(at 8.0B and 11.0B, and at `f16`). Three more are safe only because of what their guards happen to
+admit, which is the reason to list them rather than the reason not to: `a ${kv} KV cache` in
+`placement.ts` breaks only for FP16, which no catalogued runtime refuses; `a ${kv} cache` in
+`launch.ts` renders under a guard that leaves only `q8_0` and `q4_0`; and `a ${ctx(agentSession)}
+session` in `verdict.ts` is safe because every context ceiling in the catalog formats to a
+consonant-initial string. A catalog row or a bar constant is all that stands between each of those
+and the first group.
+
+**The mechanical half found four defects, and the useful one is a markup leak.** `launch.ts`'s MLX
+measurement note was written with `*length*` in it and printed the asterisks: `inlineProse` renders
+`*emphasis*` for the Hardware picker's curated `detail` and for nothing else, so markdown written
+into any other string is markup that never gets its transformation. That is the `inlineProse`
+docblock's own lesson — reference prose emitted as UI copy without the transformation it needs —
+pointed the other way, and it is the shape to check first the next time a note is added. The other
+three: `Load this into the bench above` was the one straggler from #176's rule that the hero surface
+is **the Bench** (the Matrix legend and the Envelope ring caption both had it right); the serving
+verdict's spill clause ran two independent clauses together on a bare "so" where the clause fourteen
+lines below it in the same `shortOfGood` list already carried the comma; and `family&rsquo;s` was an
+HTML entity in a paragraph whose neighbour eighteen lines up writes the character.
+
+**Two conventions were checked and deliberately not swept, and both are recorded here so the next
+pass does not re-derive them.** _Apostrophes_ are split: the components and `stops.ts` use `’` in
+plain string literals where nothing forced it, while `launch.ts`, `calibrate.ts` and `devices.json`
+use `'`. Straight is numerically dominant (~57 to ~10) — but straight does not survive a
+single-quoted string literal, so normalising that way flips three of them to double quotes and
+churns the source style, and normalising the other way means rewriting sixty strings including
+curated catalog prose. Neither arm is worth a copy pass; the inconsistency is cosmetic and invisible
+at most sizes. _Serial commas_ have no dominant form to pick: seven user-facing three-item lists
+omit the Oxford comma and five carry it, and README — the reference voice — carries it in both of
+its. The honest answer is that there is no convention to enforce yet, not that one side won.
+
 ## v2 — guided mode, and what building it settled
 
 Four features, filed under the
