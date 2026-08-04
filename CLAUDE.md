@@ -1,4 +1,4 @@
-# bench
+# Headroom
 
 Work out which open-weight LLMs run on your hardware, and how comfortably — across discrete
 GPUs, unified-memory machines, and CPU+RAM.

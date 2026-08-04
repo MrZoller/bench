@@ -68,7 +68,7 @@
  *     issue template makes that field non-optional.
  */
 
-/** One row of `llama-bench` output, in the units bench compares against. */
+/** One row of `llama-bench` output, in the units Headroom compares against. */
 export interface Measurement {
   /** `pp` rows measure prompt processing; `tg` rows measure generation. */
   kind: 'prefill' | 'decode';
@@ -291,7 +291,7 @@ function numberOf(value: unknown): number | undefined {
   return undefined;
 }
 
-/** What bench said, for the scenario the reader is looking at. */
+/** What Headroom said, for the scenario the reader is looking at. */
 export interface Prediction {
   /** Machine-wide prompt tokens per second, as `estimatePrefill` reports it. */
   prefillTokensPerSec: number;
@@ -360,7 +360,7 @@ export interface Prediction {
 export interface Comparison {
   measurement: Measurement;
   predicted: number;
-  /** `measured / predicted - 1`. Positive means bench under-predicted. */
+  /** `measured / predicted - 1`. Positive means Headroom under-predicted. */
   error: number;
   /** Whether the pair sits inside the band the engine's reference tests assert. */
   withinBand: boolean;
@@ -378,12 +378,12 @@ export interface Comparison {
 export const CALIBRATION_BAND = 0.3;
 
 /**
- * Line up each measured row against what bench predicted for it.
+ * Line up each measured row against what Headroom predicted for it.
  *
  * **A mismatch is reported, never corrected for.** It would be easy to rescale a `pp512` result to
  * the scenario's own prompt length and present a delta, and it would be wrong twice over: prefill is
  * quadratic so the rescaling is a model rather than an observation, and the whole point of this
- * surface is that the reader can check bench's arithmetic rather than take more of it on trust.
+ * surface is that the reader can check Headroom's arithmetic rather than take more of it on trust.
  */
 export function compare(
   measurements: readonly Measurement[],
@@ -617,7 +617,7 @@ function describeMismatch(
    * disagreed with each other. llama.cpp counts the output tensor a position past the repeating
    * blocks, so #136's emitter passes `layers + 1` for a fully-resident placement — and readers type
    * `-ngl 99` for the same thing. Comparing against the layer count alone would have marked a run
-   * that followed bench's own command.
+   * that followed Headroom's own command.
    *
    * So a fully-resident prediction accepts anything at or above the layer count, and a partial one
    * is compared exactly.

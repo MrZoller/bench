@@ -1,6 +1,6 @@
-# bench
+# Headroom
 
-**<https://mrzoller.github.io/bench/>**
+**<https://mrzoller.github.io/headroom/>**
 
 Work out which open-weight LLMs run on your hardware, and how comfortably — across discrete
 GPUs, unified-memory machines, and CPU+RAM.
@@ -14,7 +14,7 @@ DeepSeek-family models by several times (MLA caches one compressed latent per la
 token) and roughly doubles anything with sliding-window layers. At long context those errors are
 tens of gigabytes — the difference between "buy another GPU" and "you're fine".
 
-So `bench` computes rather than approximates. Model architectures come from each repo's own
+So Headroom computes rather than approximates. Model architectures come from each repo's own
 `config.json` on Hugging Face and exact parameter counts from its safetensors index, so weights
 and KV are derived per model instead of guessed from a size class. Throughput is a roofline
 calibrated against published measurements at both ends of the hardware range, and it reports

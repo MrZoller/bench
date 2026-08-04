@@ -232,16 +232,23 @@ test.describe('at 200% text size', () => {
 
     expect(sizes.root, 'the launch switch did not take — this is a 100% run').toBe(ROOT_200);
     /*
-     * The masthead wordmark is `clamp(2rem, 10vw, 5rem)`. At this viewport the `10vw` preferred
-     * term is 32px, well under the 2rem floor, so the floor is what applies — 64px at this root
-     * and 32px at the default.
+     * The masthead wordmark is `clamp(1.5rem, 10vw, 5rem)`. At this viewport the `10vw` preferred
+     * term is 32px, above the 1.5rem floor at the default root but below it here, so the floor is
+     * what applies at 200% — 48px at this root, and the `10vw` term's 32px at the default.
+     *
+     * The floor was `2rem` until the wordmark became `headroom`, at which point eight letters at
+     * 64px overflowed a 320px viewport in any wide sans (see the note in `Masthead.tsx`). Lowering
+     * it is the fix; this number moves with it because the two are the same statement.
      *
      * Asserted so a change that pinned the root while leaving rem-derived text alone would still
      * fail here. The floor being in `rem` is the load-bearing part: swapping it for a `px` or a
      * `vw`-only size would leave the largest text on the page ignoring a low-vision reader's
      * request outright, and this is the assertion that says so.
      */
-    expect(sizes.heading, 'rem-derived text did not follow the root').toBeCloseTo(ROOT_200 * 2, 0);
+    expect(sizes.heading, 'rem-derived text did not follow the root').toBeCloseTo(
+      ROOT_200 * 1.5,
+      0
+    );
   });
 
   /**
@@ -480,7 +487,7 @@ test.describe('at 200% text size', () => {
   });
   /**
    * The Matrix readout, filled, at 200% — the case neither suite covered
-   * ([#102](https://github.com/MrZoller/bench/issues/102)).
+   * ([#102](https://github.com/MrZoller/headroom/issues/102)).
    *
    * `min-h` is `5rem` below `sm`, `2.5rem` at `sm` and `1.25rem` at `lg`, measured against the
    * widest sentence at a 16px root. At a 32px root the reservation doubles — and so do the glyphs, so

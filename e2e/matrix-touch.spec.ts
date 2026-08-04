@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 /**
  * Inspecting a cell with a finger, in a browser that actually has one
- * ([#102](https://github.com/MrZoller/bench/issues/102)).
+ * ([#102](https://github.com/MrZoller/headroom/issues/102)).
  *
  * The Matrix's readout reaches a mouse and a keyboard, and until this it could not reach touch: the
  * only gesture a cell offers is a tap, and that tap *is* `onClick` — five store keys rewritten and a

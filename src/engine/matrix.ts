@@ -214,7 +214,7 @@ export function measureValue(cell: MatrixCell, measure: MatrixMeasure): number |
  * the fit label is the ramp's figure rather than the worst spiller's sentence.
  *
  * **`domain` replaced a bare `max`, and the floor is the half that changed**
- * ([#97](https://github.com/MrZoller/bench/issues/97)). The old field was `high`'s value and the
+ * ([#97](https://github.com/MrZoller/headroom/issues/97)). The old field was `high`'s value and the
  * caller floored the ramp at zero, on the argument that this grid runs from a desktop CPU to a B200
  * so its bottom really is near nothing. That argument holds for headroom and for tokens per second
  * and does not survive being pointed at a latency. Zero seconds is not a reading any cell can have,

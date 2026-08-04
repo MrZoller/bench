@@ -313,7 +313,7 @@ export const SEEDS: Seed[] = [
  */
 /**
  * Repos that were checked and declined, with what would change the answer and when it was last
- * asked ([#103](https://github.com/MrZoller/bench/issues/103)).
+ * asked ([#103](https://github.com/MrZoller/headroom/issues/103)).
  *
  * **A written refusal used to be permanent**, and that is the defect this shape exists for.
  * `unseededCandidates` filters out every id in here unconditionally, so a model was invisible to the
@@ -580,7 +580,7 @@ export const NOT_SEEDED: Readonly<Record<string, Refusal>> = {
     why: 'superseded by Mistral Small 4; same shape',
   },
   /**
-   * The three repos [#77](https://github.com/MrZoller/bench/issues/77) named by id and this list did
+   * The three repos [#77](https://github.com/MrZoller/headroom/issues/77) named by id and this list did
    * not answer, which is a different failure from the ones above: each was checked, each was
    * declined, and none of them was written down — so the entry a reader would look for was missing
    * for the same reason the seed list went a year stale. All three are also invisible to

@@ -224,8 +224,22 @@ export function Masthead() {
             it steady on anything wider. Left in the ink colour rather than the accent: violet is
             reserved for what changes or responds, and a title does neither.
           */}
-          <h1 className="hero-wordmark text-[clamp(2rem,10vw,5rem)] leading-none font-semibold tracking-[-0.03em]">
-            bench
+          {/*
+            **The `1.5rem` floor is set by the wordmark's own length, not by taste.** At 320px and a
+            200% root the `10vw` term is 32px, so the floor governs, and an unbreakable eight-letter
+            word cannot be wrapped or tracked out of an overflow. `headroom` needs 348.8px of ink in
+            DejaVu Sans Bold — the default sans on the CI runner and on most Linux — against the
+            294.4px the column offers, and the document scrolled sideways at 362px against a 320px
+            viewport. `bench` fit because five letters left 86px of slack.
+
+            At the default text size this changes nothing at any viewport a browser actually
+            presents: the `10vw` term is 32px at 320px wide, above the new 24px floor, so `clamp`
+            returns exactly what it did before. The new floor would only govern at 100% below 240px,
+            where the old one governed below 320px — and 320px is WCAG reflow's own floor, so no
+            reader is in that band. Under text zoom the floor does govern, which is the room needed.
+          */}
+          <h1 className="hero-wordmark text-[clamp(1.5rem,10vw,5rem)] leading-none font-semibold tracking-[-0.03em]">
+            headroom
           </h1>
           <p className="mt-3 text-sm text-[var(--color-text-muted)]">
             What runs on your hardware, and how comfortably.

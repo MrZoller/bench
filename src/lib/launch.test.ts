@@ -197,7 +197,7 @@ describe('llama.cpp: one catalog row, three launchers', () => {
      * *assigned* counts beside a resident `-ngl` hands llama.cpp two numbers from different scopes
      * and lets it re-derive a per-device split that is neither: on a rig packing 7,7,6,6 layers and
      * keeping 2,2,6,6 resident, `-ngl 16 -ts 7,7,6,6` spreads sixteen layers slightly in favour of
-     * the two cards bench sized for two — which are the constrained cards precisely because their
+     * the two cards Headroom sized for two — which are the constrained cards precisely because their
      * cache already fills them. That is an OOM on load, from a command.
      *
      * There were a spilled test and a sharded test, and the defect lived only in their product.
@@ -288,7 +288,7 @@ describe('llama.cpp: one catalog row, three launchers', () => {
       const notes = emitted.notes.join(' ');
 
       // The positive claim: both lists, in the panel, as the numbers the engine actually packed.
-      expect(notes).toContain(`bench packed ${counts.join(',')} layers`);
+      expect(notes).toContain(`Headroom packed ${counts.join(',')} layers`);
       expect(notes).toContain(`${unbounded.join(',')} of them attending over the whole context`);
 
       // And why there is no flag for it, which is the half a silent omission cannot say. `-ot`
@@ -300,18 +300,18 @@ describe('llama.cpp: one catalog row, three launchers', () => {
       expect(notes).toMatch(/KV cache follows the device -ngl and -ts put the layer on/i);
       // A floor to plan against rather than a prediction of what the command produces: llama.cpp's
       // contiguous split sometimes lands the same composition, and finding out which would be this
-      // module deriving llama.cpp's placement rather than formatting bench's.
+      // module deriving llama.cpp's placement rather than formatting Headroom's.
       expect(notes).toMatch(/Treat the busiest card above as a floor/i);
 
       // The flag itself still stays off, which is what makes the sentences above the whole of what
-      // bench claims here.
+      // Headroom claims here.
       expect(text(emitted)).not.toContain('-ts');
     });
 
     /**
      * **The same sweep the flag itself needed on this launcher.** `-ts` was missing from
      * `llama-bench` once already, because a sharded measurement run at llama.cpp's default split
-     * times a placement other than the one priced — and that is as true when bench *cannot* express
+     * times a placement other than the one priced — and that is as true when Headroom *cannot* express
      * its split as when it declines to repeat an even one. The serving command carried the
      * explanation and the measurement command, whose whole purpose is to produce a number for the
      * calibration record, carried nothing.
@@ -330,7 +330,7 @@ describe('llama.cpp: one catalog row, three launchers', () => {
 
       expect(text(measured)).not.toContain('-ts');
       if (!measured.ok) throw new Error('unreachable');
-      expect(measured.notes.join(' ')).toContain(`bench packed ${counts.join(',')} layers`);
+      expect(measured.notes.join(' ')).toContain(`Headroom packed ${counts.join(',')} layers`);
       expect(measured.notes.join(' ')).toMatch(/llama\.cpp cannot be given that assignment/i);
     });
 
@@ -364,8 +364,8 @@ describe('llama.cpp: one catalog row, three launchers', () => {
 
       const emitted = commands(spilled)['llama-server'].serve;
       if (!emitted.ok) throw new Error('unreachable');
-      expect(emitted.notes.join(' ')).toContain(`bench packed ${packed.join(',')} layers`);
-      expect(emitted.notes.join(' ')).not.toContain(`bench packed ${resident.join(',')} layers`);
+      expect(emitted.notes.join(' ')).toContain(`Headroom packed ${packed.join(',')} layers`);
+      expect(emitted.notes.join(' ')).not.toContain(`Headroom packed ${resident.join(',')} layers`);
     });
 
     /**
@@ -396,7 +396,7 @@ describe('llama.cpp: one catalog row, three launchers', () => {
       expect(text(emitted)).toContain(`-ts ${counts.join(',')}`);
       // And no packing sentences, because there is no refusal left to explain.
       if (!emitted.ok) throw new Error('unreachable');
-      expect(emitted.notes.join(' ')).not.toMatch(/bench packed/i);
+      expect(emitted.notes.join(' ')).not.toMatch(/Headroom packed/i);
     });
 
     /**
@@ -424,14 +424,14 @@ describe('llama.cpp: one catalog row, three launchers', () => {
 
       expect(text(emitted)).toContain('-ngl 0');
       if (!emitted.ok) throw new Error('unreachable');
-      expect(emitted.notes.join(' ')).not.toMatch(/bench packed/i);
+      expect(emitted.notes.join(' ')).not.toMatch(/Headroom packed/i);
 
       // Both launchers, because both carry the sentences and a guard on one of them is the half-fix
       // this pair has already been through once.
       const measured = commands(spilledOut)['llama-bench'].measure;
       expect(text(measured)).toContain('-ngl 0');
       if (!measured.ok) throw new Error('unreachable');
-      expect(measured.notes.join(' ')).not.toMatch(/bench packed/i);
+      expect(measured.notes.join(' ')).not.toMatch(/Headroom packed/i);
     });
 
     it('says nothing about a packing on a rig with one card, which packs nothing', () => {
@@ -448,7 +448,7 @@ describe('llama.cpp: one catalog row, three launchers', () => {
       const emitted = commands(one)['llama-server'].serve;
 
       if (!emitted.ok) throw new Error('unreachable');
-      expect(emitted.notes.join(' ')).not.toMatch(/bench packed/i);
+      expect(emitted.notes.join(' ')).not.toMatch(/Headroom packed/i);
     });
 
     it('gives the benchmark client the same split as the server', () => {
@@ -847,7 +847,7 @@ describe('what review found, kept as tests', () => {
 
     expect(written).not.toMatch(/cat > Modelfile/);
     expect(written).toMatch(/set -C/);
-    expect(written).toMatch(/bench-[a-z0-9-]+\.Modelfile/);
+    expect(written).toMatch(/headroom-[a-z0-9-]+\.Modelfile/);
   });
 
   it('pins the commit the catalog derived the model from, where the runtime can', () => {
@@ -998,12 +998,12 @@ describe('what review found, kept as tests', () => {
 
     // The quantized-cache branch is the one the `ollama serve &` line was removed from, so the
     // four fixes it sat above are asserted here as well as on the f16 block: the subshell, `set -e`,
-    // `set -C` and the bench-specific filename.
+    // `set -C` and the Headroom-specific filename.
     const lines = emitted.text.split('\n');
     expect(lines[0]).toBe('(');
     expect(lines[1]).toBe('set -e');
     expect(emitted.text.trimEnd().endsWith(')')).toBe(true);
-    expect(emitted.text).toMatch(/\(set -C; cat > bench-[a-z0-9-]+\.Modelfile\)/);
+    expect(emitted.text).toMatch(/\(set -C; cat > headroom-[a-z0-9-]+\.Modelfile\)/);
   });
 
   it('does not run a stale Modelfile after refusing to overwrite one', () => {

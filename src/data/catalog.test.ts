@@ -449,7 +449,7 @@ describe('the catalog covers the hardware the audience owns', () => {
    */
   /**
    * **A `cpu-ram` row's compute must be reproducible from a core count, a clock and an FMA width
-   * the row itself states** ([#90](https://github.com/MrZoller/bench/issues/90)).
+   * the row itself states** ([#90](https://github.com/MrZoller/headroom/issues/90)).
    *
    * The same shape as the Apple check below, filed for the opposite reason. There, five rows shared
    * one correct rule and three of them applied it to the wrong bin. Here, five rows shared no rule

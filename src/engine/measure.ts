@@ -21,7 +21,7 @@ export type MeasureDirection = 'higher' | 'lower';
 
 /**
  * Which way each measure reads — the thing that used to be expressed by inverting the value, and
- * the reason that was wrong ([#97](https://github.com/MrZoller/bench/issues/97)).
+ * the reason that was wrong ([#97](https://github.com/MrZoller/headroom/issues/97)).
  *
  * `measureOf` returned `1 / ttftSeconds` so that every measure could be treated as larger-is-better
  * by one comparison. That is true of the *ordering* and false of the *spacing*, which is what a

@@ -5,7 +5,7 @@ import { GIB } from '@/engine/types';
  * One-click "what can my machine run" (#137).
  *
  * The current entry point assumes the visitor knows their GPU or SoC and can find it in a 43-row
- * picker. Most people who would benefit from bench know "a MacBook" or "a gaming PC". This reads
+ * picker. Most people who would benefit from Headroom know "a MacBook" or "a gaming PC". This reads
  * what the browser exposes and narrows the picker — **to a candidate shortlist and a confirmation
  * step, never to a silent selection.**
  *
@@ -201,7 +201,7 @@ export interface Detection {
    */
   narrowedNothing?: true;
   /**
-   * Set when the platform is one bench has no rows for at all — a phone, or an iPad in its
+   * Set when the platform is one Headroom has no rows for at all — a phone, or an iPad in its
    * desktop-class mode.
    *
    * A terminal state rather than a shortlist: the catalog is desktops, laptops and servers, so the
@@ -310,7 +310,7 @@ export function detect(signals: DetectionSignals, devices: readonly DeviceSpec[]
    * narrowed *in* by the vendor and then emptied by the platform, and the conflict guard put the
    * Macs back.
    *
-   * The catalog has no phone or tablet row, so the honest answer on either is that bench has
+   * The catalog has no phone or tablet row, so the honest answer on either is that Headroom has
    * nothing to offer — which is what the caller renders. Anything it does not recognise narrows
    * nothing at all.
    */
@@ -335,7 +335,7 @@ export function detect(signals: DetectionSignals, devices: readonly DeviceSpec[]
 
   if (handheld) {
     evidence.push(
-      `The platform is ${phone ? 'a phone' : 'a tablet'}, which bench has no rows for — every ` +
+      `The platform is ${phone ? 'a phone' : 'a tablet'}, which Headroom has no rows for — every ` +
         `machine in the catalog is a desktop, a laptop or a server.`
     );
   } else if (platform !== undefined && platform !== '' && !known) {
@@ -515,7 +515,7 @@ export async function readSignals(): Promise<DetectionSignals | undefined> {
      * which on a dual-GPU laptop is routinely the integrated Intel part — and the vendor prune then
      * removed the discrete card the reader actually cares about, with no way to get it back.
      *
-     * The discrete one is the machine bench is about, so `high-performance` is asked first and its
+     * The discrete one is the machine Headroom is about, so `high-performance` is asked first and its
      * answer wins. The default is the fallback, not the other way round.
      */
     const adapter =

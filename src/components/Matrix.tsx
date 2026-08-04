@@ -389,7 +389,7 @@ export function Matrix({ config }: { config: Config }) {
   /**
    * What the line was showing when the current pointer gesture *started* — or `null` when there is no
    * pointer gesture, which is how the keyboard is told apart
-   * ([#102](https://github.com/MrZoller/bench/issues/102)).
+   * ([#102](https://github.com/MrZoller/headroom/issues/102)).
    *
    * The gap #71 left: on a touch-only device the only gesture a cell offers is a tap, and that tap
    * *is* `onClick` — five store keys rewritten and a scroll several sections away. So the readout
@@ -1852,7 +1852,7 @@ function tooltip(
   selectedDeviceCount: number,
   /**
    * Name the machine and state the figure, dropping the model and the full device name
-   * ([#102](https://github.com/MrZoller/bench/issues/102)).
+   * ([#102](https://github.com/MrZoller/headroom/issues/102)).
    *
    * The narrow form, and the reason it exists is arithmetic rather than taste. The readout's
    * reservation is in `rem`, so at a 32px root it doubles — and the glyphs double with it, so the

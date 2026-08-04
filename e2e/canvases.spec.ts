@@ -273,7 +273,7 @@ test('the masthead is a banner landmark and its backdrop is not announced', asyn
   await page.goto('/');
 
   const banner = page.getByRole('banner');
-  await expect(banner.getByRole('heading', { level: 1 })).toHaveText('bench');
+  await expect(banner.getByRole('heading', { level: 1 })).toHaveText('headroom');
 
   // The Envelope's canvas is `role="img"` carrying a described plot. This one encodes nothing, so
   // it must not reach the accessibility tree at all — announcing "image" here describes a gradient.

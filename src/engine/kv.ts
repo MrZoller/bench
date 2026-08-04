@@ -44,7 +44,7 @@ function windowOf(attention: AttentionSpec, layerIndex: number): number | null {
  * Whether this layer's attention is bounded — the property that makes a hybrid model's layers
  * non-interchangeable, and therefore the property a per-device layer *set* has to be read against.
  *
- * Exported for `launch.ts`, which says what bench packed onto each card: on Gemma at 128K one of
+ * Exported for `launch.ts`, which says what Headroom packed onto each card: on Gemma at 128K one of
  * these caches ~128x what a windowed one does, so "nine layers" and "nine layers, two of them
  * unbounded" are different statements about the same card.
  */

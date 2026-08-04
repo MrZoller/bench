@@ -150,7 +150,7 @@ describe('placing a magnitude on the ramp', () => {
   });
 
   /**
-   * The defect [#97](https://github.com/MrZoller/bench/issues/97) was filed for, asserted in both
+   * The defect [#97](https://github.com/MrZoller/headroom/issues/97) was filed for, asserted in both
    * directions so the fix cannot be silently reverted.
    *
    * The old code did not pass a direction — it inverted the *value*, handing this function
