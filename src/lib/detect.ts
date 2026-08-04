@@ -276,8 +276,16 @@ export function detect(signals: DetectionSignals, devices: readonly DeviceSpec[]
             `rather than the chip, and every Apple silicon Mac reports one of three — so this says ` +
             `which vendor and nothing about which Mac.`
         : architecture !== undefined && ARCHITECTURE_VENDORS[architecture] !== undefined
-          ? `Your browser reports a ${architecture} GPU, which is ${vendor} silicon.`
-          : `Your browser reports a ${vendor} GPU.`
+          ? // The article goes in front of the noun rather than in front of the interpolation,
+            // because the interpolation decides which article is correct and this module cannot
+            // ask it: `ampere` and every `xe-*` want "an" where `blackwell` and `gcn-1` want "a".
+            // Below, worse — `vendor` there is whatever `vendorFromString` returned, which is one
+            // of NVIDIA, AMD, Intel and Apple (the last reachable here, since `isApple` needs a
+            // reported architecture and this branch is also where an adapter that withheld one
+            // lands). Every one of the four wants "an", so "a ${vendor} GPU" was wrong on every
+            // value it can hold.
+            `Your browser reports a GPU on ${architecture}, which is ${vendor} silicon.`
+          : `Your browser reports a GPU from ${vendor}.`
     );
   }
 

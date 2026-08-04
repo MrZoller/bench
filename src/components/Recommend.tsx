@@ -353,7 +353,7 @@ function Row({
         )}
 
         <span className="text-[0.625rem] text-[var(--color-text-faint)]">
-          Load this into the bench above — {kvLabel(runtime, kvPrecision)} cache, its own numbers.
+          Load this into the Bench above — {kvLabel(runtime, kvPrecision)} cache, its own numbers.
         </span>
       </button>
     </li>

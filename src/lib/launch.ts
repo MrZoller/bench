@@ -1031,7 +1031,7 @@ function mlx(input: LaunchInput): Pair {
                       `model the batch changes the speed as well as the memory.`,
                   ]
                 : []),
-              `The prompt is piped rather than quoted because its *length* is what is being measured — ` +
+              `The prompt is piped rather than quoted because its length is what is being measured — ` +
                 `${fmt(prompt)} tokens. "word " is roughly one token each, so treat the count as ` +
                 `approximate and read the tokens-per-second the tool reports back.`,
               ...(quantizedCache
