@@ -1154,7 +1154,7 @@ export function judgeWorkloads(inputs: VerdictInputs): WorkloadVerdict[] {
              */
             servingGood.holds &&
               good.placement.offloadFraction > 0 &&
-              'the weights are spilling to host RAM so every additional user makes that worse rather than simply not fitting',
+              'the weights are spilling to host RAM, so every additional user makes that worse rather than simply not fitting',
             /*
              * And the exactly-full case, which had no sentence at all.
              *
