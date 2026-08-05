@@ -124,8 +124,10 @@ describe('prerenderRoutes', () => {
    * The page is written because it works — the status label renders in the device panel exactly as
    * it does everywhere else, so a visitor who lands on it sees what they are looking at. What must
    * not happen is a search result for a machine nobody can buy, stripped of the label that made it
-   * honest. So `indexable` is false for every route naming a non-shipping row, and
-   * `sitemap.xml` is the only thing that reads it.
+   * honest. So `indexable` is false for every route naming a non-shipping row, and two things
+   * enforce it: `sitemap.xml` omits the route, and `pageHtml` marks the page `noindex`. The
+   * omission alone is only a withheld invitation — a crawler indexes what it finds by any route,
+   * so one external link was enough to defeat it.
    */
   it('writes a page for rumoured hardware but does not advertise it', () => {
     const unshipped = DEVICES.filter((device) => device.status !== 'shipping');

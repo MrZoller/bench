@@ -65,6 +65,26 @@ export function pageHtml(
 ): string {
   const canonical = origin ? `${origin}${url}` : url;
   const meta = [
+    /**
+     * A page that is not advertised says so itself, rather than relying on not being mentioned.
+     *
+     * `indexable` was written to keep pre-release hardware out of search results, and omitting a
+     * URL from `sitemap.xml` does not do that — a sitemap is a discovery hint, not a directive, and
+     * a search engine indexes what it finds by any route. One external link is enough. `noindex` is
+     * the only thing that actually holds the line `routes.ts` claims to hold.
+     *
+     * `follow` rather than `nofollow`: these pages carry no internal route links at all, and their
+     * outbound links are the catalog's own `source` URLs, which are worth following. And no
+     * `robots.txt` `Disallow` to go with it — blocking the crawl stops the directive from ever
+     * being read, which is the usual way this fix gets silently undone.
+     *
+     * The canonical below stays, self-referential. `noindex` applies to this page and there is no
+     * consolidation target to leak it to; pointing the canonical elsewhere would both risk the
+     * directive being attributed to that target and claim these figures are a duplicate of another
+     * page's, which they are not. The Open Graph tags stay too — they drive link previews, not
+     * search, and the decision here was that the page works for whoever lands on it.
+     */
+    ...(route.indexable ? [] : ['<meta name="robots" content="noindex, follow" />']),
     `<link rel="canonical" href="${escapeHtml(canonical)}" />`,
     '<meta property="og:type" content="website" />',
     `<meta property="og:title" content="${escapeHtml(route.title)}" />`,

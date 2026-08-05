@@ -143,6 +143,37 @@ describe('a built page', () => {
     expect(html).toContain('<div id="root" data-prerendered>');
   });
 
+  /**
+   * The half of `indexable` that a sitemap cannot do.
+   *
+   * Omitting a URL from `sitemap.xml` withholds an invitation; it does not stop a crawler that
+   * found the page another way. Asserted on both arms so the tag cannot be attached to every page
+   * by accident — a blanket `noindex` would be a far worse bug than the one it fixes, and it would
+   * be invisible to any test that only checked the rumoured page.
+   */
+  it('marks an unadvertised page noindex, and no other page', () => {
+    const unadvertised = prerenderRoutes().filter((route) => !route.indexable);
+    const advertised = prerenderRoutes().filter((route) => route.indexable);
+
+    /* The device page *and* its pairs, which is the propagation worth asserting — a rumoured row
+       that is also in the pair shortlist carries ten more pages, and marking only the device page
+       would leave them advertising unshipped hardware. Asserted by tier rather than by count: the
+       exact number is a fact about `devices.json` (that the one non-shipping row falls inside the
+       leading `unified-soc` rows) which legitimately moves the day it ships or the ladder is
+       reordered, and it would then fail here, in a test about robots tags, rather than in
+       `routes.test.ts` where the flag's meaning is actually pinned. */
+    expect(unadvertised.some((route) => route.tier === 1)).toBe(true);
+    expect(unadvertised.some((route) => route.tier === 3)).toBe(true);
+    for (const route of unadvertised) {
+      expect(build(route), route.segments.join('/')).toContain(
+        '<meta name="robots" content="noindex, follow" />'
+      );
+    }
+    for (const route of [advertised[0]!, advertised[advertised.length - 1]!]) {
+      expect(build(route), route.segments.join('/')).not.toContain('name="robots"');
+    }
+  });
+
   it('writes a relative canonical and no og:url when the origin is unset', () => {
     // A fork, a pull-request build, or a repository where nobody has set `PAGES_SITE_ORIGIN`.
     // Inventing `<owner>.github.io` would be the guess that variable exists to stop.

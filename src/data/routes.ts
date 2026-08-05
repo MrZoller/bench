@@ -66,7 +66,7 @@ export interface PrerenderRoute {
   readonly title: string;
   readonly description: string;
   /**
-   * Whether `sitemap.xml` advertises this page.
+   * Whether the site advertises this page — kept out of `sitemap.xml`, and marked `noindex`.
    *
    * A page is written either way. This is the narrower question of what the site *submits to
    * crawlers*, and it is false for exactly one thing: hardware that is not shipping. A rumoured
