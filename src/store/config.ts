@@ -11,7 +11,7 @@ import { FALLBACK_QUANT_ID, quantApplies } from '@/lib/quantChoice';
 import { canonicalDeviceId, getDevice, getModel, MODELS, DEVICES } from '@/data/catalog';
 import { getQuant } from '@/data/quants';
 import { getRuntime, RUNTIMES } from '@/data/runtimes';
-import { locationToConfig } from './url';
+import { locationToConfig, pathBaseline } from './url';
 import { DEFAULT_CONFIG, type Config } from './scenario';
 
 export { DEFAULT_CONFIG, type Config };
@@ -153,6 +153,34 @@ function readInitialConfig(): Config {
     window.location.search,
     import.meta.env.BASE_URL
   );
+}
+
+/**
+ * The scenario a prerendered path was actually rendered with — coerced, as the server coerced it.
+ *
+ * `pathBaseline` answers "what does this path declare", which is a raw partial: `/m/qwen--qwen3-8b/`
+ * declares a model and nothing else, so the rest is `DEFAULT_CONFIG`. That is the right answer to
+ * its own question and the wrong baseline to compare a *store* against, because the store has been
+ * through `coerce`. `DEFAULT_CONFIG.quantId` is `mxfp4`, which `quantApplies` refuses on a model
+ * with no experts, so every dense model coerces to `bf16` and the store no longer equals the
+ * baseline. `useUrlSync` reads that as a scenario that has diverged from its path and writes the
+ * whole nine-field query in — erasing the pretty URL the prerenderer just advertised as canonical.
+ *
+ * It was 101 of the 199 routes: 17 of 35 model pages (every dense row) and 84 of 120 pair pages
+ * (7 dense models across 12 devices). Tiers 0 and 1 were clean, which is why #178's Phase 2 fix
+ * looked complete — `coerce(DEFAULT_CONFIG ∪ {deviceId})` is a fixed point for all 43 devices, so
+ * the failure could not appear until model-bearing routes existed. `microsoft/phi-4` drifts on two
+ * fields, its 16K `maxContext` clamping the default 32K as well.
+ *
+ * Coercing here rather than teaching `src/data/routes.ts` the coerced fields is what keeps the two
+ * halves in agreement *by construction*: the prerenderer renders `coerce(DEFAULT ∪ route.config)`
+ * and `routes.test.ts` already proves `configFromPath(routePath(route)) === route.config`, so this
+ * is the same expression the server evaluated rather than a second implementation of it. The
+ * alternative would put `quantApplies`, `getQuant` and the context clamp inside a module the issue
+ * requires to be a pure catalog derivation, and it would drift the day `coerce` changes.
+ */
+export function coercedPathBaseline(pathname: string, base: string): Config {
+  return coerce(pathBaseline(pathname, base));
 }
 
 /**

@@ -1,12 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { useConfig, type Config } from './config';
-import {
-  configToSearch,
-  configToShareSearch,
-  locationToConfig,
-  pathBaseline,
-  sameScenario,
-} from './url';
+import { coercedPathBaseline, useConfig, type Config } from './config';
+import { configToSearch, configToShareSearch, locationToConfig, sameScenario } from './url';
 
 /**
  * Keeps the address bar and the store in step, in both directions.
@@ -101,7 +95,11 @@ export function useUrlSync(): void {
        * alternative — rewriting the path to match — is history churn for a URL that is already
        * unambiguous, because the query wins over the path wherever both speak.
        */
-      const baseline = pathBaseline(window.location.pathname, import.meta.env.BASE_URL);
+      /* Coerced, because `current` is: the store has been through `coerce` and a raw path partial
+         has not, so on every dense model page the two disagreed on `quantId` — and on `phi-4`'s
+         page over `contextTokens` as well — and this effect wrote the full query in, erasing the
+         pretty URL the page advertises as canonical. See `coercedPathBaseline`. */
+      const baseline = coercedPathBaseline(window.location.pathname, import.meta.env.BASE_URL);
       const search = arrivedExplicit.current
         ? configToShareSearch(current)
         : configToSearch(current, baseline);
