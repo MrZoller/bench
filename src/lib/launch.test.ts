@@ -206,9 +206,21 @@ describe('llama.cpp: one catalog row, three launchers', () => {
       const notes = emitted.notes.join(' ');
 
       expect(notes).not.toMatch(/-\d+ repeating layers/);
-      expect(notes).toMatch(/keeps every layer on the host/i);
+      expect(notes).toMatch(/puts nothing on the GPU/i);
       // Not the cpu-ram sentence: this machine has a GPU, it just has no room.
       expect(notes).not.toMatch(/no GPU to offload to/i);
+
+      /**
+       * And it must not claim to match the panel, which is the mistake this note made first.
+       * `residentLayers` floors, so it hits zero while a fraction is still resident — across the
+       * 4,302 configurations reaching this note the spill runs 80.5% to 99.9% and is **never**
+       * 100%. So `-ngl 0`, which puts nothing on a GPU, is always a slower placement than the one
+       * priced, and a sentence saying otherwise is false on every case it renders.
+       */
+      expect(nothingFits.placement.offloadFraction).toBeGreaterThan(0);
+      expect(nothingFits.placement.offloadFraction).toBeLessThan(1);
+      expect(notes).toMatch(/slower than the panel estimates/i);
+      expect(notes).not.toMatch(/what the figures above price/i);
     });
 
     it('is zero on a machine with no GPU to offload to', () => {

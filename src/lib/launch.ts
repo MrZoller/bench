@@ -1160,10 +1160,17 @@ function nglNote(input: LaunchInput, ngl: number): string {
      Distinct from the `cpu-ram` case above, which is about a rig with no GPU rather than a GPU
      with no room. */
   if (ngl === 0) {
+    /* And it does *not* claim to match the figures, which was this sentence's first mistake.
+       `residentLayers` floors, so it reaches zero while a fraction of the weights is still
+       resident — across the 4,302 configurations that reach this note the spill runs 80.5% to
+       99.9% and is never 100%. `-ngl 0` puts nothing on the GPU at all, so the command is a
+       slower placement than the panel priced, every time. Which flag expresses the placement
+       Headroom sized is #204's question, not this note's. */
     return (
-      `-ngl 0 keeps every layer on the host, which is what the figures above price: ` +
-      `${percentish(placement.offloadFraction)} of the weights spill, so ${rig.device.name} ` +
-      `has no room for a whole layer beside the cache it has to hold.`
+      `-ngl 0 puts nothing on the GPU: ${rig.device.name} has no room for a whole layer beside ` +
+      `the cache it has to hold. The figures above price ${percentish(placement.offloadFraction)} ` +
+      `of the weights spilling rather than all of them, so expect this command to run slower ` +
+      `than the panel estimates.`
     );
   }
   /* Says what llama.cpp will do, not what Headroom sized, because on this branch they differ:
