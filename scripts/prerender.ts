@@ -3,12 +3,13 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 /**
- * Writes the site as real HTML files, one per route.
+ * Writes the site as real HTML files, one per route, plus the sitemap that advertises them.
  *
  * Runs after both Vite builds and reads their output: `dist/index.html` for the shell — the
  * hashed asset URLs, the meta tags, the whole document — and `dist-ssr/entry-server.js` for the
  * app, which it renders once per route and injects into that shell. Nothing here knows how to
- * render React or where the assets live; it substitutes strings into a document Vite produced.
+ * render React, where the assets live, or what a page should say; it is I/O, two caps, and one
+ * content check, over functions the SSR bundle exports and `src/prerender/` tests.
  *
  * **Why a script rather than a plugin.** Requirement 3 of
  * [#178](https://github.com/MrZoller/headroom/issues/178) is that the route list derive from the
@@ -33,10 +34,9 @@ const BASE_PATH = process.env.BASE_PATH || '/';
 /**
  * The origin the site is published at, from the `PAGES_SITE_ORIGIN` repository variable.
  *
- * Absent, the canonical link is written as a root-relative URL — valid, and resolved against the
- * page's own address — while `og:url` is omitted entirely, because Open Graph consumers want an
- * absolute URL and a relative one tells them nothing. Inventing `<owner>.github.io` instead would
- * be the same quietly-wrong guess `PAGES_BASE_PATH` exists to avoid.
+ * Empty is supported and means "not published anywhere yet": the canonical link goes
+ * root-relative, `og:url` is omitted, and no `sitemap.xml` is written at all. The reasoning for
+ * each is at its own seam — `src/prerender/page.ts` and `src/prerender/sitemap.ts`.
  */
 const SITE_ORIGIN = process.env.SITE_ORIGIN ?? '';
 
@@ -48,6 +48,11 @@ const SITE_ORIGIN = process.env.SITE_ORIGIN ?? '';
  * puts the real ceiling near 1,250 pages. 400 leaves a 3x margin, and it is the number that stops
  * a catalog which doubles from silently quadrupling the model x device tier, since that tier is a
  * product of two axes that both grow.
+ *
+ * The full tiered list is 199 of it: 1 root, 43 devices, 35 models, 120 pairs. A catalog that
+ * doubled on both axes would be 1 + 86 + 70 + 120 = 277 — still inside, because the pair tier is a
+ * fixed 10 x 12 by construction and does not grow with the catalog. What would cross this is
+ * somebody widening that shortlist, which is exactly the change worth stopping to think about.
  */
 const MAX_ROUTES = 400;
 
@@ -72,82 +77,21 @@ interface Route {
   readonly config: Record<string, unknown>;
   readonly title: string;
   readonly description: string;
+  readonly indexable: boolean;
 }
 
 interface ServerBundle {
   prerenderRoutes: () => readonly Route[];
   routePath: (route: Route, base: string) => string;
   renderRoute: (config: Record<string, unknown>) => string;
+  pageHtml: (shell: string, route: Route, url: string, body: string, origin: string) => string;
+  missingFigures: (html: string) => readonly string[];
+  sitemapXml: (routes: readonly Route[], base: string, origin: string) => string | null;
 }
 
 function fail(message: string): never {
   console.error(`prerender: ${message}`);
   process.exit(1);
-}
-
-/** `&`, `<`, `>` and `"`, which is everything that can escape an attribute or a text node here. */
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-/**
- * Substitute once, and refuse to carry on if the shell no longer looks the way this expects.
- *
- * A silent no-op here is the failure mode of every string-injecting prerenderer: `index.html`
- * gains a line, one replacement stops matching, and every page ships with the same title as the
- * root while looking entirely correct in a browser.
- */
-function replaceOnce(html: string, pattern: RegExp, replacement: string, what: string): string {
-  const matches = html.match(new RegExp(pattern, 'g'));
-  if (matches?.length !== 1) {
-    fail(
-      `expected exactly one ${what} in dist/index.html, found ${matches?.length ?? 0}. ` +
-        'The shell changed shape; update the pattern in scripts/prerender.ts rather than ' +
-        'shipping pages that all say the same thing.'
-    );
-  }
-  return html.replace(pattern, () => replacement);
-}
-
-function pageHtml(shell: string, route: Route, url: string, body: string): string {
-  const canonical = SITE_ORIGIN ? `${SITE_ORIGIN}${url}` : url;
-  const meta = [
-    `<link rel="canonical" href="${escapeHtml(canonical)}" />`,
-    '<meta property="og:type" content="website" />',
-    `<meta property="og:title" content="${escapeHtml(route.title)}" />`,
-    `<meta property="og:description" content="${escapeHtml(route.description)}" />`,
-    ...(SITE_ORIGIN ? [`<meta property="og:url" content="${escapeHtml(canonical)}" />`] : []),
-  ]
-    .map((tag) => `    ${tag}`)
-    .join('\n');
-
-  let html = replaceOnce(
-    shell,
-    /<title>[\s\S]*?<\/title>/,
-    `<title>${escapeHtml(route.title)}</title>`,
-    'title'
-  );
-  html = replaceOnce(
-    html,
-    /<meta\s+name="description"[\s\S]*?\/>/,
-    `<meta name="description" content="${escapeHtml(route.description)}" />`,
-    'description meta'
-  );
-  html = replaceOnce(html, /<\/head>/, `${meta}\n  </head>`, 'closing head tag');
-  /**
-   * The marker `main.tsx` branches on, written here so it exists on exactly the pages that have
-   * markup to hydrate. `404.html` keeps the bare shell and therefore keeps rendering from scratch.
-   */
-  return replaceOnce(
-    html,
-    /<div id="root"><\/div>/,
-    `<div id="root" data-prerendered>${body}</div>`,
-    'root container'
-  );
 }
 
 /** Total bytes of a directory tree, so the cap is checked against what is really there. */
@@ -177,6 +121,14 @@ function overflowingTier(pages: readonly RenderedPage[], cap: number, cost: 'cou
     if (running > cap) return tier;
   }
   return tiers[tiers.length - 1] ?? 0;
+}
+
+/** What each tier contributed, so the log says what was built rather than only how much. */
+function byTier(pages: readonly RenderedPage[]): string {
+  const tiers = [...new Set(pages.map((page) => page.tier))].sort((a, b) => a - b);
+  return tiers
+    .map((tier) => `tier ${tier}: ${pages.filter((page) => page.tier === tier).length}`)
+    .join(', ');
 }
 
 async function main(): Promise<void> {
@@ -217,13 +169,27 @@ async function main(): Promise<void> {
 
   const pages: RenderedPage[] = routes.map((route) => {
     const url = bundle.routePath(route, BASE_PATH);
-    const body = bundle.renderRoute(route.config);
-    return {
-      file: join(...route.segments, 'index.html'),
-      url,
-      tier: route.tier,
-      html: pageHtml(shell, route, url, body),
-    };
+    let html: string;
+    try {
+      html = bundle.pageHtml(shell, route, url, bundle.renderRoute(route.config), SITE_ORIGIN);
+    } catch (error) {
+      fail(`${url}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    /**
+     * The check that stops this shipping the thing it was built to replace.
+     *
+     * A page missing its figures is a page of layout chrome, which is what the live site already
+     * was — and it arrives looking like a success: right filename, right size, right shape. Every
+     * page is asked, rather than the handful a unit test renders being trusted for the rest.
+     */
+    const missing = bundle.missingFigures(html);
+    if (missing.length > 0) {
+      fail(
+        `${url} carries no ${missing.join(', no ')}. A page without figures is the empty shell ` +
+          '#178 exists to replace, so this is a build failure rather than a page.'
+      );
+    }
+    return { file: join(...route.segments, 'index.html'), url, tier: route.tier, html };
   });
 
   const newBytes = pages.reduce((sum, page) => sum + Buffer.byteLength(page.html), 0);
@@ -248,8 +214,9 @@ async function main(): Promise<void> {
 
   for (const page of pages) {
     const target = join(DIST, page.file);
-    // The segments are catalog ids, and `devices.json` is hand-curated: an id containing `..`
-    // would write outside the build directory. Cheap to check, and impossible to notice if not.
+    // The segments are catalog ids and model slugs, both hand-curated or derived from a curated
+    // id: one containing `..` would write outside the build directory. Cheap to check, and
+    // impossible to notice if not.
     const inside = relative(DIST, target);
     if (inside.startsWith('..') || isAbsolute(inside)) {
       fail(`route ${page.url} would write outside dist/ (${target})`);
@@ -270,10 +237,16 @@ async function main(): Promise<void> {
    */
   await writeFile(join(DIST, '404.html'), shell);
 
-  const written = pages.map((page) => `${page.url} (${(page.html.length / 1024).toFixed(0)} KiB)`);
+  const sitemap = bundle.sitemapXml(routes, BASE_PATH, SITE_ORIGIN);
+  if (sitemap) await writeFile(join(DIST, 'sitemap.xml'), sitemap);
+
+  const listed = routes.filter((route) => route.indexable).length;
   console.log(
-    `prerender: ${pages.length} routes + 404.html, ${(newBytes / 1024 / 1024).toFixed(1)} MiB\n  ` +
-      written.join('\n  ')
+    `prerender: ${pages.length} routes (${byTier(pages)}) + 404.html, ` +
+      `${(newBytes / 1024 / 1024).toFixed(1)} MiB\n` +
+      (sitemap
+        ? `prerender: sitemap.xml lists ${listed} of ${routes.length}`
+        : 'prerender: no sitemap.xml — SITE_ORIGIN is unset, and a sitemap needs absolute URLs')
   );
 }
 

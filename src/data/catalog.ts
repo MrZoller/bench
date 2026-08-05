@@ -284,6 +284,47 @@ export function getModel(id: string): CatalogModel {
 }
 
 /**
+ * A model id as one URL path segment: `openai/gpt-oss-120b` becomes `openai--gpt-oss-120b`.
+ *
+ * **A model id cannot be a path segment as it stands.** All 35 are `org/name`, so 35/35 change
+ * under an `encodeURIComponent` round-trip and none of them survives being read back out of a
+ * pathname — which is what `/m/<model>/` and `/<device>/<model>/` need them to do (#178).
+ *
+ * **The org is kept, and that is the whole point of the spelling.** The bare basename is unique
+ * across today's catalog and reads better, and it is one upload away from not being: the catalog
+ * already carries `unsloth/Llama-3.2-3B-Instruct`, a *mirror* of a model published elsewhere, so
+ * the day the seed list gains the original the two collide — silently, because the second slug
+ * simply overwrites the first's page with the same filename. `--` rather than `-` because a
+ * single dash is already inside almost every org and every name, so it could not be read back.
+ *
+ * Lowercased so the slug is one string rather than a family of them: `Qwen/Qwen3-8B`,
+ * `qwen/qwen3-8b` and every capitalisation between name one model, and a path is not a place to
+ * make a reader guess which. {@link modelIdFromSlug} lowercases what it is given for the same
+ * reason — a hand-typed `/m/Qwen--Qwen3-8B/` resolves rather than falling through to the default.
+ *
+ * **Derived here rather than stored.** `models.generated.json` is machine-written from Hugging
+ * Face and #178 forbids touching it; a slug baked in there would also be a second spelling of the
+ * id that could drift from the first. `catalog.test.ts` asserts the 35 are unique and that each is
+ * a single path segment.
+ */
+export function modelSlug(model: CatalogModel): string {
+  return model.id.replaceAll('/', '--').toLowerCase();
+}
+
+const MODEL_IDS_BY_SLUG = new Map(MODELS.map((m) => [modelSlug(m), m.id]));
+
+/**
+ * The model a slug names, or `undefined` if it names none.
+ *
+ * Total rather than throwing, like {@link canonicalDeviceId}'s neighbours in the URL layer: this
+ * reads a path a stranger may have typed, and the store's own contract is that an unresolvable
+ * address degrades to the default scenario instead of a blank page.
+ */
+export function modelIdFromSlug(slug: string): string | undefined {
+  return MODEL_IDS_BY_SLUG.get(slug.toLowerCase());
+}
+
+/**
  * What the model lists are ordered by, in the reader's own words — rendered verbatim beside the
  * Bench's Model picker.
  *

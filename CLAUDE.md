@@ -27,7 +27,11 @@ CI runs **lint → format:check → test → build → test:e2e**; run them befo
 - `src/engine/` — pure math, **no React imports**. Memory footprint, placement, roofline
   throughput. This is the product's whole value; everything else renders it.
 - `src/data/` — `quants.ts` (curated), `devices.json` (curated), `models.generated.json` (built
-  from Hugging Face by `scripts/build-catalog.ts`).
+  from Hugging Face by `scripts/build-catalog.ts`). `routes.ts` is the prerendered page list and
+  its inverse parser — one definition, read by the build and by the browser.
+- `src/prerender/` — build-only and pure: composes a page's HTML from Vite's shell and writes
+  `sitemap.xml`. Reaches `scripts/prerender.ts` through the `src/entry-server.tsx` SSR bundle, so
+  it lives where Vitest and the `@/` alias already are rather than beside the script.
 - `src/lib/` — non-engine helpers the surfaces read. `launch.ts` (runnable commands) and
   `calibrate.ts` (predicted vs measured) are pure; `detect.ts` is the one browser-I/O seam, and it
   is confined to `readSignals()` — that call touches `navigator` and asks for a WebGPU adapter,

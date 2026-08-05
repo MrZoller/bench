@@ -8,7 +8,8 @@ import {
   searchToConfig,
   shouldHydrate,
 } from './url';
-import { DEFAULT_CONFIG, type Config } from './config';
+import { coercedPathBaseline, DEFAULT_CONFIG, useConfig, type Config } from './config';
+import { prerenderRoutes, routePath } from '@/data/routes';
 
 /**
  * A link is the distribution mechanism for a tool like this, so the encoding has to survive a
@@ -283,5 +284,42 @@ describe('deciding whether to hydrate', () => {
   it('reads the address below a base path, like everything else here', () => {
     expect(shouldHydrate('/headroom/rtx-5090/', '', '/headroom/', true)).toBe(true);
     expect(shouldHydrate('/headroom/rtx-5090/', '?d=dgx-spark', '/headroom/', true)).toBe(false);
+  });
+});
+
+/**
+ * No prerendered page erases its own URL.
+ *
+ * The one assertion that would have caught #178's coercion bug, and it is exhaustive because it can
+ * be — 199 routes through the real store in milliseconds. Every other test in this area was
+ * structurally blind to it: the route round-trip in `routes.test.ts` compares a raw partial against
+ * a raw partial and never runs `coerce`, and `App.hydration.test.tsx` hands the client a store the
+ * prerenderer already coerced, so both halves agree before the URL is in the picture.
+ *
+ * `configToSearch` returning `''` is the whole property: it writes the full nine fields the moment
+ * the store differs from the baseline, so an empty string means the address bar keeps the pretty
+ * path the page advertises as canonical. It was non-empty on 101 of these — every dense model page
+ * and every dense pair page — because the store had been coerced and the baseline had not.
+ *
+ * `replace` rather than a hand-built config on purpose: it is the same call `scripts/prerender.ts`
+ * makes per route, so this asserts against what the server actually rendered rather than against a
+ * second opinion about it.
+ */
+describe('prerendered routes keep their own URLs', () => {
+  it('writes no query for any of the 199 routes, and hydrates every one', () => {
+    const rewritten: string[] = [];
+    const notHydrated: string[] = [];
+
+    for (const route of prerenderRoutes()) {
+      const path = routePath(route, '/');
+      useConfig.getState().replace(route.config);
+      if (configToSearch(useConfig.getState(), coercedPathBaseline(path, '/')) !== '') {
+        rewritten.push(path);
+      }
+      if (!shouldHydrate(path, '', '/', true)) notHydrated.push(path);
+    }
+
+    expect(rewritten).toEqual([]);
+    expect(notHydrated).toEqual([]);
   });
 });

@@ -3,6 +3,8 @@ import { renderToString } from 'react-dom/server';
 import App from '@/App';
 import { useConfig, type Config } from '@/store/config';
 import { prerenderRoutes, routePath, type PrerenderRoute } from '@/data/routes';
+import { missingFigures, pageHtml } from '@/prerender/page';
+import { sitemapXml } from '@/prerender/sitemap';
 
 /**
  * What `scripts/prerender.ts` loads: the app, rendered to a string, one route at a time.
@@ -19,10 +21,13 @@ import { prerenderRoutes, routePath, type PrerenderRoute } from '@/data/routes';
  * `BASE_PATH` the client bundle was built with. A script that imported the source directly would
  * have to reproduce all three, and `BASE_URL` would simply be undefined.
  *
- * Re-exports the route list for the same reason: one bundle, so the pages that get rendered and
- * the pages that get written cannot come from two different reads of the catalog.
+ * Re-exports the route list, the page composer and the sitemap writer for the same reason: one
+ * bundle, so the pages that get rendered, the pages that get written and the pages that get
+ * advertised cannot come from three different reads of the catalog.
  */
 export { prerenderRoutes, routePath };
+export { missingFigures, pageHtml };
+export { sitemapXml };
 export type { PrerenderRoute };
 
 /**
