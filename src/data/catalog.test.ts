@@ -4,6 +4,7 @@ import {
   DEVICES,
   DEVICE_ID_ALIASES,
   MODELS,
+  MODEL_ORDER_RULE,
   canonicalDeviceId,
   comparisonGrid,
   getDevice,
@@ -13,6 +14,9 @@ import {
   type DeviceRow,
 } from './catalog';
 import devicesJson from './devices.json';
+// The file's own order, read from the file rather than from a copy taken at import time: the claim
+// below is that nothing reorders `MODELS` in place, and a snapshot of `MODELS` cannot make it.
+import modelsJson from './models.generated.json';
 import { getQuant } from './quants';
 import { evaluate } from '@/engine';
 import { LLAMA_CPP, GPT_OSS_120B, DEEPSEEK_V3, QWEN3_32B } from '@/engine/fixtures';
@@ -210,6 +214,70 @@ describe('the comparison grid covers the shipping catalog and nothing else', () 
     const { models } = comparisonGrid();
     expect(models.map((m) => m.id)).toEqual(modelsByPopularity().map((m) => m.id));
     expect(models).toHaveLength(MODELS.length);
+  });
+});
+
+/**
+ * The order the model surfaces render in, and the sentence that now states it (#179).
+ *
+ * The issue's worry was that the order might be "whatever the generator emitted", which would make
+ * any caption describing it a claim about a side effect. It is not: `models.generated.json` is in
+ * seed order — the first row has 1.76M downloads and the fifth has 16.6M — and `modelsByPopularity`
+ * is the one place either surface's order is decided. So the sort is load-bearing rather than
+ * decorative, and these assert the two halves the caption depends on: that it is a sort at all, and
+ * that it is the one the sentence names.
+ */
+describe('the model list is ordered by the key its caption states', () => {
+  const ids = (models: readonly { id: string }[]) => models.map((m) => m.id);
+
+  it('produces the same order twice, and leaves the catalog it read alone', () => {
+    expect(ids(modelsByPopularity())).toEqual(ids(modelsByPopularity()));
+    /**
+     * The half repeated calls cannot see. A comparator applied in place would agree with itself
+     * forever while every other reader of `MODELS` — the id lookups, the prerenderer, the tests
+     * that pin file order — silently changed what they see, in whatever order the surfaces
+     * happened to render in. `[...MODELS].sort` is what makes it a copy; this is the assertion
+     * that notices if it stops being one.
+     */
+    expect(ids(MODELS)).toEqual(ids(modelsJson.models));
+  });
+
+  it('runs most-downloaded first, which is what the caption says', () => {
+    const ranked = modelsByPopularity();
+    expect(ranked).toHaveLength(MODELS.length);
+
+    const downloads = ranked.map((m) => m.popularity?.downloads ?? 0);
+    for (const [i, count] of downloads.entries()) {
+      if (i === 0) continue;
+      expect(
+        count,
+        `${ranked[i].id} outranks ${ranked[i - 1].id} on a smaller count`
+      ).toBeLessThanOrEqual(downloads[i - 1]);
+    }
+
+    // And it is not the file's own order, so the caption describes the sort rather than a
+    // coincidence that would survive deleting it.
+    expect(ids(ranked)).not.toEqual(ids(modelsJson.models));
+  });
+
+  /**
+   * The sentence and the comparator live three lines apart in `catalog.ts` for exactly this reason,
+   * and the date is the half that goes stale on its own: the catalog regenerates weekly, and a
+   * hand-written date in a component would have been wrong the first Sunday after it shipped.
+   */
+  it('states the sort key and the date the counts were read, from the catalog itself', () => {
+    /**
+     * The exact phrase `e2e/catalog-order.spec.ts` locates the rendered caption by, and the reason
+     * it is asserted here rather than there: that spec cannot import this constant, because
+     * `catalog.ts` reads `devices.json` and Playwright's loader refuses a JSON import without an
+     * attribute the app's build does not need. So a reword that would leave the browser-level guard
+     * hunting for text that no longer exists fails here first, in a second rather than in a build.
+     */
+    expect(MODEL_ORDER_RULE).toMatch(/most-downloaded first, by Hugging Face downloads/i);
+    expect(MODEL_ORDER_RULE).toContain(new Date(CATALOG_GENERATED_AT).toISOString().slice(0, 10));
+    // The snapshot half. The counts are a fetch, and a caption that read as live would be claiming
+    // freshness the weekly refresh does not provide.
+    expect(MODEL_ORDER_RULE).toMatch(/snapshot, not a live count/i);
   });
 });
 

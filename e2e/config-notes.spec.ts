@@ -74,7 +74,17 @@ async function panelGeometry(page: Page) {
 
       // The grid item, which `align-items: stretch` sizes to the whole track — so its height is the
       // row's height and its bottom is where the next row begins.
-      const cell = select.parentElement!;
+      //
+      // Walked to rather than taken as `select.parentElement`, which was an identity that held only
+      // while every cell was a bare `Select`. #179 wrapped the Model select and its order caption in
+      // one grid child, so for Model `parentElement` became the inner `Select` div — a content-sized
+      // flex item, with the row's free space accumulating *below* it inside the wrapper. That makes
+      // `contentBottom` equal the cell's own bottom and the void measure 0 whatever the row does: a
+      // green light that cannot turn red. Restoring the long Hardware note this guard was written
+      // for: the file failed at 180px before the wrapper, and after it the guard passed while the
+      // real void under Model measured 135px.
+      const cell = select.closest('section > *') as HTMLElement | null;
+      if (!cell) throw new Error(`${labelText} is not inside a Setup grid item`);
       return {
         cell: cell.getBoundingClientRect().toJSON(),
         /**
@@ -100,7 +110,12 @@ async function panelGeometry(page: Page) {
         lines,
         // From the label, which every cell has and which is `text-xs` like the notes. A line is the
         // unit the budgets below are expressed in, so it must not depend on an optional element.
-        lineHeight: parseFloat(getComputedStyle(cell.firstElementChild!).lineHeight),
+        //
+        // Read off `label` itself rather than `cell.firstElementChild`, which was the same element
+        // only while the cell was the `Select` div. Under the walk above, Model's first child is the
+        // inner `Select` div, whose inherited line-height computes to 24px against the label's 16px —
+        // silently widening every budget in this file by half without one assertion changing.
+        lineHeight: parseFloat(getComputedStyle(label).lineHeight),
       };
     };
 

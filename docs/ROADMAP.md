@@ -1758,6 +1758,22 @@ ceiling)` keeps an over-budget stack on screen, which is right and stays. What i
   clamping it inward would draw the ceiling where the ceiling is not — so the assertion now names the
   overhang and its own precondition instead of implying a guarantee.
 
+- **`toBeVisible()` does not catch `sr-only`, which is the one thing it keeps getting reached for.**
+  #179 asked in as many words for a Playwright assertion that would fail if the model-order sentence
+  were later moved back into screen-reader-only text. Written as specified it would not have:
+  Playwright calls an element visible when it has a non-empty bounding box and no `visibility: hidden`,
+  and `sr-only` is a 1px clip rather than `display: none` — so the hidden paragraph passed
+  `toBeVisible()` on both mutation runs. The clipped box was also **9px tall, not the 1px the class
+  implies**, because `pt-2` on the same element outlives `sr-only`'s `padding: 0`; a height threshold
+  picked from the class alone would have been one Tailwind ordering away from passing as well.
+  `e2e/catalog-order.spec.ts` asserts geometry instead — width > 100 (523 painted against 1 hidden),
+  height ≥ 16 (41.5 against 9), and no overflow clipping — and is mutation-checked in both directions,
+  the red run reading "the Model picker's order caption is 1px wide, which is not a sentence". The
+  jsdom half cannot help here and says so: `AppCatalog.test.tsx` can assert the paragraph is outside a
+  `<caption>` and carries no `sr-only` class, but it cannot compute visibility, so the exact
+  regression #179 exists to prevent would have passed the test written to prevent it. Any future
+  "is it really visible" assertion in this suite has the same trap under it.
+
 **Catalog figures the UI quotes**
 
 - **Three quantities are called "active params" and two of them are wrong for any given sentence.**

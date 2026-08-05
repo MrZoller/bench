@@ -283,7 +283,31 @@ export function getModel(id: string): CatalogModel {
   return model;
 }
 
-/** Models a user is most likely to be looking for, most-downloaded first. */
+/**
+ * What the model lists are ordered by, in the reader's own words — rendered verbatim beside the
+ * Bench's Model picker.
+ *
+ * **It lives here, three lines from the comparator, so that the sentence and the sort cannot
+ * drift** (#179). A caption written in a component is a claim about code in another file with
+ * nothing holding the two together: the order is decided in exactly one place, and this is that
+ * place. The argument for saying it at all is `Recommend.tsx`'s, unchanged — an unstated tie-break
+ * is the difference between a measurement and an opinion, and a list of 35 models in an order
+ * nothing explains reads as arbitrary however carefully it was chosen.
+ *
+ * **No model is named, deliberately.** Between the committed catalog and the pending weekly
+ * refresh — five days apart — 13 of 35 rows change rank and the second and third swap, so "led by
+ * X" is a sentence that goes stale between releases while "most-downloaded first" stays true.
+ *
+ * The date is `generatedAt`, because the figure is a fetch rather than a feed: every run reads
+ * `expand[]=downloads` for every seed, and a run whose figures move is a run that gets committed
+ * (`scripts/catalog-diff.ts` counts popularity as substance), so the counts and the stamp are
+ * always from the same fetch. The window is Hugging Face's own: `huggingface_hub` documents
+ * `ModelInfo.downloads` as "Number of downloads of the model over the last 30 days", against
+ * `downloadsAllTime` for the cumulative one.
+ */
+export const MODEL_ORDER_RULE = `Most-downloaded first, by Hugging Face downloads over the 30 days before the catalog was generated on ${new Date(CATALOG_GENERATED_AT).toISOString().slice(0, 10)} — a snapshot, not a live count.`;
+
+/** Models a user is most likely to be looking for, most-downloaded first. See {@link MODEL_ORDER_RULE}. */
 export function modelsByPopularity(): readonly CatalogModel[] {
   return [...MODELS].sort(
     (a, b) => (b.popularity?.downloads ?? 0) - (a.popularity?.downloads ?? 0)

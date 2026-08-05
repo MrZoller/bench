@@ -22,6 +22,10 @@ import { expect, test } from '@playwright/test';
 const matrix = (page: import('@playwright/test').Page) =>
   page.getByRole('region', { name: /every model on every machine/i });
 
+/** The Setup panel, by the name its `sr-only` heading gives the landmark. */
+const setup = (page: import('@playwright/test').Page) =>
+  page.getByRole('region', { name: 'Setup', exact: true });
+
 /** The grid's squares in the first row, left to right, with the gutter before each. */
 async function firstRowGeometry(page: import('@playwright/test').Page) {
   return matrix(page)
@@ -191,5 +195,85 @@ test('grouping the Hardware picker does not widen the page at 320px', async ({ p
   }));
   expect(overflow.document, 'the page scrolls sideways at 320px').toBeLessThanOrEqual(
     overflow.viewport
+  );
+});
+
+/**
+ * The model order stated where a sighted reader meets it, on both surfaces (#179).
+ *
+ * **`toBeVisible()` is necessary and nowhere near sufficient, which is the whole reason this test
+ * has geometry in it.** Playwright calls an element visible when it has a non-empty bounding box
+ * and is not `visibility: hidden` — and Tailwind's `sr-only` is a 1x1px absolutely-positioned box
+ * with a `clip` rect, so it passes both. A guard written as `toBeVisible()` alone would stay green
+ * through exactly the regression this issue was filed about twice: the explanation moving back into
+ * screen-reader-only text. So the claim is measured instead — a box wide enough to hold the
+ * sentence and tall enough for a line of it — and `sr-only` fails it by two orders of magnitude.
+ *
+ * jsdom cannot answer any of that: it computes no layout, reports every box as zero, and would
+ * report an `sr-only` paragraph and a painted one identically. `src/AppCatalog.test.tsx` owns the
+ * DOM half — that the sentence exists, sits in the Setup panel, and matches the rendered option
+ * order — and this owns whether anybody can read it.
+ *
+ * Nothing is clicked, hovered or focused before the assertions, which is the other half of what the
+ * issue asked for.
+ */
+async function assertReadable(locator: import('@playwright/test').Locator, subject: string) {
+  await expect(locator, `${subject} is not visible`).toBeVisible();
+
+  /**
+   * Three independent detectors, because `sr-only` defeats each of them differently and a utility
+   * beside it can rescue any one. Measured with the class applied, which is how these bounds were
+   * picked rather than guessed: the caption reports 523x41.5 painted at 1280 and **9px tall**
+   * `sr-only` — not 1px, because the `pt-2` on the same element outlives `sr-only`'s `padding: 0`.
+   * A threshold set at "taller than nothing" would have been one Tailwind ordering away from
+   * green.
+   *
+   * Width is the unambiguous one (`width: 1px`, against 260px at the narrowest supported viewport),
+   * height allows the sentence to shrink to a single line of the smallest type this app ships
+   * (10px at `leading-relaxed`), and the overflow check catches the case where a wider box still
+   * hides its text behind `white-space: nowrap` and `overflow: hidden`.
+   */
+  const box = (await locator.boundingBox())!;
+  expect(box.width, `${subject} is ${box.width}px wide, which is not a sentence`).toBeGreaterThan(
+    100
+  );
+  expect(
+    box.height,
+    `${subject} is ${box.height}px tall, which is not a line of text`
+  ).toBeGreaterThanOrEqual(16);
+  const clipped = await locator.evaluate((el) => el.scrollWidth - el.clientWidth);
+  expect(clipped, `${subject} overflows its own box, so its text is clipped`).toBeLessThanOrEqual(
+    1
+  );
+}
+
+test('both model surfaces state their order where a sighted reader can read it', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto('/');
+
+  /**
+   * The Bench's Model picker: the surface that carried no explanation at all until #179.
+   *
+   * By the sentence's own words rather than by `MODEL_ORDER_RULE` itself, which is the one
+   * compromise here. Specs in this directory do import from `@/` — `SETTING_LABELS`, `marks`,
+   * `colors` all arrive that way — but `catalog.ts` imports `devices.json`, and Playwright's ESM
+   * loader refuses a JSON import without a `with { type: 'json' }` attribute the app's own build
+   * does not need. Adding one to the source to satisfy a test runner is the wrong direction, so the
+   * phrase is pinned in `catalog.test.ts` against the constant instead: reword the caption past
+   * these words and a unit test fails a second before this one does.
+   */
+  await assertReadable(
+    setup(page).getByText(/most-downloaded first, by Hugging Face downloads/i),
+    'the Model picker’s order caption'
+  );
+
+  // And the Matrix's, which has had a visible sentence since #135 and no browser-level guard on it.
+  // Its `sr-only` `<caption>` carries the same facts deliberately, so this names a phrase only the
+  // visible paragraph has.
+  await assertReadable(
+    matrix(page).getByText(/curated set, not a top-N chart/i),
+    'the Matrix’s row-order sentence'
   );
 });

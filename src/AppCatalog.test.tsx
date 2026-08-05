@@ -9,7 +9,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 import { useConfig, DEFAULT_CONFIG, estimateConfig } from '@/store/config';
-import { DEVICES, getDevice } from '@/data/catalog';
+import { DEVICES, MODEL_ORDER_RULE, getDevice, modelsByPopularity } from '@/data/catalog';
 import { DEVICE_CLASS_LABELS, SETTING_LABELS, SETTING_NOTES, deviceCountNote } from '@/lib/stops';
 // The one component this file mounts on its own, and only to sweep a renderer over all 43 catalog
 // rows — see "leaves none of the markup in any note the catalog carries".
@@ -925,5 +925,34 @@ describe('the catalog shows the order it is listed in', () => {
     // The visible sentence carries all three facts: the criterion, the sort, the absence rule.
     expect(visible!.textContent).toMatch(/curated set, not a top-N/i);
     expect(visible!.textContent).toMatch(/most-downloaded first/i);
+  });
+
+  /**
+   * The Bench's Model picker, which is the surface that said nothing at all (#179).
+   *
+   * The Matrix has explained its row order since #135; this control's only hint was a per-option
+   * "N downloads/mo" note, which names a figure without saying the list is sorted on it — and which
+   * six of the 35 rows replace with their `overrideNote`. So the reader most likely to be scanning
+   * for a model got the least.
+   *
+   * The order and the sentence in one test on purpose: a caption is a claim about the comparator,
+   * and asserting either alone lets them drift into a sentence that is merely plausible.
+   */
+  it('states what the Model picker is sorted by, beside the picker', () => {
+    render(<App />);
+
+    const picker = screen.getByLabelText(SETTING_LABELS.modelId) as HTMLSelectElement;
+    // The premise. A rendered order that stopped matching the helper would make the sentence below
+    // false while leaving it on screen, which is the one failure this feature cannot have.
+    expect([...picker.options].map((o) => o.value)).toEqual(modelsByPopularity().map((m) => m.id));
+
+    const stated = screen.getByText(MODEL_ORDER_RULE);
+    // In the panel with the control it describes, rather than somewhere else on the page.
+    expect(picker.closest('section')).toContainElement(stated);
+    // And not in the channel both earlier passes at this issue landed in. `e2e/catalog-order.spec.ts`
+    // owns the real claim — jsdom computes no styles, so this catches the literal regression
+    // (a class on the element) and not the general one (a rule that hides it from anywhere else).
+    expect(stated.closest('caption')).toBeNull();
+    expect(stated.className).not.toMatch(/\bsr-only\b/);
   });
 });

@@ -3,7 +3,7 @@ import { DEVICES, RUNTIMES, evaluateConfig, useConfig } from '@/store/config';
 import { useUrlSync } from '@/store/useUrlSync';
 import { getRuntime, kvSubstitutionFor, runtimeDrives, substitutionFor } from '@/data/runtimes';
 import { QUANTS, getQuant } from '@/data/quants';
-import { getDevice, getModel, modelsByPopularity } from '@/data/catalog';
+import { MODEL_ORDER_RULE, getDevice, getModel, modelsByPopularity } from '@/data/catalog';
 // The decode basis itself, so the sentence that attributes speed to a figure prints the figure the
 // speed was computed from rather than a near neighbour of it.
 import { effectiveActiveParams } from '@/engine/weights';
@@ -224,6 +224,12 @@ export function Bench() {
         }`,
         // The override note takes precedence: six models carry a hand-entered totalParams,
         // and every figure on screen derives from it. That provenance outranks a download count.
+        //
+        // `/mo` is Hugging Face's own definition of the field rather than an assumption about it:
+        // `huggingface_hub` documents `ModelInfo.downloads` as "Number of downloads of the model
+        // over the last 30 days", with `downloads_all_time` as the cumulative one, and
+        // `build-catalog.ts` asks for `expand[]=downloads` — the 30-day figure. (Read 4 August
+        // 2026 from `src/huggingface_hub/hf_api.py` at huggingface/huggingface_hub main.)
         note:
           m.overrideNote ??
           (m.popularity && m.popularity.downloads > 0
@@ -414,12 +420,35 @@ export function Bench() {
         <h2 id={setupHeadingId} className="sr-only">
           Setup
         </h2>
-        <Select
-          label={SETTING_LABELS.modelId}
-          value={config.modelId}
-          onChange={(v) => set('modelId', v)}
-          options={modelOptions}
-        />
+        {/* The Model picker's order, on the channel a sighted reader actually has (#179).
+            35 options in an order nothing on the page explained — and unlike the Matrix, which
+            states its row order in the sentence under its heading, this control said nothing at
+            all. Its one hint was the per-option "N downloads/mo" note, which names a figure
+            without saying the list is sorted on it and which six models replace with their
+            `overrideNote` anyway.
+
+            Visible text, not `sr-only` and not behind the disclosure `Select` already has: both
+            earlier passes at this closed the screen-reader gap and left the visual one open,
+            which is what the issue is about. `e2e/catalog-order.spec.ts` asserts it is painted,
+            because computed visibility is the one thing jsdom cannot answer — a `className` away
+            from invisible is exactly how this regressed before.
+
+            Wrapped rather than added as a fifth grid item, so the sentence sits under the control
+            it describes instead of taking a cell of its own and pushing Hardware down a row. The
+            divider and the type scale are `Recommend.tsx`'s rules block, for the same reason: this
+            is a fact about the list, not about the option currently selected, and the note above
+            it is the latter. */}
+        <div className="flex flex-col gap-1">
+          <Select
+            label={SETTING_LABELS.modelId}
+            value={config.modelId}
+            onChange={(v) => set('modelId', v)}
+            options={modelOptions}
+          />
+          <p className="border-t border-[var(--color-border)] pt-2 text-[0.625rem] leading-relaxed text-[var(--color-text-muted)]">
+            {MODEL_ORDER_RULE}
+          </p>
+        </div>
         <Select
           label={SETTING_LABELS.deviceId}
           value={config.deviceId}
