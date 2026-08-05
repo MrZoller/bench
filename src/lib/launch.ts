@@ -1153,6 +1153,19 @@ function nglNote(input: LaunchInput, ngl: number): string {
   if (ngl > model.layers) {
     return `-ngl ${ngl} is all ${model.layers} layers plus one: llama.cpp counts the output tensor a position past the repeating blocks, so ${model.layers} would keep the output tensor and leave layer 0 on the host.`;
   }
+  /* Zero is its own sentence, not the general one with a zero in it.
+     The branch below subtracts the output slot, which is only there for a *positive* `-ngl` —
+     at zero llama.cpp offloads nothing at all, and the subtraction rendered "-1 repeating
+     layers" on 2,202 catalog configurations, Llama 3.2 3B BF16 on two 5080s at 32K among them.
+     Distinct from the `cpu-ram` case above, which is about a rig with no GPU rather than a GPU
+     with no room. */
+  if (ngl === 0) {
+    return (
+      `-ngl 0 keeps every layer on the host, which is what the figures above price: ` +
+      `${percentish(placement.offloadFraction)} of the weights spill, so ${rig.device.name} ` +
+      `has no room for a whole layer beside the cache it has to hold.`
+    );
+  }
   /* Says what llama.cpp will do, not what Headroom sized, because on this branch they differ:
      the output tensor takes a slot for any positive `-ngl`, so this loads one fewer repeating
      layer than the number reads. Known, tracked in #204, and stated here rather than left as the
