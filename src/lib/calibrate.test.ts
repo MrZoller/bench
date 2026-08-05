@@ -278,13 +278,19 @@ describe('a measurement of a different job is not evidence about the model', () 
     }
   });
 
-  it('accepts both spellings of a partial placement, which is what the panel now emits', () => {
+  it('accepts the emitted flag for a partial placement, and the older one it replaced', () => {
     /**
      * **The same disagreement one layer down** (#204). `prediction.gpuLayers` counts *repeating
      * layers*; `n_gpu_layers` in a paste is the flag, which counts the output tensor a slot past
      * them. Since #204 the Launch panel emits `-ngl N + 1` for a spilling placement of `N` layers,
      * so comparing exactly against `N` would mark a run that followed Headroom's own command — the
      * failure the fully-resident branch above was written for, arriving on the branch it left out.
+     *
+     * `-ngl N` is accepted alongside it, and **not because the two are equivalent** — it loads
+     * `N - 1` repeating layers, a measurably different placement. It is accepted because every
+     * spilling command this panel emitted between #169 and #204 was a bare `-ngl N`, so those
+     * pastes exist. A backwards-compatibility tolerance with a shelf life, narrowed in #208
+     * together with the fully-resident arm, which has the same hole and far more of it.
      */
     for (const ngl of [12, 13]) {
       const run = JSON.stringify([
@@ -296,7 +302,7 @@ describe('a measurement of a different job is not evidence about the model', () 
       ).toBeUndefined();
     }
 
-    // And it is two spellings of one count, not a tolerance: a genuinely different split still
+    // And the tolerance is exactly one slot wide, not a band: a genuinely different split still
     // fails, on both sides.
     for (const ngl of [11, 14]) {
       const run = JSON.stringify([
