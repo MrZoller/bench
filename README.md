@@ -70,9 +70,12 @@ than tidy: the gap shipped a real bug once, and the specs there carry the reason
 `npm run build` prerenders. After the client bundle it builds an SSR one and runs
 [`scripts/prerender.ts`](scripts/prerender.ts), which renders each route in
 [`src/data/routes.ts`](src/data/routes.ts) to `dist/<route>/index.html` with that scenario's real
-figures in the markup, and copies the un-prerendered shell to `dist/404.html`. The same route list
-is read in the browser, so a visitor landing on `/rtx-5090/` gets the RTX 5090 rather than a page
-that renders one thing and hydrates another. Query URLs are unchanged and always win over a path.
+figures in the markup, writes `sitemap.xml`, and copies the un-prerendered shell to `dist/404.html`.
+199 pages today: the root, `/<device>/` for every device, `/m/<model>/` for every model, and
+`/<device>/<model>/` for the ten most-downloaded models against twelve machines spread across the
+three hardware classes. The same route list is read in the browser, so a visitor landing on
+`/rtx-5090/` gets the RTX 5090 rather than a page that renders one thing and hydrates another.
+Query URLs are unchanged and always win over a path.
 
 The model catalog is generated, never typed. `npm run catalog` rewrites
 `src/data/models.generated.json` from each repo's own `config.json` and safetensors index, and a

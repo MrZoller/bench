@@ -19,9 +19,9 @@ import App from './App';
  *
  * **This is one of a pair and does not stand alone.** It passes on a page that was an empty shell
  * to begin with — what it checks is that the client agrees with the server, not that the server
- * produced anything. `entry-server.test.tsx` is the other half, asserting real per-device figures
- * in the markup; Phase 3 adds a browser check with JavaScript disabled, which is the one thing
- * jsdom structurally cannot answer.
+ * produced anything. `entry-server.test.tsx` and `src/prerender/page.test.ts` are the other half,
+ * asserting real per-device figures in the markup, and `e2e/prerendered.spec.ts` is the third:
+ * a browser with JavaScript disabled, which is the one thing jsdom structurally cannot answer.
  */
 vi.mock('@/data/catalog', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/data/catalog')>();
@@ -29,6 +29,7 @@ vi.mock('@/data/catalog', async (importOriginal) => {
 });
 
 import { boundGridByDefault } from '@/test/grid';
+import { getDevice, getModel } from '@/data/catalog';
 import { DEFAULT_CONFIG, useConfig } from '@/store/config';
 import { configToShareSearch, locationToConfig, shouldHydrate } from '@/store/url';
 import { prerenderRoutes, renderRoute } from './entry-server';
@@ -36,6 +37,46 @@ import { prerenderRoutes, renderRoute } from './entry-server';
 boundGridByDefault();
 
 const mounted: Root[] = [];
+
+/**
+ * One route per shape of tree, rather than all 199.
+ *
+ * **This swept every route while there were four, and the arithmetic stopped working at 199.** A
+ * hydrate of the whole app costs ~65ms here and the CI runner is roughly 5x this machine, so the
+ * full sweep is ~70s against a 30s per-test limit — and `vite.config.ts` argues at length that the
+ * limit is not the thing to raise, because "a test approaching this is a test rendering the full
+ * grid for a claim that does not need it". This is that case.
+ *
+ * **What it does not need is the product.** A mismatch is the client and the server disagreeing,
+ * and both compute the tree from the same coerced `Config`; the one place they can diverge is the
+ * path parse, and `routes.test.ts` round-trips all 199 of those in milliseconds. What is left for
+ * this file is that each *shape* of tree hydrates — and shape is decided by the handful of fields
+ * that switch a branch: the tier (which fields the route names at all), the device class (the
+ * runtime filter, the quant fallback, the shard control), the device status (the pre-release
+ * label), whether the ceiling is tunable (a second note and a different capacity verdict), and the
+ * model's attention kind and MoE-ness (the quant applicability rules and the parameter breakdown).
+ *
+ * Derived rather than listed, so a catalog that grows a new combination gets covered without
+ * anybody remembering to add it — which is the property a hand-picked sample would not have.
+ */
+function routeShapes(): readonly ReturnType<typeof prerenderRoutes>[number][] {
+  const seen = new Set<string>();
+  return prerenderRoutes().filter((route) => {
+    const device = route.config.deviceId ? getDevice(route.config.deviceId) : undefined;
+    const model = route.config.modelId ? getModel(route.config.modelId) : undefined;
+    const key = [
+      route.tier,
+      device?.class,
+      device?.status,
+      device?.allocatableTunable ?? false,
+      model?.attention.core.kind,
+      model?.experts !== undefined,
+    ].join('|');
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
 
 afterEach(() => {
   act(() => {
@@ -85,9 +126,9 @@ describe('hydration', () => {
     expect(await hydrate({ deviceId: 'epyc-9654' })).toEqual([]);
   });
 
-  it('keeps the markup prerendered for every route the build writes', async () => {
-    for (const route of prerenderRoutes()) {
-      expect(await hydrate(route.config)).toEqual([]);
+  it('keeps the markup prerendered for every shape of route the build writes', async () => {
+    for (const route of routeShapes()) {
+      expect(await hydrate(route.config), `/${route.segments.join('/')}/`).toEqual([]);
       act(() => {
         for (const root of mounted.splice(0)) root.unmount();
       });

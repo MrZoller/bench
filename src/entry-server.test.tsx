@@ -18,7 +18,7 @@ vi.mock('@/data/catalog', async (importOriginal) => {
 });
 
 import { boundGridByDefault } from '@/test/grid';
-import { prerenderRoutes, renderRoute } from './entry-server';
+import { renderRoute } from './entry-server';
 
 boundGridByDefault();
 
@@ -72,18 +72,13 @@ describe('renderRoute', () => {
 
   it('renders real engine output, not layout chrome', () => {
     const html = renderRoute({ deviceId: 'dgx-spark' });
-    // A fit verdict, a memory figure, a prefill number and a decode number — the four things #178
-    // asks a prerendered page to carry.
-    expect(html).toMatch(/Fits|Tight|Spills|Will not fit/);
-    expect(html).toMatch(/[0-9.]+ GiB of [0-9.]+ GiB allocatable/);
+    // A memory figure, a prefill number and a decode number — three of the four things #178 asks a
+    // prerendered page to carry. The exhaustive version of this claim, over every route and
+    // against the same check the build enforces before writing a byte, is in
+    // `src/prerender/page.test.ts`; what stays here is the per-scenario reading it needs a
+    // hand-picked device for.
+    expect(html).toMatch(/[0-9.]+ GiB of [0-9.]+ GiB allocatable used/);
     expect(html).toMatch(/[0-9,]+ tok\/s prompt processing/);
     expect(html).toMatch(/tok\/s per user/);
-  });
-
-  it('renders every route the build will write', () => {
-    for (const route of prerenderRoutes()) {
-      const html = renderRoute(route.config);
-      expect(html).toMatch(/[0-9.]+ GiB of [0-9.]+ GiB allocatable/);
-    }
   });
 });

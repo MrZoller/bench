@@ -9,6 +9,8 @@ import {
   comparisonGrid,
   getDevice,
   getModel,
+  modelIdFromSlug,
+  modelSlug,
   modelsByPopularity,
   toDevice,
   type DeviceRow,
@@ -278,6 +280,69 @@ describe('the model list is ordered by the key its caption states', () => {
     // The snapshot half. The counts are a fetch, and a caption that read as live would be claiming
     // freshness the weekly refresh does not provide.
     expect(MODEL_ORDER_RULE).toMatch(/snapshot, not a live count/i);
+  });
+});
+
+/**
+ * The slug is the id made addressable, and the two things that can go wrong with it are silent.
+ *
+ * A collision overwrites one model's page with another's — same filename, no error, and the loser
+ * is simply gone. A slug that is not one path segment writes a directory nobody asked for, or
+ * fails to read back out of a pathname, which lands the visitor on the default scenario under a
+ * URL that named something else (#178).
+ */
+describe('a model id is addressable as a path segment', () => {
+  it('gives every model a slug of its own', () => {
+    const slugs = MODELS.map(modelSlug);
+    expect(new Set(slugs).size).toBe(MODELS.length);
+  });
+
+  it('keeps the org, because the bare name is one mirror away from colliding', () => {
+    // Not hypothetical: the catalog already carries a mirror of a model published elsewhere, so
+    // the day the seed list gains the original the two basenames are the same string.
+    const basenames = MODELS.map((m) => m.id.split('/').pop());
+    expect(new Set(basenames).size).toBeLessThanOrEqual(MODELS.length);
+    for (const model of MODELS) expect(modelSlug(model)).toContain('--');
+  });
+
+  it('is a single path segment that survives a URL round-trip', () => {
+    for (const model of MODELS) {
+      const slug = modelSlug(model);
+      expect(slug).not.toContain('/');
+      expect(encodeURIComponent(slug)).toBe(slug);
+      expect(slug).toBe(slug.toLowerCase());
+    }
+  });
+
+  it('reads back to the model it was made from, whatever case it arrives in', () => {
+    for (const model of MODELS) {
+      expect(modelIdFromSlug(modelSlug(model))).toBe(model.id);
+      expect(modelIdFromSlug(modelSlug(model).toUpperCase())).toBe(model.id);
+    }
+    expect(modelIdFromSlug('not-a-model')).toBeUndefined();
+    // The lookup takes a string from a URL, so a prototype key must not resolve to a function.
+    expect(modelIdFromSlug('toString')).toBeUndefined();
+  });
+
+  /**
+   * Devices and models share the top level of the site's namespace, and nothing about either
+   * catalog keeps them apart — a device id is a path segment on its own and a pair route puts a
+   * model slug next to one. Two collisions are possible and both resolve silently to whichever
+   * branch the parser tries first:
+   *
+   *   - a device id equal to the model prefix, which would make `/m/` a device page that
+   *     `/m/<model>/` shadows;
+   *   - a device id equal to a model slug, which would make one page unreachable.
+   *
+   * Neither can be prevented by a type, so it is asserted here — over the whole cross product,
+   * because the next collision arrives with a catalog refresh rather than with an edit.
+   */
+  it('shares no name with a device id', () => {
+    const slugs = new Set(MODELS.map(modelSlug));
+    for (const device of DEVICES) {
+      expect(device.id, 'a device id is the model prefix').not.toBe('m');
+      expect(slugs.has(device.id), `${device.id} is also a model slug`).toBe(false);
+    }
   });
 });
 

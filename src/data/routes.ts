@@ -1,4 +1,13 @@
-import { DEVICES, canonicalDeviceId, getDevice, type CatalogDevice } from '@/data/catalog';
+import {
+  DEVICES,
+  canonicalDeviceId,
+  modelIdFromSlug,
+  modelSlug,
+  modelsByPopularity,
+  type CatalogDevice,
+  type CatalogModel,
+} from '@/data/catalog';
+import { params, tokens } from '@/lib/format';
 import { GB, GIB } from '@/engine/types';
 import type { Config } from '@/store/scenario';
 
@@ -7,8 +16,8 @@ import type { Config } from '@/store/scenario';
  *
  * Two directions of the same fact, deliberately in one module ([#178](https://github.com/MrZoller/headroom/issues/178)):
  *
- *   - {@link prerenderRoutes} is what `scripts/prerender.ts` writes to disk, and what Phase 3's
- *     `sitemap.xml` and its content regression test will read. Three consumers, one definition,
+ *   - {@link prerenderRoutes} is what `scripts/prerender.ts` writes to disk, what `sitemap.xml` is
+ *     generated from, and what the content regression test reads. Three consumers, one definition,
  *     so they cannot disagree about which pages exist. This mirrors `comparisonGrid()` in
  *     `catalog.ts`, which exists for the same reason and whose docblock argues the case.
  *   - {@link configFromPath} is the inverse, and it runs in the browser: the store reads it at
@@ -18,10 +27,16 @@ import type { Config } from '@/store/scenario';
  *     unparsed path falls back to the default scenario and simply shows the wrong machine.
  *
  * **A path is a lossy entry point; the querystring is the lossless encoding.** `Config` is nine
- * fields (`src/store/scenario.ts`) and `/<device>/` carries one; the other eight come from
+ * fields (`src/store/scenario.ts`) and `/<device>/<model>/` carries two; the rest come from
  * `DEFAULT_CONFIG`. That is the framing rather than a shortcoming, and it is what settles the
  * precedence rule stated on {@link configFromPath}: a query wins over a path, because the query
  * names an exact scenario and the path names *a scenario worth having a page for*.
+ *
+ * **No model id and no device id is written down here.** Every route derives from `DEVICES`,
+ * `modelsByPopularity()` and the class counts below, so the pages the site publishes follow the
+ * catalog on the next build rather than following whoever last remembered to edit this file. Phase
+ * 2 kept three named device ids because no catalog-order rule produced the set it wanted; the tier
+ * rules below supersede that shortlist, so the literals are gone.
  *
  * The `Config` import is type-only and therefore erased: nothing in `src/data/` depends on the
  * store at runtime, and the shape is the only thing the two genuinely share — the same reason
@@ -31,12 +46,10 @@ import type { Config } from '@/store/scenario';
 /**
  * Which layer of the route inventory a page belongs to.
  *
- * Phase 2 builds tiers 0 and 1 only. Phase 3 adds `/m/<model-slug>/` and
- * `/<device>/<model-slug>/`; the tier travels on the route so `scripts/prerender.ts` can name the
- * overflowing layer when a cap trips, rather than reporting a bare total that says nothing about
- * which addition caused it.
+ * The tier travels on the route so `scripts/prerender.ts` can name the overflowing layer when a
+ * cap trips, rather than reporting a bare total that says nothing about which addition caused it.
  */
-export type RouteTier = 0 | 1;
+export type RouteTier = 0 | 1 | 2 | 3;
 
 export interface PrerenderRoute {
   /**
@@ -52,37 +65,74 @@ export interface PrerenderRoute {
   readonly config: Partial<Config>;
   readonly title: string;
   readonly description: string;
+  /**
+   * Whether `sitemap.xml` advertises this page.
+   *
+   * A page is written either way. This is the narrower question of what the site *submits to
+   * crawlers*, and it is false for exactly one thing: hardware that is not shipping. A rumoured
+   * row is a specification somebody wrote down before the product existed, and the catalog's rule
+   * is that such a figure stays visibly labelled — which it does on the page, in the status line
+   * the device panel renders like any other. What it must not do is arrive in a search result
+   * stripped of that label, as an answer to "does X run on Y" for a machine nobody can buy. So the
+   * page works if someone lands on it, and nothing invites them to.
+   *
+   * Decided here rather than in the sitemap writer, because `status` is a catalog field and the
+   * rule about it is a catalog rule — leaving the filter in the writer would put it somewhere the
+   * route tests cannot reach, which is the same argument `comparisonGrid()` makes for holding its
+   * own shipping filter.
+   */
+  readonly indexable: boolean;
 }
 
 /**
- * The devices Phase 2 prerenders: one per device class, named rather than sliced.
+ * The segment that separates the model namespace from the device one.
  *
- * **Three, and one would not do.** One route proves `renderToString` runs; three prove the two
- * things that actually break. That per-route injection *varies* the output — with a single route
- * "injected the config" and "rendered the default" are the same bytes, which is precisely the
- * failure mode of a store whose initial state is read from `window.location` at import time. And
- * that routes in one process do not leak into each other — the store is a module-level singleton,
- * so route 2 renders whatever route 1 left behind unless the scenario is replaced every time.
- * Three is the smallest slice that *can* fail.
- *
- * **One per class, because class is what makes the pages differ.** `class` drives the runtime
- * filter, the quant fallback in the store's `coerce`, and whether a rig can shard at all; three
- * discrete GPUs would render three near-identical pages and prove strictly less than these do.
- *
- * **Ids rather than indices**, which is the same call `src/test/grid.ts` makes about the bounded
- * comparison grid and for the same reason: a slice of the catalog — "the first row of each class"
- * — silently becomes a different slice the next time `devices.json` is reordered, and row order
- * there is display order that is expected to move. Naming them means the pages the maintainer
- * asked for are the pages that get built. Each id is resolved through `getDevice`, which throws
- * on an unknown one, so a renamed device fails the build loudly instead of quietly prerendering
- * a page of default figures under the old name. `routes.test.ts` holds the rest of the
- * preconditions — that the three resolve, and that they really are three different classes.
- *
- * Phase 3 replaces this with every device, at which point there is nothing to name.
+ * Depth alone would disambiguate `/m/<model>/` from `/<device>/<model>/` if models sat at the top
+ * level too, but then a device id and a model slug would share one namespace with nothing keeping
+ * them apart — and the collision would resolve to whichever branch was tried first, silently.
+ * Devices keep the top level because they are what people search for; models get a prefix.
+ * `catalog.test.ts` asserts no device id is this string and no device id is any model slug.
  */
-const PHASE_2_DEVICE_IDS: readonly string[] = ['rtx-5090', 'dgx-spark', 'epyc-9654'];
+const MODEL_PREFIX = 'm';
+
+/**
+ * How many devices of each class the model x device tier pairs every shortlisted model against.
+ *
+ * **Per class, because a flat slice of `DEVICES` would be twelve NVIDIA cards.** `devices.json` is
+ * grouped by class in display order (CLAUDE.md), so its first twelve rows are all discrete GPUs
+ * from one vendor — twelve pages that answer the same question at different price points, and
+ * nothing at all for the unified-memory and CPU machines whose whole appeal is that a large model
+ * fits. Class is also what makes the pages differ: it drives the runtime filter, the quant
+ * fallback, and whether a rig can shard at all.
+ *
+ * **The leading rows of each class**, which is `$comment-order`'s newest-and-largest-first, so the
+ * shortlist tracks the file's own statement of what leads a line rather than a second opinion
+ * about it. 6/4/2 splits 12 roughly in proportion to the catalog's 25/13/5 while keeping at least
+ * two of the smallest class.
+ */
+const PAIR_DEVICES_PER_CLASS: readonly (readonly [CatalogDevice['class'], number])[] = [
+  ['discrete-gpu', 6],
+  ['unified-soc', 4],
+  ['cpu-ram', 2],
+];
+
+/**
+ * How many models the model x device tier pairs.
+ *
+ * Ten from {@link modelsByPopularity}, so the shortlist is Hugging Face's answer to "what are
+ * people actually running" rather than a hand-kept list that rots between catalog refreshes — 13
+ * of 35 rows changed rank across a single week's refresh, so any list written down here would be
+ * wrong within the month. Ten against twelve devices is 120 pages, which is where the tier is
+ * sized: the count cap is 400 and the other three tiers are 79 of it.
+ */
+const PAIR_MODELS = 10;
 
 const DEVICE_IDS = new Set(DEVICES.map((device) => device.id));
+
+/** What every page's description ends with: the claim that separates this from a rule of thumb. */
+const COMPUTED =
+  'Fit verdict, memory footprint, prefill and decode, computed from the architecture rather ' +
+  'than approximated.';
 
 /** The root, which is the URL people actually have, and the page whose emptiness opened #178. */
 function rootRoute(): PrerenderRoute {
@@ -96,33 +146,83 @@ function rootRoute(): PrerenderRoute {
     description:
       'Work out which open-weight LLMs run on your hardware, and how comfortably — across ' +
       'discrete GPUs, unified-memory machines, and CPU+RAM.',
+    indexable: true,
   };
 }
 
+/** A device's headline pair, in the units the catalog states them in. */
+function deviceFigures(device: CatalogDevice): string {
+  return `${Math.round(device.capacityBytes / GIB)} GiB at ${Math.round(device.bandwidthBytesPerSec / GB)} GB/s`;
+}
+
 function deviceRoute(device: CatalogDevice): PrerenderRoute {
-  const capacity = Math.round(device.capacityBytes / GIB);
-  const bandwidth = Math.round(device.bandwidthBytesPerSec / GB);
   return {
     segments: [device.id],
     tier: 1,
     config: { deviceId: device.id },
     title: `${device.name} — what LLM runs on it? · Headroom`,
     description:
-      `Which open-weight LLMs run on the ${device.name} — ${capacity} GiB at ` +
-      `${bandwidth} GB/s — and how comfortably. Fit verdict, memory footprint, prefill and ` +
-      'decode, computed per model rather than approximated.',
+      `Which open-weight LLMs run on the ${device.name} — ${deviceFigures(device)} — and how ` +
+      `comfortably. ${COMPUTED}`,
+    indexable: device.status === 'shipping',
   };
+}
+
+function modelRoute(model: CatalogModel): PrerenderRoute {
+  return {
+    segments: [MODEL_PREFIX, modelSlug(model)],
+    tier: 2,
+    config: { modelId: model.id },
+    title: `${model.name} — what hardware runs it? · Headroom`,
+    description:
+      `Which machines run ${model.org} ${model.name} — ${params(model.totalParams)} parameters, ` +
+      `${tokens(model.maxContext)} context — and how comfortably. ${COMPUTED}`,
+    indexable: true,
+  };
+}
+
+function pairRoute(device: CatalogDevice, model: CatalogModel): PrerenderRoute {
+  return {
+    segments: [device.id, modelSlug(model)],
+    tier: 3,
+    config: { deviceId: device.id, modelId: model.id },
+    title: `${model.name} on the ${device.name} — does it fit? · Headroom`,
+    description:
+      `Does ${model.org} ${model.name}, ${params(model.totalParams)} parameters, run on the ` +
+      `${device.name} — ${deviceFigures(device)}? ${COMPUTED}`,
+    indexable: device.status === 'shipping',
+  };
+}
+
+/** The leading rows of each class, in the order `devices.json` lists both. */
+function pairDevices(): readonly CatalogDevice[] {
+  return PAIR_DEVICES_PER_CLASS.flatMap(([deviceClass, count]) =>
+    DEVICES.filter((device) => device.class === deviceClass).slice(0, count)
+  );
 }
 
 /**
  * Every page the build writes as a file.
  *
- * Derived rather than listed: the device rows, their names and every figure in the metadata come
- * from the catalog, so a spec correction reaches the prerendered pages on the next build without
- * anybody editing this file.
+ * Four tiers, and the shape of the inventory is the whole answer to a combinatorial space that has
+ * 468 million points in it: every device (43) and every model (35) get a page, and the product of
+ * the two is taken only across a shortlist (120). Ordered by tier so a cap that trips can name the
+ * layer to narrow, and within a tier by the catalog's own order.
+ *
+ * Derived rather than listed: the rows, their names and every figure in the metadata come from the
+ * catalog, so a spec correction reaches the prerendered pages on the next build without anybody
+ * editing this file.
  */
 export function prerenderRoutes(): readonly PrerenderRoute[] {
-  return [rootRoute(), ...PHASE_2_DEVICE_IDS.map((id) => deviceRoute(getDevice(id)))];
+  const byPopularity = modelsByPopularity();
+  return [
+    rootRoute(),
+    ...DEVICES.map(deviceRoute),
+    ...byPopularity.map(modelRoute),
+    ...pairDevices().flatMap((device) =>
+      byPopularity.slice(0, PAIR_MODELS).map((model) => pairRoute(device, model))
+    ),
+  ];
 }
 
 /**
@@ -147,12 +247,29 @@ export function routePath(route: PrerenderRoute, base: string): string {
  *
  * Aliases resolve, so an old device id in a path lands on the row it was renamed to, exactly as
  * it does in a querystring.
+ *
+ * **A two-segment path claims nothing unless both halves resolve.** `/rtx-5090/nonsense/` reads as
+ * no route at all rather than as an RTX 5090 page: the address names a page that does not exist,
+ * and answering it with a *different* page's figures under the reader's own URL is the failure the
+ * device aliases exist to prevent.
  */
 export function configFromPath(pathname: string, base: string): Partial<Config> {
   const segments = pathSegments(pathname, base);
-  if (segments.length !== 1) return {};
-  const id = canonicalDeviceId(segments[0]);
-  return DEVICE_IDS.has(id) ? { deviceId: id } : {};
+
+  if (segments.length === 1) {
+    const deviceId = canonicalDeviceId(segments[0]);
+    return DEVICE_IDS.has(deviceId) ? { deviceId } : {};
+  }
+
+  if (segments.length === 2) {
+    const modelId = modelIdFromSlug(segments[1]);
+    if (modelId === undefined) return {};
+    if (segments[0] === MODEL_PREFIX) return { modelId };
+    const deviceId = canonicalDeviceId(segments[0]);
+    return DEVICE_IDS.has(deviceId) ? { deviceId, modelId } : {};
+  }
+
+  return {};
 }
 
 /**

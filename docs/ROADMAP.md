@@ -89,16 +89,20 @@ zoller.ai subdomain is one repository variable away. See **Deployment**, below.
 | 7. URL state, responsive, a11y     | **done** (#6)     | Querystring round-trips a scenario. Browser pass in `e2e/` (#19); reflow and hit targets (#35, #29)  |
 | 8. Weekly catalog refresh + deploy | **done**          | Refresh opens a PR on a _substantive_ diff. Deployed to Pages, 28 July 2026 — see below              |
 
-**The site now serves real HTML, on four routes** ([#178](https://github.com/MrZoller/headroom/issues/178),
-Phase 2). `npm run build` renders `/`, `/rtx-5090/`, `/dgx-spark/` and `/epyc-9654/` to files
-carrying their own figures — the fit verdict, the memory breakdown, prefill and decode — against
-860 bytes of empty shell before it, for **+0.4 s** of build time. The route list is derived in
-`src/data/routes.ts` and read by both the prerenderer and the browser, so the pages that get built
-and the scenario a visitor lands on cannot disagree. Phase 3 scales it to the full tiered list and
-adds `sitemap.xml`, model pages and the JavaScript-off browser check; what Phase 2 settled is under
-**Things that took real work to get right**, and the finding worth reading first is that the plan's
-injection seam was wrong in a way that produced four correct-looking files with one machine's
-numbers in all of them.
+**The site now serves real HTML, on 199 routes** ([#178](https://github.com/MrZoller/headroom/issues/178),
+Phases 2 and 3). `npm run build` renders the root, `/<device>/` for all 43 devices, `/m/<model>/`
+for all 35 models, and `/<device>/<model>/` for the ten most-downloaded models against twelve
+machines spread 6/4/2 across the hardware classes — each file carrying its own figures, the memory
+breakdown, prefill and decode, against 860 bytes of empty shell before it. **163 MiB of `dist/` and
++5.7 s of build time** (2.5 s → 8.2 s), against caps of 400 routes and 512 MiB that both fail the
+build loudly and name the tier that crossed them. `sitemap.xml` is generated from the same
+`prerenderRoutes()` the pages are, so the two cannot drift; it lists 188 of the 199, because the
+one rumoured device gets a page and no invitation to it. The route list is derived in
+`src/data/routes.ts` — no device id or model id is written down in it — and read by both the
+prerenderer and the browser, so the pages that get built and the scenario a visitor lands on cannot
+disagree. What the two phases settled is under **Things that took real work to get right**, and the
+finding worth reading first is that the plan's injection seam was wrong in a way that produced four
+correct-looking files with one machine's numbers in all of them.
 
 **Correctness debt is tracked as issues, not here.** #9 and #10, which graded a configuration as
 working when it is not, are fixed — together with #11, which printed a figure measured at a
@@ -852,11 +856,11 @@ explanation instead of a broken-looking one.
 Three settings are repository variables rather than committed values, because they describe where
 the site is served rather than what it is, and all three fail _quietly_ when wrong:
 
-| Variable              | Default | What it is for                                                                                |
-| --------------------- | ------- | --------------------------------------------------------------------------------------------- |
-| `PAGES_BASE_PATH`     | `/`     | Vite's `base`. A Pages _project_ site serves from `/<repo>/`; a custom domain serves from `/` |
-| `PAGES_SITE_ORIGIN`   | unset   | The origin prerendered pages write into `<link rel="canonical">`, `og:url` and the share link |
-| `PAGES_CUSTOM_DOMAIN` | unset   | Written to `dist/CNAME` each deploy, since Pages drops the domain otherwise                   |
+| Variable              | Default | What it is for                                                                                               |
+| --------------------- | ------- | ------------------------------------------------------------------------------------------------------------ |
+| `PAGES_BASE_PATH`     | `/`     | Vite's `base`. A Pages _project_ site serves from `/<repo>/`; a custom domain serves from `/`                |
+| `PAGES_SITE_ORIGIN`   | unset   | The origin prerendered pages write into `<link rel="canonical">`, `og:url`, `sitemap.xml` and the share link |
+| `PAGES_CUSTOM_DOMAIN` | unset   | Written to `dist/CNAME` each deploy, since Pages drops the domain otherwise                                  |
 
 `PAGES_SITE_ORIGIN` arrived with prerendering (#178) and is the same class of setting as the base
 path, which is why it is a variable and not a constant: a built page states its own canonical URL,
@@ -865,7 +869,9 @@ and that claim needs an origin that no amount of reading the code can supply. In
 so — the failure this pair exists to make visible. **Unset is a supported value.** A fork, a local
 build and CI's own `build` job all run without it: the canonical link is then written root-relative,
 which is valid and resolves against the page's own address, and `og:url` is omitted rather than
-invented. Setting it is what turns both absolute. It moves together with `PAGES_CUSTOM_DOMAIN` and
+invented. Setting it is what turns both absolute, and it is also what decides whether a
+`sitemap.xml` is written at all: `<loc>` has to be a complete URL, so a build with no known origin
+writes no sitemap rather than an invalid one. It moves together with `PAGES_CUSTOM_DOMAIN` and
 `PAGES_BASE_PATH` — a custom domain means all three change at once.
 
 `PAGES_BASE_PATH` holds the repo's own name, because a Pages _project_ site serves from it.
@@ -1093,7 +1099,7 @@ reading the test that guards them.
   The knobs were left alone deliberately. Re-centring right after removing what a fudge factor was
   masking is how the next error gets hidden. All three sit inside the ±30% band the tests assert.
 
-**Prerendering** (#178, Phase 2)
+**Prerendering** (#178, Phases 2 and 3)
 
 - **Zustand's server snapshot is `getInitialState()`, and it is a closure over the state the store
   was built from.** The plan for #178 proposed `useConfig.getState().replace(config)` as the seam
@@ -1120,6 +1126,31 @@ reading the test that guards them.
   be an RTX 5090. And `main.tsx` branches on an explicit `data-prerendered` marker rather than on
   `hasChildNodes()`, because the shell's whitespace is a child node and hydrating an empty
   container is itself a mismatch.
+- **A model id is not a path segment, and the bare basename is one upload away from a collision.**
+  All 35 ids are `org/name`, so 35/35 change under an `encodeURIComponent` round-trip. The slug is
+  `org--name` lowercased, derived in `catalog.ts` and never baked into `models.generated.json` —
+  the basename alone is unique today, and the catalog already carries `unsloth/Llama-3.2-3B-Instruct`,
+  a mirror, so the day the seed list gains the original the two pages share a filename and the loser
+  is simply gone. Devices keep the top level and models sit under `/m/`, because otherwise the two
+  namespaces overlap with nothing enforcing separation; `catalog.test.ts` asserts no device id is
+  `m` and none equals a model slug.
+- **The pair tier is per class, or it is twelve NVIDIA cards.** `devices.json` is grouped by class
+  in display order, so a flat first-twelve is one vendor answering one question at twelve price
+  points. 6 discrete GPUs / 4 unified-memory / 2 CPU, each the leading rows of its class, and ten
+  models from `modelsByPopularity()` so the shortlist tracks Hugging Face instead of rotting — 13
+  of 35 rows changed rank across one week's refresh.
+- **A sitemap with relative URLs is not a lesser sitemap, it is an invalid file.** `<loc>` must be
+  a complete URL, so with `PAGES_SITE_ORIGIN` unset the build writes **no** `sitemap.xml` rather
+  than one a crawler reports as a parse error — the same call `pageHtml` makes when it omits
+  `og:url` instead of inventing an origin.
+- **The build refuses to write a page with no figures in it.** `missingFigures` checks every page
+  against four rendered patterns before a byte is written, because the way #178 comes back is a
+  file of the right name and roughly the right shape with nothing computed inside it. The verdict
+  _word_ is deliberately not one of the four: `Fits|Tight|Will not run` matches every page in the
+  catalog because those words are also legend entries, while none of them alone is universal
+  (`Fits` 126 pages, `Tight` 182, `Will not run` 186) — an alternation satisfied by chrome is not a
+  check. Two of the four accept "there is no speed to report", which is what the 19 pages whose
+  model overflows the machine correctly say instead of a rate.
 
 **Tests**
 
@@ -1773,6 +1804,26 @@ ceiling)` keeps an over-budget stack on screen, which is right and stays. What i
   `<caption>` and carries no `sr-only` class, but it cannot compute visibility, so the exact
   regression #179 exists to prevent would have passed the test written to prevent it. Any future
   "is it really visible" assertion in this suite has the same trap under it.
+
+- **A sweep that was free at four routes is a CI failure at 199.** `App.hydration.test.tsx` hydrated
+  every route the build writes; at 199 that is 13 s locally and roughly 70 s on the runner, against
+  a 30 s per-test limit — and `vite.config.ts` argues at length that the limit is not the thing to
+  raise, because "a test approaching this is a test rendering the full grid for a claim that does
+  not need it". It does not need the product: a mismatch is the client and the server disagreeing,
+  both compute the tree from the same coerced `Config`, and the one place they can diverge is the
+  path parse — which `routes.test.ts` round-trips over all 199 in milliseconds. So the hydration
+  suite now takes one route per _shape_ of tree, derived from the fields that switch a branch
+  (tier, device class, device status, tunable ceiling, attention kind, MoE), which is ~21 routes
+  and 1.4 s and grows by itself when the catalog gains a combination. The exhaustive figure check
+  moved to `src/prerender/page.test.ts`, where it is the same `missingFigures` the build enforces.
+- **The regression guard for "the site went back to being a shell" cannot read `dist/`.** CI runs
+  `npm test` before `npm run build`, so a test that read the built output would find nothing on a
+  fresh checkout — and both ways around that are worse than composing the page in the test:
+  skipping when `dist/` is absent is a guard that silently does not run where it matters, and
+  asserting against whatever `dist/` holds makes a green suite depend on a build that may be hours
+  old. `src/prerender/page.test.ts` composes from the committed `index.html` and the real render;
+  `e2e/prerendered.spec.ts` is what reads genuinely built files, because the browser suite always
+  builds first.
 
 **Catalog figures the UI quotes**
 
