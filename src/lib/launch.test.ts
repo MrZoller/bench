@@ -533,7 +533,7 @@ describe('llama.cpp: one catalog row, three launchers', () => {
   });
 
   describe('the measurement form is a different binary, and it prices the same workload', () => {
-    it('carries this scenario’s prompt and generation lengths, not llama-bench’s defaults', () => {
+    it('carries this scenario’s own prompt, and decodes at the top of its window', () => {
       const scenario = usage({ contextTokens: 8192, promptTokens: 6000 });
       const measured = input(LLAMA_31_8B, getQuant('q4_k_m'), LLAMA_CPP, RTX_5090, 1, scenario);
       const command = text(commands(measured)['llama-bench'].measure);
@@ -541,13 +541,22 @@ describe('llama.cpp: one catalog row, three launchers', () => {
       // Two invocations: `-p` and `-n` are separate tests, and the generation one does not inherit
       // the prompt as cache depth — so a single command measures decoding from an empty cache.
       expect(command).toContain('-p 6000');
-      expect(command).toContain('-n 2192');
       expect(command).toContain('-n 0');
       expect(command).toContain('-p 0');
-      expect(command).toContain('-d 6000');
-      // llama-bench's own defaults, which are what a reader would otherwise measure.
+      /**
+       * The decode run is `-d 8064 -n 128` and **not** `-d 6000 -n 2192`, which is what #180 was
+       * filed against: the depth is the window less what the run needs to answer, because
+       * `estimateDecode` charges every step at `contextTokens` rather than at the cache generation
+       * happens to start from. The length is llama-bench's own 128 — deliberately its default here,
+       * since a steady-state rate does not sharpen with a longer sample and the remainder of an 8K
+       * window is two thousand tokens of wall clock for nothing.
+       */
+      expect(command).toContain('-d 8064');
+      expect(command).toContain('-n 128');
+      expect(command).not.toContain('-d 6000');
+      expect(command).not.toContain('-n 2192');
+      // llama-bench's default prompt, which is what a reader would otherwise measure prefill at.
       expect(command).not.toContain('-p 512');
-      expect(command).not.toContain('-n 128');
     });
 
     /**
@@ -555,6 +564,13 @@ describe('llama.cpp: one catalog row, three launchers', () => {
      * agent turn's attention against a resident prefix, so a measurement of a standalone prompt is
      * a measurement of a different workload than the prediction it would be compared against.
      * `llama-bench -d` runs the test at a stated context depth, which is exactly that state.
+     *
+     * **The prefix is the prefill run's depth and not the decode run's**, which is the half of this
+     * #180 corrected. Prefill charges the turn's attention against what is already resident, so the
+     * prefix is the state to reproduce; decode charges every step at the whole window, and the
+     * prefix is *inside* that window rather than a smaller state to measure at. So the two runs
+     * take different depths here for the same reason they take different depths on a standalone
+     * prompt — the archetype moves one of them and not the other.
      */
     it('reproduces a resident prefix with -d, so the measured workload is the priced one', () => {
       const agentish = usage({
@@ -564,8 +580,13 @@ describe('llama.cpp: one catalog row, three launchers', () => {
       });
       const measured = input(LLAMA_31_8B, getQuant('q4_k_m'), LLAMA_CPP, RTX_5090, 1, agentish);
       const emitted = commands(measured)['llama-bench'].measure;
+      const [prefillRun, decodeRun] = text(emitted).split('\n\n');
 
-      expect(text(emitted)).toContain('-d 47616');
+      expect(prefillRun).toContain('-d 47616');
+      // The window less the 128 tokens the run generates — not the 64,000 resident when generation
+      // starts, which is the depth this emitted before #180.
+      expect(decodeRun).toContain('-d 65408');
+      expect(decodeRun).not.toContain('-d 64000');
       if (!emitted.ok) throw new Error('unreachable');
       expect(emitted.notes.join(' ')).toMatch(/already in the cache/i);
     });
@@ -574,8 +595,9 @@ describe('llama.cpp: one catalog row, three launchers', () => {
       /**
        * The two runs want different depths, which is the whole reason there are two. A standalone
        * prefill is measured against an empty cache — passing `-d 0` would say the same thing more
-       * loudly — while decode is *always* measured with the prompt resident, because that is what
-       * `estimateDecode` charges every step against whatever the archetype's prefix is.
+       * loudly — while decode is *always* measured against a nearly-full one, because
+       * `estimateDecode` charges every step at the whole window whatever the prompt and the
+       * archetype's prefix happen to be.
        */
       const [prefillRun, decodeRun] = text(commands(i)['llama-bench'].measure).split('\n\n');
 
@@ -782,18 +804,25 @@ describe('what review found, kept as tests', () => {
   });
 
   it('counts the resident prefix as occupying the window too', () => {
-    // 47,616 of prefix under a 16,384 prompt in a 65,536 window leaves 7,536 — not the 49,152 a
-    // prompt-only subtraction produced.
+    /**
+     * 47,616 of prefix under a 16,384 prompt in a 65,536 window leaves 1,536 — not the 49,152 a
+     * prompt-only subtraction produced.
+     *
+     * Asserted on vLLM because that is where the figure is still a flag. `llama-bench` asks for a
+     * short generation at the top of the window since #180, so the room the scenario leaves only
+     * *gates* its measurement form; `vllm bench latency` still runs the scenario's own answer end
+     * to end, and `--output-len` is what a prompt-only subtraction would overrun.
+     */
     const agentish = input(
       LLAMA_31_8B,
-      getQuant('q4_k_m'),
-      LLAMA_CPP,
+      getQuant('bf16'),
+      VLLM,
       RTX_5090,
       1,
       usage({ contextTokens: 65536, promptTokens: 16384, cachedPrefixTokens: 47616 })
     );
 
-    expect(text(commands(agentish)['llama-bench'].measure)).toContain('-n 1536');
+    expect(text(commands(agentish).vllm.measure)).toContain('--output-len 1536');
   });
 
   it('names the right cause when weights alone are over a rig that cannot spill', () => {

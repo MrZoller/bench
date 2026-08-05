@@ -7,6 +7,10 @@ import {
   submissionUrl,
   type Prediction,
 } from './calibrate';
+// The other end of the same relation: what the launch panel tells a reader to run has to be
+// something this module accepts, and only a test spanning both can say so (#180).
+import { decodeBenchSpan } from './launch';
+import { CONTEXT_STOPS } from './stops';
 
 /**
  * Predicted versus measured (#139).
@@ -383,6 +387,76 @@ describe('a measurement of a different job is not evidence about the model', () 
 
     expect(inside[0].withinBand).toBe(true);
     expect(outside[0].withinBand).toBe(false);
+  });
+});
+
+/**
+ * The other side of every check above: **the one command Headroom itself prints has to survive
+ * them** (#180).
+ *
+ * It did not. `llamaBench()` emitted its decode run at `prompt + prefix` — the cache resident when
+ * generation begins — while this module expects `contextTokens`, which is what `estimateDecode`
+ * charges every step's cache read at. On the default 8K-prompt/32K-context scenario that is 8,192
+ * against 32,768, so the likeliest path a reader takes through this feature — copy the measure
+ * command, run it, paste the result — produced a row marked unusable.
+ *
+ * The relation is a *ratio* rather than a shared constant, which is why this sweeps the stops
+ * instead of asserting one pair of numbers. `decodeBenchSpan` leaves room for the generation inside
+ * the window, so the emitted depth is `contextTokens - gen` and the depth the run actually averages
+ * over is `contextTokens - gen / 2`; neither is the figure the engine charges, and both have to stay
+ * inside the tolerance at every context a reader can select — including the 512 floor `coerce`
+ * clamps at, where a flat 128 tokens of generation would be a quarter of the window and rejected.
+ */
+describe('the command the launch panel prints is one this comparison accepts', () => {
+  /** Every context a reader can reach: the fixed stops, plus the floor below the smallest of them. */
+  const contexts = [512, ...CONTEXT_STOPS];
+
+  it('accepts the emitted depth at every context stop', () => {
+    for (const contextTokens of contexts) {
+      const { depth, gen } = decodeBenchSpan({
+        contextTokens,
+        concurrency: 1,
+        kvPrecision: 'fp16',
+      });
+      const [pair] = compare(
+        [{ kind: 'decode', tokens: gen, depthTokens: depth, tokensPerSec: 44 }],
+        prediction({ residentContextTokens: contextTokens, promptTokens: contextTokens })
+      );
+
+      expect(pair.mismatch, `${contextTokens}: -d ${depth} -n ${gen}`).toBeUndefined();
+      // And the command is one llama-bench can run: it sizes n_ctx as n_prompt + n_gen + n_depth,
+      // so the two flags together have to fit the window the panel priced.
+      expect(depth + gen, `${contextTokens}`).toBe(contextTokens);
+    }
+  });
+
+  it('accepts the depth the run averages over, which is the shallower of the two', () => {
+    // The cache grows as it generates, so a reader's measurement is not taken at `-d` throughout.
+    // Half a generation shallower is still the same claim, and it is the one the numbers embody.
+    for (const contextTokens of contexts) {
+      const { depth, gen } = decodeBenchSpan({
+        contextTokens,
+        concurrency: 1,
+        kvPrecision: 'fp16',
+      });
+      const meanDepth = Math.round(depth + gen / 2);
+      const [pair] = compare(
+        [{ kind: 'decode', tokens: gen, depthTokens: meanDepth, tokensPerSec: 44 }],
+        prediction({ residentContextTokens: contextTokens, promptTokens: contextTokens })
+      );
+
+      expect(pair.mismatch, `${contextTokens}: mean depth ${meanDepth}`).toBeUndefined();
+    }
+  });
+
+  it('would have rejected the depth it emitted before, on the default scenario', () => {
+    // The regression this closes, stated as the numbers #180 was filed with rather than as a rule.
+    const [pair] = compare(
+      [{ kind: 'decode', tokens: 24576, depthTokens: 8192, tokensPerSec: 44 }],
+      prediction({ residentContextTokens: 32768, promptTokens: 8192 })
+    );
+
+    expect(pair.mismatch).toMatch(/depth of 8,192 where the prediction charges 32,768/);
   });
 });
 
