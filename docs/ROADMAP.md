@@ -59,18 +59,19 @@ for recommend, #168 for detect, #169 for calibrate — and what each turned out 
 two more (#180, #181) came out of reviewing _this section_ a day later; they are in **Open
 questions**, and two of the first six share one root.
 
-What remains is a naming decision, **two open issues, both of them work** — the six filed
+What remains is a naming decision, **one open issue, and it is work** — the six filed
 during the pass, less [#165](https://github.com/MrZoller/headroom/issues/165),
 [#166](https://github.com/MrZoller/headroom/issues/166),
 [#170](https://github.com/MrZoller/headroom/issues/170),
 [#171](https://github.com/MrZoller/headroom/issues/171) and
-[#172](https://github.com/MrZoller/headroom/issues/172), which are fixed, plus
-[#181](https://github.com/MrZoller/headroom/issues/181), which came out of reviewing this very
-document alongside [#180](https://github.com/MrZoller/headroom/issues/180) — fixed 5 August 2026, and
-recorded under **Launch commands** below, since what it settled is where the benchmark measures from
-— plus [#182](https://github.com/MrZoller/headroom/issues/182), which is the half of #165 that
-its own verification note said not to fold in, less #174, which is closed as a record of a decision
-already made rather than as a task —
+[#172](https://github.com/MrZoller/headroom/issues/172), which are fixed, and the two that came out
+of reviewing this very document — [#180](https://github.com/MrZoller/headroom/issues/180), fixed
+5 August 2026 and recorded under **Launch commands** below, since what it settled is where the
+benchmark measures from, and [#181](https://github.com/MrZoller/headroom/issues/181), fixed the same
+day and recorded under **Calibrate**, since what it settled is how the output of that benchmark is
+read back — leaving [#182](https://github.com/MrZoller/headroom/issues/182), which is the half of
+#165 that its own verification note said not to fold in, less #174, which is closed as a record of a
+decision already made rather than as a task —
 and **two loose ends that are on `main` and in no issue at all**: a `LLAMA_KV_TYPES`
 mapping duplicated between `Calibrate.tsx` and `launch.ts` under a comment saying the two must be
 merged once both land, and the emitted `llama-bench` command asking for `-o md` while the parser
@@ -790,29 +791,45 @@ submittable as calibration evidence. There is no way to recover either rate from
 answers differ in one table.** The rate cell was first taken as the first numeric cell, which read
 `ngl` — 33 — as a throughput of 33 tok/s on a row measuring 7,285: every column between `model` and
 `t/s` is a number on some backend, so "shaped like a number" does not identify that column. The
-spread does when it is present, and `t/s` is last when it is not. `ngl` itself is then found by
-_position_ — a bare integer is not a distinctive shape — while `params` (`8.03 B`) and the backend
-word are found by shape, because a position breaks on the next column upstream adds.
+spread does when it is present, and `t/s` is last when it is not. `params` (`8.03 B`) and the backend
+word are found by shape for the same reason in reverse — each is distinctive, and a position would
+break on the next column upstream adds.
 
-**And the position is already broken**, on the one output that matters most: llama-bench prints
-`type_k`/`type_v` between `ngl` and `test`, so on any run with a non-default cache — which is what
-the panel's own command asks for — the cell before `test` is `q8_0` and the layer count is lost.
-`describeMismatch` then skips the placement check, so an offloaded run compares clean against a
-fully-resident prediction, which is a wrong number entering the record rather than an unverifiable
-one. Same root as the cache columns and filed with them in
-[#181](https://github.com/MrZoller/headroom/issues/181): the parser never reads the header row. A fix
-that adds `type_k`/`type_v` and leaves `ngl` positional would close the quieter half and leave the
-louder one.
+**`ngl` was then found by _position_, and the position was already broken**
+([#181](https://github.com/MrZoller/headroom/issues/181), fixed 5 August 2026). A bare integer is not
+a distinctive shape, which is a true observation and an argument for reading the header rather than
+for counting from `test`: llama-bench prints a column for every setting that is not at its default,
+in its own field order, **between `backend` and `test`** — so the middle of the table is exactly the
+part a position cannot describe. `type_k`/`type_v` land there on any non-default cache, which is what
+the panel's own command asks for; `ts` lands there on the multi-GPU command; and on a CPU backend
+`ngl` is not printed at all while `threads` is. The consequences ran in both directions. A displaced
+`ngl` is _lost_, so `describeMismatch` skips the placement check and an offloaded run compares clean
+against a fully-resident prediction — a wrong number entering the record rather than an unverifiable
+one. A CPU paste was worse: the cell before `test` was the thread count, so a 96-thread EPYC run was
+marked as 96 layers on a GPU it does not have, which is a _false_ rejection of exactly the
+measurements the second calibration anchor is made of.
+
+**So the header row is read once and the columns with no distinctive shape are indexed by name.**
+That is one fix for both halves of #181 — a cache-only fix would have closed the quieter half and
+left the louder one — and it is why the parser now tolerates a reordered table, an unknown column,
+and a llama-bench too old to print either pair. Three rules make it safe rather than merely
+indexed: a row whose cell count does not match the header's is read as though it had no header,
+since a header that does not describe a row cannot name its cells; a missing header falls back to
+the positional read rather than failing, because a reader pasting one row out of a table is not a
+parse error; and empty cells are kept rather than dropped, because the header is now what says which
+column a cell is and a blank one would shift everything after it.
 
 **Unverifiable is not the same as matching**, and treating it as such let a paste with no stated
 cache precision sail past a Q8 or Q4 prediction. It is called out as unverifiable now, with the
-`-o json` re-run named — but **the limitation is the parser rather than the format, and saying
-otherwise is how it survived two reviews**. `parseMarkdown` has no branch for `type_k`/`type_v` at
-all, so no markdown paste ever carries a cache precision, including the one the panel's own
-`-ctk q8_0 -ctv q8_0 -o md` produces with the columns printed. The reader who follows the panel
-exactly is told their correct run looks like f16. Reading those columns is
-[#181](https://github.com/MrZoller/headroom/issues/181); the current behaviour is now pinned by a test
-that inverts when it lands.
+`-o json` re-run named — but **the limitation was the parser rather than the format, and saying
+otherwise is how it survived two reviews**. `parseMarkdown` had no branch for `type_k`/`type_v` at
+all, so no markdown paste ever carried a cache precision, including the one the panel's own
+`-ctk q8_0 -ctv q8_0 -o md` produces with the columns printed: the reader who followed the panel
+exactly was told their correct run looked like f16. Reading those columns was the other half of
+#181, and what reaches the unverifiable branch now is a run that really did leave the cache at its
+default — the one case llama-bench prints no columns for. Both halves of the pair or neither, since
+`-ctk q8_0` alone prints one column and completing it with the default would invent the field the
+mixed-cache check exists to compare.
 
 **The band is judged on the rounded percent**, per the rule this file already carries for thresholds:
 a raw comparison put a 30.0% delta outside the ±30% band on float epsilon alone
@@ -839,19 +856,21 @@ version-skew guard, so a reader who follows the panel exactly arrives without it
 re-run. Which
 way that resolves is a product decision; what is not defensible is the two files disagreeing about
 which one the panel emits, and `parseJson`'s docblock claimed the other answer until this was
-written down.
+written down. It costs less than it did: since #181 the commit is the only field the JSON re-run
+buys, where it used to be the cache precision and the layer count as well.
 
 Deliberately absent, and not forgotten: cloud pricing stays out of scope per the settled decision
 below, and fine-tuning memory (LoRA/QLoRA) is a second engine rather than a feature — real demand,
 weak incumbents, and deliberately not attempted before guided mode shipped. Now that it has, that is
-the v3-scale bet. What stands between here and it is **#181 and #182**. The six issues in
+the v3-scale bet. What stands between here and it is **#182**. The six issues in
 **Open questions** are all resolved as of 3 August 2026 — five fixed, and
 [#174](https://github.com/MrZoller/headroom/issues/174) closed as a _record_ of an answered policy
-question rather than as work. What is left is #181, which came out of reviewing this very document
-alongside #180 — the P1 on the path a reader is most likely to take, fixed 5 August 2026 — and #182,
-which is the half of #165 its own verification note said not to fold in: a different provenance from
-the other two, and worth keeping straight. Counting #174 as a blocker would have made a settled
-decision look like a task, which is why no count here ever did.
+question rather than as work. The two that came out of reviewing this very document are resolved
+too, both on 5 August 2026: #180, the P1 on the path a reader is most likely to take, and #181, the
+parser that could not read the output that path produces. What is left is #182, which is the half of
+#165 its own verification note said not to fold in: a different provenance from the other two, and
+worth keeping straight. Counting #174 as a blocker would have made a settled decision look like a
+task, which is why no count here ever did.
 
 ## Deployment
 
@@ -2457,10 +2476,10 @@ should be whenever the code is the thing that can be read instead.
 
 Two of the findings were not about the prose at all. They are defects the prose walked into:
 
-| filed                                                                                                              | what it is                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [#180](https://github.com/MrZoller/headroom/issues/180) the emitted decode depth is unusable                       | **P1, fixed 5 August 2026.** `llamaBench()` emitted `-d prompt+prefix`; `Calibrate` expects `contextTokens`; `describeMismatch` rejects a depth off by 10%. The panel's own command produced a row the panel marked unusable. Filed as a question about what `estimateDecode` should charge, on the premise that the expectation was unreachable — but `llama-bench` sizes `n_ctx` from the test, so `-d ctx-n -n n` reaches it exactly. The engine was left alone and the emitter moved; see **Launch commands** |
-| [#181](https://github.com/MrZoller/headroom/issues/181) markdown loses the cache precision **and the layer count** | `parseMarkdown` never reads the header row. It has no branch for `type_k`/`type_v`, so every markdown paste reads as f16 — including the one the panel's own `-ctk q8_0 -ctv q8_0 -o md` produces with the columns printed — and it finds `ngl` by position, which those same columns displace, so the placement check is skipped and an offloaded run compares clean against a resident prediction. One fix for both; a cache-only fix leaves the worse half                                                     |
+| filed                                                                                                              | what it is                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [#180](https://github.com/MrZoller/headroom/issues/180) the emitted decode depth is unusable                       | **P1, fixed 5 August 2026.** `llamaBench()` emitted `-d prompt+prefix`; `Calibrate` expects `contextTokens`; `describeMismatch` rejects a depth off by 10%. The panel's own command produced a row the panel marked unusable. Filed as a question about what `estimateDecode` should charge, on the premise that the expectation was unreachable — but `llama-bench` sizes `n_ctx` from the test, so `-d ctx-n -n n` reaches it exactly. The engine was left alone and the emitter moved; see **Launch commands**         |
+| [#181](https://github.com/MrZoller/headroom/issues/181) markdown loses the cache precision **and the layer count** | **P2, fixed 5 August 2026.** `parseMarkdown` never read the header row. It had no branch for `type_k`/`type_v`, so every markdown paste read as f16 — including the one the panel's own `-ctk q8_0 -ctv q8_0 -o md` produces with the columns printed — and it found `ngl` by position, which those same columns displace, so the placement check was skipped and an offloaded run compared clean against a resident prediction. One fix for both, and a cache-only fix would have left the worse half; see **Calibrate** |
 
 ### Standing questions
 
