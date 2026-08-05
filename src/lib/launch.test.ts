@@ -7,6 +7,7 @@ import {
   GPT_OSS_20B,
   GPT_OSS_120B,
   LLAMA_31_8B,
+  LLAMA_32_3B,
   LLAMA_CPP,
   MAC_STUDIO_M3_ULTRA_256,
   MLX,
@@ -153,7 +154,8 @@ describe('llama.cpp: one catalog row, three launchers', () => {
   describe('-ngl is a layer count, and the layer count has three cases', () => {
     it('adds one for the output tensor when everything is resident', () => {
       // llama.cpp's `n_gpu_layers` counts a position past the repeating blocks, so `layers` alone
-      // leaves the output tensor on the host. Verified against llama-model.cpp, not recalled.
+      // is one short of the whole model — it sheds layer 0 off the front and keeps the output
+      // tensor. Verified against llama-model.cpp at commit 360e134, not recalled (#202).
       const served = text(commands(i)['llama-server'].serve);
       expect(i.placement.offloadFraction).toBe(0);
       expect(served).toContain(`-ngl ${LLAMA_31_8B.layers + 1}`);
@@ -169,6 +171,56 @@ describe('llama.cpp: one catalog row, three launchers', () => {
       expect(text(emitted)).toContain(`-ngl ${ngl}`);
       if (!emitted.ok) throw new Error('unreachable');
       expect(emitted.notes.join(' ')).toMatch(/not a fraction of the model/i);
+    });
+
+    it('has its own sentence at zero on a GPU rig, rather than subtracting the output slot', () => {
+      /**
+       * A GPU with no room is not a rig with no GPU, and the general spilling note cannot serve
+       * both: it subtracts the output slot, which only occupies a position for a *positive*
+       * `-ngl`. Written without this branch the note read "llama.cpp reads it as -1 repeating
+       * layers", on 2,202 catalog configurations — reachable wherever the resident fraction
+       * floors to zero, which `residentLayersOf`'s `Math.max(0, …)` permits by design.
+       */
+      /* A card small enough that no whole layer survives beside the cache, synthesised rather
+         than named: the real rows that reach this are the 16 GB 50-series parts, and pinning a
+         catalog id here would make this fail the day one is re-specced (#197). */
+      const small = {
+        ...RTX_4090,
+        id: 'small-fixture',
+        name: 'Small fixture',
+        capacityBytes: 16 * 1024 ** 3,
+        allocatableBytes: 15 * 1024 ** 3,
+      };
+      const nothingFits = input(
+        LLAMA_32_3B,
+        getQuant('bf16'),
+        LLAMA_CPP,
+        small,
+        1,
+        usage({ contextTokens: 131072 })
+      );
+
+      expect(nothingFits.placement.assignment.residentLayers).toBe(0);
+      const emitted = commands(nothingFits)['llama-server'].serve;
+      if (!emitted.ok) throw new Error('unreachable');
+      const notes = emitted.notes.join(' ');
+
+      expect(notes).not.toMatch(/-\d+ repeating layers/);
+      expect(notes).toMatch(/puts nothing on the GPU/i);
+      // Not the cpu-ram sentence: this machine has a GPU, it just has no room.
+      expect(notes).not.toMatch(/no GPU to offload to/i);
+
+      /**
+       * And it must not claim to match the panel, which is the mistake this note made first.
+       * `residentLayers` floors, so it hits zero while a fraction is still resident — across the
+       * 4,302 configurations reaching this note the spill runs 80.5% to 99.9% and is **never**
+       * 100%. So `-ngl 0`, which puts nothing on a GPU, is always a slower placement than the one
+       * priced, and a sentence saying otherwise is false on every case it renders.
+       */
+      expect(nothingFits.placement.offloadFraction).toBeGreaterThan(0);
+      expect(nothingFits.placement.offloadFraction).toBeLessThan(1);
+      expect(notes).toMatch(/slower than the panel estimates/i);
+      expect(notes).not.toMatch(/what the figures above price/i);
     });
 
     it('is zero on a machine with no GPU to offload to', () => {

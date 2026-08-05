@@ -385,7 +385,8 @@ trap paying out immediately rather than in six months:
 
 - **llama.cpp's `-ngl` counts the output tensor.** `n_gpu_layers` defaults to `n_layer_all + 1` and
   `i_gpu_start = max(n_layer_all + 1 - ngl, 0)`, so a fully-resident 48-layer model wants `-ngl 49`
-  and `-ngl 48` leaves the output tensor on the host.
+  — and what `-ngl 48` sheds is **layer 0**, not the output tensor. See the correction below; the
+  first version of this bullet had that half backwards.
 - **`-c` is the whole cache, divided among the slots.** `n_ctx_seq` is `n_ctx / n_seq_max` unless the
   KV buffer is unified, and passing `-np` explicitly is what turns unification off — so eight users
   at 64K is `-c 524288`. Passing the per-user figure gives each slot an eighth of it.
@@ -397,10 +398,44 @@ trap paying out immediately rather than in six months:
   8-bit-cache scenario therefore cannot be _served_ at the precision it was priced at, and the note
   says the served cache is fp16 and roughly twice the size shown.
 
+**Three of those four were read correctly and the first one was half backwards, which only a second
+source read caught** ([#202](https://github.com/MrZoller/headroom/issues/202)). `-ngl` counting the
+output tensor is right. "`-ngl 48` leaves the output tensor on the host" is not: the output tensor is
+slot `n_layer_all` of `n_layer_all + 1`, and `i_gpu_start` shifts the resident window off the
+**front** of the stack. Put `il = L` into the guard and `il - i_gpu_start = ngl - 1` is below
+`act_gpu_layers = ngl` for every `ngl >= 1` — so the output tensor is on a GPU whenever anything is,
+and `-ngl 48` on a 48-layer model sheds **layer 0**. Upstream states it in its own fitter: "the last
+device has the output layer, which cannot be a partial layer". Read 5 August 2026 from
+`src/llama-model.cpp:1318-1343` and `common/fit.cpp:581` at ggml-org/llama.cpp commit `360e134`, and
+measured on an 18-layer Gemma 3 270M: at `-ngl 1` the only resident tensor is the output table, and
+at `-ngl 18` layer 0 is on the CPU while the output is still on the GPU.
+
+**The false sentence reached 56,612 commands, which is the part worth sitting with.** The `+1`
+arithmetic is right where it applies — a fully-resident 48-layer model wants `-ngl 49` under either
+reading — but `gpuLayers` applies it only on that branch, and emits a bare `residentLayers` when the
+placement spills. The output takes a slot for any positive `-ngl`, so those commands load one fewer
+repeating layer than the number reads, and 1,530 of them are `-ngl 1`, which loads none. Every
+emitted `-ts` is wrong for the same reason, on all 42,146 configurations that emit one: the ratios
+sum to `L` while llama.cpp compares them against a key over `L + 1`, so the first card always gains
+a layer. Both are tracked in #204 and neither is corrected here — the fix rewrites `-ts` on every
+configuration that emits it, which is the churn #182's sequence exists to isolate. Where the false
+sentence also reached was a _justification_: `placement.ts` charges a
+device's whole spill against its repeating layers, and called that the conservative of two readings
+because llama.cpp supposedly shed the output tensor first. Under the real order it is not the
+cautious reading, it is the only one llama.cpp can execute — the generous alternative, where the
+fixed tensors leave and a spilling device still reports every layer resident, describes a placement
+no `-ngl` expresses, since any `-ngl` holding all `L` repeating layers is at least `L + 1` and holds
+the output too. Same count, sound reason instead of an inverted one. A backwards reason is worse than
+an absent one for exactly the failure mode this file keeps warning about: the next person reasons
+forward from it, and the tests cannot tell.
+
 **The trap #136 names most sharply was reached from the far side, by the one flag the feature
-exists for.** `-ngl` was right from the start — it reads `assignment.residentLayers` and never a
-fraction — and `-ts` was wrong, which nothing in the issue's framing predicts because `-ts` is not a
-flag the issue mentions. It is the payoff of surfacing the assignment: llama.cpp's default split is
+exists for.** `-ngl` reads `assignment.residentLayers` and never a fraction, which was the trap the
+issue named — and `-ts` was wrong, which nothing in its framing predicts because `-ts` is not a flag
+it mentions. (Read once as "`-ngl` was right from the start". It was not: reading `residentLayers`
+avoided the fraction and still emitted a count one short of what llama.cpp loads. Right about the
+trap, wrong about the flag — #204.) It is the payoff of surfacing the assignment: llama.cpp's
+default split is
 proportional to device _memory_, so on identical cards it is an equal number of layers, which is the
 wrong split for a model whose layers cache different amounts.
 

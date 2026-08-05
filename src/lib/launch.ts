@@ -37,8 +37,9 @@ import { substitutionFor } from '@/data/runtimes';
  * was found by reading the source rather than by recalling it:
  *
  *   - **llama.cpp's `-ngl` counts the output tensor.** `n_gpu_layers` is the repeating blocks plus
- *     one position, so a fully-resident 48-layer model wants `-ngl 49` and `-ngl 48` leaves the
- *     output tensor on the CPU.
+ *     one position, so a fully-resident 48-layer model wants `-ngl 49`, and `-ngl 48` sheds *layer
+ *     0* rather than the output tensor — the window comes off the front of the stack. See
+ *     {@link gpuLayers}.
  *   - **`-c` is the whole cache, divided among the `-np` slots.** `n_ctx_seq` is
  *     `n_ctx / n_seq_max` unless the KV buffer is unified, so eight users at 64K wants `-c 524288`.
  *     Passing the per-user figure would give each slot an eighth of it.
@@ -181,8 +182,18 @@ const VLLM_KV_DTYPE = { fp16: 'auto', q8: 'fp8', q4: undefined } as const;
  *     nothing spilled, because there was nowhere to spill *from*. The honest flag is 0.
  *   - **llama.cpp counts the output tensor one position past the repeating blocks.**
  *     `n_gpu_layers` defaults to `n_layer_all + 1`, and `i_gpu_start = max(n_layer_all + 1 - ngl, 0)`
- *     — so `-ngl 48` on a 48-layer model leaves the output tensor on the host. "All of them" is
- *     `layers + 1`.
+ *     — so "all of them" is `layers + 1`, and `-ngl 48` on a 48-layer model is one short: it sheds
+ *     **layer 0**, at the front of the stack, and keeps the output tensor. The output tensor is slot
+ *     `n_layer_all`, and `il - i_gpu_start = ngl - 1 < act_gpu_layers = ngl` holds there for every
+ *     `ngl >= 1`, so it is on a GPU whenever anything is; upstream's own fitter says "the last device
+ *     has the output layer, which cannot be a partial layer". Read 5 August 2026 from
+ *     `src/llama-model.cpp:1318-1343` and `common/fit.cpp:581` at ggml-org/llama.cpp commit
+ *     `360e134` (#202). A fully-resident placement wants `layers + 1` under either reading, so the
+ *     branch below is right where it applies. **The spilling branch is not** — the output occupies a
+ *     slot for any positive `-ngl`, so `-ngl N` loads `N - 1` repeating layers and the table, not
+ *     `N` layers. Measured at 56,612 of 205,198 emitted commands, and 1,530 of those are `-ngl 1`,
+ *     which loads no repeating layer at all. Left as it is here deliberately: the fix rewrites `-ts`
+ *     on every configuration that emits it and belongs with that change, in #204.
  */
 function gpuLayers(input: LaunchInput): number {
   if (input.rig.device.class === 'cpu-ram') return 0;
@@ -610,7 +621,9 @@ function llamaServer(input: LaunchInput): Pair {
           `-ts proportions the -ngl window, not the model: llama.cpp puts the last ${ngl} layers ` +
             `on GPUs and splits those by these ratios. ${split} is the split Headroom sized, against ` +
             `a default that divides by device memory and therefore evenly on identical cards — ` +
-            `which is the wrong answer for a model whose layers cache different amounts.`,
+            `which is the wrong answer for a model whose layers cache different amounts. ` +
+            `llama.cpp normalises these ratios across the -ngl window, which counts the output ` +
+            `tensor as well, so the first card currently receives one layer more than stated (#204).`,
         ]),
   ];
 
@@ -1138,12 +1151,37 @@ function nglNote(input: LaunchInput, ngl: number): string {
     return `-ngl 0 because ${rig.device.name} has no GPU to offload to — every layer runs on the host, which is what the figures above price.`;
   }
   if (ngl > model.layers) {
-    return `-ngl ${ngl} is all ${model.layers} layers plus one: llama.cpp counts the output tensor a position past the repeating blocks, so ${model.layers} would leave it on the host.`;
+    return `-ngl ${ngl} is all ${model.layers} layers plus one: llama.cpp counts the output tensor a position past the repeating blocks, so ${model.layers} would keep the output tensor and leave layer 0 on the host.`;
   }
+  /* Zero is its own sentence, not the general one with a zero in it.
+     The branch below subtracts the output slot, which is only there for a *positive* `-ngl` —
+     at zero llama.cpp offloads nothing at all, and the subtraction rendered "-1 repeating
+     layers" on 2,202 catalog configurations, Llama 3.2 3B BF16 on two 5080s at 32K among them.
+     Distinct from the `cpu-ram` case above, which is about a rig with no GPU rather than a GPU
+     with no room. */
+  if (ngl === 0) {
+    /* And it does *not* claim to match the figures, which was this sentence's first mistake.
+       `residentLayers` floors, so it reaches zero while a fraction of the weights is still
+       resident — across the 4,302 configurations that reach this note the spill runs 80.5% to
+       99.9% and is never 100%. `-ngl 0` puts nothing on the GPU at all, so the command is a
+       slower placement than the panel priced, every time. Which flag expresses the placement
+       Headroom sized is #204's question, not this note's. */
+    return (
+      `-ngl 0 puts nothing on the GPU: ${rig.device.name} has no room for a whole layer beside ` +
+      `the cache it has to hold. The figures above price ${percentish(placement.offloadFraction)} ` +
+      `of the weights spilling rather than all of them, so expect this command to run slower ` +
+      `than the panel estimates.`
+    );
+  }
+  /* Says what llama.cpp will do, not what Headroom sized, because on this branch they differ:
+     the output tensor takes a slot for any positive `-ngl`, so this loads one fewer repeating
+     layer than the number reads. Known, tracked in #204, and stated here rather than left as the
+     confident wrong sentence it was. */
   return (
-    `-ngl ${ngl} of ${model.layers} layers is the split Headroom sized, not a fraction of the model: ` +
+    `-ngl ${ngl} of ${model.layers} layers is a count Headroom sized, not a fraction of the model: ` +
     `${percentish(placement.offloadFraction)} of the weights spill to host RAM, and which layers ` +
-    `stay is what decides whether that is ${ngl} or ${ngl + 2}.`
+    `stay is what decides the count. llama.cpp reads it as ${ngl - 1} repeating layers plus the ` +
+    `output tensor, which it counts a position past the blocks.`
   );
 }
 
