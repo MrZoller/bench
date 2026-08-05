@@ -91,7 +91,14 @@ export interface Measurement {
   buildCommit?: string;
   /** `-ngl`, where the format carried it — the layer split the run actually used. */
   gpuLayers?: number;
-  /** `-ctk`/`-ctv`, from JSON. The cache precision the run used, which changes both bytes and rate. */
+  /**
+   * `-ctk`/`-ctv` — the cache precision the run used, which changes both the bytes and the rate.
+   *
+   * From either format now. JSON always states it; markdown states it whenever it is not the
+   * default, which is exactly when it matters and is what the panel's own command asks for. Absent
+   * means the paste did not say, which `describeMismatch` treats as unverifiable rather than as
+   * agreement.
+   */
   kvTypes?: { k: string; v: string };
   /** However the format names the checkpoint — `model_type`, or the markdown table's first column. */
   modelLabel?: string;
@@ -129,10 +136,9 @@ export function parseLlamaBench(text: string): readonly Measurement[] {
  * because the block beside it is read by a person before it is run by one. So the reader who
  * follows the panel arrives here with markdown and no `build_commit`, and {@link submissionUrl} is
  * what asks for the JSON re-run — in the issue body, at the point the missing commit would have
- * been printed. (`describeMismatch` asks for one too, and for a reason that is worse than it reads:
- * {@link parseMarkdown} never assigns `kvTypes` at all, so **every** markdown paste is
- * cache-unverifiable — including the one the panel's own `-ctk q8_0 -ctv q8_0 -o md` produces, where
- * llama-bench really did print the columns. See #181.) Worth revisiting as a pair rather than in
+ * been printed. The commit is the only thing that re-run still buys the reader who followed the
+ * panel: #181 made {@link parseMarkdown} read the header row, so the cache precision and the layer
+ * count now come out of the markdown that command prints. Worth revisiting as a pair rather than in
  * either file: whichever way it goes, the emitter and this comment have to agree.
  *
  * `-o json` produces an array of objects carrying every field the CSV header lists, so the depth,
@@ -205,23 +211,84 @@ function parseJson(text: string): readonly Measurement[] | undefined {
 /**
  * The default format.
  *
- * The table is `| model | size | params | backend | ngl | test | t/s |`, and only two of those
- * columns are read — the rest vary by build and by backend, and depending on their positions is how
- * a parser breaks on the next release. The `test` column is matched rather than indexed, so a
- * column added or reordered upstream costs nothing.
+ * The table is `| model | size | params | backend | ngl | test | t/s |` *at its narrowest*, and the
+ * middle of it is what varies: `llama-bench` prints a column for every setting that is not at its
+ * default, in the order its own field list declares, between `backend` and `test`. So `type_k`,
+ * `type_v`, `ts`, `threads`, `fa` and a dozen more appear and disappear per invocation — and a
+ * parser that counts positions from either end is reading a different column on every one.
+ *
+ * **So the header row is read once and the columns without a distinctive shape are indexed by
+ * name** (#181). Three fields want that. `type_k`/`type_v` were previously not read at all, so
+ * every markdown paste was cache-unverifiable including the one the panel's own
+ * `-ctk q8_0 -ctv q8_0 -o md` produces with the columns printed. `ngl` was read by *position* — the
+ * cell before `test` — on the theory that a bare integer has no shape to find it by, which is true
+ * and is an argument for the header rather than for the position: those same cache columns sit
+ * between `ngl` and `test`, as does the `ts` the multi-GPU command emits, so the panel's own output
+ * was the case that broke it. Silently, and in the direction that matters — a lost `ngl` skips the
+ * placement check entirely, so an offloaded run compared clean against a fully-resident prediction.
+ * On a CPU paste it was worse than lost: `llama-bench` omits `ngl` for a CPU backend and prints
+ * `threads`, so the cell before `test` was the thread count and a 96-thread EPYC run was marked as
+ * 96 layers on a GPU it does not have.
+ *
+ * Everything else stays found by shape, because shape is the stronger identifier where one exists:
+ * `params` is `8.03 B`, the backend is a bare alphabetic word, the rate carries the `±`. The header
+ * is a fallback for the cells that have no shape, not a replacement for the cells that do.
+ *
+ * **A missing header is not a parse failure**, and neither is a header that does not fit. A reader
+ * pasting one row out of a table has to keep working, so `ngl` falls back to the position it used
+ * before and the cache columns stay unread — which is where both of them were. A header that lists
+ * no `ngl`, which is every CPU-backend table, means the table has no `ngl`, and unstated is the
+ * honest answer there; see `describeMismatch`, which checks the paste's optional fields only when
+ * the paste states them.
  *
  * The `test` label has been spelled `pp 512`, `pp512` and `pp512 @ d512` across versions, so the
  * pattern tolerates the whitespace rather than pinning one spelling.
  */
 function parseMarkdown(text: string): readonly Measurement[] {
   const rows: Measurement[] = [];
+  /**
+   * The most recent header's column names, lower-cased, by index.
+   *
+   * Most recent rather than first, because the panel emits **two** commands and a reader pastes
+   * both tables — and llama-bench prints a header per invocation, whose columns need not match the
+   * one before it. Rows are read against the header above them; rows with no header above them at
+   * all fall back to the positional read.
+   */
+  let header: readonly string[] | undefined;
 
   for (const line of text.split('\n')) {
     if (!line.includes('|')) continue;
-    const cells = line
-      .split('|')
-      .map((c) => c.trim())
-      .filter((c) => c !== '');
+    const cells = tableCells(line);
+
+    if (isHeaderRow(cells)) {
+      header = cells.map((c) => c.toLowerCase());
+      continue;
+    }
+
+    /**
+     * The header, but only where it can actually name *this* row's cells.
+     *
+     * One rule for every way a table can be ragged — a row truncated in transit, a header pasted
+     * from a different run, a hand-assembled table — and it is the rule the format itself
+     * guarantees: `llama-bench` writes one cell per field for the header and for every row under
+     * it, so a row of a different width is a row this header does not describe. Reading it anyway
+     * is how a neighbouring cell becomes a cache precision, and a fabricated `q8_0` is worse than
+     * an absent one: it is a confident answer to the question the panel was asked. A row the header
+     * cannot name is read as though there were no header, which is a state this already handles.
+     */
+    const columns = header !== undefined && header.length === cells.length ? header : undefined;
+    /**
+     * A cell by column name, and `undefined` for every way that can fail to name one: no usable
+     * header, no such column in it, or an empty cell where it should be. Unstated, in other words —
+     * which `describeMismatch` reads as a field the paste did not claim rather than as a mismatch.
+     */
+    const columnCell = (name: string): string | undefined => {
+      if (columns === undefined) return undefined;
+      const at = columns.indexOf(name);
+      if (at === -1) return undefined;
+      const cell = cells[at];
+      return cell === undefined || cell === '' ? undefined : cell;
+    };
 
     const testCell = cells.find((c) => /^(pp|tg)\s*\d/i.test(c));
     if (testCell === undefined) continue;
@@ -248,16 +315,43 @@ function parseMarkdown(text: string): readonly Measurement[] {
      * That is the only place the markdown format says what was actually loaded, and a paste from a
      * different quantization is otherwise indistinguishable from a disagreement about the model.
      */
-    const modelLabel = cells[0] === testCell || cells[0] === rateCell ? undefined : cells[0];
+    const modelLabel =
+      cells[0] === undefined || cells[0] === '' || cells[0] === testCell || cells[0] === rateCell
+        ? undefined
+        : cells[0];
     /**
      * The `ngl` column, which the default output carries and this first discarded — so a run with
      * half the model on the host was accepted as comparable with a fully-resident prediction, and
-     * only JSON pastes got the layer check. Found by position rather than by shape because a bare
-     * integer is not a shape that identifies it: it is the cell immediately before the `test` one,
-     * which is the table's own layout.
+     * only JSON pastes got the layer check.
+     *
+     * By name where there is a header, and by the position it used before where there is not.
+     * `n_gpu_layers` is the same column under the name the other two output formats give it, and
+     * costs one lookup to accept from someone who assembled a table by hand.
+     *
+     * **The fallback is exactly as good as it was, which is the point and also its limit.** A bare
+     * integer before `test` is taken as the layer count because that is what the table's own layout
+     * puts there, and a reader who stripped the header off a CPU table would still hand over a
+     * thread count. That is a reason to read the header, not a reason to refuse the row: the common
+     * bare paste is a GPU row where the position is right, and dropping it would lose the layer
+     * check on every paste that arrives without its header.
      */
-    const nglCell = cells[cells.indexOf(testCell) - 1];
+    const nglCell =
+      columns === undefined
+        ? cells[cells.indexOf(testCell) - 1]
+        : (columnCell('ngl') ?? columnCell('n_gpu_layers'));
     const ngl = nglCell !== undefined && /^\d+$/.test(nglCell) ? Number(nglCell) : undefined;
+    /**
+     * The cache precision, which markdown carries and nothing read until #181.
+     *
+     * **Both halves or neither.** `-ctk q8_0` alone prints `type_k` and leaves `type_v` at a
+     * default llama-bench does not print, and filling in `f16` for the missing half would be
+     * inventing the exact field `describeMismatch` refuses to guess at — a mixed `K=q8_0 V=f16` run
+     * is not a run at either precision, which is why that check compares the pair rather than
+     * either side. One column stated is a paste that has not stated its cache precision.
+     */
+    const typeK = columnCell('type_k');
+    const typeV = columnCell('type_v');
+    const kvTypes = typeK !== undefined && typeV !== undefined ? { k: typeK, v: typeV } : undefined;
     /**
      * The `params` and `backend` columns, found by shape rather than by index — `8.03 B` and a bare
      * alphabetic word are each distinctive enough, where a position would break on the next column
@@ -270,6 +364,7 @@ function parseMarkdown(text: string): readonly Measurement[] {
       kind: test[1].toLowerCase() === 'pp' ? 'prefill' : 'decode',
       ...(modelLabel === undefined ? {} : { modelLabel }),
       ...(ngl === undefined ? {} : { gpuLayers: ngl }),
+      ...(kvTypes === undefined ? {} : { kvTypes }),
       ...(params === undefined || !Number.isFinite(params) ? {} : { params }),
       ...(backend === undefined ? {} : { backend }),
       tokens: Number.parseInt(test[2], 10),
@@ -280,6 +375,38 @@ function parseMarkdown(text: string): readonly Measurement[] {
   }
 
   return rows;
+}
+
+/**
+ * One table row's cells, **keeping the empty ones**, because the header is now what says which
+ * column a cell is.
+ *
+ * This dropped empties before, which was harmless while every lookup was by shape and is not once
+ * one is by index: a single blank cell in a row would shift every column after it against the
+ * header and report a neighbour's value as `ngl`. So the outer pipes come off by pattern — they are
+ * a delimiter rather than a cell — and everything between them is kept as written.
+ */
+function tableCells(line: string): readonly string[] {
+  return line
+    .trim()
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map((c) => c.trim());
+}
+
+/**
+ * Whether this row names the columns rather than carrying one.
+ *
+ * `test` is the anchor because llama-bench's field list always ends `test`, `t/s` whatever else it
+ * printed. The second clause is what keeps a data row from being mistaken for a header if a
+ * checkpoint is ever literally called "test": a row carrying a `pp512`-shaped cell is a
+ * measurement, whatever else is in it.
+ */
+function isHeaderRow(cells: readonly string[]): boolean {
+  return (
+    cells.some((c) => c.toLowerCase() === 'test') && !cells.some((c) => /^(pp|tg)\s*\d/i.test(c))
+  );
 }
 
 function numberOf(value: unknown): number | undefined {
@@ -349,10 +476,11 @@ export interface Prediction {
   /**
    * Layers the placement expects on the GPU, when that is unambiguous.
    *
-   * Absent means "no claim", and the check is skipped — which is the honest state wherever the
-   * placement spills, since converting a spill fraction back into a layer count is the #14 shape
-   * and this module is not the place to invent it. The caller states it only for a fully-resident
-   * placement, where the answer is every layer.
+   * Absent means "no claim", and the check is skipped — which is the honest state for a caller that
+   * cannot say where the layers went. The panel can: `Placement.assignment.residentLayers` is the
+   * count the placement actually sized, spilled or not, and zero on a machine with no GPU. Stating
+   * it only when nothing spilled was the first version, and it disabled the check on precisely the
+   * configurations where a wrong `-ngl` matters most.
    */
   gpuLayers?: number;
 }
@@ -565,13 +693,14 @@ function describeMismatch(
      * **Unverifiable is not the same as matching**, and the first version treated it as such: a
      * paste carrying no cache precision sailed past a Q8 or Q4 prediction.
      *
-     * **This branch is reached by every markdown paste, not only a default one** (raised by Codex
-     * on #175; the comment here previously claimed the narrower cause and was wrong).
-     * `parseMarkdown` has no branch for the cache columns at all, so it never assigns `kvTypes`
-     * whether or not llama-bench printed them — and the panel's own measure command passes
-     * `-ctk`/`-ctv` explicitly, which makes it print them. So the reader who follows the panel
-     * exactly gets told their correctly reproduced run looks like f16. Reading those columns is
-     * #181.
+     * **Reached by a paste that does not state the fields, which is now the only way to reach it.**
+     * It used to be reached by *every* markdown paste — `parseMarkdown` had no branch for the cache
+     * columns at all, so it never assigned `kvTypes` whether or not llama-bench printed them, and
+     * the panel's own measure command passes `-ctk`/`-ctv` explicitly, which makes it print them.
+     * The reader who followed the panel exactly was told their correctly reproduced run looked like
+     * f16 (raised by Codex on #175, fixed in #181). What lands here now is a run that really did
+     * leave the cache at its default, since that is the one case llama-bench prints no columns for
+     * — and against a q8_0 or q4_0 prediction that is a difference rather than a silence.
      *
      * **The sentence names neither format**, which is the correction after the first one named the
      * wrong one (Codex again, on #175). A JSON row that simply omits `type_k`/`type_v` lands here
@@ -610,8 +739,10 @@ function describeMismatch(
    * The layer split, which is the whole subject of the offload term.
    *
    * A run at `-ngl 20` against a fully-resident prediction is streaming most of the model across
-   * the bus, and the prediction is not. Only flagged when the paste states it, since markdown's
-   * `ngl` column is not read — this is the one field the parser captured and nothing consulted.
+   * the bus, and the prediction is not. Only flagged when the paste states it — which both formats
+   * now do, and markdown did not until #181: the cache columns and `-ts` both sit between `ngl` and
+   * `test`, so the positional read that found it was displaced by the panel's own command and this
+   * check was skipped on exactly the paste it was written for.
    */
   /**
    * **Two-sided, and it was one-sided.** Only rejecting *fewer* layers than the prediction let
