@@ -385,6 +385,70 @@ function generationTokens(usage: UsageSpec): number | undefined {
   return room > 0 ? room : undefined;
 }
 
+/**
+ * llama-bench's own default `-n`, and the ceiling that keeps it inside calibrate's tolerance.
+ *
+ * See {@link decodeBenchSpan}. A sixteenth rather than the tenth the tolerance itself allows,
+ * because a power of two is exact in binary and a tenth is not — this repo already records a
+ * threshold missed by float epsilon at the calibration band's edge — and because the depth is not
+ * quite the quantity the run averages over.
+ */
+const BENCH_GEN_TOKENS = 128;
+const BENCH_GEN_WINDOW_DIVISOR = 16;
+
+/**
+ * Where the decode benchmark measures from, and for how long: a **short** generation at the top of
+ * the window.
+ *
+ * `estimateDecode` charges every step's cache read at `usage.contextTokens` — the whole window, not
+ * the prompt — and that is right on this app's own terms. Context here is "prompt plus everything
+ * generated so far" (`SETTING_NOTES.contextTokens`): a session fills its window across turns and
+ * spends almost every token it emits near the top of it. So the state to reproduce is a nearly-full
+ * cache, and `-d` is the flag that produces it.
+ *
+ * **The length is not the interesting half, and asking for the window's whole remainder was the
+ * defect** (#180). Decode is a steady-state per-token rate — the same fact `describeMismatch` relies
+ * on when it declines to check a decode run's length at all — so how many tokens you ask for does
+ * not move the number, while the cache each of them reads does. The first version handed `-n` the
+ * entire remainder: 24,576 tokens on the default scenario, which at the predicted 35.6 tok/s is 11.5
+ * minutes of generation per repetition and llama-bench repeats five times by default. It also put
+ * the cache at `prompt + prefix` — 8,192 against a figure charged at 32,768 — so the row the panel
+ * told a reader to produce was one `compare` rejected.
+ *
+ * **What that cost the calibration record was decode points rather than correct ones**, and the two
+ * are worth telling apart: `submissionUrl` writes only the pairs `compare` did *not* reject, so a
+ * biased decode row could never have reached the corpus that feeds the next retune of
+ * `bandwidthEfficiency`. It is the rows that got through that were the problem. `prompt + prefix`
+ * lands inside the tolerance exactly when the prompt already nearly fills the window, so the only
+ * scenarios the panel's own path could contribute a decode measurement from were the ones with
+ * almost nothing left to generate — a narrow slice, selected on the axis being calibrated, and
+ * shallow within it.
+ *
+ * **`gen` is llama-bench's own default of 128, held to a sixteenth of the window**, and the ceiling
+ * is what makes the emitted command acceptable rather than merely quick. `describeMismatch` marks a
+ * decode row whose depth is more than 10% off the context the prediction charges, and the depth here
+ * is `contextTokens - gen`, so `gen` has to stay inside a tenth of the window at *every* context a
+ * reader can reach — not just the default. The fixed stops start at 2,048 and 128/2,048 is exactly a
+ * sixteenth, so the clamp never binds at a stop and 128 is what an ordinary scenario measures; below
+ * the smallest stop — which no control offers, and which a hand-edited link reaches down to the 512
+ * floor `coerce` clamps at — it keeps the ratio instead, since a flat 128 there is a quarter of the
+ * window and would be rejected.
+ *
+ * The relation is a ratio and not a shared constant, which is why this returns a pair rather than
+ * exporting a number for both sides to use: the cache grows as the run generates, so the depth the
+ * measurement actually averages over is `contextTokens - gen / 2` — inside the ceiling by another
+ * factor of two, and still not the `contextTokens` the engine charges. `calibrate.test.ts` pins that
+ * both of them clear the tolerance at every stop.
+ */
+export function decodeBenchSpan(usage: UsageSpec): { depth: number; gen: number } {
+  const context = Math.max(1, usage.contextTokens);
+  const gen = Math.max(
+    1,
+    Math.min(BENCH_GEN_TOKENS, Math.floor(context / BENCH_GEN_WINDOW_DIVISOR))
+  );
+  return { depth: Math.max(0, context - gen), gen };
+}
+
 /** A shell command written one flag per line, which is how anyone would paste it back. */
 function shell(head: string, args: readonly (string | undefined)[]): string {
   const kept = args.filter((a): a is string => a !== undefined);
@@ -577,7 +641,14 @@ function llamaBench(input: LaunchInput): Pair {
   const ngl = gpuLayers(input);
   const kv = LLAMA_KV_TYPE[usage.kvPrecision];
   const prompt = effectivePromptTokens(usage);
-  const gen = generationTokens(usage);
+  /**
+   * `room` gates and no longer supplies a flag. A scenario whose prompt and prefix fill the window
+   * has nothing to answer with and therefore nothing to measure, which is a property of the
+   * scenario rather than of the benchmark's shape — so the refusal still reads it, while what the
+   * decode run asks for comes from {@link decodeBenchSpan}.
+   */
+  const room = generationTokens(usage);
+  const decode = decodeBenchSpan(usage);
   const prefix = usage.cachedPrefixTokens ?? 0;
   /**
    * `-ts` belongs here too, and leaving it off was the same defect one file over. `llama-bench`
@@ -590,10 +661,15 @@ function llamaBench(input: LaunchInput): Pair {
   const notes = [
     `Two runs, because -p and -n are separate tests: the generation one does not inherit the ` +
       `prompt as cache depth, so a single command would measure decoding from an empty cache. The ` +
-      `second run puts ${fmt(prompt + prefix)} tokens in the cache first, which is what the decode ` +
-      `figure above is charged against.`,
-    `The lengths are this scenario's own, which is what makes the result comparable with the ` +
-      `figures above rather than with llama-bench's defaults of 512 and 128.`,
+      `second run fills the cache to ${fmt(decode.depth)} tokens and then generates ` +
+      `${fmt(decode.gen)} from there, which puts it at the ${fmt(usage.contextTokens)}-token ` +
+      `window the decode figure above is charged against.`,
+    `The prompt length is this scenario's own, which is what makes the first result comparable ` +
+      `with the figure above rather than with llama-bench's default of 512. The second run ` +
+      `generates only ${fmt(decode.gen)} tokens, and deliberately: decode is a steady-state ` +
+      `per-token rate, so asking for more does not sharpen the measurement — the depth is what ` +
+      `decides the number, and a window's worth of generation is minutes of wall clock per ` +
+      `repetition, five times over.`,
     nglNote(input, ngl),
     // The same sweep the `-ts` flag itself needed on this launcher: a measurement run at
     // llama.cpp's default split times a different placement from the one priced, and that is as
@@ -607,9 +683,11 @@ function llamaBench(input: LaunchInput): Pair {
         ]),
     ...(prefix > 0
       ? [
-          `-d runs the test with ${fmt(prefix)} tokens already in the cache, which is what this ` +
+          `The first run has ${fmt(prefix)} tokens already in the cache, which is what this ` +
             `archetype's resident prefix means. Without it the measurement is a standalone prompt ` +
-            `and the prediction above is not: the turn's attention is charged against the prefix.`,
+            `and the prediction above is not: the turn's attention is charged against the prefix. ` +
+            `The second run's -d is the window rather than the prefix, because decode is charged ` +
+            `at the whole context and the prefix is already part of it.`,
         ]
       : []),
     ...(usage.concurrency > 1
@@ -627,7 +705,7 @@ function llamaBench(input: LaunchInput): Pair {
       reason: `llama-bench measures; it does not serve. The llama-server command above is the serving form of this same placement.`,
     },
     measure:
-      gen === undefined
+      room === undefined
         ? { ok: false, reason: noRoomToAnswer(usage.contextTokens) }
         : {
             ok: true,
@@ -639,8 +717,15 @@ function llamaBench(input: LaunchInput): Pair {
              * panel priced, and at an 8K or 128K context the two are far apart.
              *
              * So prefill is measured at its own depth — the archetype's resident prefix, usually
-             * none — and decode is measured with the prompt already in the cache, which is what
-             * `estimateDecode` charges every step against.
+             * none — and decode is measured at the **top of the window**: `-d` a short way under
+             * `contextTokens`, and a generation short enough to leave room for itself.
+             *
+             * Not `prompt + prefix`, which is where this started and what #180 was filed against.
+             * That is the cache at the moment generation *begins*, and it is neither what the
+             * engine charges nor what the run would average over: `estimateDecode` prices every
+             * step at the whole window, because a session fills that window and answers from near
+             * the top of it. See {@link decodeBenchSpan} for the arithmetic and for why the
+             * generation is short.
              */
             text: [
               shell('llama-bench', [
@@ -657,8 +742,8 @@ function llamaBench(input: LaunchInput): Pair {
               shell('llama-bench', [
                 `-m ${ggufPlaceholder(model, quant)}`,
                 `-p 0`,
-                `-n ${gen}`,
-                `-d ${prompt + prefix}`,
+                `-n ${decode.gen}`,
+                `-d ${decode.depth}`,
                 `-ngl ${ngl}`,
                 `-ctk ${kv} -ctv ${kv}`,
                 split === undefined ? undefined : `-ts ${split}`,

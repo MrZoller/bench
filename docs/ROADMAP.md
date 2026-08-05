@@ -59,15 +59,16 @@ for recommend, #168 for detect, #169 for calibrate — and what each turned out 
 two more (#180, #181) came out of reviewing _this section_ a day later; they are in **Open
 questions**, and two of the first six share one root.
 
-What remains is a naming decision, **three open issues, all of them work** — the six filed
+What remains is a naming decision, **two open issues, both of them work** — the six filed
 during the pass, less [#165](https://github.com/MrZoller/headroom/issues/165),
 [#166](https://github.com/MrZoller/headroom/issues/166),
 [#170](https://github.com/MrZoller/headroom/issues/170),
 [#171](https://github.com/MrZoller/headroom/issues/171) and
 [#172](https://github.com/MrZoller/headroom/issues/172), which are fixed, plus
-[#180](https://github.com/MrZoller/headroom/issues/180) and
 [#181](https://github.com/MrZoller/headroom/issues/181), which came out of reviewing this very
-document, plus [#182](https://github.com/MrZoller/headroom/issues/182), which is the half of #165 that
+document alongside [#180](https://github.com/MrZoller/headroom/issues/180) — fixed 5 August 2026, and
+recorded under **Launch commands** below, since what it settled is where the benchmark measures from
+— plus [#182](https://github.com/MrZoller/headroom/issues/182), which is the half of #165 that
 its own verification note said not to fold in, less #174, which is closed as a record of a decision
 already made rather than as a task —
 and **two loose ends that are on `main` and in no issue at all**: a `LLAMA_KV_TYPES`
@@ -316,10 +317,12 @@ part of the comparison, because both parse. Do not read the protocol as a set of
 
 The danger is the part with no guard on either side. Nothing static ties the two modules together,
 so a change to either is invisible to the other — which is exactly how
-[#180](https://github.com/MrZoller/headroom/issues/180) happened: the two ends disagree about the
-depth, which _is_ checked, so Headroom's own command now emits a row Headroom rejects. **Change the
-emitter and re-read `compare` in the same sitting**, because there is no compiler that will do it
-for you.
+[#180](https://github.com/MrZoller/headroom/issues/180) happened: the two ends disagreed about the
+depth, which _is_ checked, so Headroom's own command emitted a row Headroom rejected. **Change the
+emitter and re-read `compare` in the same sitting**, because there is still no compiler that will do
+it for you. The depth now has the one guard the pair can have — `calibrate.test.ts` sweeps every
+context stop, feeding `decodeBenchSpan`'s output through the real `compare` — and that is a test
+rather than a type, so it holds only for the quantity it names.
 
 The one thing they duplicate in code is the llama.cpp spelling of a cache precision. All five
 branches were cut from `main` rather than stacked, so calibrate could not import it and copied it
@@ -497,20 +500,53 @@ prompt-processing test _and_ a generation test, and **the generation test does n
 prompt as cache depth.** So a single command measures decoding from an empty cache: the
 weight-bound job, not the KV-bound one the panel priced, and at 128K the two are nowhere near each
 other. The panel emits two invocations instead — `-p N -n 0 [-d prefix]` for prefill, and
-`-p 0 -n G -d prompt+prefix` for decode — with the reason in a note beside them. Read forward into
+`-p 0 -n 128 -d ctx-128` for decode — with the reason in a note beside them. Read forward into
 calibrate, the single-command version would have submitted a decode rate measured at depth 0
 against a prediction charged at full depth, and the comparison would have reported it as a
 disagreement about the model.
 
-**The two panels then disagree about _which_ depth, and neither knows it**
-([#180](https://github.com/MrZoller/headroom/issues/180), a P1 from Codex on #175). The emitter puts
-`prompt + prefix` in the cache; `Calibrate` expects `contextTokens`, under a docblock arguing that
-this is what `estimateDecode` charges every step's cache read at; and `describeMismatch` rejects a
-depth off by more than 10%. So on the default 8K-prompt/32K-context scenario **Headroom's own measure
-command produces a row Headroom marks unusable** — the likeliest path a reader takes through this
-feature. It is filed rather than patched because calibrate's expectation is not reachable by any
-command at all (`-d 32768 -n 512` does not fit a 32K window), which makes it a question about what
-`estimateDecode` should charge rather than about either panel's arithmetic.
+**The two panels then disagreed about _which_ depth, and neither knew it**
+([#180](https://github.com/MrZoller/headroom/issues/180), a P1 from Codex on #175, fixed 5 August
+2026). The emitter put `prompt + prefix` in the cache; `Calibrate` expects `contextTokens`, under a
+docblock arguing that this is what `estimateDecode` charges every step's cache read at; and
+`describeMismatch` rejects a depth off by more than 10%. So on the default 8K-prompt/32K-context
+scenario **Headroom's own measure command produced a row Headroom marked unusable** — the likeliest
+path a reader takes through this feature.
+
+**It was filed as an engine question and settled as an emitter one, on a premise that turned out to
+be wrong.** The issue reasoned that calibrate's expectation was unreachable, since `-d 32768 -n 512`
+does not fit a 32K window — but `llama-bench` sizes `n_ctx` as `n_prompt + n_gen + n_depth` from the
+test rather than inheriting the scenario's window, so the command runs; what it prices is a
+33,280-token deployment rather than the 32,768 on screen. Take the generation out of the window
+instead and the depth is reachable exactly. **`estimateDecode` was left alone, and charging the full
+window is right on this app's own terms**: context here is "prompt plus everything generated so far",
+a session filling across turns, and `RESPONSE_ALLOWANCE` is 512 — a 512-token answer in a 32K window
+has a mean occupancy of 32,512, within 0.8% of what the engine charges. So the emitter moved:
+`decodeBenchSpan` puts `-d` at `contextTokens - n` and asks for a short `-n`.
+
+**`n` is llama-bench's own default of 128, held to a sixteenth of the window**, and the clamp is the
+part worth remembering. The depth must land inside `describeMismatch`'s 10% at _every_ context stop,
+not merely at the default: the fixed stops start at 2,048, but `coerce` clamps at 512 and a
+hand-edited link lands there as a stop of its own, where a flat 128 would be a quarter of the window
+and rejected. A sixteenth is exactly 128/2,048 — the smallest fixed stop — so the clamp never
+binds at a stop, and a power of two cannot land on the threshold by float epsilon the way a tenth
+can. `calibrate.test.ts` sweeps every stop against the unmodified comparison, for the emitted depth
+and for the mean depth the run actually averages over (`contextTokens - n/2`), because the relation
+is a ratio and not a constant the two files could share.
+
+**The wall clock was the other half, and it is the half a reader would have felt first.** `-n` was
+the window's whole remainder — 24,576 tokens on the default scenario, 11.5 minutes per repetition at
+the predicted 35.6 tok/s, and llama-bench repeats five times: **58 minutes for one command**, against
+about two and a half now. Decode is a steady-state per-token rate, so the long sample bought no
+accuracy at all.
+
+**And the corpus effect is starvation rather than bias, which is the version to remember.**
+`submissionUrl` writes only the pairs `compare` did not reject, so the old command's shallow decode
+row could not enter the record — it was thrown away with an explanation. What could enter was the
+scenarios where `prompt + prefix` happens to land within a tenth of the window, which is to say the
+ones with almost nothing left to generate. So the decode half of the calibration record — the half
+that would eventually identify `bandwidthEfficiency` — was reachable through the panel's own path
+only from a narrow slice of scenarios, selected on the very axis being calibrated.
 
 **And the Ollama block stopped managing a daemon**
 ([#171](https://github.com/MrZoller/headroom/issues/171), from Codex on #164), **which is one issue
@@ -808,14 +844,14 @@ written down.
 Deliberately absent, and not forgotten: cloud pricing stays out of scope per the settled decision
 below, and fine-tuning memory (LoRA/QLoRA) is a second engine rather than a feature — real demand,
 weak incumbents, and deliberately not attempted before guided mode shipped. Now that it has, that is
-the v3-scale bet. What stands between here and it is **#180, #181 and #182**. The six issues in
+the v3-scale bet. What stands between here and it is **#181 and #182**. The six issues in
 **Open questions** are all resolved as of 3 August 2026 — five fixed, and
 [#174](https://github.com/MrZoller/headroom/issues/174) closed as a _record_ of an answered policy
-question rather than as work. What is left is #180 and #181, which came out of reviewing this very
-document, and #182, which is the half of #165 its own verification note said not to fold in — a
-different provenance from the other two, and worth keeping straight. One of the three is a P1 on the
-path a reader is most likely to take. Counting #174 as a blocker would have made a settled decision
-look like a task, which is why no count here ever did.
+question rather than as work. What is left is #181, which came out of reviewing this very document
+alongside #180 — the P1 on the path a reader is most likely to take, fixed 5 August 2026 — and #182,
+which is the half of #165 its own verification note said not to fold in: a different provenance from
+the other two, and worth keeping straight. Counting #174 as a blocker would have made a settled
+decision look like a task, which is why no count here ever did.
 
 ## Deployment
 
@@ -2421,10 +2457,10 @@ should be whenever the code is the thing that can be read instead.
 
 Two of the findings were not about the prose at all. They are defects the prose walked into:
 
-| filed                                                                                                              | what it is                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [#180](https://github.com/MrZoller/headroom/issues/180) the emitted decode depth is unusable                       | **P1.** `llamaBench()` emits `-d prompt+prefix`; `Calibrate` expects `contextTokens`; `describeMismatch` rejects a depth off by 10%. The panel's own command produces a row the panel marks unusable, and calibrate's expectation is not reachable by any command — `-d 32768 -n 512` does not fit a 32K window, so the question is what `estimateDecode` should charge                                                                                       |
-| [#181](https://github.com/MrZoller/headroom/issues/181) markdown loses the cache precision **and the layer count** | `parseMarkdown` never reads the header row. It has no branch for `type_k`/`type_v`, so every markdown paste reads as f16 — including the one the panel's own `-ctk q8_0 -ctv q8_0 -o md` produces with the columns printed — and it finds `ngl` by position, which those same columns displace, so the placement check is skipped and an offloaded run compares clean against a resident prediction. One fix for both; a cache-only fix leaves the worse half |
+| filed                                                                                                              | what it is                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [#180](https://github.com/MrZoller/headroom/issues/180) the emitted decode depth is unusable                       | **P1, fixed 5 August 2026.** `llamaBench()` emitted `-d prompt+prefix`; `Calibrate` expects `contextTokens`; `describeMismatch` rejects a depth off by 10%. The panel's own command produced a row the panel marked unusable. Filed as a question about what `estimateDecode` should charge, on the premise that the expectation was unreachable — but `llama-bench` sizes `n_ctx` from the test, so `-d ctx-n -n n` reaches it exactly. The engine was left alone and the emitter moved; see **Launch commands** |
+| [#181](https://github.com/MrZoller/headroom/issues/181) markdown loses the cache precision **and the layer count** | `parseMarkdown` never reads the header row. It has no branch for `type_k`/`type_v`, so every markdown paste reads as f16 — including the one the panel's own `-ctk q8_0 -ctv q8_0 -o md` produces with the columns printed — and it finds `ngl` by position, which those same columns displace, so the placement check is skipped and an offloaded run compares clean against a resident prediction. One fix for both; a cache-only fix leaves the worse half                                                     |
 
 ### Standing questions
 

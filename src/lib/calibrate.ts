@@ -406,8 +406,14 @@ export function compare(
      * `estimateDecode` charges every step's cache read at the scenario's whole context — so the run
      * that reproduces it has that much in the cache, and `tg128` from an empty cache is measuring a
      * weight-bound job against a KV-bound prediction. The first version had `expectedDepth = 0` for
-     * both, so it *flagged* the correctly-reproduced `tg … -d 8192` and *passed* the empty-cache run
-     * that is not comparable at all. Backwards, in the direction that manufactures evidence.
+     * both, so it *flagged* the run that reproduced the cache and *passed* the empty-cache run that
+     * is not comparable at all. Backwards, in the direction that manufactures evidence.
+     *
+     * **The whole context, and `llama-bench` can be asked for it** — the sticking point that kept
+     * #180 open. It sizes `n_ctx` as `n_prompt + n_gen + n_depth` from the test rather than
+     * inheriting a window, so `-d` may go as deep as the window less the tokens the run generates.
+     * `decodeBenchSpan` in `launch.ts` is what emits that pair, and generates few enough tokens that
+     * the depth clears the tolerance below at every context a reader can select.
      */
     const expectedDepth =
       measurement.kind === 'prefill'
