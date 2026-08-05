@@ -716,16 +716,32 @@ export function planPlacement(
    * against a 2 GiB ceiling reported 7 of 28 layers where 4 is what the card can hold. The two
    * readings agree exactly whenever nothing spills, which is most of the catalog.
    *
-   * **The whole spill is charged against the layers**, which is the conservative of two defensible
-   * readings and deliberately so. llama.cpp sheds the output tensor before any layer — that is what
-   * an `-ngl` short of `layers + 1` *means* — so a device over budget really does keep more layers
-   * than this reports. Taking the generous reading needs a second rule rather than a different
-   * denominator, because it lets a spilling device report every layer resident, which `launch.ts`
-   * turns into `layers + 1`: an instruction to put back the very tensor that had to leave. One safe
-   * direction and one rule beat two of each — the cost here is a slower command, and the cost there
-   * is an OOM on load.
+   * **The whole spill is charged against the layers, and that is llama.cpp's own eviction order
+   * rather than a cautious approximation of it** (#202). An earlier version of this comment argued
+   * the opposite — that llama.cpp sheds the output tensor before any layer, so this under-reports —
+   * and it was backwards. `i_gpu_start = max(n_layer_all + 1 - ngl, 0)` shifts the resident window
+   * off the **front** of the stack, and the output tensor is slot `n_layer_all`, where
+   * `il - i_gpu_start = ngl - 1 < act_gpu_layers = ngl` for every `ngl >= 1`: the output tensor is
+   * resident whenever anything is, and what an `-ngl` short of `layers + 1` sheds is layer 0. Read
+   * 5 August 2026 from `src/llama-model.cpp:1318-1343` and `common/fit.cpp:581` at
+   * ggml-org/llama.cpp commit `360e134`, and measured: an 18-layer model at `-ngl 1` has the output
+   * table on the GPU and nothing else.
    *
-   * Floored, for the same reason.
+   * **The count is unchanged, because the true rule is what the count already assumed.** A device
+   * over budget keeps its fixed tensors and gives up repeating layers from the front, so every
+   * overflowing byte really does come out of `layerWeightBytes`, and the generous reading is not the
+   * other defensible option — it is a placement no `-ngl` expresses. It would let a spilling device
+   * report every layer resident, which `launch.ts` turns into `layers + 1`, and any `-ngl` holding
+   * all `layers` repeating blocks is at least `layers + 1` and therefore holds the output too. There
+   * is no flag for "every layer, output evicted"; asking for one is an OOM on load.
+   *
+   * Floored for the same reason, and under the true rule the floor is exact rather than merely
+   * safe: llama.cpp sheds *whole* layers, so the floored ratio is the count it lands on rather than
+   * a cautious rounding-down of one.
+   *
+   * What the corrected rule *does* touch is which tensors sit on which device — the fixed block is
+   * smeared across bins here, and upstream puts `token_embd` and the output projection at opposite
+   * ends of the rig. That is bytes, not this count, and it belongs to #182.
    */
   const residentLayersOf = (bin: DeviceLoad) => {
     if (bin.layers <= 0 || bin.layerWeightBytes <= 0) return bin.layers;

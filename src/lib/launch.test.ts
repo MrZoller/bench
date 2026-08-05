@@ -153,7 +153,8 @@ describe('llama.cpp: one catalog row, three launchers', () => {
   describe('-ngl is a layer count, and the layer count has three cases', () => {
     it('adds one for the output tensor when everything is resident', () => {
       // llama.cpp's `n_gpu_layers` counts a position past the repeating blocks, so `layers` alone
-      // leaves the output tensor on the host. Verified against llama-model.cpp, not recalled.
+      // is one short of the whole model — it sheds layer 0 off the front and keeps the output
+      // tensor. Verified against llama-model.cpp at commit 360e134, not recalled (#202).
       const served = text(commands(i)['llama-server'].serve);
       expect(i.placement.offloadFraction).toBe(0);
       expect(served).toContain(`-ngl ${LLAMA_31_8B.layers + 1}`);

@@ -37,8 +37,9 @@ import { substitutionFor } from '@/data/runtimes';
  * was found by reading the source rather than by recalling it:
  *
  *   - **llama.cpp's `-ngl` counts the output tensor.** `n_gpu_layers` is the repeating blocks plus
- *     one position, so a fully-resident 48-layer model wants `-ngl 49` and `-ngl 48` leaves the
- *     output tensor on the CPU.
+ *     one position, so a fully-resident 48-layer model wants `-ngl 49`, and `-ngl 48` sheds *layer
+ *     0* rather than the output tensor — the window comes off the front of the stack. See
+ *     {@link gpuLayers}.
  *   - **`-c` is the whole cache, divided among the `-np` slots.** `n_ctx_seq` is
  *     `n_ctx / n_seq_max` unless the KV buffer is unified, so eight users at 64K wants `-c 524288`.
  *     Passing the per-user figure would give each slot an eighth of it.
@@ -181,8 +182,14 @@ const VLLM_KV_DTYPE = { fp16: 'auto', q8: 'fp8', q4: undefined } as const;
  *     nothing spilled, because there was nowhere to spill *from*. The honest flag is 0.
  *   - **llama.cpp counts the output tensor one position past the repeating blocks.**
  *     `n_gpu_layers` defaults to `n_layer_all + 1`, and `i_gpu_start = max(n_layer_all + 1 - ngl, 0)`
- *     — so `-ngl 48` on a 48-layer model leaves the output tensor on the host. "All of them" is
- *     `layers + 1`.
+ *     — so "all of them" is `layers + 1`, and `-ngl 48` on a 48-layer model is one short: it sheds
+ *     **layer 0**, at the front of the stack, and keeps the output tensor. The output tensor is slot
+ *     `n_layer_all`, and `il - i_gpu_start = ngl - 1 < act_gpu_layers = ngl` holds there for every
+ *     `ngl >= 1`, so it is on a GPU whenever anything is; upstream's own fitter says "the last device
+ *     has the output layer, which cannot be a partial layer". Read 5 August 2026 from
+ *     `src/llama-model.cpp:1318-1343` and `common/fit.cpp:581` at ggml-org/llama.cpp commit
+ *     `360e134` (#202). The flag is unaffected — `layers + 1` is what a fully-resident placement
+ *     wants either way — but the sentence saying why used to be backwards.
  */
 function gpuLayers(input: LaunchInput): number {
   if (input.rig.device.class === 'cpu-ram') return 0;
@@ -1138,7 +1145,7 @@ function nglNote(input: LaunchInput, ngl: number): string {
     return `-ngl 0 because ${rig.device.name} has no GPU to offload to — every layer runs on the host, which is what the figures above price.`;
   }
   if (ngl > model.layers) {
-    return `-ngl ${ngl} is all ${model.layers} layers plus one: llama.cpp counts the output tensor a position past the repeating blocks, so ${model.layers} would leave it on the host.`;
+    return `-ngl ${ngl} is all ${model.layers} layers plus one: llama.cpp counts the output tensor a position past the repeating blocks, so ${model.layers} would keep the output tensor and leave layer 0 on the host.`;
   }
   return (
     `-ngl ${ngl} of ${model.layers} layers is the split Headroom sized, not a fraction of the model: ` +
