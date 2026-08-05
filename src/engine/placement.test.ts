@@ -32,7 +32,7 @@ import { isSlidingLayer } from './kv';
 import { weightBreakdown } from './weights';
 import { getQuant } from '@/data/quants';
 import { GIB } from './types';
-import type { DeviceSpec, UsageSpec } from './types';
+import type { DeviceSpec, ModelSpec, UsageSpec } from './types';
 
 const usage = (contextTokens: number, concurrency = 1): UsageSpec => ({
   contextTokens,
@@ -150,7 +150,14 @@ describe('fit', () => {
       LLAMA_CPP
     );
 
-    expect(two.weightBytesPerDevice).toBeCloseTo(one.weightBytesPerDevice / 2, -6);
+    // The *repeating stack* is what divides, and since #182 that is visible in the figures rather
+    // than hidden by a smeared fixed block. Qwen3 32B is untied, so a single card's budget is the
+    // file less the host-resident input table, and the output projection seeds the last bin — which
+    // pushes one repeating layer onto the other card, 33/31 rather than 32/32.
+    const { layerBytes } = weightBreakdown(QWEN3_32B, quant);
+    expect(two.weightBytesPerDevice).toBeCloseTo((layerBytes / QWEN3_32B.layers) * 33, -6);
+    // Still comfortably under what one card was holding, which is what "shards" has to mean.
+    expect(two.weightBytesPerDevice).toBeLessThan(one.weightBytesPerDevice * 0.55);
     expect(two.fits).toBe(true);
   });
 
@@ -443,12 +450,14 @@ describe('an indivisible layer count rounds weights up too', () => {
 
     const two = plan(2);
     const one = plan(1);
-    expect(two.weightBytesPerDevice).toBeCloseTo((one.weightBytesPerDevice * 31) / 61, -3);
+    // 31 layers of the repeating stack, and the output projection is on the *other* card — it
+    // seeds the last bin, so the busiest bin by combined load is the one holding a layer more
+    // rather than the one holding the table (#182). The whole file over 61 was the divisor before,
+    // and it charged this card for a share of tensors it does not hold.
+    const perLayer = weightBreakdown(DEEPSEEK_V3, getQuant('iq4_xs')).layerBytes / 61;
+    expect(two.weightBytesPerDevice).toBeCloseTo(31 * perLayer, -3);
     // And the same divisor as the cache, which is the property that was broken.
-    expect(two.weightBytesPerDevice / one.weightBytesPerDevice).toBeCloseTo(
-      two.kvBytesPerDevice / one.kvBytesPerDevice,
-      6
-    );
+    expect(two.kvBytesPerDevice).toBeCloseTo((one.kvBytesPerDevice * 31) / 61, -3);
   });
 
   it('leaves tensor-parallel rigs dividing evenly, because they do', () => {
@@ -486,12 +495,19 @@ describe('layer splits are sized, not divided', () => {
     const five = gemma(5);
     const evenShare = gemma(1).kvBytesPerDevice / 5;
 
-    expect(five.kvBytesPerDevice).toBeGreaterThan(evenShare);
+    expect(five.kvBytesPerDevice).toBeGreaterThan(evenShare * 1.15);
 
-    // And a count that *does* divide the full layers evenly gets the even share, so the model is
-    // charging for real imbalance rather than adding a blanket penalty.
+    // And a count that *does* divide the full layers evenly gets essentially the even share, so
+    // the model is charging for real imbalance rather than adding a blanket penalty. Not *exactly*
+    // even since #182: the output projection seeds the last bin and the vision tower the first, so
+    // the walk balances 5,7,7,7,7,6,6,3 layers rather than six apiece. Each card still lands
+    // exactly one full-attention layer — those are the eight heaviest and go out first — so what
+    // is left over is a difference in sliding layers, which cache ~1/128 as much: under 1% against
+    // the 20% the five-card split carries.
     const eight = gemma(8);
-    expect(eight.kvBytesPerDevice).toBeCloseTo(gemma(1).kvBytesPerDevice / 8, -3);
+    const evenEighth = gemma(1).kvBytesPerDevice / 8;
+    expect(eight.kvBytesPerDevice).toBeGreaterThan(evenEighth);
+    expect(eight.kvBytesPerDevice).toBeLessThan(evenEighth * 1.01);
   });
 
   it('takes both figures from the same device', () => {
@@ -500,11 +516,23 @@ describe('layer splits are sized, not divided', () => {
     // Adding those two maxima describes a device that does not exist — and reported spill for
     // a rig that fits.
     const p = gemma(4);
-    const perLayerWeight = gemma(1).weightBytesPerDevice / GEMMA_3_12B.layers;
+    const { layerBytes, towerBytes, outputBytes } = weightBreakdown(
+      GEMMA_3_12B,
+      getQuant('q4_k_m')
+    );
+    const perLayerWeight = layerBytes / GEMMA_3_12B.layers;
 
-    // Whatever share of the weights the busiest card holds, it must be a whole number of layers.
-    const layersHeld = p.weightBytesPerDevice / perLayerWeight;
-    expect(layersHeld).toBeCloseTo(Math.round(layersHeld), 6);
+    // Whatever share of the weights a card holds, it must be a whole number of layers plus
+    // whichever fixed tensor was *placed* on it — the vision tower on the first card, the output
+    // projection on the last, nothing at all in between (#182). The divisor is `layerBytes`, not
+    // the file: charging a layer a share of tensors no layer holds is the #165 defect, and now
+    // that the blocks sit where upstream puts them the whole-number property is exact rather than
+    // a coincidence of the smearing.
+    const last = p.assignment.shares.length - 1;
+    for (const [i, s] of p.assignment.shares.entries()) {
+      const placed = (i === 0 ? towerBytes : 0) + (i === last ? outputBytes : 0);
+      expect((s.weightBytes - placed) / perLayerWeight, `bin ${i}`).toBeCloseTo(s.layers, 6);
+    }
 
     // And the two together must never exceed what one device could hold of each.
     expect(p.weightBytesPerDevice).toBeLessThanOrEqual(gemma(1).weightBytesPerDevice + 1);
@@ -644,12 +672,20 @@ describe('layer splits are sized, not divided', () => {
      * cache over the ceiling, so BudgetBar could rebuild the figure from `kvBytesPerDevice`.
      */
     it('names the device that made it impossible, not the one the readout describes', () => {
-      // Gemma 3 12B over three 4090s at 128K and 8 users: the packing gives two cards three
-      // full-attention layers each and the third the remaining 42 layers, so the busiest card by
-      // combined load is the one with the *least* cache.
+      // Gemma 3 12B over three 4090s at 128K and 8 users: the packing gives two cards seven and
+      // eight layers against the third's thirty-three, so the busiest card by combined load is the
+      // one with the *least* cache.
+      //
+      // **At Q8_0 rather than Q4_K_M, and #182 is why.** The two readings were within 0.2% of each
+      // other on combined load at Q4_K_M, and seeding the vision tower onto the first bin was
+      // enough to swap which one `busiest` returns — so the scenario stopped exhibiting the
+      // property rather than the property stopping being true. That is `floorBytesPerDevice`'s own
+      // docblock arriving in its test: `weightBytesPerDevice` is an argmax readout and a test
+      // resting on which bin wins needs a margin. Q8_0 has one, at 24.95 GiB of floor against a
+      // 18.57 GiB readout and a 23 GiB ceiling.
       const p = planPlacement(
         GEMMA_3_12B,
-        getQuant('q4_k_m'),
+        getQuant('q8_0'),
         { contextTokens: 131072, concurrency: 8, kvPrecision: 'fp16' },
         { device: RTX_4090, count: 3 },
         LLAMA_CPP
@@ -1076,11 +1112,16 @@ describe('the layer assignment survives the packing', () => {
   /**
    * The count is taken against the layers, not against the file (#165).
    *
-   * `layerSplitBins` charges every layer `totalWeightBytes / layers`, which is a layer plus a share
-   * of tensors no layer holds — the embedding table, the output projection where it is untied, any
-   * vision tower. As a byte total that is right in aggregate and it stays; as a *layer count* it is
+   * `layerSplitBins` used to charge every layer `totalWeightBytes / layers`, which is a layer plus
+   * a share of tensors no layer holds — the embedding table, the output projection where it is
+   * untied, any vision tower. As a byte total that was right in aggregate; as a *layer count* it is
    * a different quantity, and #163 exported these bins as a layer count while #136 printed it as
-   * `-ngl`. So the count divides `layerWeightBytes` and the bytes are untouched.
+   * `-ngl`. So the count divides `layerWeightBytes`.
+   *
+   * **#165 left the bytes alone and #182 has now moved them**, which is why the scope test below
+   * reads the opposite way round from the one it replaces. The count's basis is unchanged; what
+   * changed underneath it is that `weightBytes` and `layerWeightBytes` now differ by a *placed*
+   * block rather than a smeared share of one.
    */
   describe('a layer count is taken against the layers', () => {
     const quant = getQuant('q4_k_m');
@@ -1115,7 +1156,8 @@ describe('the layer assignment survives the packing', () => {
 
       // The same overflow read against the whole share, which is what this used to do. It asks the
       // card for 0.62 GiB where the card has 0.50, and `-ngl` is where that lands.
-      const spilled = p.offloadFraction * p.totalWeightBytes;
+      // `deviceWeightBytes`, since #182: the fraction is of what the cards were asked to hold.
+      const spilled = p.offloadFraction * p.deviceWeightBytes;
       const wholeFileBasis = Math.floor(
         ((share.weightBytes - spilled) / share.weightBytes) * share.layers
       );
@@ -1123,25 +1165,111 @@ describe('the layer assignment survives the packing', () => {
       expect(wholeFileBasis * perLayer + fixedBytes).toBeGreaterThan(budget);
     });
 
-    it('leaves every byte figure exactly where it was', () => {
-      // The scope line. #165 is a defect in a *count*, and the bins' byte totals are the input to
-      // every memory panel, `fits`, `impossible` and both speed estimators — so a fix that moved
-      // them would be a change to what the product answers wearing a layer count's clothes.
-      // Assigning the fixed tensors to one bin, which is where they physically are, does exactly
-      // that: measured over the catalog's multi-card configurations it moves `usedBytesPerDevice`
-      // by more than 5% on a tenth of them, by up to 28%, and flips `fits` on 0.6%. Filed instead.
+    it('places the fixed tensors where the rig holds them, and accounts for every byte', () => {
+      // #165's scope line, inverted by #182. It used to read "leaves every byte figure exactly
+      // where it was", and the reason was that assigning the fixed tensors to one bin is a change
+      // to what the product answers rather than to a layer count — true, and now made on purpose
+      // with upstream read rather than reasoned about.
+      //
+      // What survives is the accounting: nothing may be lost or double-counted by the placing. The
+      // bins sum to `deviceWeightBytes`, and each bin is a whole number of repeating layers plus
+      // exactly the block that was placed on it.
+      const { layerBytes, towerBytes, outputBytes } = weightBreakdown(GEMMA_3_12B, quant);
+      const perLayer = layerBytes / GEMMA_3_12B.layers;
+
       for (const count of [1, 2, 3, 4, 5, 8]) {
         const p = gemma(count);
         const held = p.assignment.shares.reduce((sum, s) => sum + s.deviceCount * s.weightBytes, 0);
-        expect(held, `${count} cards`).toBeCloseTo(p.totalWeightBytes, 0);
+        expect(held, `${count} cards`).toBeCloseTo(p.deviceWeightBytes, 0);
 
-        // Every bin's weights are still a whole number of `totalWeightBytes / layers`, which is the
-        // property the byte side has always had and the one the count may not be read from.
-        const perBinLayer = p.totalWeightBytes / GEMMA_3_12B.layers;
-        for (const s of p.assignment.shares) {
-          expect(s.weightBytes / perBinLayer, `${count} cards`).toBeCloseTo(s.layers, 6);
+        const last = p.assignment.shares.length - 1;
+        for (const [i, s] of p.assignment.shares.entries()) {
+          const placed = (i === 0 ? towerBytes : 0) + (i === last ? outputBytes : 0);
+          expect((s.weightBytes - placed) / perLayer, `${count} cards, bin ${i}`).toBeCloseTo(
+            s.layers,
+            6
+          );
         }
       }
+    });
+
+    /**
+     * The ordering invariant, which is a new one and is not a preference (#182).
+     *
+     * llama.cpp indexes the output slot through the same `upper_bound` over `tensor_split` that the
+     * repeating layers go through, so it puts the output projection on the **last** device with a
+     * share of the `-ngl` window — whichever bin Headroom nominated. A packing that seeds any other
+     * bin is asking for a layout llama.cpp will not execute, and `launch.ts` would then print a
+     * `-ts` whose extra slot lands on a card that was never sized for the table.
+     *
+     * Synthesised rather than pinned to a catalog row (#197): what makes the property visible is an
+     * untied table large enough to see beside a layer, and that is a shape rather than a model.
+     */
+    it('emits the bin holding the output projection last, whatever the packing', () => {
+      const model: ModelSpec = {
+        ...LLAMA_31_8B,
+        id: 'test/ordering',
+        // A deliberately fat vocabulary against a shallow stack, so the table is worth several
+        // layers and the walk has a real imbalance to work around.
+        vocabSize: 200_000,
+        hiddenSize: 4_096,
+        layers: 12,
+        tiedEmbeddings: false,
+      };
+      const { layerBytes, outputBytes } = weightBreakdown(model, quant);
+      const perLayer = layerBytes / model.layers;
+      expect(outputBytes).toBeGreaterThan(perLayer);
+
+      for (const count of [2, 3, 4, 5, 8]) {
+        const p = planPlacement(
+          model,
+          quant,
+          { contextTokens: 8192, concurrency: 1, kvPrecision: 'fp16' },
+          { device: RTX_5090, count },
+          LLAMA_CPP
+        );
+        const shares = p.assignment.shares;
+        const extra = shares.map((s) => s.weightBytes - s.layers * perLayer);
+
+        // The last bin carries the table, and no other bin carries anything.
+        expect(extra[extra.length - 1], `${count} cards`).toBeCloseTo(outputBytes, 0);
+        for (const [i, e] of extra.entries()) {
+          if (i < extra.length - 1) expect(e, `${count} cards, bin ${i}`).toBeCloseTo(0, 0);
+        }
+        // And no bin is emitted holding nothing but the table — a card the model cannot use is
+        // dropped rather than described (#182, decision 4).
+        for (const [i, s] of shares.entries())
+          expect(s.layers, `${count} cards, bin ${i}`).toBeGreaterThan(0);
+      }
+    });
+
+    it('suppresses a bin the model cannot put a layer on, rather than emitting an empty card', () => {
+      // A table worth more than three layers over eight cards: the walk would leave the seeded bin
+      // with the table and nothing else, which is legal, reproducible and reads as a bug in a
+      // command. The rig is told it has more cards than the model can use instead.
+      const model: ModelSpec = {
+        ...LLAMA_31_8B,
+        id: 'test/suppression',
+        vocabSize: 262_144,
+        hiddenSize: 4_096,
+        layers: 8,
+        tiedEmbeddings: false,
+      };
+      const p = planPlacement(
+        model,
+        quant,
+        { contextTokens: 8192, concurrency: 1, kvPrecision: 'fp16' },
+        { device: RTX_5090, count: 8 },
+        LLAMA_CPP
+      );
+
+      expect(p.assignment.shares.length).toBeLessThan(8);
+      for (const s of p.assignment.shares) expect(s.layers).toBeGreaterThan(0);
+      // Every layer is still placed, and the rig still holds every byte it is charged for.
+      expect(p.assignment.shares.reduce((n, s) => n + s.layers, 0)).toBe(model.layers);
+      expect(
+        p.assignment.shares.reduce((sum, s) => sum + s.deviceCount * s.weightBytes, 0)
+      ).toBeCloseTo(p.deviceWeightBytes, 0);
     });
 
     it('leaves a fully resident rig reporting every layer, on either parallelism', () => {

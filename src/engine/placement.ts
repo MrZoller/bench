@@ -57,6 +57,25 @@ export interface Placement {
 
   /** Totals across the whole rig, for the headline readout. */
   totalWeightBytes: number;
+  /**
+   * Of `totalWeightBytes`, what the rig's devices actually hold — the rest is resident in host RAM
+   * and never on a card (#182).
+   *
+   * Equal to `totalWeightBytes` everywhere except a **discrete-GPU rig under a layer split**, where
+   * llama.cpp pins `token_embd.weight` to the CPU whatever `-ngl`, `-ts` and `-sm` say. On an
+   * untied model that is a whole `vocab x hidden` table the cards were being charged for — 7.6% of
+   * the file on Qwen3 8B — and on a tied one it is zero, because the file's single table *is* the
+   * duplicate the GPU holds. See {@link WeightBreakdown.hostResidentBytes}.
+   *
+   * `totalWeightBytes` stays the **file size**, which is what the reference tests pin against
+   * llama.cpp's published figures and what the headline readout means by "the model". This is the
+   * residency figure beside it, and the two are different questions rather than a correction of
+   * one by the other.
+   *
+   * **This, not `totalWeightBytes`, is what `offloadFraction` is a fraction of**, since a device can
+   * only spill what it was holding.
+   */
+  deviceWeightBytes: number;
   totalKvBytes: number;
 
   /** Spare room per device; negative when over. */
@@ -75,13 +94,40 @@ export interface Placement {
    * while the card this readout describes needs 19.1 — so a sentence built from `kvBytesPerDevice`
    * printed "the cache and overhead alone need 19.1 GiB" beside a 23.0 GiB ceiling and disproved
    * itself.
+   *
+   * ## `weightBytesPerDevice` is an argmax readout, and reading its drift as movement is a mistake
+   *
+   * The same property has a second consequence, and it is the one that misreads a measurement
+   * rather than a panel. `weightBytesPerDevice` and `kvBytesPerDevice` are *whichever bin won* the
+   * `busiest` reduction, so any change to the packing can move them without moving the machine:
+   * on 77.9% of layer-split configurations the top two bins are already within 1% of each other on
+   * combined load, so a block of a few hundred megabytes is enough to swap which one the whole
+   * readout describes.
+   *
+   * Measured across #182's repacking: `weightBytesPerDevice` moved by up to three orders of
+   * magnitude, and **every one of the largest values sits in the set where the makespan — the
+   * maximum bin load, which has no bin identity in it — barely moved at all.** The machine did not
+   * change; the sentence describing it did. So the identity-free quantity is what a claim about
+   * hardware has to be defended on, and a test resting on which bin is busiest needs a margin
+   * rather than a coin flip.
+   *
+   * It is not the *whole* of the drift, and reading it as such is the opposite mistake: where the
+   * makespan genuinely moved, so did the bytes, and that set carries about 42% of the mass past 5%.
    */
   floorBytesPerDevice: number;
 
   /**
-   * Fraction of the model's weights that must live in host RAM. Zero when everything fits. Only
-   * meaningful for discrete GPUs — a unified-memory machine has no faster tier to fall
-   * back from, so an over-budget config there simply does not run.
+   * Fraction of the weights the devices were asked to hold that must live in host RAM instead.
+   * Zero when everything fits. Only meaningful for discrete GPUs — a unified-memory machine has no
+   * faster tier to fall back from, so an over-budget config there simply does not run.
+   *
+   * **The denominator is `deviceWeightBytes`, not `totalWeightBytes`** (#182). They differ only
+   * where llama.cpp already keeps the input embedding table on the host, and there the file is the
+   * wrong basis in both directions a consumer reads this: `speed.ts` multiplies it by
+   * `activeWeightBytes`, which excludes an untied input table for exactly the same reason, so the
+   * file basis would price a fully-spilled Qwen3 8B at 92% of the bus traffic it really pays; and a
+   * panel saying "92% of the weights spill" about a card that gave up every byte it held is
+   * describing nothing that happened. What must be resident is what can fail to be.
    *
    * **Rig-wide, not per-device**, and the distinction only shows up under a layer split, where the
    * devices hold different amounts and one can be over its ceiling while the others are not. Both
@@ -443,7 +489,16 @@ export function clampUsageToContext(usage: UsageSpec, contextTokens: number): Us
  * **`planPlacement` reaches this only on the branch `layerSplitBins` does not cover** — tensor
  * parallelism, where every tensor really is sliced, and the single-device case, where the answer is
  * 1 either way. The layer arm survives because `kvShards` delegates to it, and a cache genuinely
- * does divide by whole layers. So the tensors that divide by nothing (#165) never reach it.
+ * does divide by whole layers.
+ *
+ * **The reason that is safe changed with #182, and the function did not.** It used to be that the
+ * tensors which divide by nothing (#165) never reach this — true while `shards > 1` on this branch
+ * meant only tensor parallelism *and* the fixed block was smeared everywhere anyway. Now the fixed
+ * block is placed rather than smeared, and it does reach here: the uniform branch divides
+ * `deviceWeightBytes` whole. That is still correct, and now for the physical reason rather than by
+ * exclusion — a tensor-parallel rank genuinely does slice the embedding table, which is vLLM's
+ * `VocabParallelEmbedding` and not an approximation of it, and the single-device case divides by 1.
+ * So this stays as it is; only the argument for it is narrower.
  */
 export function weightShards(model: ModelSpec, shards: number, runtime?: RuntimeSpec): number {
   if (shards <= 1) return 1;
@@ -471,13 +526,15 @@ interface DeviceLoad {
   weightBytes: number;
   kvBytes: number;
   /**
-   * Of `weightBytes`, the part belonging to the repeating layers — so the remainder is this bin's
-   * share of the embedding table, the output projection and any vision tower.
+   * Of `weightBytes`, the part belonging to the repeating layers — so the remainder is whichever
+   * fixed tensor was *placed* on this bin: the output projection on the last, a vision tower on the
+   * first, nothing at all in between.
    *
    * The only basis a layer *count* may be taken against, and it is not `weightBytes`: the two
-   * diverge by the fixed tensors' share of the file, which is 12.3% on Llama 3.2 3B and 25% on
-   * Gemma 3 4B. Tracked during the packing rather than derived afterwards, for the same reason
-   * `layers` is.
+   * diverge by the fixed tensors, which are 12.3% of the file on Llama 3.2 3B and 25% on Gemma 3
+   * 4B. Tracked during the packing rather than derived afterwards, for the same reason `layers` is —
+   * and since #182 the remainder is concentrated rather than smeared, so on an unseeded bin the two
+   * fields are equal and on a seeded one they differ by exactly one tensor.
    */
   layerWeightBytes: number;
   /**
@@ -521,30 +578,50 @@ const loadOf = (d: { weightBytes: number; kvBytes: number }) => d.weightBytes + 
  * estimators then charged against the whole model's active weights — every stage billed for host-bus
  * time on an overflow that happened at one of them.
  *
- * **The weights are still divided by the layer count, and `layerWeightBytes` is what stops that
- * being read as a layer count** (#165). `weightBytes` here is `totalWeightBytes / layers` per layer,
- * which charges every bin a share of tensors no layer holds — the embedding table, the output
- * projection where it is untied, any vision tower. As a byte total that is right in aggregate and
- * approximate per bin; as a *count* it is neither, so the count is taken against the repeating
- * bytes that `weightBreakdown` separates out.
+ * **The fixed tensors are seeded onto the devices that hold them, and the walk balances around
+ * them** (#182). This used to charge every layer `totalWeightBytes / layers`, smearing the
+ * embedding table, the output projection and any vision tower evenly across bins that hold none of
+ * them; a layer is now charged `layerBytes / layers`, which is a layer, and the blocks are placed.
+ * They go to **two different ends of the rig**, which is why lumping them into one seed would have
+ * been wrong in a new way rather than approximately right:
  *
- * **Assigning the fixed block to one bin instead was measured and deferred**, and the measurement is
- * the reason. Those tensors really do sit whole on one device, so seeding a bin with them is the
- * physically faithful packing — but it moves `usedBytesPerDevice` by more than 5% on a tenth of the
- * catalog's multi-card configurations, by up to 28%, and flips `fits` on 0.6% of them. That is a
- * change to what the product answers, not to a layer count, and it turns on which device llama.cpp
- * puts `token_embd` and a *tied* output tensor on — a question this file would have to read from
- * upstream rather than reason about. Filed rather than folded in.
+ *   - the **output projection** seeds the **last** bin. `llama-model.cpp:1284-1315` normalises
+ *     `tensor_split` into cumulative fractions and indexes the output slot through the same
+ *     `upper_bound` the repeating layers use, so it lands on the last device with a share of the
+ *     `-ngl` window.
+ *   - a **vision tower** seeds the **first** bin. `tools/mtmd/clip.cpp:184-205` builds its own
+ *     backend list from the first GPU device and never consults `tensor_split`.
+ *   - the **input embedding** is not here at all on a discrete-GPU rig, because it is on the host —
+ *     `planPlacement` takes it off the total before this is called. On unified memory the host *is*
+ *     the rig, so it arrives as part of the first bin's seed.
+ *
+ * **The seeded bin is emitted last, and that is an invariant rather than a preference.** llama.cpp
+ * puts the output on the last `-ts` device regardless of which bin Headroom nominated, so any other
+ * ordering asks for a layout it will not execute. Seeding bin `devices - 1` is what makes
+ * `launch.ts`'s "last non-zero share" the same card this packing priced, without that file having
+ * to re-derive anything.
+ *
+ * **A bin that ends up with no layer is suppressed rather than emitted**, by repacking over one
+ * fewer device. It is reachable only on a seeded bin — an unseeded one starts at zero load and the
+ * walk cannot pass it over while layers remain — and only on a small model over six to eight cards,
+ * where the output table outweighs a layer's combined load. The layout is legal and reproducible,
+ * and a command saying "buy this eighth card and put nothing on it" still reads as a bug; the true
+ * and more useful statement is that the model cannot use every card, which is what a shorter
+ * `shares` list says.
+ *
+ * **`layerWeightBytes` still exists and is still what a layer count divides** (#165), and the two
+ * fields now differ by a placed block rather than a smeared share of one — so on every bin but the
+ * seeded ones they are equal, and on those the difference is exactly the tensor that is there.
  */
 function layerSplitBins(
   model: ModelSpec,
   weights: WeightBreakdown,
   usage: UsageSpec,
   shards: number,
-  runtime: RuntimeSpec
+  runtime: RuntimeSpec,
+  seeds: { firstBin: number; lastBin: number }
 ): DeviceLoad[] {
-  const perLayerWeight = weights.totalBytes / model.layers;
-  const perLayerRepeating = weights.layerBytes / model.layers;
+  const perLayerWeight = weights.layerBytes / model.layers;
   const sequences = Math.max(1, usage.concurrency);
 
   // The index travels with the load, because the sort below reorders them and the assignment is
@@ -556,38 +633,63 @@ function layerSplitBins(
     kvBytes: layerKvBytes(model, i, usage.contextTokens, usage.kvPrecision, runtime) * sequences,
   })).sort((a, b) => loadOf(b) - loadOf(a));
 
+  const pack = (devices: number): DeviceLoad[] => {
+    const bins: DeviceLoad[] = Array.from({ length: devices }, () => ({
+      weightBytes: 0,
+      layerWeightBytes: 0,
+      kvBytes: 0,
+      layers: 0,
+      layerIndices: [],
+    }));
+
+    // Before the walk, so the balance is struck around them rather than on top of them. Both land
+    // on the same bin when there is only one, which is the rig that has no ends to be at opposite.
+    bins[0].weightBytes += seeds.firstBin;
+    bins[devices - 1].weightBytes += seeds.lastBin;
+
+    for (const layer of layers) {
+      let lightest = 0;
+      for (let d = 1; d < bins.length; d++) {
+        if (loadOf(bins[d]) < loadOf(bins[lightest])) lightest = d;
+      }
+      bins[lightest].weightBytes += layer.weightBytes;
+      bins[lightest].layerWeightBytes += perLayerWeight;
+      bins[lightest].kvBytes += layer.kvBytes;
+      bins[lightest].layers += 1;
+      bins[lightest].layerIndices.push(layer.index);
+    }
+
+    // The walk visits layers heaviest-first, so a bin collects its indices in load order. Sorted
+    // back into the model's own order because that is the order every reader of the list means —
+    // a card's share is "layers 5, 11 and 17", not "the three most expensive it was handed".
+    for (const bin of bins) bin.layerIndices.sort((a, b) => a - b);
+
+    return bins;
+  };
+
   // Capped at the layer count, because a card with no layers on it holds nothing — and the device
   // count arrives from a hand-editable querystring, where `?n=99999999` would otherwise allocate a
   // bin per phantom card. The cap is not merely a guard: `weightShards` already divides by
   // `layers / ceil(layers / shards)`, which saturates at `layers` for the same reason, so capping
   // is what keeps the packing and the divisor describing one machine.
-  const devices = Math.max(1, Math.min(Math.floor(shards), model.layers));
-  const bins: DeviceLoad[] = Array.from({ length: devices }, () => ({
-    weightBytes: 0,
-    layerWeightBytes: 0,
-    kvBytes: 0,
-    layers: 0,
-    layerIndices: [],
-  }));
-
-  for (const layer of layers) {
-    let lightest = 0;
-    for (let d = 1; d < bins.length; d++) {
-      if (loadOf(bins[d]) < loadOf(bins[lightest])) lightest = d;
-    }
-    bins[lightest].weightBytes += layer.weightBytes;
-    bins[lightest].layerWeightBytes += perLayerRepeating;
-    bins[lightest].kvBytes += layer.kvBytes;
-    bins[lightest].layers += 1;
-    bins[lightest].layerIndices.push(layer.index);
+  const ceiling = Math.max(1, Math.min(Math.floor(shards), model.layers));
+  // And the cap is no longer sufficient on its own, because a seeded bin can be passed over by a
+  // walk that always feeds the lightest. Descending rather than solving for the count directly:
+  // whether a seed outweighs a layer depends on the cache, which depends on the context and the
+  // concurrency, and there is no closed form over the three. It descends by more than one step —
+  // eight cards to six on Gemma 3 4B at a short context — because dropping a card raises every
+  // other bin's load, which is what eventually lets the seeded one take a layer.
+  //
+  // Bounded by `ceiling`, which is bounded by the layer count, and `pack(1)` always has a layer in
+  // it. A rig that collapsed all the way to one share would be a multi-card machine described as a
+  // single card, which is not reachable on any catalog row: it needs the fixed block to outweigh
+  // the entire repeating stack, and the `Math.min(denseBytes, …)` clamp in `weightBreakdown` is
+  // what stops a row getting there at all.
+  for (let devices = ceiling; devices > 1; devices--) {
+    const bins = pack(devices);
+    if (bins.every((bin) => bin.layers > 0)) return bins;
   }
-
-  // The walk visits layers heaviest-first, so a bin collects its indices in load order. Sorted
-  // back into the model's own order because that is the order every reader of the list means —
-  // a card's share is "layers 5, 11 and 17", not "the three most expensive it was handed".
-  for (const bin of bins) bin.layerIndices.sort((a, b) => a - b);
-
-  return bins;
+  return pack(1);
 }
 
 export function planPlacement(
@@ -602,6 +704,40 @@ export function planPlacement(
 
   const weights = weightBreakdown(model, quant);
   const totalWeightBytes = weights.totalBytes;
+  /**
+   * The input embedding table sits in host RAM and on no card, so a discrete-GPU rig is not charged
+   * for it (#182).
+   *
+   * `llama-model.cpp:1333-1335` pins it there unconditionally — *"there is very little benefit to
+   * offloading the input layer, so always keep it on the CPU"* — with no `-ngl`, `-sm` or `-ts`
+   * input to the decision. Measured on an 18-layer model at `-ngl 19`: `CPU model buffer size =
+   * 170.00 MiB`, exactly `262144 x 640` at Q8_0, beside a GPU buffer holding the whole file. Read at
+   * ggml-org/llama.cpp commit `360e134`.
+   *
+   * **Two gates, and each of them is the difference between a correction and a new defect.**
+   *
+   *   - **`discrete-gpu` only.** With mmap the host tensors are wrapped from the mapping and Metal
+   *     declares `buffer_from_host_ptr = true` (`ggml-metal.cpp:682`), so a unified-memory machine
+   *     pays for one copy however llama.cpp labels the buffer; CUDA and Vulkan declare it false
+   *     (`ggml-cuda.cu:4711`, `ggml-vulkan.cpp:17693`) and the copy is real. On `unified-soc` and
+   *     `cpu-ram` the host *is* the rig and the existing charge is right.
+   *   - **`layer` parallelism only.** This is llama.cpp's placement, not everyone's: vLLM shards the
+   *     embedding table across tensor-parallel ranks and keeps every shard on a GPU, which is the
+   *     same fact {@link weightShards} now rests on. Applying an llama.cpp residency rule to vLLM
+   *     would take 7.6% off an untied model's card budget with nothing upstream saying so, in the
+   *     direction that reports a fit and then OOMs.
+   *
+   * Zero for a tied model in any case, and not because the host holds nothing there — see
+   * {@link WeightBreakdown.hostResidentBytes}.
+   *
+   * **What this cannot see, and what the launch surface has to say out loud instead:** `-sm row`
+   * splits the output projection across cards rather than holding it whole on the last one, so the
+   * seeded packing below is a `-sm layer` statement; and the residency argument is read off the
+   * mmap path, which `--no-mmap` leaves. Both move answers optimistically, so neither can live only
+   * in a docblock — `launch.ts` carries them beside the command.
+   */
+  const hostHoldsInput = rig.device.class === 'discrete-gpu' && runtime.parallelism === 'layer';
+  const deviceWeightBytes = totalWeightBytes - (hostHoldsInput ? weights.hostResidentBytes : 0);
   const totalKvBytes = kvBytesTotal(
     model,
     usage.contextTokens,
@@ -640,10 +776,20 @@ export function planPlacement(
   // single-device case, where the divisor is 1 and there is nothing to say.
   const uniformShards = weightShards(model, shards, runtime);
   const bins: DeviceLoad[] = layerSplit
-    ? layerSplitBins(model, weights, usage, shards, runtime)
+    ? layerSplitBins(model, weights, usage, shards, runtime, {
+        // The vision tower, plus the input embedding wherever the host is not a separate pool from
+        // the rig. Upstream puts these at opposite ends: the tower is `clip.cpp`'s first GPU, the
+        // output projection is `tensor_split`'s last device.
+        firstBin: weights.towerBytes + (hostHoldsInput ? 0 : weights.hostResidentBytes),
+        lastBin: weights.outputBytes,
+      })
     : [
         {
-          weightBytes: totalWeightBytes / uniformShards,
+          // `deviceWeightBytes`, not the file: on a single discrete GPU under llama.cpp the input
+          // embedding is on the host exactly as it is on eight of them, and this is the branch that
+          // covers the commonest rig shape there is (#182). Nothing else on this branch changes —
+          // a tensor-parallel rank slices every tensor, so the whole of what it holds still divides.
+          weightBytes: deviceWeightBytes / uniformShards,
           layerWeightBytes: weights.layerBytes / uniformShards,
           kvBytes: totalKvBytes / kvShards(model, shards, runtime),
           // Every layer, in both cases this branch covers, and for two different reasons: one
@@ -696,7 +842,10 @@ export function planPlacement(
         )
       : 0;
   const spilledBytes = binsPerEntry * bins.reduce((sum, bin) => sum + spilledOf(bin), 0);
-  const offloadFraction = Math.min(1, spilledBytes / Math.max(totalWeightBytes, 1));
+  // Against what the devices were asked to hold rather than against the file — see
+  // `offloadFraction`'s docblock. The two are the same number everywhere but a discrete-GPU rig
+  // under a layer split, and there the file basis cannot reach 1 however much spills.
+  const offloadFraction = Math.min(1, spilledBytes / Math.max(deviceWeightBytes, 1));
 
   /**
    * The same overflow read as a layer count, which is what a launch command needs.
@@ -739,9 +888,11 @@ export function planPlacement(
    * safe: llama.cpp sheds *whole* layers, so the floored ratio is the count it lands on rather than
    * a cautious rounding-down of one.
    *
-   * What the corrected rule *does* touch is which tensors sit on which device — the fixed block is
-   * smeared across bins here, and upstream puts `token_embd` and the output projection at opposite
-   * ends of the rig. That is bytes, not this count, and it belongs to #182.
+   * **What the corrected rule touched was the bytes, and #182 has now moved them**: `token_embd` is
+   * off the cards entirely on a discrete-GPU rig, the output projection is on the last bin whole and
+   * a tower on the first. This expression is unchanged by that, and deliberately so — it was already
+   * reading `layerWeightBytes` rather than `weightBytes`, which is the field that stayed a layer
+   * count while the composition of `weightBytes` around it changed.
    */
   const residentLayersOf = (bin: DeviceLoad) => {
     if (bin.layers <= 0 || bin.layerWeightBytes <= 0) return bin.layers;
@@ -825,6 +976,7 @@ export function planPlacement(
     usedBytesPerDevice,
     allocatableBytesPerDevice,
     totalWeightBytes,
+    deviceWeightBytes,
     totalKvBytes,
     headroomBytes,
     utilization: usedBytesPerDevice / allocatableBytesPerDevice,

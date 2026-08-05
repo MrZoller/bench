@@ -218,13 +218,19 @@ describe('the Bench does not overclaim', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    // Gemma 3 12B over three 4090s at 128K and 8 users: two cards take three full-attention layers
-    // each and the third takes the remaining 42, so the card with the most cache is the one with
-    // the fewest layers.
+    // Gemma 3 12B over three 4090s at 128K and 8 users: two cards take seven and eight layers and
+    // the third takes the remaining 33, so the card with the most cache is the one with the fewest
+    // layers.
+    //
+    // **At Q8_0 rather than Q4_K_M since #182**, for the reason `floorBytesPerDevice`'s docblock
+    // now states: `weightBytesPerDevice` names whichever bin won an argmax, the top two bins were
+    // within 0.2% of each other at Q4_K_M, and seeding the vision tower onto the first bin was
+    // enough to swap them — so the scenario stopped exhibiting the split rather than the split
+    // stopping being real. Q8_0 has a margin: 24.95 GiB of floor against an 18.57 GiB readout.
     await user.selectOptions(screen.getByLabelText('Model'), 'unsloth/gemma-3-12b-it');
     await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-4090');
     await user.selectOptions(screen.getByLabelText('Runtime'), 'llama.cpp');
-    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q8_0');
     act(() => {
       useConfig.getState().set('contextTokens', 131072);
       useConfig.getState().set('concurrency', 8);
@@ -1521,18 +1527,23 @@ describe('the decode tile blames the term that sets the pace', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    // Qwen3-32B at Q4_K_M on a 4090 at 16K: spilled by 0.7%, so the bus is a sliver of the
+    // Qwen3-30B-A3B at Q8_0 on a 5090 at 16K: spilled by 3.4%, so the bus is a sliver of the
     // step and VRAM bandwidth still sets the pace.
-    await user.selectOptions(screen.getByLabelText('Model'), 'Qwen/Qwen3-32B');
-    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-4090');
-    await user.selectOptions(screen.getByLabelText('Quantization'), 'q4_k_m');
+    //
+    // **This was Qwen3 32B at Q4_K_M on a 4090 at 16K, spilled by 0.7%, and #182 dissolved it.**
+    // Taking the host-resident input table off the card leaves that configuration 22.7 GiB under a
+    // 23 GiB ceiling — it fits outright, so there is no spill left to misattribute. The band this
+    // test guards is narrow by construction, and the pair below now straddles it on one rig.
+    await user.selectOptions(screen.getByLabelText('Model'), 'Qwen/Qwen3-30B-A3B');
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
+    await user.selectOptions(screen.getByLabelText('Quantization'), 'q8_0');
     act(() => {
       useConfig.getState().set('contextTokens', 16384);
     });
 
     expect(screen.queryByText(/host bus set the pace/i)).not.toBeInTheDocument();
     expect(
-      screen.getByText(/resident reads still cost more per step than the 1% of weights/i)
+      screen.getByText(/resident reads still cost more per step than the 3% of weights/i)
     ).toBeInTheDocument();
   });
 
@@ -1560,15 +1571,17 @@ describe('the decode tile blames the term that sets the pace', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    // The same shape past the crossover: 4.4% spilled, and the bus term is the larger half.
+    // The same rig past the crossover — the test above at 16K, this one at 32K: 8.4% spilled, and
+    // the bus term is now the larger half. One model, one card, one format, two contexts, which is
+    // what makes the pair a crossover rather than two unrelated configurations.
     await user.selectOptions(screen.getByLabelText('Model'), 'Qwen/Qwen3-30B-A3B');
     await user.selectOptions(screen.getByLabelText('Hardware'), 'rtx-5090');
     await user.selectOptions(screen.getByLabelText('Quantization'), 'q8_0');
     act(() => {
-      useConfig.getState().set('contextTokens', 16384);
+      useConfig.getState().set('contextTokens', 32768);
     });
 
-    expect(screen.getByText(/host bus set the pace — 4% of them spill/i)).toBeInTheDocument();
+    expect(screen.getByText(/host bus set the pace — 8% of them spill/i)).toBeInTheDocument();
   });
 });
 

@@ -3,6 +3,7 @@ import type { Placement } from '@/engine/placement';
 import { effectiveDeviceCount, effectivePromptTokens } from '@/engine/placement';
 import { isSlidingLayer, layersCacheAlike } from '@/engine/kv';
 import { substitutionFor } from '@/data/runtimes';
+import { gib } from './format';
 
 /**
  * The runnable command for a placement (#136).
@@ -380,6 +381,52 @@ function tensorSplit(input: LaunchInput): TensorSplit | undefined {
  * Read on 2 August 2026 from `src/llama-model.cpp`, `src/llama-model-loader.cpp` and
  * `src/llama-kv-cache.cpp` at ggml-org/llama.cpp master.
  */
+/**
+ * Where the tensors no layer holds actually go, and the two flags that move them (#182).
+ *
+ * The engine takes the input embedding table off a discrete GPU's budget entirely, because
+ * llama.cpp pins it to the host — `llama-model.cpp:1333-1335`, *"there is very little benefit to
+ * offloading the input layer, so always keep it on the CPU"*, with no `-ngl`, `-sm` or `-ts` input
+ * to the decision. On an untied model that is a whole `vocab x hidden` table the cards used to be
+ * charged for.
+ *
+ * **It moves answers optimistically, which is why the caveats are printed rather than filed in a
+ * docblock.** Fifty-five thousand of the catalog's single-card configurations get lighter and 174
+ * of them cross from "will not run" to "fits" — Qwen3 14B at Q5_K_M on a 5080 at 32K goes from
+ * 15.39 to 14.87 GiB against a 15.00 GiB ceiling. A reader acting on that has bought the card. So
+ * the two conditions under which the accounting is not what the panel priced are stated beside the
+ * command a reader is about to run:
+ *
+ *   - **`-sm row`** splits the output projection across cards rather than holding it whole on the
+ *     last one. Every placement here is `-sm layer`, llama.cpp's default, and "the block sits on
+ *     one card" is a statement about that mode only.
+ *   - **`--no-mmap`** does not put the table back on the GPU — `dev_input` is the CPU device
+ *     either way — but it turns the host's copy from a file mapping into committed RAM. The panel
+ *     has no host-RAM input at all, and this is a requirement it now depends on even for a
+ *     placement that spills nothing.
+ *
+ * Read off `Placement` rather than recomputed: `totalWeightBytes` is the file and
+ * `deviceWeightBytes` is what the cards hold, so the difference is the engine's own figure and
+ * cannot drift from it. Silent where the two are equal, which is every unified-memory rig, every
+ * vLLM placement, and every tied model — on a tied one llama.cpp materialises the table twice and
+ * the card really does hold one, so there is nothing taken off and nothing to caveat.
+ */
+function residencyNote(input: LaunchInput): readonly string[] {
+  const { placement, rig } = input;
+  const hostResident = placement.totalWeightBytes - placement.deviceWeightBytes;
+  if (rig.device.class !== 'discrete-gpu' || hostResident <= 0) return [];
+
+  return [
+    `The weights above are ${gib(hostResident)} lighter than the file, and that is not a ` +
+      `rounding choice: llama.cpp keeps the input embedding table in host RAM whatever -ngl says, ` +
+      `so ${rig.device.name} never holds it. Two things change that accounting — -sm row splits ` +
+      `the output projection across cards instead of holding it whole on the last one, so the ` +
+      `split above is a -sm layer statement; and --no-mmap turns the host's copy from a file ` +
+      `mapping into ${gib(hostResident)} of committed RAM, which is host memory this page does ` +
+      `not check.`,
+  ];
+}
+
 function packingNotes(input: LaunchInput): readonly string[] {
   const { model, rig, usage, placement } = input;
   const { parallelism, shares } = placement.assignment;
@@ -692,6 +739,7 @@ function llamaServer(input: LaunchInput): Pair {
       `thing here you are meant to replace.`,
     ...(split === undefined ? packingNotes(input) : []),
     ...(split === undefined ? [] : [tsNote(split, ngl)]),
+    ...residencyNote(input),
   ];
 
   return {
@@ -777,6 +825,10 @@ function llamaBench(input: LaunchInput): Pair {
             `capacity above is what ${usage.concurrency} users cost in memory.`,
         ]
       : []),
+    // On the measurement form as well as the serving one, and for the same reason `-ts` is on
+    // both: a run whose residency assumptions differ from the panel's measures a different
+    // placement, and this is the one the reader is invited to check the panel against.
+    ...residencyNote(input),
   ];
 
   return {
@@ -998,11 +1050,16 @@ function vllm(input: LaunchInput): Pair {
    * tensor-parallel: every rank holds an equal shard, so the rig's spill divides evenly. Rounded
    * **up**, because the two directions are not symmetric — too little offload is an out-of-memory
    * error on load and too much is merely slower.
+   *
+   * `deviceWeightBytes` rather than `totalWeightBytes`, because that is what `offloadFraction` is a
+   * fraction of since #182. The two are the same number on every vLLM placement — a tensor-parallel
+   * rank slices the embedding table and keeps its slice on the GPU — so this changes nothing here
+   * and states the right operand, which is the difference between agreeing and agreeing by luck.
    */
   const spilledPerGpu =
     input.placement.offloadFraction > 0
       ? Math.ceil(
-          (input.placement.offloadFraction * input.placement.totalWeightBytes) / tp / 1024 ** 3
+          (input.placement.offloadFraction * input.placement.deviceWeightBytes) / tp / 1024 ** 3
         )
       : 0;
 

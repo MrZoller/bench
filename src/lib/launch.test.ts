@@ -3,6 +3,7 @@ import { artifactFor, launchCommands, type Emission, type LaunchInput } from './
 import { planPlacement } from '@/engine/placement';
 import {
   DEEPSEEK_V3,
+  DGX_SPARK,
   GEMMA_3_12B,
   GPT_OSS_20B,
   GPT_OSS_120B,
@@ -249,6 +250,64 @@ describe('llama.cpp: one catalog row, three launchers', () => {
 
       expect(onCpu.placement.assignment.residentLayers).toBe(LLAMA_31_8B.layers);
       expect(text(commands(onCpu)['llama-server'].serve)).toContain('-ngl 0');
+    });
+  });
+
+  /**
+   * The caveats on a correction that moves answers *optimistically* (#182).
+   *
+   * The engine takes the input embedding table off a discrete GPU's budget because llama.cpp pins
+   * it to the host, which makes 55,200 of the catalog's single-card configurations lighter and
+   * flips 174 of them from "will not run" to "fits". A reader acting on that has bought hardware,
+   * so the two modes under which the accounting is not what the panel priced have to be printed
+   * beside the command rather than filed in a docblock.
+   */
+  describe('the host-resident correction states its own caveats', () => {
+    it('says what came off the card, and the two flags that put it back', () => {
+      // Untied, so a whole `vocab x hidden` table is host-resident and the card budget is the file
+      // less that. Llama 3.1 8B at Q4_K_M is 4.58 GiB of file against 318 MB of table.
+      const untied = input(LLAMA_31_8B, getQuant('q4_k_m'), LLAMA_CPP, RTX_5090);
+      expect(untied.placement.deviceWeightBytes).toBeLessThan(untied.placement.totalWeightBytes);
+
+      for (const launcher of ['llama-server', 'llama-bench'] as const) {
+        const emitted =
+          commands(untied)[launcher][launcher === 'llama-server' ? 'serve' : 'measure'];
+        if (!emitted.ok) throw new Error('unreachable');
+        const notes = emitted.notes.join(' ');
+
+        expect(notes, launcher).toMatch(/lighter than the file/i);
+        expect(notes, launcher).toMatch(/keeps the input embedding table in host RAM/i);
+        // The two flags, named. Neither is a flag Headroom emits, which is exactly why the note
+        // has to: a reader who adds one is running something the panel did not price.
+        expect(notes, launcher).toMatch(/-sm row/);
+        expect(notes, launcher).toMatch(/--no-mmap/);
+      }
+    });
+
+    it('stays silent where nothing came off the card', () => {
+      // A tied model holds the table on the card too — llama.cpp materialises it twice — so the
+      // file and the card budget agree and there is nothing to caveat. Synthesised from the same
+      // row so the tie is the only thing that differs (#197).
+      const tied = input(
+        { ...LLAMA_31_8B, id: 'test/tied', tiedEmbeddings: true },
+        getQuant('q4_k_m'),
+        LLAMA_CPP,
+        RTX_5090
+      );
+      expect(tied.placement.deviceWeightBytes).toBe(tied.placement.totalWeightBytes);
+
+      const emitted = commands(tied)['llama-server'].serve;
+      if (!emitted.ok) throw new Error('unreachable');
+      expect(emitted.notes.join(' ')).not.toMatch(/lighter than the file/i);
+    });
+
+    it('stays silent on unified memory, where the host is the rig', () => {
+      const spark = input(LLAMA_31_8B, getQuant('q4_k_m'), LLAMA_CPP, DGX_SPARK);
+      expect(spark.placement.deviceWeightBytes).toBe(spark.placement.totalWeightBytes);
+
+      const emitted = commands(spark)['llama-server'].serve;
+      if (!emitted.ok) throw new Error('unreachable');
+      expect(emitted.notes.join(' ')).not.toMatch(/lighter than the file/i);
     });
   });
 
@@ -561,9 +620,14 @@ describe('llama.cpp: one catalog row, three launchers', () => {
 
       expect(new Set(counts).size, 'the split is even, so this proves nothing').toBeGreaterThan(1);
       expect(counts.reduce((a, b) => a + b, 0)).toBe(LLAMA_31_8B.layers);
-      // 7,7,6,6,6 layers, emitted as 7,7,6,6,7 slots: the fifth card holds six layers *and* the
+      // 7,7,7,6,5 layers, emitted as 7,7,7,6,6 slots: the fifth card holds five layers *and* the
       // output tensor, and llama.cpp normalises the ratios over a window that counts it (#204).
-      expect(served).toContain(`-ts 7,7,6,6,7`);
+      //
+      // **The packing is 7,7,7,6,5 rather than the 7,7,6,6,6 #204 was filed on, and #182 is why.**
+      // The output projection is 318 MB against a 266 MB combined per-layer load here, so seeding
+      // the last bin with it costs that card a layer — which is the layout llama.cpp produces, and
+      // was previously smeared across all five.
+      expect(served).toContain(`-ts 7,7,7,6,6`);
       expect(served).toContain(`-ngl ${LLAMA_31_8B.layers + 1}`);
     });
 
@@ -574,13 +638,19 @@ describe('llama.cpp: one catalog row, three launchers', () => {
     it('stays silent when the split is even, which is what llama.cpp would do unaided', () => {
       // A dense model divides cleanly, so the flag would say "split this evenly" — which is the
       // default. Emitting it anyway would make the flag noise and hide the case that matters.
+      //
+      // **At 128K rather than 4K, and the difference is #182's seed.** The output projection now
+      // seeds the last bin, so an evenly divisible rig only splits evenly when that block weighs
+      // less than one layer's combined load — which it does once the cache is the larger term.
+      // Llama 3.1 8B's table is 318 MB against 149 MB of layer at 4K and 669 MB at 128K, so the
+      // same rig is 9,9,8,6 there and 8,8,8,8 here.
       const dense = input(
         LLAMA_31_8B,
         getQuant('q4_k_m'),
         LLAMA_CPP,
         RTX_5090,
         4,
-        usage({ contextTokens: 4096 })
+        usage({ contextTokens: 131072 })
       );
       const counts = dense.placement.assignment.shares.map((s) => s.layers);
       expect(new Set(counts).size, 'the split is uneven, so this proves nothing').toBe(1);
@@ -682,10 +752,15 @@ describe('llama.cpp: one catalog row, three launchers', () => {
 
     it('worked by hand: 32 layers over five cards, and the fifth keeps the table', () => {
       /**
-       * The example #204 is filed on. The packing is 7,7,6,6,6 and the old emission was
-       * `-ngl 33 -ts 7,7,6,6,6`, which llama.cpp resolves to `8,7,6,6,5` — the first card gains the
-       * slot the ratios did not account for, and the last card pays for it. Stating the slot instead
-       * (`-ts 7,7,6,6,7`) makes the sum equal `-ngl` and the arithmetic land exactly.
+       * The example #204 is filed on, with #182's packing under it. The packing is 7,7,7,6,5 — the
+       * fifth card gives up a layer to the output projection it holds — and emitting the counts bare
+       * as `-ngl 33 -ts 7,7,7,6,5` resolves to `8,7,7,6,4`: the first card gains the slot the ratios
+       * did not account for, and the last card pays for it. Stating the slot instead
+       * (`-ts 7,7,7,6,6`) makes the sum equal `-ngl` and the arithmetic land exactly.
+       *
+       * #204 was filed against a 7,7,6,6,6 packing, which is what this rig produced while the fixed
+       * block was smeared across all five cards. The defect and its fix are unchanged by the move;
+       * only the counts they operate on are.
        */
       const five = input(
         LLAMA_31_8B,
@@ -698,18 +773,18 @@ describe('llama.cpp: one catalog row, three launchers', () => {
       const sized = five.placement.assignment.shares.flatMap(
         (s) => Array(s.deviceCount).fill(s.residentLayers) as number[]
       );
-      expect(sized).toEqual([7, 7, 6, 6, 6]);
+      expect(sized).toEqual([7, 7, 7, 6, 5]);
 
       const served = text(commands(five)['llama-server'].serve);
       expect(served).toContain('-ngl 33');
-      expect(served).toContain('-ts 7,7,6,6,7');
+      expect(served).toContain('-ts 7,7,7,6,6');
 
       const got = place(five, served);
-      expect(got.perDevice).toEqual([7, 7, 6, 6, 6]);
+      expect(got.perDevice).toEqual([7, 7, 7, 6, 5]);
       expect(got.outputDevice).toBe(4);
 
       // And the emission this replaced, run through the same reference: the defect, reproduced.
-      expect(placeDelivered(five, 33, [7, 7, 6, 6, 6])).toEqual([8, 7, 6, 6, 5]);
+      expect(placeDelivered(five, 33, [7, 7, 7, 6, 5])).toEqual([8, 7, 7, 6, 4]);
     });
 
     /** The per-card layer counts a given pair produces, for asserting against a *rejected* pair. */
@@ -1228,9 +1303,12 @@ describe('what review found, kept as tests', () => {
 
     // Per GPU, which is how vLLM documents it, and rounded up: too little offload is an OOM on
     // load and too much is only slower.
+    // `deviceWeightBytes`, which is what `offloadFraction` is a fraction of since #182 — the same
+    // number as the file on any vLLM placement, and the right operand rather than a lucky one.
     const perGpu =
-      (spilled.placement.offloadFraction * spilled.placement.totalWeightBytes) / 2 / 1024 ** 3;
+      (spilled.placement.offloadFraction * spilled.placement.deviceWeightBytes) / 2 / 1024 ** 3;
     expect(Number(flag![1])).toBe(Math.ceil(perGpu));
+    expect(spilled.placement.deviceWeightBytes).toBe(spilled.placement.totalWeightBytes);
     // The measurement form needs it too, or it starts a machine the serving form does not.
     expect(text(commands(spilled).vllm.measure)).toContain(`--cpu-offload-gb ${flag![1]}`);
   });

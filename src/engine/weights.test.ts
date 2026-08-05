@@ -19,6 +19,7 @@ import {
 } from './fixtures';
 import { getQuant } from '@/data/quants';
 import { GIB } from './types';
+import type { ModelSpec } from './types';
 
 describe('uniform quantization', () => {
   /**
@@ -284,6 +285,102 @@ describe('the fixed tensors are separated from the repeating stack', () => {
       const b = weightBreakdown(model, quant);
       expect(b.totalBytes, model.name).toBe(b.expertBytes + b.denseBytes);
     }
+  });
+
+  /**
+   * The three placements, and the identity a placement seeds bins from (#182).
+   *
+   * `fixedBytes` is a file figure and stays one; what upstream disproves is the premise it used to
+   * carry, that the tensors in it go to *one* device. They go to three: the input embedding to the
+   * host, the output projection to the last `-ts` device, a tower to the first GPU. The sum has to
+   * survive that, because `layerBytes` is still `totalBytes - fixedBytes` and a placement that seeds
+   * bins from components which do not add up would lose or double-count bytes silently.
+   */
+  describe('and the fixed block is three placements rather than one', () => {
+    it('adds back up to the fixed block, on every model and every format', () => {
+      for (const model of [LLAMA_31_8B, LLAMA_32_3B, QWEN3_32B, GEMMA_3_12B, GPT_OSS_120B]) {
+        for (const format of ['bf16', 'q8_0', 'q4_k_m', 'q3_k_m', 'mxfp4']) {
+          const b = weightBreakdown(model, getQuant(format));
+          const where = `${model.name} ${format}`;
+          expect(b.hostResidentBytes + b.outputBytes + b.towerBytes, where).toBeCloseTo(
+            b.fixedBytes,
+            0
+          );
+          for (const part of [b.hostResidentBytes, b.outputBytes, b.towerBytes]) {
+            expect(part, where).toBeGreaterThanOrEqual(0);
+          }
+        }
+      }
+    });
+
+    it('keeps the identity when the defensive clamp fires', () => {
+      /**
+       * `fixedBytes` is clamped to `denseBytes` so `layerBytes` cannot go negative, and the clamp
+       * is documented as defensive rather than reachable — no catalog row's vocabulary and tower
+       * outweigh its own dense half. Unreachable is not the same as untested: the three components
+       * are scaled by whatever the clamp took, and a clamp that quietly broke their sum would be
+       * worse than the negative `layerBytes` it exists to prevent.
+       *
+       * Synthesised rather than hunted for (#197), since the whole point is a shape the catalog
+       * does not have: a 4,096-hidden model with a two-million-token vocabulary, which is two
+       * tables larger than the model.
+       */
+      const absurd: ModelSpec = {
+        ...LLAMA_31_8B,
+        id: 'test/clamped',
+        vocabSize: 2_000_000,
+        hiddenSize: 4_096,
+        totalParams: 8_030_261_248,
+        tiedEmbeddings: false,
+      };
+      const b = weightBreakdown(absurd, quant);
+
+      expect(b.fixedBytes).toBe(b.denseBytes);
+      expect(b.fixedBytes).toBeLessThan((fixedParams(absurd) * quant.bpw) / 8);
+      expect(b.hostResidentBytes + b.outputBytes + b.towerBytes).toBeCloseTo(b.fixedBytes, 0);
+      expect(b.layerBytes).toBe(0);
+    });
+
+    it('charges a tied model no host-resident table, because the card holds one too', () => {
+      // llama.cpp materialises a tied table twice — the host's copy and a `TENSOR_DUPLICATED`
+      // output on the last GPU — and adds the duplicate's bytes to `size_data` itself. The file
+      // carries one table and the card holds one, so nothing comes off the card's budget. An
+      // untied model has two in the file and the card holds one, which is the whole over-charge.
+      const table = (m: typeof LLAMA_31_8B) => (m.vocabSize * m.hiddenSize * quant.bpw) / 8;
+
+      const tied = weightBreakdown(LLAMA_32_3B, quant);
+      expect(tied.hostResidentBytes).toBe(0);
+      expect(tied.outputBytes).toBeCloseTo(table(LLAMA_32_3B), 0);
+
+      const untied = weightBreakdown(LLAMA_31_8B, quant);
+      expect(untied.hostResidentBytes).toBeCloseTo(table(LLAMA_31_8B), 0);
+      expect(untied.outputBytes).toBeCloseTo(table(LLAMA_31_8B), 0);
+
+      // 7.6% of Qwen3 8B's file and 6.5% of Llama 3.1 8B's is what a discrete GPU stops being
+      // charged for — one table, not the whole fixed block.
+      expect(untied.hostResidentBytes / untied.totalBytes).toBeCloseTo(0.065, 2);
+    });
+
+    it('separates a tower from the table, since they sit at opposite ends of the rig', () => {
+      // Gemma 3 12B is tied *and* multimodal, so its fixed block is a table and a tower with
+      // nothing host-resident — and the two go to the last card and the first respectively.
+      const b = weightBreakdown(GEMMA_3_12B, quant);
+
+      expect(b.hostResidentBytes).toBe(0);
+      expect(b.towerBytes).toBeCloseTo((GEMMA_3_12B.nonLanguageParams! * quant.bpw) / 8, 0);
+      expect(b.outputBytes).toBeCloseTo(
+        (GEMMA_3_12B.vocabSize * GEMMA_3_12B.hiddenSize * quant.bpw) / 8,
+        0
+      );
+      expect(b.towerBytes).toBeGreaterThan(0);
+      expect(b.outputBytes).toBeGreaterThan(b.towerBytes);
+    });
+
+    it('gives a text-only model no tower to place', () => {
+      for (const model of [LLAMA_31_8B, LLAMA_32_3B, QWEN3_32B]) {
+        expect(weightBreakdown(model, quant).towerBytes, model.name).toBe(0);
+      }
+    });
   });
 });
 
