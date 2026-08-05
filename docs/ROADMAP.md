@@ -412,14 +412,37 @@ at `-ngl 18` layer 0 is on the CPU while the output is still on the GPU.
 
 **The false sentence reached 56,612 commands, which is the part worth sitting with.** The `+1`
 arithmetic is right where it applies — a fully-resident 48-layer model wants `-ngl 49` under either
-reading — but `gpuLayers` applies it only on that branch, and emits a bare `residentLayers` when the
-placement spills. The output takes a slot for any positive `-ngl`, so those commands load one fewer
-repeating layer than the number reads, and 1,530 of them are `-ngl 1`, which loads none. Every
-emitted `-ts` is wrong for the same reason, on all 42,146 configurations that emit one: the ratios
-sum to `L` while llama.cpp compares them against a key over `L + 1`, so the first card always gains
-a layer. Both are tracked in #204 and neither is corrected here — the fix rewrites `-ts` on every
-configuration that emits it, which is the churn #182's sequence exists to isolate. Where the false
-sentence also reached was a _justification_: `placement.ts` charges a
+reading — but `gpuLayers` applied it only on that branch, and emitted a bare `residentLayers` when
+the placement spilled. The output takes a slot for any positive `-ngl`, so those commands loaded one
+fewer repeating layer than the number read, and 1,530 of them were `-ngl 1`, which loads none. Every
+emitted `-ts` was wrong for the same reason, on all 42,146 configurations that emit one: the ratios
+summed to `L` while llama.cpp compares them against a key over `L + 1`, so the first card always
+gained a layer.
+
+**Both are fixed in [#204](https://github.com/MrZoller/headroom/issues/204)**, ahead of #182's engine
+change rather than after it: the packing rewrite moves which bin holds which layers, so it would
+have invalidated the proof that this emission is exact. `-ngl` is now `min(residentLayers, L) + 1`
+on every branch, and `-ts` states the output tensor's slot on the last non-zero share so the ratios
+sum to `-ngl`. An independent sweep of 361,200 configurations put the emitted pair through a port of
+`llama-model.cpp:1285-1343` at `360e134`: 56,719 spilling commands wrong before and **0 after**,
+42,037 `-ts` commands wrong before and **0 after**, with the output tensor on the intended card every
+time. `launch.test.ts` carries the port, so the guard is the placement rather than the string —
+neither defect changed a string that looked wrong.
+
+**Two things #204 measured and deliberately did not change.** The `max === min` gate that suppresses
+`-ts` on an even split is wrong the same way — `L + 1` slots over `n` cards cannot divide evenly when
+`n` divides `L`, so llama.cpp's default hands card 0 an extra layer — and the default reproduces the
+packing on **0 of the 89,615** configurations that reach it. Widening the gate would put a `-ts` on
+all of them, which is a larger rewrite than the one verified and interacts with #182's packing. And
+where `residentLayers` floors to **zero** on a GPU rig the emission stays `-ngl 0`: the `+1` rule
+would put the whole output table on a card that had no room for a layer, which is nearer the priced
+placement on 96.3% of the 5,807 cases that reach it and **over the card's own weight budget on 9.1%**
+— worst case a 2,004 MiB table into 344 MiB of room. The deciding quantity is the table against the
+card's spare room, not how much spilled (r = 0.08 against `offloadFraction`), so no threshold on the
+spill fraction separates them; and the byte accounting that would decide it is exactly what #182
+rewrites. Open, and open for a stated reason.
+
+Where the false sentence also reached was a _justification_: `placement.ts` charges a
 device's whole spill against its repeating layers, and called that the conservative of two readings
 because llama.cpp supposedly shed the output tensor first. Under the real order it is not the
 cautious reading, it is the only one llama.cpp can execute — the generous alternative, where the
@@ -433,8 +456,9 @@ forward from it, and the tests cannot tell.
 exists for.** `-ngl` reads `assignment.residentLayers` and never a fraction, which was the trap the
 issue named — and `-ts` was wrong, which nothing in its framing predicts because `-ts` is not a flag
 it mentions. (Read once as "`-ngl` was right from the start". It was not: reading `residentLayers`
-avoided the fraction and still emitted a count one short of what llama.cpp loads. Right about the
-trap, wrong about the flag — #204.) It is the payoff of surfacing the assignment: llama.cpp's
+avoided the fraction and still emitted a count one short of what llama.cpp loads, on 27.6% of
+emitted commands, until #204. Right about the trap, wrong about the flag.) It is the payoff of
+surfacing the assignment: llama.cpp's
 default split is
 proportional to device _memory_, so on identical cards it is an equal number of layers, which is the
 wrong split for a model whose layers cache different amounts.

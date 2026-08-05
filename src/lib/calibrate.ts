@@ -758,14 +758,29 @@ function describeMismatch(
    * `-ngl 99` for the same thing. Comparing against the layer count alone would have marked a run
    * that followed Headroom's own command.
    *
-   * So a fully-resident prediction accepts anything at or above the layer count, and a partial one
-   * is compared exactly.
+   * So a fully-resident prediction accepts anything at or above the layer count.
+   *
+   * **A partial one has two spellings too, since #204**, and this is where that fix reaches across
+   * the panel. `prediction.gpuLayers` is a count of *repeating layers* — what the placement put on
+   * the card — while `n_gpu_layers` in a paste is llama.cpp's flag, which counts the output tensor
+   * a slot past them. `-ngl N + 1` is what loads `N` layers, and it is what the Launch panel now
+   * emits; `-ngl N` is what a reader who counted the panel's own figure by hand would type. Both
+   * describe this placement to within the one slot the flag cannot express, so both are accepted —
+   * where before the fix, only the second was, and the emitter's own command would have been marked
+   * as a run of a different placement.
+   *
+   * **Not at zero, which is the one place the extra slot is a different claim rather than a
+   * spelling.** A prediction of no GPU layers is either a `cpu-ram` machine or a card with no room
+   * for one, and the emitter passes `-ngl 0` for both; `-ngl 1` puts the whole output table on a
+   * GPU, so accepting it there would let a GPU run satisfy the EPYC-shaped measurements this
+   * feature exists to collect — the one-sided check's own failure, re-introduced from the far side.
    */
   if (measurement.gpuLayers !== undefined && prediction.gpuLayers !== undefined) {
     const allResident = prediction.gpuLayers >= prediction.modelLayers;
     const agrees = allResident
       ? measurement.gpuLayers >= prediction.modelLayers
-      : measurement.gpuLayers === prediction.gpuLayers;
+      : measurement.gpuLayers === prediction.gpuLayers ||
+        (prediction.gpuLayers > 0 && measurement.gpuLayers === prediction.gpuLayers + 1);
     if (!agrees) {
       reasons.push(
         `run with ${measurement.gpuLayers} layers on the GPU where the placement above puts ` +
