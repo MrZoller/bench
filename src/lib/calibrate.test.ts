@@ -278,6 +278,43 @@ describe('a measurement of a different job is not evidence about the model', () 
     }
   });
 
+  it('accepts the emitted flag for a partial placement, and the older one it replaced', () => {
+    /**
+     * **The same disagreement one layer down** (#204). `prediction.gpuLayers` counts *repeating
+     * layers*; `n_gpu_layers` in a paste is the flag, which counts the output tensor a slot past
+     * them. Since #204 the Launch panel emits `-ngl N + 1` for a spilling placement of `N` layers,
+     * so comparing exactly against `N` would mark a run that followed Headroom's own command — the
+     * failure the fully-resident branch above was written for, arriving on the branch it left out.
+     *
+     * `-ngl N` is accepted alongside it, and **not because the two are equivalent** — it loads
+     * `N - 1` repeating layers, a measurably different placement. It is accepted because every
+     * spilling command this panel emitted between #169 and #204 was a bare `-ngl N`, so those
+     * pastes exist. A backwards-compatibility tolerance with a shelf life, narrowed in #208
+     * together with the fully-resident arm, which has the same hole and far more of it.
+     */
+    for (const ngl of [12, 13]) {
+      const run = JSON.stringify([
+        { n_prompt: 2048, n_gen: 0, n_depth: 0, n_gpu_layers: ngl, avg_ts: 900 },
+      ]);
+      expect(
+        compare(parseLlamaBench(run), prediction({ modelLayers: 32, gpuLayers: 12 }))[0].mismatch,
+        `-ngl ${ngl}`
+      ).toBeUndefined();
+    }
+
+    // And the tolerance is exactly one slot wide, not a band: a genuinely different split still
+    // fails, on both sides.
+    for (const ngl of [11, 14]) {
+      const run = JSON.stringify([
+        { n_prompt: 2048, n_gen: 0, n_depth: 0, n_gpu_layers: ngl, avg_ts: 900 },
+      ]);
+      expect(
+        compare(parseLlamaBench(run), prediction({ modelLayers: 32, gpuLayers: 12 }))[0].mismatch,
+        `-ngl ${ngl}`
+      ).toMatch(/layers on the GPU where the placement above puts 12 of 32/);
+    }
+  });
+
   it('rejects a GPU run against a CPU prediction, which a one-sided check let through', () => {
     // `cpu-ram` predicts zero GPU layers, and only rejecting *fewer* than predicted let every
     // positive count pass — so the EPYC-shaped measurements this feature exists for could be
@@ -288,6 +325,19 @@ describe('a measurement of a different job is not evidence about the model', () 
     expect(
       compare(parseLlamaBench(onGpu), prediction({ gpuLayers: 0, modelLayers: 32 }))[0].mismatch
     ).toMatch(/32 layers on the GPU where the placement above puts 0 of 32/);
+
+    /**
+     * **And `-ngl 1` is not a second spelling of zero**, which is where the #204 widening above had
+     * to stop. A prediction of no GPU layers is a machine with no GPU or a card with no room for a
+     * layer, and the emitter passes `-ngl 0` for both; `-ngl 1` puts the whole output table on a
+     * GPU, so accepting it would re-open the hole the two-sided check closed.
+     */
+    const oneSlot = JSON.stringify([
+      { n_prompt: 2048, n_gen: 0, n_depth: 0, n_gpu_layers: 1, avg_ts: 7285.68 },
+    ]);
+    expect(
+      compare(parseLlamaBench(oneSlot), prediction({ gpuLayers: 0, modelLayers: 32 }))[0].mismatch
+    ).toMatch(/1 layers on the GPU where the placement above puts 0 of 32/);
   });
 
   it('will not read a markdown paste as confirming a non-default cache', () => {

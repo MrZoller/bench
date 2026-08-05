@@ -758,14 +758,37 @@ function describeMismatch(
    * `-ngl 99` for the same thing. Comparing against the layer count alone would have marked a run
    * that followed Headroom's own command.
    *
-   * So a fully-resident prediction accepts anything at or above the layer count, and a partial one
-   * is compared exactly.
+   * So a fully-resident prediction accepts anything at or above the layer count.
+   *
+   * **A partial one accepts two values, and they are not two spellings of one count.** This is
+   * where #204 reaches across the panel. `prediction.gpuLayers` is a count of *repeating layers* —
+   * what the placement put on the card — while `n_gpu_layers` in a paste is llama.cpp's flag, which
+   * counts the output tensor a slot past them. `-ngl N + 1` is what loads `N` layers, and it is
+   * what the Launch panel now emits. `-ngl N` loads `N - 1` of them plus the table, which is a
+   * *different placement* — measurably so: repricing every partial configuration with that extra
+   * layer shed puts the median 2.2% off and 270 of 56,719 outside the ±30% band, worst case 60.4%
+   * on Kimi-K2 at Q5_K_M over four B200s.
+   *
+   * It is accepted anyway, deliberately and for one reason: **every spilling command this panel
+   * emitted between #169 and #204 was a bare `-ngl N`**, so those pastes exist and describe runs
+   * people actually made. That is a backwards-compatibility tolerance, not an equivalence, and it
+   * should be narrowed once those pastes have aged out — with the fully-resident arm above, which
+   * has the same hole and a far larger one: `>= modelLayers` accepts a bare `-ngl L`, i.e. `L - 1`
+   * layers against a prediction of no spill at all, on 148,151 configurations with 32.4% outside
+   * the band. Both are #208.
+   *
+   * **Not at zero, which is the one place the tolerance would swallow a whole category rather
+   * than a layer.** A prediction of no GPU layers is either a `cpu-ram` machine or a card with no room
+   * for one, and the emitter passes `-ngl 0` for both; `-ngl 1` puts the whole output table on a
+   * GPU, so accepting it there would let a GPU run satisfy the EPYC-shaped measurements this
+   * feature exists to collect — the one-sided check's own failure, re-introduced from the far side.
    */
   if (measurement.gpuLayers !== undefined && prediction.gpuLayers !== undefined) {
     const allResident = prediction.gpuLayers >= prediction.modelLayers;
     const agrees = allResident
       ? measurement.gpuLayers >= prediction.modelLayers
-      : measurement.gpuLayers === prediction.gpuLayers;
+      : measurement.gpuLayers === prediction.gpuLayers ||
+        (prediction.gpuLayers > 0 && measurement.gpuLayers === prediction.gpuLayers + 1);
     if (!agrees) {
       reasons.push(
         `run with ${measurement.gpuLayers} layers on the GPU where the placement above puts ` +

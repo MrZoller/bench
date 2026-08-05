@@ -38,8 +38,15 @@ import { substitutionFor } from '@/data/runtimes';
  *
  *   - **llama.cpp's `-ngl` counts the output tensor.** `n_gpu_layers` is the repeating blocks plus
  *     one position, so a fully-resident 48-layer model wants `-ngl 49`, and `-ngl 48` sheds *layer
- *     0* rather than the output tensor — the window comes off the front of the stack. See
- *     {@link gpuLayers}.
+ *     0* rather than the output tensor — the window comes off the front of the stack. It is one
+ *     rule and not a rule for resident placements: the slot exists for any positive `-ngl`, so a
+ *     spilling placement of `N` layers is `-ngl N + 1` too. See {@link gpuLayers}.
+ *   - **`-ts` is normalised over that same window, so its ratios have to sum to `-ngl`.** The
+ *     cumulative shares are compared against `(il - i_gpu_start) / act_gpu_layers` and
+ *     `act_gpu_layers` is `min(ngl, n_layer_all + 1)` — so ratios summing to the repeating layers
+ *     alone are stretched across one slot more than they describe, and the first card silently
+ *     gains a layer. The output slot rides on the last non-zero share, and is emitted as part of
+ *     it. See {@link tensorSplit}.
  *   - **`-c` is the whole cache, divided among the `-np` slots.** `n_ctx_seq` is
  *     `n_ctx / n_seq_max` unless the KV buffer is unified, so eight users at 64K wants `-c 524288`.
  *     Passing the per-user figure would give each slot an eighth of it.
@@ -173,7 +180,7 @@ const LLAMA_KV_TYPE = { fp16: 'f16', q8: 'q8_0', q4: 'q4_0' } as const;
 const VLLM_KV_DTYPE = { fp16: 'auto', q8: 'fp8', q4: undefined } as const;
 
 /**
- * `-ngl`, which is a layer count and not a fraction.
+ * `-ngl`, one rule: the resident layer count plus the output tensor's slot.
  *
  * Two corrections sit between `assignment.residentLayers` and the flag, and the engine declines
  * both because it has no notion of a flag:
@@ -188,17 +195,51 @@ const VLLM_KV_DTYPE = { fp16: 'auto', q8: 'fp8', q4: undefined } as const;
  *     `ngl >= 1`, so it is on a GPU whenever anything is; upstream's own fitter says "the last device
  *     has the output layer, which cannot be a partial layer". Read 5 August 2026 from
  *     `src/llama-model.cpp:1318-1343` and `common/fit.cpp:581` at ggml-org/llama.cpp commit
- *     `360e134` (#202). A fully-resident placement wants `layers + 1` under either reading, so the
- *     branch below is right where it applies. **The spilling branch is not** — the output occupies a
- *     slot for any positive `-ngl`, so `-ngl N` loads `N - 1` repeating layers and the table, not
- *     `N` layers. Measured at 56,612 of 205,198 emitted commands, and 1,530 of those are `-ngl 1`,
- *     which loads no repeating layer at all. Left as it is here deliberately: the fix rewrites `-ts`
- *     on every configuration that emits it and belongs with that change, in #204.
+ *     `360e134` (#202).
+ *
+ * **The `+ 1` used to be applied only where nothing spilled**, and that was #204's first defect: a
+ * spilling `-ngl N` loaded `N - 1` repeating layers plus the table rather than the `N` the panel
+ * priced. Measured over 361,200 catalog configurations (35 models x llama.cpp's eight weight
+ * formats x 43 devices x {1,2,4,5,8} cards x {8K,32K,128K} x {1,4} users), 218,334 of which emit a
+ * command: **56,719 of them were off by one, and 1,537 were `-ngl 1` loading no repeating layer at
+ * all.** `Math.min(residentLayers, model.layers) + 1` collapses the two branches into the one rule
+ * upstream actually has. The clamp is defensive — under a layer split `residentLayers` is a sum
+ * bounded by the model's own count — and it is what keeps the flag from claiming a slot that does
+ * not exist if that ever stops holding.
+ *
+ * **Zero is deliberately still zero, and it is the one case #204 left open.** Where
+ * `residentLayers` floors to zero on a GPU rig the rule above would emit `-ngl 1`, which puts the
+ * whole output table on the card and no repeating layer. Whether that is honest varies across the
+ * range it fires on: `residentLayers` floors, so it reaches zero while a real fraction of the
+ * weights is still resident — 74.6% to 99.9% of the rig spilling across the 5,807 configurations
+ * that reach it in the sweep above, and never 100%. Near the low end the resident remainder is
+ * roughly the fixed block and the table is close to the right thing to keep; near the high end
+ * nothing meaningful is resident and offloading the whole table over-offloads relative to what was
+ * priced. `placementRefusal` already turns away 17,464 of the 23,271 zero-resident GPU
+ * configurations, so the open question is where that boundary belongs rather than whether to build
+ * one — and it is not answered by an off-by-one fix. Left as it was so this change moves only what
+ * it verified.
  */
 function gpuLayers(input: LaunchInput): number {
   if (input.rig.device.class === 'cpu-ram') return 0;
   const { residentLayers } = input.placement.assignment;
-  return residentLayers >= input.model.layers ? input.model.layers + 1 : residentLayers;
+  if (residentLayers <= 0) return 0;
+  return Math.min(residentLayers, input.model.layers) + 1;
+}
+
+/**
+ * A `-ts` split in its two readings, which differ by exactly the output tensor's slot.
+ *
+ * They are carried together rather than derived twice because both are printed: the flag needs the
+ * window's proportions and the sentence beside it needs the layer counts the panel actually sized,
+ * and a note that recomputed either from the other is a second derivation of the thing this module
+ * exists not to derive twice.
+ */
+interface TensorSplit {
+  /** Repeating layers per card, exactly as `layerSplitBins` packed them. */
+  readonly sized: readonly number[];
+  /** What `-ts` carries: {@link sized} with the output tensor's slot on the last non-zero share. */
+  readonly ratios: readonly number[];
 }
 
 /**
@@ -220,14 +261,43 @@ function gpuLayers(input: LaunchInput): number {
  * It is reachable and it OOMs. Ministral 3 3B at Q8_0, 131,072 tokens over 4 users on four RTX
  * 5080s packs 7,7,6,6 layers and keeps 2,2,6,6 of them resident — so `-ngl 16 -ts 7,7,6,6` asks
  * llama.cpp to spread sixteen layers slightly-in-favour-of the two cards Headroom sized for two, which
- * are the constrained cards precisely because their cache already fills them. `-ts 2,2,6,6` is the
+ * are the constrained cards precisely because their cache already fills them. `2,2,6,6` is the
  * split that was actually sized.
  *
  * Where nothing spills the two are identical, so this changes only the case it exists for.
  *
+ * ## The window has one more slot than the split describes, and that is what {@link ratios} is for
+ *
+ * `-ts` proportions the `-ngl` window, and the window is `act_gpu_layers = min(ngl, L + 1)` slots
+ * — the repeating layers **and the output tensor's own position**. llama.cpp normalises the ratios
+ * by their own sum and then compares the cumulative shares against `(il - i_gpu_start) /
+ * act_gpu_layers`, so ratios summing to `L` are stretched across `L + 1` positions and device 0's
+ * boundary lands at `c0/L` against a key stepping in `1/(L + 1)`: **the first card gains a slot
+ * whenever its cumulative share is at least one.** Worked, and confirmed against a port of
+ * `llama-model.cpp:1285-1343` at commit `360e134`: 32 layers, `-ngl 33 -ts 7,7,6,6,6` delivers
+ * `8,7,6,6,5` with the output on the last card. Every one of the 42,037 `-ts`-emitting
+ * configurations in the sweep {@link gpuLayers} describes was wrong this way — 100% of them, and
+ * the first card gained the slot on 39,736; the rest lead with a zero share, which cannot gain.
+ *
+ * **The correction is to emit the output's slot rather than to leave it implicit**: `+1` on the
+ * last non-zero share, which is the one llama.cpp puts the output on, and `-ngl` reads
+ * `residentLayers + 1` from {@link gpuLayers}. The two then agree by construction — the ratios sum
+ * to `-ngl` — and the arithmetic collapses: with `act_gpu_layers` equal to the ratio sum, key
+ * `k / sum` against boundary `c_i / sum` assigns slot `k` to the first device with `c_i > k`, so
+ * device `i` gets exactly `ratio_i` slots and the last non-zero one spends its extra slot on the
+ * output. Exact on all 42,037, output on the intended card every time (#204).
+ *
  * Emitted only when the counts really differ, so the flag never appears saying "split this evenly",
  * which is what llama.cpp would have done unaided — and that gate reads the resident counts too,
  * since a packing that assigns equal counts of *unequal* layers is exactly where the flag is needed.
+ *
+ * **That gate is measurably too tight and #204 deliberately did not widen it.** An even *resident*
+ * split is not an even *window*: `L + 1` slots over `n` identical cards cannot divide evenly when
+ * `n` divides `L`, so llama.cpp's memory-proportional default hands card 0 an extra layer and takes
+ * one off the card holding the output. The same sweep finds 89,615 configurations that suppress the
+ * flag on this gate and **not one** where the default reproduces what was packed. Widening it would
+ * put a `-ts` on 89,615 commands that carry none today, which is a larger rewrite than the one
+ * verified here and interacts with #182's packing change; it is reported rather than taken.
  *
  * **And never where the layers cache different amounts, which is the case the flag looked most
  * useful for** (raised by Codex on #164, P1). `-ts` partitions llama.cpp's ordered `-ngl` suffix
@@ -249,19 +319,25 @@ function gpuLayers(input: LaunchInput): number {
  * does not divide it (48 layers over 5 cards is 10,10,10,9,9), is both uneven and exactly
  * expressible, and llama.cpp's memory-proportional default gets it wrong.
  */
-function tensorSplit(input: LaunchInput): string | undefined {
+function tensorSplit(input: LaunchInput): TensorSplit | undefined {
   const { parallelism, shares } = input.placement.assignment;
   if (parallelism !== 'layer' || effectiveDeviceCount(input.rig) <= 1) return undefined;
   if (!layersCacheAlike(input.model, input.usage.contextTokens)) return undefined;
 
-  const counts = shares.flatMap((s) =>
+  const sized = shares.flatMap((s) =>
     Array.from({ length: s.deviceCount }, () => s.residentLayers)
   );
-  if (counts.length <= 1) return undefined;
+  if (sized.length <= 1) return undefined;
   // Nothing is on a GPU at all, so there is no window to proportion. `-ngl 0` already says it.
-  if (counts.every((c) => c === 0)) return undefined;
-  if (Math.max(...counts) === Math.min(...counts)) return undefined;
-  return counts.join(',');
+  if (sized.every((c) => c === 0)) return undefined;
+  if (Math.max(...sized) === Math.min(...sized)) return undefined;
+
+  // The card llama.cpp will put the output tensor on: the last one with a share of the window.
+  // A trailing zero is legal and gets nothing, so it is the last *non-zero* share and not the
+  // last entry — and it is the share that has to carry the extra slot, since asking any other
+  // card for it would move the table as well as the layer.
+  const output = sized.reduce((last, c, i) => (c > 0 ? i : last), -1);
+  return { sized, ratios: sized.map((c, i) => (i === output ? c + 1 : c)) };
 }
 
 /**
@@ -615,16 +691,7 @@ function llamaServer(input: LaunchInput): Pair {
     `-m takes a path on your own disk, which no catalog can supply — the placeholder is the one ` +
       `thing here you are meant to replace.`,
     ...(split === undefined ? packingNotes(input) : []),
-    ...(split === undefined
-      ? []
-      : [
-          `-ts proportions the -ngl window, not the model: llama.cpp puts the last ${ngl} layers ` +
-            `on GPUs and splits those by these ratios. ${split} is the split Headroom sized, against ` +
-            `a default that divides by device memory and therefore evenly on identical cards — ` +
-            `which is the wrong answer for a model whose layers cache different amounts. ` +
-            `llama.cpp normalises these ratios across the -ngl window, which counts the output ` +
-            `tensor as well, so the first card currently receives one layer more than stated (#204).`,
-        ]),
+    ...(split === undefined ? [] : [tsNote(split, ngl)]),
   ];
 
   return {
@@ -636,7 +703,7 @@ function llamaServer(input: LaunchInput): Pair {
         usage.concurrency > 1 ? `-np ${usage.concurrency}` : undefined,
         `-ngl ${ngl}`,
         `-ctk ${kv} -ctv ${kv}`,
-        split === undefined ? undefined : `-ts ${split}`,
+        split === undefined ? undefined : `-ts ${split.ratios.join(',')}`,
       ]),
       notes,
     },
@@ -748,7 +815,7 @@ function llamaBench(input: LaunchInput): Pair {
                 prefix > 0 ? `-d ${prefix}` : undefined,
                 `-ngl ${ngl}`,
                 `-ctk ${kv} -ctv ${kv}`,
-                split === undefined ? undefined : `-ts ${split}`,
+                split === undefined ? undefined : `-ts ${split.ratios.join(',')}`,
                 `-o md`,
               ]),
               '',
@@ -759,7 +826,7 @@ function llamaBench(input: LaunchInput): Pair {
                 `-d ${decode.depth}`,
                 `-ngl ${ngl}`,
                 `-ctk ${kv} -ctv ${kv}`,
-                split === undefined ? undefined : `-ts ${split}`,
+                split === undefined ? undefined : `-ts ${split.ratios.join(',')}`,
                 `-o md`,
               ]),
             ].join('\n'),
@@ -840,9 +907,15 @@ function ollama(input: LaunchInput): Pair {
    * the list; `num_gpu` is not on it. So the template says what it cannot say rather than emitting
    * a plausible-looking line — which is the same rule as the artifact refusal, applied to a flag.
    */
+  /* The layers, not the flag. `gpuLayers` carries the output tensor's slot on top of the resident
+     count, so printing it here would name a split one layer larger than the panel above shows —
+     and this sentence is about the panel. Read back off the flag rather than re-derived from the
+     placement, so the two cannot come to disagree about how much stayed on the card. */
+  const residentLayers = Math.max(gpuLayers(input) - 1, 0);
+
   const notes = [
     `Ollama's Modelfile has no parameter for the GPU layer count — num_ctx and num_predict are ` +
-      `documented, num_gpu is not — so the ${gpuLayers(input)}-layer split above is the one thing ` +
+      `documented, num_gpu is not — so the ${residentLayers}-layer split above is the one thing ` +
       `this surface cannot be told. Ollama decides it. Use llama-server if you need to pin it.`,
     `num_ctx is per request here, unlike llama-server's -c, which is the whole cache across slots.`,
     `FROM takes a path on your own disk, absolute or relative to the Modelfile.`,
@@ -1144,6 +1217,27 @@ function mlx(input: LaunchInput): Pair {
   };
 }
 
+/**
+ * The `-ts` sentence, which has to state both readings because the flag shows only one.
+ *
+ * The ratios a reader sees are the window's, and the window carries the output tensor — so the
+ * largest number in the flag is one greater than the layer count that card holds, and a sentence
+ * that offered the ratios as the layer split would be off by one on exactly the card whose share
+ * the panel is least able to check. Saying which card the table lands on is the other half: it is
+ * the reason that share is larger, and it is a placement fact `-ts` is otherwise silent about.
+ */
+function tsNote(split: TensorSplit, ngl: number): string {
+  const output = split.ratios.findIndex((r, i) => r !== split.sized[i]);
+  return (
+    `-ts proportions the -ngl window, not the model: llama.cpp puts the last ${ngl} slots of the ` +
+    `stack on GPUs and splits those by these ratios. The window counts the output tensor as a slot ` +
+    `of its own, so the ratios sum to -ngl rather than to the layer count — ${split.sized.join(',')} ` +
+    `layers is the split Headroom sized, and card ${output + 1} carries the output tensor on top of ` +
+    `its ${split.sized[output]}. The default divides by device memory instead, and therefore evenly ` +
+    `on identical cards, which is the wrong answer for a model whose layers cache different amounts.`
+  );
+}
+
 /** The `-ngl` sentence, which differs in the three cases the flag has. */
 function nglNote(input: LaunchInput, ngl: number): string {
   const { model, rig, placement } = input;
@@ -1154,18 +1248,23 @@ function nglNote(input: LaunchInput, ngl: number): string {
     return `-ngl ${ngl} is all ${model.layers} layers plus one: llama.cpp counts the output tensor a position past the repeating blocks, so ${model.layers} would keep the output tensor and leave layer 0 on the host.`;
   }
   /* Zero is its own sentence, not the general one with a zero in it.
-     The branch below subtracts the output slot, which is only there for a *positive* `-ngl` —
-     at zero llama.cpp offloads nothing at all, and the subtraction rendered "-1 repeating
-     layers" on 2,202 catalog configurations, Llama 3.2 3B BF16 on two 5080s at 32K among them.
+     The branch below counts the output slot, which is only there for a *positive* `-ngl` — at
+     zero llama.cpp offloads nothing at all, so the general sentence would offer "-1 of L layers"
+     as the resident count. It was reachable on 2,202 catalog configurations when the branch was
+     added, Llama 3.2 3B BF16 on two 5080s at 32K among them.
+
+     **Still live under #204, and deliberately.** `gpuLayers` now adds the output's slot on every
+     positive count, and the one place it does not is here: a zero-resident GPU rig would emit
+     `-ngl 1`, which is the whole output table on a card that had no room for a layer. #204 left
+     that open rather than settling it — see {@link gpuLayers} — so this branch keeps its subject.
      Distinct from the `cpu-ram` case above, which is about a rig with no GPU rather than a GPU
      with no room. */
   if (ngl === 0) {
     /* And it does *not* claim to match the figures, which was this sentence's first mistake.
        `residentLayers` floors, so it reaches zero while a fraction of the weights is still
-       resident — across the 4,302 configurations that reach this note the spill runs 80.5% to
-       99.9% and is never 100%. `-ngl 0` puts nothing on the GPU at all, so the command is a
-       slower placement than the panel priced, every time. Which flag expresses the placement
-       Headroom sized is #204's question, not this note's. */
+       resident — across the configurations that reach this note the spill runs from around 75%
+       to 99.9% and is never 100%. `-ngl 0` puts nothing on the GPU at all, so the command is a
+       slower placement than the panel priced, every time. */
     return (
       `-ngl 0 puts nothing on the GPU: ${rig.device.name} has no room for a whole layer beside ` +
       `the cache it has to hold. The figures above price ${percentish(placement.offloadFraction)} ` +
@@ -1173,15 +1272,15 @@ function nglNote(input: LaunchInput, ngl: number): string {
       `than the panel estimates.`
     );
   }
-  /* Says what llama.cpp will do, not what Headroom sized, because on this branch they differ:
-     the output tensor takes a slot for any positive `-ngl`, so this loads one fewer repeating
-     layer than the number reads. Known, tracked in #204, and stated here rather than left as the
-     confident wrong sentence it was. */
+  /* One sentence for what Headroom sized and what llama.cpp loads, because since #204 they are
+     the same thing: the flag carries the resident count *plus* the output tensor's slot, so the
+     layer count a reader wants is `ngl - 1` and the flag is what produces it. This used to emit
+     the resident count bare and warn that llama.cpp would read it as one layer fewer. */
   return (
-    `-ngl ${ngl} of ${model.layers} layers is a count Headroom sized, not a fraction of the model: ` +
-    `${percentish(placement.offloadFraction)} of the weights spill to host RAM, and which layers ` +
-    `stay is what decides the count. llama.cpp reads it as ${ngl - 1} repeating layers plus the ` +
-    `output tensor, which it counts a position past the blocks.`
+    `-ngl ${ngl} keeps ${ngl - 1} of ${model.layers} layers on the GPU, plus the output tensor, ` +
+    `which llama.cpp counts as a slot of its own a position past the blocks — a count Headroom ` +
+    `sized, not a fraction of the model. ${percentish(placement.offloadFraction)} of the weights ` +
+    `spill to host RAM, and which layers stay is what decides it.`
   );
 }
 

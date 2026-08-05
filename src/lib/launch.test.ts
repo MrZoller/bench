@@ -161,16 +161,28 @@ describe('llama.cpp: one catalog row, three launchers', () => {
       expect(served).toContain(`-ngl ${LLAMA_31_8B.layers + 1}`);
     });
 
-    it('drops to the resident count when weights spill, and says it is not a fraction', () => {
+    it('adds the same one when the placement spills, which is not a second rule', () => {
+      /**
+       * **The `+ 1` is not a fully-resident special case, and treating it as one was #204's first
+       * defect.** The output tensor occupies a slot for any positive `-ngl`, so `-ngl N` loads
+       * `N - 1` repeating layers whether or not anything spilled — the emitter passed the resident
+       * count bare and every spilling command was one layer short of what the panel priced.
+       */
       const spilled = input(QWEN3_32B, getQuant('bf16'), LLAMA_CPP, RTX_4090);
       expect(spilled.placement.offloadFraction).toBeGreaterThan(0);
 
       const emitted = commands(spilled)['llama-server'].serve;
-      const ngl = spilled.placement.assignment.residentLayers;
-      expect(ngl).toBeLessThan(QWEN3_32B.layers);
-      expect(text(emitted)).toContain(`-ngl ${ngl}`);
+      const resident = spilled.placement.assignment.residentLayers;
+      expect(resident).toBeGreaterThan(0);
+      expect(resident).toBeLessThan(QWEN3_32B.layers);
+      expect(text(emitted)).toContain(`-ngl ${resident + 1}`);
       if (!emitted.ok) throw new Error('unreachable');
       expect(emitted.notes.join(' ')).toMatch(/not a fraction of the model/i);
+      // And the sentence states the layer count rather than the flag, which are now different
+      // numbers: a reader checking the note against the panel is checking the resident count.
+      expect(emitted.notes.join(' ')).toContain(
+        `-ngl ${resident + 1} keeps ${resident} of ${QWEN3_32B.layers} layers`
+      );
     });
 
     it('has its own sentence at zero on a GPU rig, rather than subtracting the output slot', () => {
@@ -285,13 +297,19 @@ describe('llama.cpp: one catalog row, three launchers', () => {
       expect(resident.join(','), 'resident equals assigned').not.toBe(assigned.join(','));
 
       const served = text(commands(spilled)['llama-server'].serve);
-      expect(served).toContain(`-ts ${resident.join(',')}`);
+      // The resident counts with the output tensor's slot on the last card, which is where
+      // llama.cpp puts it — see the `upper_bound` suite below for why the slot has to be stated.
+      const ratios = [...resident.slice(0, -1), resident[resident.length - 1] + 1];
+      expect(ratios[ratios.length - 1]).toBeGreaterThan(1);
+      expect(served).toContain(`-ts ${ratios.join(',')}`);
       expect(served).not.toContain(`-ts ${assigned.join(',')}`);
 
       // And the two flags have to agree, which is the property that makes the pair safe: `-ts`
-      // proportions the window `-ngl` opens, so the proportions must sum to it.
+      // proportions the window `-ngl` opens, so the proportions must sum to it — the *window*,
+      // which is one slot wider than the layer count.
       expect(resident.reduce((a, b) => a + b, 0)).toBe(spilled.placement.assignment.residentLayers);
-      expect(served).toContain(`-ngl ${spilled.placement.assignment.residentLayers}`);
+      expect(served).toContain(`-ngl ${ratios.reduce((a, b) => a + b, 0)}`);
+      expect(served).toContain(`-ngl ${spilled.placement.assignment.residentLayers + 1}`);
     });
 
     /**
@@ -445,7 +463,10 @@ describe('llama.cpp: one catalog row, three launchers', () => {
       expect(new Set(counts).size, 'the split is even, so this proves nothing').toBeGreaterThan(1);
       expect(counts.reduce((a, b) => a + b, 0)).toBe(GEMMA_3_12B.layers);
 
-      expect(text(emitted)).toContain(`-ts ${counts.join(',')}`);
+      // The output tensor's slot rides on the last card's share; see the `upper_bound` suite below.
+      expect(text(emitted)).toContain(
+        `-ts ${[...counts.slice(0, -1), counts[counts.length - 1] + 1].join(',')}`
+      );
       // And no packing sentences, because there is no refusal left to explain.
       if (!emitted.ok) throw new Error('unreachable');
       expect(emitted.notes.join(' ')).not.toMatch(/Headroom packed/i);
@@ -517,9 +538,11 @@ describe('llama.cpp: one catalog row, three launchers', () => {
       );
       const counts = dense.placement.assignment.shares.map((s) => s.residentLayers);
 
+      const ts = [...counts.slice(0, -1), counts[counts.length - 1] + 1].join(',');
+
       expect(new Set(counts).size, 'the split is even, so this proves nothing').toBeGreaterThan(1);
-      expect(text(commands(dense)['llama-bench'].measure)).toContain(`-ts ${counts.join(',')}`);
-      expect(text(commands(dense)['llama-server'].serve)).toContain(`-ts ${counts.join(',')}`);
+      expect(text(commands(dense)['llama-bench'].measure)).toContain(`-ts ${ts}`);
+      expect(text(commands(dense)['llama-server'].serve)).toContain(`-ts ${ts}`);
     });
 
     it('emits the layer counts an indivisible split actually produced', () => {
@@ -538,7 +561,10 @@ describe('llama.cpp: one catalog row, three launchers', () => {
 
       expect(new Set(counts).size, 'the split is even, so this proves nothing').toBeGreaterThan(1);
       expect(counts.reduce((a, b) => a + b, 0)).toBe(LLAMA_31_8B.layers);
-      expect(served).toContain(`-ts ${counts.join(',')}`);
+      // 7,7,6,6,6 layers, emitted as 7,7,6,6,7 slots: the fifth card holds six layers *and* the
+      // output tensor, and llama.cpp normalises the ratios over a window that counts it (#204).
+      expect(served).toContain(`-ts 7,7,6,6,7`);
+      expect(served).toContain(`-ngl ${LLAMA_31_8B.layers + 1}`);
     });
 
     it('stays silent on a single device, where there is nothing to split', () => {
@@ -559,6 +585,238 @@ describe('llama.cpp: one catalog row, three launchers', () => {
       const counts = dense.placement.assignment.shares.map((s) => s.layers);
       expect(new Set(counts).size, 'the split is uneven, so this proves nothing').toBe(1);
       expect(text(commands(dense)['llama-server'].serve)).not.toContain('-ts');
+    });
+  });
+
+  /**
+   * **The flags are checked against llama.cpp's own placement rule rather than against a string**
+   * (#204), and that is the whole point of this block.
+   *
+   * Every other assertion above pins what the emitter writes. None of them could have caught either
+   * of #204's defects, because both emitted a perfectly well-formed flag carrying the number the
+   * panel displayed — a spilling `-ngl N` that loads `N - 1` layers, and `-ts` ratios summing to
+   * `L` against a window of `L + 1` slots. The string was what Headroom meant; it was not what
+   * llama.cpp does with it. So this suite runs the emitted pair through {@link placeSlots} and
+   * asserts the *placement*: the layer counts that end up on each card, and which card gets the
+   * output tensor.
+   *
+   * The reference implementation is about twenty lines, which is what makes this cheap enough to be
+   * worth having.
+   */
+  describe('the emitted -ngl/-ts pair lands the placement Headroom sized', () => {
+    /**
+     * `llama_model::load_tensors`' device assignment, ported verbatim.
+     *
+     * Read from `src/llama-model.cpp:1285-1343` at ggml-org/llama.cpp commit `360e134`: the
+     * `splits` cumulative-sum normalisation, `i_gpu_start`, `act_gpu_layers`, the
+     * `get_layer_buft_list` guard and its `std::upper_bound`, and `dev_output =
+     * get_layer_buft_list(n_layer_all)`. Not recalled — the file was fetched at that commit.
+     *
+     * Two details are load-bearing and neither is obvious from the flag's documentation:
+     *
+     *   - **The window is `n_layer_all + 1` slots**, the repeating blocks plus the output tensor's
+     *     own position, and `-ts` is normalised over that window rather than over the layers. So
+     *     ratios summing to the layer count are stretched across one slot more than they describe.
+     *   - **`upper_bound` is a strict `>`**, so a boundary falls to the *next* device. With integer
+     *     ratios whose sum equals `act_gpu_layers` the comparison is exact at every boundary, which
+     *     is what makes the corrected emission land on the nose rather than nearly.
+     *
+     * `Math.fround` at each step because upstream computes the splits and the key in `float`. It
+     * makes no difference to any case here, and it is what keeps this a port rather than a
+     * paraphrase of one.
+     */
+    function placeSlots(
+      nLayerAll: number,
+      nGpuLayers: number,
+      tensorSplit: readonly number[] | null,
+      nDevices: number
+    ): { layerDevice: number[]; outputDevice: number } {
+      const f = Math.fround;
+      const allZero = tensorSplit === null || tensorSplit.every((x) => x === 0);
+      // The default is by free memory; on the identical cards a `Rig` describes, that is equal.
+      const raw = allZero ? Array.from({ length: nDevices }, () => 1) : tensorSplit;
+
+      let sum = 0;
+      const splits = raw.slice(0, nDevices).map((x) => (sum = f(sum + x)));
+      for (let i = 0; i < nDevices; i++) splits[i] = f(splits[i] / sum);
+
+      const iGpuStart = Math.max(nLayerAll + 1 - nGpuLayers, 0);
+      const actGpuLayers = nDevices === 0 ? 0 : Math.min(nGpuLayers, nLayerAll + 1);
+
+      /** The device slot `il` lands on, or -1 for the host. */
+      const deviceFor = (il: number): number => {
+        if (il < iGpuStart || il - iGpuStart >= actGpuLayers) return -1;
+        const key = f(f(il - iGpuStart) / actGpuLayers);
+        const at = splits.findIndex((boundary) => boundary > key);
+        // Unreachable: the largest key is `(actGpuLayers - 1) / actGpuLayers < 1` and the last
+        // boundary is exactly 1. Asserted rather than assumed, since a silent -1 here would read
+        // as "on the host" and quietly satisfy every count below.
+        expect(at, `no device covers slot ${il}`).toBeGreaterThanOrEqual(0);
+        return at;
+      };
+
+      return {
+        layerDevice: Array.from({ length: nLayerAll }, (_, il) => deviceFor(il)),
+        outputDevice: deviceFor(nLayerAll),
+      };
+    }
+
+    /** What llama.cpp will actually do with a command, read back out of the command itself. */
+    function place(i: LaunchInput, command: string) {
+      const ngl = Number(/-ngl (\d+)/.exec(command)?.[1]);
+      expect(ngl, 'no -ngl in the command').not.toBeNaN();
+      const ts = /-ts ([\d,]+)/.exec(command)?.[1];
+      const devices = i.rig.count;
+      const { layerDevice, outputDevice } = placeSlots(
+        i.model.layers,
+        ngl,
+        ts === undefined ? null : ts.split(',').map(Number),
+        devices
+      );
+      const perDevice = Array.from(
+        { length: devices },
+        (_, d) => layerDevice.filter((x) => x === d).length
+      );
+      return { ngl, ts, outputDevice, perDevice, onGpu: layerDevice.filter((x) => x >= 0).length };
+    }
+
+    it('worked by hand: 32 layers over five cards, and the fifth keeps the table', () => {
+      /**
+       * The example #204 is filed on. The packing is 7,7,6,6,6 and the old emission was
+       * `-ngl 33 -ts 7,7,6,6,6`, which llama.cpp resolves to `8,7,6,6,5` — the first card gains the
+       * slot the ratios did not account for, and the last card pays for it. Stating the slot instead
+       * (`-ts 7,7,6,6,7`) makes the sum equal `-ngl` and the arithmetic land exactly.
+       */
+      const five = input(
+        LLAMA_31_8B,
+        getQuant('q4_k_m'),
+        LLAMA_CPP,
+        RTX_5090,
+        5,
+        usage({ contextTokens: 32768 })
+      );
+      const sized = five.placement.assignment.shares.flatMap(
+        (s) => Array(s.deviceCount).fill(s.residentLayers) as number[]
+      );
+      expect(sized).toEqual([7, 7, 6, 6, 6]);
+
+      const served = text(commands(five)['llama-server'].serve);
+      expect(served).toContain('-ngl 33');
+      expect(served).toContain('-ts 7,7,6,6,7');
+
+      const got = place(five, served);
+      expect(got.perDevice).toEqual([7, 7, 6, 6, 6]);
+      expect(got.outputDevice).toBe(4);
+
+      // And the emission this replaced, run through the same reference: the defect, reproduced.
+      expect(placeDelivered(five, 33, [7, 7, 6, 6, 6])).toEqual([8, 7, 6, 6, 5]);
+    });
+
+    /** The per-card layer counts a given pair produces, for asserting against a *rejected* pair. */
+    function placeDelivered(i: LaunchInput, ngl: number, ts: readonly number[]): number[] {
+      const { layerDevice } = placeSlots(i.model.layers, ngl, ts, i.rig.count);
+      return Array.from(
+        { length: i.rig.count },
+        (_, d) => layerDevice.filter((x) => x === d).length
+      );
+    }
+
+    it('puts the output on the last card with a share, not the last card', () => {
+      /**
+       * A leading-zero share is the shape that separates "last entry" from "last non-zero entry",
+       * and it is reachable: a packing that spills the front cards entirely emits `0,0,6,6`. A
+       * trailing zero would be the mirror case — llama.cpp's `upper_bound` skips a device whose
+       * cumulative share does not advance, so the table moves one card earlier and the `+ 1` has to
+       * move with it.
+       */
+      const sized = [0, 0, 6, 6];
+      const ratios = [0, 0, 6, 7];
+      const { layerDevice, outputDevice } = placeSlots(26, 13, ratios, 4);
+      expect(
+        Array.from({ length: 4 }, (_, d) => layerDevice.filter((x) => x === d).length)
+      ).toEqual(sized);
+      expect(outputDevice, 'the table went to a card with no layers').toBe(3);
+
+      // Trailing zero: the same rule, from the other end.
+      const trailing = placeSlots(26, 13, [6, 7, 0, 0], 4);
+      expect(
+        Array.from({ length: 4 }, (_, d) => trailing.layerDevice.filter((x) => x === d).length)
+      ).toEqual([6, 6, 0, 0]);
+      expect(trailing.outputDevice).toBe(1);
+    });
+
+    /**
+     * **The sweep, which is the assertion that would have caught both defects.**
+     *
+     * Every command over a cross-section of the shipped catalog, run through the reference. Two
+     * claims, and the second is the one no string test can make: the repeating layers that end up
+     * on a GPU are the count the placement sized, and where `-ts` is emitted, each card's share is
+     * the one it was packed with and the output tensor is on the card that was given the extra slot.
+     *
+     * The coverage counts are asserted rather than hoped for. Without them a sweep that reached
+     * neither a spilling placement nor a `-ts` command would pass while proving nothing, which is
+     * how this file's own `-ts` defect survived — there was a spilled test and a sharded test and
+     * never their product.
+     */
+    it('holds across the shipped catalog, spilled and sharded', () => {
+      const quants = [getQuant('q4_k_m'), getQuant('q8_0'), getQuant('bf16')];
+      let spilling = 0;
+      let sharded = 0;
+      let resident = 0;
+
+      for (const model of MODELS) {
+        for (const quant of quants) {
+          for (const count of [1, 2, 4, 5, 8]) {
+            for (const contextTokens of [8192, 32768, 131072]) {
+              const scenario = input(
+                model,
+                quant,
+                LLAMA_CPP,
+                RTX_5090,
+                count,
+                usage({ contextTokens, concurrency: 4 })
+              );
+              const emitted = commands(scenario)['llama-server'].serve;
+              if (!emitted.ok) continue;
+
+              const where = `${model.id} ${quant.id} x${count} @${contextTokens}`;
+              const sizedTotal = Math.min(
+                scenario.placement.assignment.residentLayers,
+                model.layers
+              );
+              const got = place(scenario, emitted.text);
+
+              // `-ngl 0` is the one case #204 left open: it declines the placement rather than
+              // expressing it, so there is nothing here to check it against. See `gpuLayers`.
+              if (got.ngl === 0) continue;
+
+              if (sizedTotal < model.layers) spilling++;
+              else resident++;
+              expect(got.onGpu, `layers on a GPU: ${where}`).toBe(sizedTotal);
+
+              if (got.ts === undefined) continue;
+              sharded++;
+              const sized = scenario.placement.assignment.shares.flatMap(
+                (s) => Array(s.deviceCount).fill(s.residentLayers) as number[]
+              );
+              expect(got.perDevice, `per-card split: ${where}`).toEqual(sized);
+              // The extra slot went to the card that asked for it, and that card holds the table.
+              const lastNonZero = sized.reduce((last, c, at) => (c > 0 ? at : last), -1);
+              expect(got.outputDevice, `output tensor: ${where}`).toBe(lastNonZero);
+              // The pair agrees with itself: `-ts` proportions the window, so it sums to `-ngl`.
+              expect(
+                got.ts.split(',').reduce((a, b) => a + Number(b), 0),
+                `-ts sums to -ngl: ${where}`
+              ).toBe(got.ngl);
+            }
+          }
+        }
+      }
+
+      // The premises. Each of these was zero in some earlier draft of this sweep.
+      expect(resident, 'no fully-resident placement swept').toBeGreaterThan(400);
+      expect(spilling, 'no spilling placement swept — this is defect 1').toBeGreaterThan(400);
+      expect(sharded, 'no -ts emitted — this is defect 2').toBeGreaterThan(200);
     });
   });
 
