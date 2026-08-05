@@ -188,8 +188,12 @@ const VLLM_KV_DTYPE = { fp16: 'auto', q8: 'fp8', q4: undefined } as const;
  *     `ngl >= 1`, so it is on a GPU whenever anything is; upstream's own fitter says "the last device
  *     has the output layer, which cannot be a partial layer". Read 5 August 2026 from
  *     `src/llama-model.cpp:1318-1343` and `common/fit.cpp:581` at ggml-org/llama.cpp commit
- *     `360e134` (#202). The flag is unaffected — `layers + 1` is what a fully-resident placement
- *     wants either way — but the sentence saying why used to be backwards.
+ *     `360e134` (#202). A fully-resident placement wants `layers + 1` under either reading, so the
+ *     branch below is right where it applies. **The spilling branch is not** — the output occupies a
+ *     slot for any positive `-ngl`, so `-ngl N` loads `N - 1` repeating layers and the table, not
+ *     `N` layers. Measured at 56,612 of 205,198 emitted commands, and 1,530 of those are `-ngl 1`,
+ *     which loads no repeating layer at all. Left as it is here deliberately: the fix rewrites `-ts`
+ *     on every configuration that emits it and belongs with that change, in #204.
  */
 function gpuLayers(input: LaunchInput): number {
   if (input.rig.device.class === 'cpu-ram') return 0;
@@ -617,7 +621,9 @@ function llamaServer(input: LaunchInput): Pair {
           `-ts proportions the -ngl window, not the model: llama.cpp puts the last ${ngl} layers ` +
             `on GPUs and splits those by these ratios. ${split} is the split Headroom sized, against ` +
             `a default that divides by device memory and therefore evenly on identical cards — ` +
-            `which is the wrong answer for a model whose layers cache different amounts.`,
+            `which is the wrong answer for a model whose layers cache different amounts. ` +
+            `llama.cpp normalises these ratios across the -ngl window, which counts the output ` +
+            `tensor as well, so the first card currently receives one layer more than stated (#204).`,
         ]),
   ];
 
@@ -1147,10 +1153,15 @@ function nglNote(input: LaunchInput, ngl: number): string {
   if (ngl > model.layers) {
     return `-ngl ${ngl} is all ${model.layers} layers plus one: llama.cpp counts the output tensor a position past the repeating blocks, so ${model.layers} would keep the output tensor and leave layer 0 on the host.`;
   }
+  /* Says what llama.cpp will do, not what Headroom sized, because on this branch they differ:
+     the output tensor takes a slot for any positive `-ngl`, so this loads one fewer repeating
+     layer than the number reads. Known, tracked in #204, and stated here rather than left as the
+     confident wrong sentence it was. */
   return (
-    `-ngl ${ngl} of ${model.layers} layers is the split Headroom sized, not a fraction of the model: ` +
+    `-ngl ${ngl} of ${model.layers} layers is a count Headroom sized, not a fraction of the model: ` +
     `${percentish(placement.offloadFraction)} of the weights spill to host RAM, and which layers ` +
-    `stay is what decides whether that is ${ngl} or ${ngl + 2}.`
+    `stay is what decides the count. llama.cpp reads it as ${ngl - 1} repeating layers plus the ` +
+    `output tensor, which it counts a position past the blocks.`
   );
 }
 
