@@ -1194,6 +1194,20 @@ describe('the layer assignment survives the packing', () => {
     });
 
     /**
+     * A deliberately fat vocabulary against a shallow stack, so the table is worth several layers
+     * and the walk has a real imbalance to work around. Shared by the two tests below, which are
+     * the same invariant on either side of the ceiling.
+     */
+    const ordering: ModelSpec = {
+      ...LLAMA_31_8B,
+      id: 'test/ordering',
+      vocabSize: 200_000,
+      hiddenSize: 4_096,
+      layers: 12,
+      tiedEmbeddings: false,
+    };
+
+    /**
      * The ordering invariant, which is a new one and is not a preference (#182).
      *
      * llama.cpp indexes the output slot through the same `upper_bound` over `tensor_split` that the
@@ -1206,16 +1220,7 @@ describe('the layer assignment survives the packing', () => {
      * untied table large enough to see beside a layer, and that is a shape rather than a model.
      */
     it('emits the bin holding the output projection last, whatever the packing', () => {
-      const model: ModelSpec = {
-        ...LLAMA_31_8B,
-        id: 'test/ordering',
-        // A deliberately fat vocabulary against a shallow stack, so the table is worth several
-        // layers and the walk has a real imbalance to work around.
-        vocabSize: 200_000,
-        hiddenSize: 4_096,
-        layers: 12,
-        tiedEmbeddings: false,
-      };
+      const model = ordering;
       const { layerBytes, outputBytes } = weightBreakdown(model, quant);
       const perLayer = layerBytes / model.layers;
       expect(outputBytes).toBeGreaterThan(perLayer);
@@ -1241,6 +1246,73 @@ describe('the layer assignment survives the packing', () => {
         for (const [i, s] of shares.entries())
           expect(s.layers, `${count} cards, bin ${i}`).toBeGreaterThan(0);
       }
+    });
+
+    /**
+     * **The same invariant once the rig is over its ceiling, which is where it actually bites**
+     * (#209).
+     *
+     * The test above pins the ordering on a placement that fits, so it never reads
+     * `residentLayers` — and the state `launch.ts` gets wrong is only reachable under spill: a
+     * seeded bin can be sized for the table and keep **no layer at all**, because `spilledOf`
+     * clamps its overflow against a `weightBytes` carrying the output block while
+     * `residentLayersOf` divides that overflow by a `layerWeightBytes` that does not. So the bin
+     * holding an extra fixed block is the first to floor, and a launcher reading "the last share
+     * with a layer on it" then puts the table on a card this packing never charged for it.
+     *
+     * Decision 4's suppression is not the guard against this and cannot be: it repacks a bin that
+     * was assigned no layer, before any ceiling is known, and every bin here is assigned several.
+     *
+     * The premise is asserted rather than assumed — a ceiling that merely made things tight would
+     * pass every line below while proving nothing.
+     */
+    it('keeps the table on the last bin when the spill takes its last layer', () => {
+      const model = ordering;
+      const { layerBytes, outputBytes } = weightBreakdown(model, quant);
+      const perLayer = layerBytes / model.layers;
+      // Small enough that a 12-layer model spills most of itself, large enough that the cache and
+      // activations still fit — an `impossible` rig is refused before any of this matters.
+      const device = { ...RTX_5090, allocatableBytes: 1.5 * GIB };
+      let seededBinEmptied = 0;
+
+      for (const count of [3, 4, 5, 8]) {
+        const p = planPlacement(model, quant, usage(32768), { device, count }, LLAMA_CPP);
+        const shares = p.assignment.shares;
+        const last = shares.length - 1;
+
+        expect(p.fits, `${count} cards`).toBe(false);
+        expect(p.impossible, `${count} cards`).toBe(false);
+        expect(p.offloadFraction, `${count} cards`).toBeGreaterThan(0);
+
+        // The invariant, unchanged by the spill: the table is charged to the last bin whole.
+        const extra = shares.map((s) => s.weightBytes - s.layers * perLayer);
+        expect(extra[last], `${count} cards`).toBeCloseTo(outputBytes, 0);
+        for (const [i, e] of extra.entries()) {
+          if (i < last) expect(e, `${count} cards, bin ${i}`).toBeCloseTo(0, 0);
+        }
+        // Still a real card holding real layers, which is what makes the zero below a residency
+        // fact rather than an empty bin decision 4 should have dropped.
+        for (const [i, s] of shares.entries())
+          expect(s.layers, `${count} cards, bin ${i}`).toBeGreaterThan(0);
+
+        // And the bin carrying the table is the one that gives its layers up first.
+        for (const [i, s] of shares.entries()) {
+          expect(s.residentLayers, `${count} cards, bin ${i}`).toBeLessThanOrEqual(s.layers);
+          if (i < last)
+            expect(
+              shares[last].residentLayers,
+              `${count} cards: the seeded bin outlasted bin ${i}`
+            ).toBeLessThanOrEqual(s.residentLayers);
+        }
+        if (shares[last].residentLayers === 0 && shares.some((s) => s.residentLayers > 0)) {
+          seededBinEmptied++;
+        }
+      }
+
+      expect(
+        seededBinEmptied,
+        'no rig reached a table-holding bin with no resident layer — the case is unswept'
+      ).toBe(4);
     });
 
     it('suppresses a bin the model cannot put a layer on, rather than emitting an empty card', () => {

@@ -423,12 +423,31 @@ gained a layer.
 **Both are fixed in [#204](https://github.com/MrZoller/headroom/issues/204)**, ahead of #182's engine
 change rather than after it: the packing rewrite moves which bin holds which layers, so it would
 have invalidated the proof that this emission is exact. `-ngl` is now `min(residentLayers, L) + 1`
-on every branch, and `-ts` states the output tensor's slot on the last non-zero share so the ratios
-sum to `-ngl`. An independent sweep of 361,200 configurations put the emitted pair through a port of
+on every branch, and `-ts` states the output tensor's slot as a `+1` on one share so the ratios sum
+to `-ngl`. An independent sweep of 361,200 configurations put the emitted pair through a port of
 `llama-model.cpp:1285-1343` at `360e134`: 56,719 spilling commands wrong before and **0 after**,
-42,037 `-ts` commands wrong before and **0 after**, with the output tensor on the intended card every
-time. `launch.test.ts` carries the port, so the guard is the placement rather than the string —
-neither defect changed a string that looked wrong.
+42,037 `-ts` commands wrong before and **0 after**. `launch.test.ts` carries the port, so the guard
+is the placement rather than the string — neither defect changed a string that looked wrong.
+
+**Which share carries that `+1` took a second correction, and the sweep could not see the first one
+be wrong** ([#209](https://github.com/MrZoller/headroom/issues/209)). #204 put it on the last share
+_with a layer on it_, which is the careful-looking choice and diverges from the engine exactly where
+it matters: `planPlacement` charges `outputBytes` to the bin it **seeded**, always the last one, and
+the seeded bin is the first to floor to zero resident layers — `spilledOf` clamps its overflow
+against a `weightBytes` carrying the output block while `residentLayersOf` divides that overflow by a
+`layerWeightBytes` that does not. So the flag put the table on a card the panel never sized for it
+and left the card it did size idle: 1,801 placements diverge across the shipped catalog and 1,055 of
+them emit a `-ts`, at offload fractions from 39.0% to 97.8%. The slot now goes to the **last share,
+unconditionally** — its ratio is `c + 1 >= 1` whatever `c` is, so its cumulative boundary is the only
+one clearing the final slot's key. #182's zero-layer suppression is not the guard against this and
+cannot be: it runs before any ceiling is known and it guards _assigned_ layers.
+
+**The sweep passed by construction, which is the lesson rather than the arithmetic.** "The output
+tensor on the intended card every time" was checked by recomputing the emitter's own rule from the
+same `sized` list the emitter reads — self-consistency, asserted as correctness, and 1,055 broken
+commands went through it. The assertion now derives the expected card from `shares[].weightBytes`
+against `weightBreakdown().outputBytes`: the bin the engine actually charged the table to. A test
+whose expectation is spelled the way the code is spelled tests nothing, however wide the sweep.
 
 **Two things #204 measured and deliberately did not change, and #182 has since moved one of them
 without touching it.** The `max === min` gate that suppresses `-ts` on an even split is wrong the

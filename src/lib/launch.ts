@@ -3,7 +3,7 @@ import type { Placement } from '@/engine/placement';
 import { effectiveDeviceCount, effectivePromptTokens } from '@/engine/placement';
 import { isSlidingLayer, layersCacheAlike } from '@/engine/kv';
 import { substitutionFor } from '@/data/runtimes';
-import { gib } from './format';
+import { gibLabel } from './format';
 
 /**
  * The runnable command for a placement (#136).
@@ -46,8 +46,8 @@ import { gib } from './format';
  *     cumulative shares are compared against `(il - i_gpu_start) / act_gpu_layers` and
  *     `act_gpu_layers` is `min(ngl, n_layer_all + 1)` — so ratios summing to the repeating layers
  *     alone are stretched across one slot more than they describe, and the first card silently
- *     gains a layer. The output slot rides on the last non-zero share, and is emitted as part of
- *     it. See {@link tensorSplit}.
+ *     gains a layer. The output slot rides on the last share — the bin `planPlacement` seeded with
+ *     the output projection — and is emitted as part of it. See {@link tensorSplit}.
  *   - **`-c` is the whole cache, divided among the `-np` slots.** `n_ctx_seq` is
  *     `n_ctx / n_seq_max` unless the KV buffer is unified, so eight users at 64K wants `-c 524288`.
  *     Passing the per-user figure would give each slot an eighth of it.
@@ -239,7 +239,7 @@ function gpuLayers(input: LaunchInput): number {
 interface TensorSplit {
   /** Repeating layers per card, exactly as `layerSplitBins` packed them. */
   readonly sized: readonly number[];
-  /** What `-ts` carries: {@link sized} with the output tensor's slot on the last non-zero share. */
+  /** What `-ts` carries: {@link sized} with the output tensor's slot on the last share. */
   readonly ratios: readonly number[];
 }
 
@@ -280,13 +280,36 @@ interface TensorSplit {
  * configurations in the sweep {@link gpuLayers} describes was wrong this way — 100% of them, and
  * the first card gained the slot on 39,736; the rest lead with a zero share, which cannot gain.
  *
- * **The correction is to emit the output's slot rather than to leave it implicit**: `+1` on the
- * last non-zero share, which is the one llama.cpp puts the output on, and `-ngl` reads
- * `residentLayers + 1` from {@link gpuLayers}. The two then agree by construction — the ratios sum
- * to `-ngl` — and the arithmetic collapses: with `act_gpu_layers` equal to the ratio sum, key
- * `k / sum` against boundary `c_i / sum` assigns slot `k` to the first device with `c_i > k`, so
- * device `i` gets exactly `ratio_i` slots and the last non-zero one spends its extra slot on the
- * output. Exact on all 42,037, output on the intended card every time (#204).
+ * **The correction is to emit the output's slot rather than to leave it implicit**: `+1` on one
+ * share, and `-ngl` reads `residentLayers + 1` from {@link gpuLayers}. The two then agree by
+ * construction — the ratios sum to `-ngl` — and the arithmetic collapses: with `act_gpu_layers`
+ * equal to the ratio sum, key `k / sum` against boundary `c_i / sum` assigns slot `k` to the first
+ * device with `c_i > k`, so device `i` gets exactly `ratio_i` slots and the share carrying the `+1`
+ * spends its extra slot on the output. Every one of the 42,037 delivers the packed layer counts on
+ * the packed cards (#204). *Which* share carries the `+1` is the next section, and #204 got it
+ * wrong.
+ *
+ * ## The extra slot goes to the seeded bin whatever its layer count, and "last non-zero" did not
+ *
+ * #204 gave the slot to the last share **with a layer on it**, reasoning that a card with no share
+ * of the window cannot be handed the table. That reads as the careful choice and it is the defect:
+ * `planPlacement` charges `outputBytes` to the bin it *seeded*, which is the last one, and the
+ * seeded bin is systematically the first to floor to zero resident layers — `spilledOf` clamps a
+ * bin's overflow to `weightBytes`, which carries the output block, while `residentLayersOf` divides
+ * that overflow by `layerWeightBytes`, which does not. So the one bin holding an extra fixed block
+ * loses its layers first, and the moment it does, "last non-zero" points at a different card from
+ * the one the panel priced the table onto: the flag puts the output table on a card that was never
+ * sized for it, while the card that was sits idle. Measured over the shipped catalog — 35
+ * models x 12 formats x the 25 discrete GPUs x {2,3,4,5,8} cards x {8K,32K,128K} x {1,4} users —
+ * 1,801 placements diverge and 1,055 of them emit a `-ts`, at offload fractions from 39.0% to
+ * 97.8%. `layerSplitBins`'s zero-layer suppression cannot see any of it: that guard runs before the
+ * ceiling is known and it guards *assigned* layers, not resident ones.
+ *
+ * A zero share is legal, so the fix is to stop treating it as a special case. The seeded bin's
+ * ratio is `c + 1 >= 1` whatever `c` is, so its cumulative boundary is the only one that exceeds
+ * the final slot's key and the output lands there by the same `upper_bound` as everything else.
+ * Confirmed against the port in `launch.test.ts`: `-ngl 2 -ts 1,1` delivers `[1,0]` layers with the
+ * output on card 1, and `-ngl 3 -ts 1,1,0,1` delivers `[1,1,0,0]` with the output on card 3.
  *
  * Emitted only when the counts really differ, so the flag never appears saying "split this evenly",
  * which is what llama.cpp would have done unaided — and that gate reads the resident counts too,
@@ -333,12 +356,11 @@ function tensorSplit(input: LaunchInput): TensorSplit | undefined {
   if (sized.every((c) => c === 0)) return undefined;
   if (Math.max(...sized) === Math.min(...sized)) return undefined;
 
-  // The card llama.cpp will put the output tensor on: the last one with a share of the window.
-  // A trailing zero is legal and gets nothing, so it is the last *non-zero* share and not the
-  // last entry — and it is the share that has to carry the extra slot, since asking any other
-  // card for it would move the table as well as the layer.
-  const output = sized.reduce((last, c, i) => (c > 0 ? i : last), -1);
-  return { sized, ratios: sized.map((c, i) => (i === output ? c + 1 : c)) };
+  // The extra slot goes to the last share unconditionally, because that is the bin `planPlacement`
+  // seeded with the output projection — and a spilling seeded bin can be sized for the table while
+  // holding no layer at all. Giving the slot to the last *non-zero* share instead moved the table
+  // to a card that was never charged for it; see the docblock above.
+  return { sized, ratios: sized.map((c, i) => (i === sized.length - 1 ? c + 1 : c)) };
 }
 
 /**
@@ -410,20 +432,72 @@ function tensorSplit(input: LaunchInput): TensorSplit | undefined {
  * cannot drift from it. Silent where the two are equal, which is every unified-memory rig, every
  * vLLM placement, and every tied model — on a tied one llama.cpp materialises the table twice and
  * the card really does hold one, so there is nothing taken off and nothing to caveat.
+ *
+ * **Three launchers share the correction, so all three carry a caveat — in their own vocabulary.**
+ * The `llama.cpp` runtime row emits llama-server, llama-bench and Ollama, and the same reduced
+ * budget is on the panel above all of them. The Ollama block built its notes independently and
+ * carried none of this, which was an omission rather than a decision; what it must *not* do is
+ * repeat the sentence below, because `-sm row` and `--no-mmap` are flags an Ollama reader cannot
+ * type. See {@link ollamaResidencyNote}.
  */
 function residencyNote(input: LaunchInput): readonly string[] {
-  const { placement, rig } = input;
-  const hostResident = placement.totalWeightBytes - placement.deviceWeightBytes;
-  if (rig.device.class !== 'discrete-gpu' || hostResident <= 0) return [];
+  const hostResident = hostResidentBytes(input);
+  if (hostResident <= 0) return [];
 
   return [
-    `The weights above are ${gib(hostResident)} lighter than the file, and that is not a ` +
+    `The weights above are ${gibLabel(hostResident)} lighter than the file, and that is not a ` +
       `rounding choice: llama.cpp keeps the input embedding table in host RAM whatever -ngl says, ` +
-      `so ${rig.device.name} never holds it. Two things change that accounting — -sm row splits ` +
-      `the output projection across cards instead of holding it whole on the last one, so the ` +
-      `split above is a -sm layer statement; and --no-mmap turns the host's copy from a file ` +
-      `mapping into ${gib(hostResident)} of committed RAM, which is host memory this page does ` +
-      `not check.`,
+      `so ${input.rig.device.name} never holds it. Two things change that accounting — -sm row ` +
+      `splits the output projection across cards instead of holding it whole on the last one, so ` +
+      `the split above is a -sm layer statement; and --no-mmap turns the host's copy from a file ` +
+      `mapping into ${gibLabel(hostResident)} of committed RAM, which is host memory this page ` +
+      `does not check.`,
+  ];
+}
+
+/**
+ * The weights the cards do not hold, or nothing where that is not a claim about this rig.
+ *
+ * One reading for every launcher that states the correction, so two surfaces cannot come to
+ * disagree about whether there is anything to state.
+ */
+function hostResidentBytes(input: LaunchInput): number {
+  const { placement, rig } = input;
+  if (rig.device.class !== 'discrete-gpu') return 0;
+  return Math.max(0, placement.totalWeightBytes - placement.deviceWeightBytes);
+}
+
+/**
+ * The same correction for a reader who is typing `ollama`, which is a different sentence and not a
+ * different fact.
+ *
+ * **The host-memory half is launcher-independent and the flags are not.** Ollama runs llama.cpp, so
+ * the embedding table is on the host there for the same reason and by the same code — but a reader
+ * of this block has no `-sm` to reach for and no `--no-mmap` to type, and pasting llama-server's
+ * sentence here would name two flags that do nothing on this surface. What survives the translation
+ * is the requirement: the machine needs that much memory of its own, on top of what the cards hold,
+ * and this page has no host-RAM input to check it against.
+ *
+ * **No knob is named, and that was checked rather than assumed.** Ollama's documented `PARAMETER`
+ * table is `num_ctx`, `num_predict`, `draft_num_predict` and the sampler knobs — no mmap control
+ * and no `num_gpu`, which is the same list the layer-split note above refuses on. `use_mmap` does
+ * exist further down the stack, as a `Runner` field on `api.Options`, and `PARAMETER use_mmap
+ * false` reaches `--load-mode none`; it is undocumented, and on a Linux host with an integrated
+ * CUDA or ROCm GPU `appendLoadModeArgs` returns `--load-mode dio` before it ever reads the field,
+ * so the parameter is neither documented nor unconditional. Naming it would make this note a
+ * promise on both counts. Read 5 August 2026 from `docs/modelfile.mdx`, `api/types.go`,
+ * `parser/parser.go` and `llm/llama_server.go` at ollama/ollama main.
+ */
+function ollamaResidencyNote(input: LaunchInput): readonly string[] {
+  const hostResident = hostResidentBytes(input);
+  if (hostResident <= 0) return [];
+
+  return [
+    `The weights above are ${gibLabel(hostResident)} lighter than the file, and that is not a ` +
+      `rounding choice: Ollama runs llama.cpp, which keeps the input embedding table in host RAM ` +
+      `however many layers go to the GPU, so ${input.rig.device.name} never holds it. That ` +
+      `${gibLabel(hostResident)} is a requirement on the machine's own memory rather than on the ` +
+      `card's, and it is host memory this page does not check.`,
   ];
 }
 
@@ -982,6 +1056,10 @@ function ollama(input: LaunchInput): Pair {
             `The figures above are sized for a ${kv} cache.`,
         ]
       : []),
+    // The same correction llama-server and llama-bench state, in the vocabulary of this surface.
+    // All three hang off the one `llama.cpp` runtime row, so the budget the panel above shows is
+    // reduced here too — and this block used to be the one that did not say so.
+    ...ollamaResidencyNote(input),
   ];
 
   return {
@@ -1282,15 +1360,24 @@ function mlx(input: LaunchInput): Pair {
  * that offered the ratios as the layer split would be off by one on exactly the card whose share
  * the panel is least able to check. Saying which card the table lands on is the other half: it is
  * the reason that share is larger, and it is a placement fact `-ts` is otherwise silent about.
+ *
+ * **The card holding the table can hold nothing else**, which is why that clause has two forms. The
+ * seeded bin takes the slot whatever its layer count, and under spill it is the first bin to reach
+ * zero — so the general sentence would read "carries the output tensor on top of its 0", offering a
+ * count that is the absence of one.
  */
 function tsNote(split: TensorSplit, ngl: number): string {
   const output = split.ratios.findIndex((r, i) => r !== split.sized[i]);
+  const layers = split.sized[output];
   return (
     `-ts proportions the -ngl window, not the model: llama.cpp puts the last ${ngl} slots of the ` +
     `stack on GPUs and splits those by these ratios. The window counts the output tensor as a slot ` +
     `of its own, so the ratios sum to -ngl rather than to the layer count — ${split.sized.join(',')} ` +
-    `layers is the split Headroom sized, and card ${output + 1} carries the output tensor on top of ` +
-    `its ${split.sized[output]}. The default divides by device memory instead, and therefore evenly ` +
+    `layers is the split Headroom sized, and card ${output + 1} ` +
+    (layers === 0
+      ? `carries the output tensor and no layer at all, which is the share it was priced for`
+      : `carries the output tensor on top of its ${layers}`) +
+    `. The default divides by device memory instead, and therefore evenly ` +
     `on identical cards, which is the wrong answer for a model whose layers cache different amounts.`
   );
 }

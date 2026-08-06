@@ -597,9 +597,16 @@ const loadOf = (d: { weightBytes: number; kvBytes: number }) => d.weightBytes + 
  *
  * **The seeded bin is emitted last, and that is an invariant rather than a preference.** llama.cpp
  * puts the output on the last `-ts` device regardless of which bin Headroom nominated, so any other
- * ordering asks for a layout it will not execute. Seeding bin `devices - 1` is what makes
- * `launch.ts`'s "last non-zero share" the same card this packing priced, without that file having
- * to re-derive anything.
+ * ordering asks for a layout it will not execute. Seeding bin `devices - 1` is what lets `launch.ts`
+ * put the output tensor's slot on its last share without re-deriving anything.
+ *
+ * **The invariant is about the bin, not about its layers.** A seeded bin can spill to zero resident
+ * layers and still be the bin that holds the table — it is the first to get there, since
+ * `spilledOf` clamps its overflow to a `weightBytes` that carries the output block while
+ * `residentLayersOf` divides that overflow by a `layerWeightBytes` that does not. `launch.ts` gives
+ * the extra `-ts` slot to the last share unconditionally for exactly that reason; the suppression
+ * below is not the guard against it, because it runs before any ceiling is known and it guards
+ * *assigned* layers.
  *
  * **A bin that ends up with no layer is suppressed rather than emitted**, by repacking over one
  * fewer device. It is reachable only on a seeded bin — an unseeded one starts at zero load and the
