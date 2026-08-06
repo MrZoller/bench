@@ -127,7 +127,7 @@ export function weightBreakdown(model: ModelSpec, quant: QuantSpec): WeightBreak
     fixedBytes,
     // One table for an untied model, none for a tied one — `fixedParams` counted one table there
     // and the GPU's duplicate is what it pays for. See the field's docblock.
-    hostResidentBytes: model.tiedEmbeddings === true ? 0 : tableBytes * held,
+    hostResidentBytes: model.tiedEmbeddings ? 0 : tableBytes * held,
     outputBytes: tableBytes * held,
     towerBytes: towerBytes * held,
     layerBytes: totalBytes - fixedBytes,
@@ -157,18 +157,23 @@ export function weightBreakdown(model: ModelSpec, quant: QuantSpec): WeightBreak
  * the weights, and Gemma 3 4B's vocabulary and vision tower together are 25% — which no layer holds
  * any of.
  *
- * `tiedEmbeddings` is read as untied unless it says otherwise, matching the generator's own
- * convention. **That used to have a safe failure direction and no longer does** (#182): over-stating
- * the fixed block still understates the per-layer weight and reports fewer resident layers, but it
- * now also deducts a host-resident table that a genuinely tied model keeps on the GPU, which is the
- * direction that OOMs a reader. What makes it safe instead is the *derivation*: `build-catalog.ts`
- * reads the tie from the safetensors tensor list — whether an output head exists at all — rather
- * than from `config.json`'s `tie_word_embeddings`, which is absent on both Gemma 3 repos even
- * though they are tied. Every catalog row states the field, and none of them guesses it.
+ * **`tiedEmbeddings` is stated, never inferred from its own absence.** It used to be optional and
+ * read as untied when missing, which over-stated the fixed block and was conservative in both
+ * directions it moved — a smaller per-layer weight, fewer resident layers. #182 removed that
+ * safety: an untied model's `hostResidentBytes` is now deducted from what the cards are charged, so
+ * a tied model that failed to say so would give away a whole `vocab x hidden` table of card budget,
+ * the direction that reports a fit and then OOMs. The field is required on {@link ModelSpec} and
+ * `toModel` rejects a catalog without it, so the two readings here and in
+ * {@link WeightBreakdown.hostResidentBytes} cannot come apart on a missing value.
+ *
+ * What makes the stated value trustworthy is its *derivation*: `build-catalog.ts` reads the tie from
+ * the safetensors tensor list — whether an output head exists at all — rather than from
+ * `config.json`'s `tie_word_embeddings`, which is absent on both Gemma 3 repos even though they are
+ * tied. Every catalog row states the field, and none of them guesses it.
  */
 export function fixedParams(model: ModelSpec): number {
   const table = outputProjectionParams(model);
-  return (model.tiedEmbeddings === true ? table : 2 * table) + (model.nonLanguageParams ?? 0);
+  return (model.tiedEmbeddings ? table : 2 * table) + (model.nonLanguageParams ?? 0);
 }
 
 export function weightBytes(model: ModelSpec, quant: QuantSpec): number {

@@ -93,8 +93,21 @@ export interface ModelSpec {
    * this is the decode basis, not a shared one.
    */
   activeDenseParams: number;
-  /** Whether the output projection reuses the input embedding table. */
-  tiedEmbeddings?: boolean;
+  /**
+   * Whether the output projection reuses the input embedding table.
+   *
+   * **Required, and it was optional until #182 gave the omission an unsafe direction.** Absent, it
+   * used to read as untied and only over-state `fixedBytes`, which understated the per-layer weight
+   * and reported fewer resident layers — conservative on both. Now `hostResidentBytes` is a whole
+   * table on an untied model and `planPlacement` deducts it from the card budget, so a genuinely
+   * tied model that omitted the field would lose `vocabSize x hiddenSize` off what the GPUs are
+   * charged: the direction that reports a fit and then runs out of memory on load.
+   *
+   * Every constructor already states it — `build-catalog.ts` derives it from the safetensors tensor
+   * list rather than guessing, and `toModel` rejects a generated catalog that arrives without it —
+   * so this says at the type boundary what the data already does.
+   */
+  tiedEmbeddings: boolean;
   /** Parameters in non-text towers — resident, but not run for a text token. */
   nonLanguageParams?: number;
   /**
