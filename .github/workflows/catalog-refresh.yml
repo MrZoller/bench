@@ -35,7 +35,13 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     steps:
+      # Full history rather than the default shallow clone. The guard in the pull request step
+      # asks what the refresh branch changes *relative to where it left `main`* — the diff
+      # GitHub renders on the pull request, and the one a merge would apply — and that question
+      # needs a merge base. A depth-1 clone has none, and `git diff a...b` fails outright.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -97,6 +103,20 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
 
+          # Asked once, up here, and read twice below: it decides which commit the branch is
+          # built on, and then whether the pull request is created or edited. Asking twice would
+          # let the two disagree — a PR merged or closed mid-run would give a reset branch and
+          # then a `gh pr edit` against nothing, or the reverse — and neither half would say so.
+          #
+          # `gh pr list --state open`, never `gh pr view`. `view` resolves a branch name to *any*
+          # pull request that ever had it as its head, including merged ones on branches that no
+          # longer exist — verified against this repo, where a long-deleted branch still resolves
+          # to its merged PR. So once the first refresh PR merged, every later run would have
+          # found it, edited the body of a merged pull request, logged "Updated the open refresh
+          # PR" and exited green, having opened nothing. A scheduled job that silently stops
+          # working is the worst outcome available here.
+          OPEN=$(gh pr list --head "$BRANCH" --base main --state open --json number --jq 'length')
+
           # The regenerated file has to survive the branch switch below, so it is stashed aside and
           # the worktree put back. Without the restore, `git checkout` of an existing refresh
           # branch refuses to move — that branch differs from `main` in exactly this file, which
@@ -105,14 +125,38 @@ jobs:
           cp "$CATALOG" "$RUNNER_TEMP/fresh.json"
           git checkout -- "$CATALOG"
 
-          # Commit *on top of* an open refresh branch rather than resetting it. A force-push
-          # would be tidier and would discard any review already left on the PR, which is the
-          # one thing this job exists to invite.
+          # `origin/main`, not `HEAD`: one definition of the base, shared with the `--base main`
+          # this job opens its pull request against. The branch exists to be merged into main, so
+          # main is both what it is rebuilt on and what the guard below measures it against.
+          git fetch origin main
+          BASE=origin/main
+
+          # Empty unless the branch is reset below, and passed to `git push` unquoted so that it
+          # disappears when it is. A lease rather than a bare `--force`: the only commit this run
+          # may discard is the one it just looked at.
+          FORCE=
           if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
             git fetch origin "$BRANCH"
-            git checkout -B "$BRANCH" "origin/$BRANCH"
+            if [ "$OPEN" -gt 0 ]; then
+              # Commit *on top of* an open refresh branch rather than resetting it. A force-push
+              # would be tidier and would discard any review already left on the PR, which is the
+              # one thing this job exists to invite.
+              git checkout -B "$BRANCH" "origin/$BRANCH"
+            else
+              # No open pull request means nothing is reading this branch and no review can be
+              # lost, so the reason above does not apply and the branch is stale by definition:
+              # it is whatever the last run that failed to publish left behind. Building on it
+              # carries an ever-older base forward, and the cost is not the age but what the age
+              # looks like: `git diff main catalog/refresh` grows without bound while the branch's
+              # actual pull request diff stays at one file. The branch stranded by #193 read as
+              # 3,497 deletions two days in and 6,252 by the time this landed, and that reading is
+              # what stopped it being merged by hand. Reset instead, so a run that publishes always
+              # proposes a branch one commit off current `main`.
+              git checkout -B "$BRANCH" "$BASE"
+              FORCE="--force-with-lease=$BRANCH:$(git rev-parse "origin/$BRANCH")"
+            fi
           else
-            git checkout -b "$BRANCH"
+            git checkout -B "$BRANCH" "$BASE"
           fi
 
           # Whether the branch already carries these figures — asked on substance, for the same
@@ -121,7 +165,7 @@ jobs:
           # an unchanged catalog would push a timestamp-only commit to the open PR every Monday —
           # the exact noise this job avoids on `main` and would then reintroduce on the branch.
           if npx tsx scripts/catalog-diff.ts "$CATALOG" "$RUNNER_TEMP/fresh.json" --exit-code; then
-            echo "::notice::The open refresh branch already carries these figures."
+            echo "::notice::The refresh branch already carries these figures."
             exit 0
           fi
           cp "$RUNNER_TEMP/fresh.json" "$CATALOG"
@@ -137,7 +181,21 @@ jobs:
 
           git add "$CATALOG"
           git commit -F "$RUNNER_TEMP/message.txt"
-          git push origin "$BRANCH"
+
+          # What this branch changes relative to where it left `main`: the pull request's own
+          # diff, and the set of files merging it would touch. A catalog refresh has exactly one
+          # file's worth of business here. Anything else — a hand-pushed commit on the branch, a
+          # generator that started writing somewhere new — is caught before it is pushed rather
+          # than in review, because the pull request this job opens gets no CI of its own.
+          TOUCHED=$(git diff --name-only "$BASE...HEAD")
+          if [ "$TOUCHED" != "$CATALOG" ]; then
+            echo "::error::The refresh branch changes more than the catalog. Nothing was pushed."
+            printf 'Expected exactly %s. Against %s, the branch changes:\n%s\n' \
+              "$CATALOG" "$BASE" "$TOUCHED"
+            exit 1
+          fi
+
+          git push $FORCE origin "$BRANCH"
 
           {
             printf "Regenerated by \`npm run catalog\` from each repo's own \`config.json\` and safetensors index.\n\n"
@@ -166,14 +224,8 @@ jobs:
           BODY_EOF
           } > "$RUNNER_TEMP/body.md"
 
-          # `gh pr list --state open`, never `gh pr view`. `view` resolves a branch name to *any*
-          # pull request that ever had it as its head, including merged ones on branches that no
-          # longer exist — verified against this repo, where a long-deleted branch still resolves
-          # to its merged PR. So once the first refresh PR merged, every later run would have
-          # found it, edited the body of a merged pull request, logged "Updated the open refresh
-          # PR" and exited green, having opened nothing. A scheduled job that silently stops
-          # working is the worst outcome available here.
-          OPEN=$(gh pr list --head "$BRANCH" --base main --state open --json number --jq 'length')
+          # The same `$OPEN` the branch was built against, deliberately not re-asked — see the
+          # `gh pr list` above for both why it is that call and why it is only made once.
           if [ "$OPEN" -gt 0 ]; then
             gh pr edit "$BRANCH" --body-file "$RUNNER_TEMP/body.md"
             echo "Updated the open refresh PR."
