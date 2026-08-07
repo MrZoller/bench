@@ -32,7 +32,7 @@ import { isSlidingLayer } from './kv';
 import { weightBreakdown } from './weights';
 import { getQuant } from '@/data/quants';
 import { GIB } from './types';
-import type { DeviceSpec, ModelSpec, UsageSpec } from './types';
+import type { DeviceSpec, ModelSpec, RuntimeSpec, UsageSpec } from './types';
 
 const usage = (contextTokens: number, concurrency = 1): UsageSpec => ({
   contextTokens,
@@ -1378,5 +1378,90 @@ describe('the layer assignment survives the packing', () => {
       expect(busiest.weightBytes, `${count} cards`).toBeCloseTo(p.weightBytesPerDevice, 6);
       expect(busiest.kvBytes, `${count} cards`).toBeCloseTo(p.kvBytesPerDevice, 6);
     }
+  });
+});
+
+/**
+ * The host-resident deduction follows the runtime's own claim, not its parallelism mode (#209).
+ *
+ * The gate used to read `parallelism === 'layer'`, which picks out llama.cpp alone only by accident
+ * of today's catalog: MLX is layer-parallel too and is saved by never meeting `discrete-gpu`, and
+ * vLLM is tensor-parallel. `RuntimeSpec.parallelism` states how layers and their caches *shard* and
+ * says nothing about where a tensor no layer holds ends up — so a layer-parallel runtime added for
+ * discrete GPUs would have had a whole `vocab x hidden` table taken off its card budget with nothing
+ * upstream saying so, in the direction that reports a fit and then OOMs on load.
+ *
+ * **Both fixtures, because one direction proves half of it.** A layer-parallel row without the claim
+ * shows the mode does not grant the deduction; a tensor-parallel row with it shows the claim does.
+ * Asserting only the first would pass equally against a gate reading `parallelism === 'layer' &&
+ * hostResidentInputEmbedding`, which still lets the mode veto a runtime that shards its layers some
+ * other way.
+ *
+ * Synthesised rather than pinned to a catalog row, and it has to be: no row is layer-parallel on
+ * discrete GPUs without llama.cpp's placement, which is exactly why the proxy went unnoticed. The
+ * pairs differ in one field each from a real row, so nothing else can be what moved.
+ */
+describe('the input embedding comes off the cards on the runtime’s claim, not its parallelism', () => {
+  const quant = getQuant('q4_k_m');
+  // Untied, so `hostResidentBytes` is a whole table and the two budgets are visibly different —
+  // on a tied row llama.cpp materialises it twice and the deduction is zero either way.
+  const model: ModelSpec = { ...LLAMA_31_8B, id: 'test/residency', tiedEmbeddings: false };
+  const plan = (runtime: RuntimeSpec, count = 1) =>
+    planPlacement(model, quant, usage(8192), { device: RTX_5090, count }, runtime);
+
+  const table = weightBreakdown(model, quant).hostResidentBytes;
+
+  it('asserts its own premise: the table is worth seeing on this row', () => {
+    expect(table).toBeGreaterThan(0);
+    expect(plan(LLAMA_CPP).unsupported).toBeUndefined();
+  });
+
+  it('charges a layer-parallel runtime that makes no such claim for the whole file', () => {
+    const runtime: RuntimeSpec = {
+      ...LLAMA_CPP,
+      id: 'test/layer-parallel-no-claim',
+      hostResidentInputEmbedding: false,
+    };
+    const p = plan(runtime);
+
+    expect(runtime.parallelism).toBe('layer');
+    expect(p.unsupported).toBeUndefined();
+    expect(p.deviceWeightBytes).toBe(p.totalWeightBytes);
+    // And llama.cpp, identical but for the one field, is the row that does get it deducted.
+    expect(plan(LLAMA_CPP).deviceWeightBytes).toBeCloseTo(p.deviceWeightBytes - table, 0);
+  });
+
+  it('keeps the table on a card under a layer split, rather than losing it off the rig', () => {
+    // The second read of the gate: `layerSplitBins` seeds the first bin with the table whenever the
+    // host is not holding it. A runtime without the claim must still be charged for every byte, and
+    // the bins must still sum to what the rig holds.
+    const runtime: RuntimeSpec = {
+      ...LLAMA_CPP,
+      id: 'test/layer-parallel-no-claim',
+      hostResidentInputEmbedding: false,
+    };
+    for (const count of [2, 4]) {
+      const p = plan(runtime, count);
+      expect(p.deviceWeightBytes, `${count} cards`).toBe(p.totalWeightBytes);
+      expect(
+        p.assignment.shares.reduce((sum, s) => sum + s.deviceCount * s.weightBytes, 0),
+        `${count} cards`
+      ).toBeCloseTo(p.totalWeightBytes, 0);
+    }
+  });
+
+  it('deducts it for a tensor-parallel runtime that does make the claim', () => {
+    const runtime: RuntimeSpec = {
+      ...VLLM,
+      id: 'test/tensor-parallel-host-resident',
+      hostResidentInputEmbedding: true,
+      // vLLM cannot read a K-quant, and an unsupported placement is refused before any of this.
+      weightFormats: [...VLLM.weightFormats, quant.id],
+    };
+    const p = plan(runtime);
+
+    expect(runtime.parallelism).toBe('tensor');
+    expect(p.unsupported).toBeUndefined();
+    expect(p.deviceWeightBytes).toBeCloseTo(p.totalWeightBytes - table, 0);
   });
 });

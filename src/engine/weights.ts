@@ -65,8 +65,9 @@ export interface WeightBreakdown {
    * Llama 3.1 8B, and 26 of the 35 catalog rows are untied.
    *
    * **Stated here, applied by `planPlacement`**, which is the only layer that knows the device
-   * class and the runtime. It is a discrete-GPU correction under a *layer* split: on unified memory
-   * the host is the rig, and under tensor parallelism a rank genuinely slices the embedding table.
+   * class and the runtime. It is a discrete-GPU correction for a runtime that declares
+   * `RuntimeSpec.hostResidentInputEmbedding`: on unified memory the host is the rig, and vLLM's
+   * tensor-parallel ranks genuinely slice the embedding table and keep every slice on a card.
    */
   hostResidentBytes: number;
   /**

@@ -2439,11 +2439,20 @@ stale silently. What the reading settled, at ggml-org/llama.cpp commit `360e134`
   embedding on the host, the output projection on the **last** `-ts` device, a vision tower on the
   **first** GPU via `clip.cpp`'s own backend list. Lumping them and seeding one bin would have put
   the input embedding on a card that never holds it and the tower on the card holding the output.
-- **It is `discrete-gpu`-only, and `layer`-parallelism-only.** With mmap the host tensors are wrapped
-  from the mapping and Metal declares `buffer_from_host_ptr = true`, so unified memory pays once
-  however llama.cpp labels the buffer; and vLLM shards the embedding table across tensor-parallel
-  ranks and keeps every shard on a GPU, so the correction is llama.cpp's placement rather than a
-  universal one.
+- **It is `discrete-gpu`-only, and only for a runtime that declares the residency.** With mmap the
+  host tensors are wrapped from the mapping and Metal declares `buffer_from_host_ptr = true`, so
+  unified memory pays once however llama.cpp labels the buffer; and vLLM shards the embedding table
+  across tensor-parallel ranks and keeps every shard on a GPU, so the correction is llama.cpp's
+  placement rather than a universal one. The second gate read `parallelism === 'layer'` until #209,
+  which is a proxy and not the fact: `RuntimeSpec.parallelism` states how layers and their caches
+  _shard_, never where a tensor no layer holds ends up. It picked out llama.cpp alone only by
+  accident of the catalog — MLX is layer-parallel too and is saved by never meeting `discrete-gpu` —
+  so a layer-parallel row added for discrete GPUs would have taken a whole `vocab x hidden` table off
+  its card budget silently. `RuntimeSpec.hostResidentInputEmbedding` is the fact, and it is required
+  rather than optional for the same reason `ModelSpec.tiedEmbeddings` was made required on the same
+  PR — a boolean read as `false` by omission is safe only while the polarity happens to point that
+  way. It decides the input embedding alone: the output projection and any tower are placed by the
+  split, not by the runtime.
 
 Two things found on the way there are worth keeping even though neither is #165. **`weightBytesPerDevice`
 is unstable by construction on hybrid models**: it is the busiest-by-_combined_-load bin's weights,

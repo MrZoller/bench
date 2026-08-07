@@ -61,8 +61,9 @@ export interface Placement {
    * Of `totalWeightBytes`, what the rig's devices actually hold — the rest is resident in host RAM
    * and never on a card (#182).
    *
-   * Equal to `totalWeightBytes` everywhere except a **discrete-GPU rig under a layer split**, where
-   * llama.cpp pins `token_embd.weight` to the CPU whatever `-ngl`, `-ts` and `-sm` say. On an
+   * Equal to `totalWeightBytes` everywhere except a **discrete-GPU rig under a runtime that
+   * declares `hostResidentInputEmbedding`**, where llama.cpp pins `token_embd.weight` to the CPU
+   * whatever `-ngl`, `-ts` and `-sm` say. On an
    * untied model that is a whole `vocab x hidden` table the cards were being charged for — 7.6% of
    * the file on Qwen3 8B — and on a tied one it is zero, because the file's single table *is* the
    * duplicate the GPU holds. See {@link WeightBreakdown.hostResidentBytes}.
@@ -728,11 +729,19 @@ export function planPlacement(
    *     pays for one copy however llama.cpp labels the buffer; CUDA and Vulkan declare it false
    *     (`ggml-cuda.cu:4711`, `ggml-vulkan.cpp:17693`) and the copy is real. On `unified-soc` and
    *     `cpu-ram` the host *is* the rig and the existing charge is right.
-   *   - **`layer` parallelism only.** This is llama.cpp's placement, not everyone's: vLLM shards the
-   *     embedding table across tensor-parallel ranks and keeps every shard on a GPU, which is the
-   *     same fact {@link weightShards} now rests on. Applying an llama.cpp residency rule to vLLM
-   *     would take 7.6% off an untied model's card budget with nothing upstream saying so, in the
-   *     direction that reports a fit and then OOMs.
+   *   - **Runtimes that declare the residency, only.** This is llama.cpp's placement, not
+   *     everyone's: vLLM shards the embedding table across tensor-parallel ranks and keeps every
+   *     shard on a GPU, which is the same fact {@link weightShards} now rests on. Applying an
+   *     llama.cpp residency rule to vLLM would take 7.6% off an untied model's card budget with
+   *     nothing upstream saying so, in the direction that reports a fit and then OOMs.
+   *
+   *     **Asked of the runtime rather than inferred from `parallelism`** (#209). This read
+   *     `parallelism === 'layer'`, which selects llama.cpp alone only by accident of the catalog:
+   *     MLX is layer-parallel too and is turned away by the `discrete-gpu` half above, and vLLM is
+   *     tensor-parallel. `RuntimeSpec.parallelism` says how layers and their caches shard and
+   *     nothing about where a tensor no layer holds ends up — so a layer-parallel row added for
+   *     discrete GPUs would have taken this deduction silently. `hostResidentInputEmbedding` states
+   *     the fact the comment was already naming.
    *
    * Zero for a tied model in any case, and not because the host holds nothing there — see
    * {@link WeightBreakdown.hostResidentBytes}.
@@ -743,7 +752,7 @@ export function planPlacement(
    * mmap path, which `--no-mmap` leaves. Both move answers optimistically, so neither can live only
    * in a docblock — `launch.ts` carries them beside the command.
    */
-  const hostHoldsInput = rig.device.class === 'discrete-gpu' && runtime.parallelism === 'layer';
+  const hostHoldsInput = rig.device.class === 'discrete-gpu' && runtime.hostResidentInputEmbedding;
   const deviceWeightBytes = totalWeightBytes - (hostHoldsInput ? weights.hostResidentBytes : 0);
   const totalKvBytes = kvBytesTotal(
     model,
