@@ -247,9 +247,10 @@ describe('the comparison grid puts a cell’s value where it can be read', () =>
     expect(full).toMatch(/^Qwen3 8B on GeForce RTX 5090/);
     expect(brief).not.toContain('Qwen3 8B');
     expect(brief).toContain('RTX 5090');
-    // The figure itself, which is the payload both forms carry.
-    expect(brief).toContain('69% of the ceiling free');
-    expect(full).toContain('69% of the ceiling free');
+    // The figure itself, which is the payload both forms carry. 70% since #182 took Qwen3 8B's
+    // host-resident input table off the card — an untied 151,936 x 4,096 table is 7.6% of the file.
+    expect(brief).toContain('70% of the ceiling free');
+    expect(full).toContain('70% of the ceiling free');
     /*
      * Materially shorter, which is the property the reservation depends on — the geometry itself is
      * `e2e/reflow.spec.ts`, since jsdom reports every height as 0. The margin is smaller than it was

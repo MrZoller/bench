@@ -69,10 +69,11 @@ of reviewing this very document — [#180](https://github.com/MrZoller/headroom/
 5 August 2026 and recorded under **Launch commands** below, since what it settled is where the
 benchmark measures from, and [#181](https://github.com/MrZoller/headroom/issues/181), fixed the same
 day and recorded under **Calibrate**, since what it settled is how the output of that benchmark is
-read back — leaving [#182](https://github.com/MrZoller/headroom/issues/182), which is the half of
-#165 that its own verification note said not to fold in, less #174, which is closed as a record of a
-decision already made rather than as a task —
-and **two loose ends that are on `main` and in no issue at all**: a `LLAMA_KV_TYPES`
+read back — and [#182](https://github.com/MrZoller/headroom/issues/182), the half of #165 that its
+own verification note said not to fold in, fixed 5 August 2026 and recorded under **Open questions**
+below, since what it settled is which device holds the tensors no layer holds. #174 is closed as a
+record of a decision already made rather than as a task. What remains is
+**two loose ends that are on `main` and in no issue at all**: a `LLAMA_KV_TYPES`
 mapping duplicated between `Calibrate.tsx` and `launch.ts` under a comment saying the two must be
 merged once both land, and the emitted `llama-bench` command asking for `-o md` while the parser
 prefers JSON. Both are described under **Calibrate**, below, and both are named here because a
@@ -422,25 +423,55 @@ gained a layer.
 **Both are fixed in [#204](https://github.com/MrZoller/headroom/issues/204)**, ahead of #182's engine
 change rather than after it: the packing rewrite moves which bin holds which layers, so it would
 have invalidated the proof that this emission is exact. `-ngl` is now `min(residentLayers, L) + 1`
-on every branch, and `-ts` states the output tensor's slot on the last non-zero share so the ratios
-sum to `-ngl`. An independent sweep of 361,200 configurations put the emitted pair through a port of
+on every branch, and `-ts` states the output tensor's slot as a `+1` on one share so the ratios sum
+to `-ngl`. An independent sweep of 361,200 configurations put the emitted pair through a port of
 `llama-model.cpp:1285-1343` at `360e134`: 56,719 spilling commands wrong before and **0 after**,
-42,037 `-ts` commands wrong before and **0 after**, with the output tensor on the intended card every
-time. `launch.test.ts` carries the port, so the guard is the placement rather than the string —
-neither defect changed a string that looked wrong.
+42,037 `-ts` commands wrong before and **0 after**. `launch.test.ts` carries the port, so the guard
+is the placement rather than the string — neither defect changed a string that looked wrong.
 
-**Two things #204 measured and deliberately did not change.** The `max === min` gate that suppresses
-`-ts` on an even split is wrong the same way — `L + 1` slots over `n` cards cannot divide evenly when
-`n` divides `L`, so llama.cpp's default hands card 0 an extra layer — and the default reproduces the
-packing on **0 of the 89,615** configurations that reach it. Widening the gate would put a `-ts` on
-all of them, which is a larger rewrite than the one verified and interacts with #182's packing. And
-where `residentLayers` floors to **zero** on a GPU rig the emission stays `-ngl 0`: the `+1` rule
-would put the whole output table on a card that had no room for a layer, which is nearer the priced
-placement on 96.3% of the 5,807 cases that reach it and **over the card's own weight budget on 9.1%**
-— worst case a 2,004 MiB table into 344 MiB of room. The deciding quantity is the table against the
-card's spare room, not how much spilled (r = 0.08 against `offloadFraction`), so no threshold on the
-spill fraction separates them; and the byte accounting that would decide it is exactly what #182
-rewrites. Open, and open for a stated reason.
+**Which share carries that `+1` took a second correction, and the sweep could not see the first one
+be wrong** ([#209](https://github.com/MrZoller/headroom/issues/209)). #204 put it on the last share
+_with a layer on it_, which is the careful-looking choice and diverges from the engine exactly where
+it matters: `planPlacement` charges `outputBytes` to the bin it **seeded**, always the last one, and
+the seeded bin is the first to floor to zero resident layers — `spilledOf` clamps its overflow
+against a `weightBytes` carrying the output block while `residentLayersOf` divides that overflow by a
+`layerWeightBytes` that does not. So the flag put the table on a card the panel never sized for it
+and left the card it did size idle: 1,801 placements diverge across the shipped catalog and 1,055 of
+them emit a `-ts`, at offload fractions from 39.0% to 97.8%. The slot now goes to the **last share,
+unconditionally** — its ratio is `c + 1 >= 1` whatever `c` is, so its cumulative boundary is the only
+one clearing the final slot's key. #182's zero-layer suppression is not the guard against this and
+cannot be: it runs before any ceiling is known and it guards _assigned_ layers.
+
+**The sweep passed by construction, which is the lesson rather than the arithmetic.** "The output
+tensor on the intended card every time" was checked by recomputing the emitter's own rule from the
+same `sized` list the emitter reads — self-consistency, asserted as correctness, and 1,055 broken
+commands went through it. The assertion now derives the expected card from `shares[].weightBytes`
+against `weightBreakdown().outputBytes`: the bin the engine actually charged the table to. A test
+whose expectation is spelled the way the code is spelled tests nothing, however wide the sweep.
+
+**Two things #204 measured and deliberately did not change, and #182 has since moved one of them
+without touching it.** The `max === min` gate that suppresses `-ts` on an even split is wrong the
+same way — `L + 1` slots over `n` cards cannot divide evenly when `n` divides `L`, so llama.cpp's
+default hands card 0 an extra layer — and the default reproduces the packing on **0 of the 89,615**
+configurations that reach it. Widening the gate was deferred as a larger rewrite that interacts with
+#182's packing, and the interaction turned out to run the other way: **seeding the output projection
+onto the last bin makes the packing genuinely uneven, so the existing gate now lets the flag
+through.** `-ts` appears on **29,311 configurations that carried none before** and reads differently
+on 14,665 of the 38,765 that did — 67,678 in all, against 38,765. The gate is unchanged and the
+emission is still exact: all 67,678 were put through the same port of `llama-model.cpp:1285-1343`,
+and every one lands the packed counts on the packed cards with the output tensor on the intended
+one. What is left behind the gate is the shrinking remainder where the split really is even, which
+is now mostly long-context rigs where a layer's cache outweighs the table.
+
+The second is untouched. Where `residentLayers` floors to **zero** on a GPU rig the emission stays
+`-ngl 0`: the `+1` rule would put the whole output table on a card that had no room for a layer,
+which is nearer the priced placement on 96.3% of the 5,807 cases that reach it and **over the card's
+own weight budget on 9.1%** — worst case a 2,004 MiB table into 344 MiB of room. The deciding
+quantity is the table against the card's spare room, not how much spilled (r = 0.08 against
+`offloadFraction`), so no threshold on the spill fraction separates them. The byte accounting that
+would decide it has now landed with #182 — `Placement.deviceWeightBytes` and
+`WeightBreakdown.outputBytes` state the two operands the question needs — so it is re-derivable
+rather than blocked. Open, and open for a stated reason.
 
 Where the false sentence also reached was a _justification_: `placement.ts` charges a
 device's whole spill against its repeating layers, and called that the conservative of two readings
@@ -921,15 +952,15 @@ buys, where it used to be the cache precision and the layer count as well.
 Deliberately absent, and not forgotten: cloud pricing stays out of scope per the settled decision
 below, and fine-tuning memory (LoRA/QLoRA) is a second engine rather than a feature — real demand,
 weak incumbents, and deliberately not attempted before guided mode shipped. Now that it has, that is
-the v3-scale bet. What stands between here and it is **#182**. The six issues in
+the v3-scale bet. **Nothing filed stands between here and it.** The six issues in
 **Open questions** are all resolved as of 3 August 2026 — five fixed, and
 [#174](https://github.com/MrZoller/headroom/issues/174) closed as a _record_ of an answered policy
 question rather than as work. The two that came out of reviewing this very document are resolved
 too, both on 5 August 2026: #180, the P1 on the path a reader is most likely to take, and #181, the
-parser that could not read the output that path produces. What is left is #182, which is the half of
-#165 its own verification note said not to fold in: a different provenance from the other two, and
-worth keeping straight. Counting #174 as a blocker would have made a settled decision look like a
-task, which is why no count here ever did.
+parser that could not read the output that path produces. #182 — the half of #165 its own
+verification note said not to fold in, and a different provenance from the other two — is fixed the
+same day, on the source reading its blocker named. Counting #174 as a blocker would have made a
+settled decision look like a task, which is why no count here ever did.
 
 ## Deployment
 
@@ -2282,7 +2313,8 @@ questions those issues cannot settle, and the three tables below are the record 
 findings filed rather than patched — six out of the July sweep, all now closed; six out of the v2
 pass, of which #165, #166, #170, #171 and #172 are now closed too, and #174 closed as a record
 rather than as work; and two more out of _documenting_ the v2 pass, which is its own entry. Two of
-those last eight are open, plus #182, which #165 split off rather than fold in.
+those last eight are open. #182, which #165 split off rather than fold in, is fixed — see the entry
+below.
 They are kept because what a finding turns out to need is repeatedly not what the issue said it
 would be.
 
@@ -2335,7 +2367,7 @@ the top of this file had to.
 
 | filed                                                                                                | what it is                                                                                                                                                                                                                                                                                                                                                                                                    |
 | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [#165](https://github.com/MrZoller/headroom/issues/165) resident layers charge the non-layer tensors | **Fixed**, and it turned out to be two issues rather than one — see below. The count divides `layerWeightBytes`; every byte figure is bit-identical to before it; `-ngl` drops on 7.9% of the catalog's configurations, by a median of 1 layer and never rises. The byte assignment those tensors get is [#182](https://github.com/MrZoller/headroom/issues/182)                                              |
+| [#165](https://github.com/MrZoller/headroom/issues/165) resident layers charge the non-layer tensors | **Fixed**, and it turned out to be two issues rather than one — see below. The count divides `layerWeightBytes`; every byte figure is bit-identical to before it; `-ngl` drops on 7.9% of the catalog's configurations, by a median of 1 layer and never rises. The byte assignment those tensors get is [#182](https://github.com/MrZoller/headroom/issues/182), fixed                                       |
 | [#166](https://github.com/MrZoller/headroom/issues/166) the assignment discards _which_ layers       | **Fixed**, and its second half was answered rather than built. `DeviceShare.layerIndices` records which layers a card holds; the flag the issue hoped for does not exist, because `-ot` overrides where a _weight_ lives while a layer's cache follows the `-ngl`/`-ts` split — see above. The panel states the packing instead: `2,2,2,21,21` layers against `2,2,2,1,1` full-attention ones                 |
 | [#170](https://github.com/MrZoller/headroom/issues/170) tiers graded at scenarios never planned      | **Fixed**, and the seam moved rather than the arithmetic. `gradedScenarios` states the tier structure and the sweep walks it, largest first, stopping at the first scenario the machine can plan — 269 long-context rows across the 43 shipped devices are now graded at the reduced tier, 161 of them `tight`, and no row that already had an answer changed it                                              |
 | [#172](https://github.com/MrZoller/headroom/issues/172) the caveat describes the wrong tier          | **Fixed**, and two of its three findings were already closed by #170 — verified rather than assumed, then pinned by tests that did not exist. The third is the axis `gradedScenarios` deliberately does not express: `declaredConcurrency` states serving's four users and two, and the footer names those rather than the reader's own                                                                       |
@@ -2381,22 +2413,62 @@ The measurement is what decided it rather than the argument. Assigning the block
 by up to 27.9%, and flips `fits` on 0.60% of them and `impossible` on 0.12% — a change to what the
 product answers, wearing a layer count's clothes. What shipped instead is bit-identical on 2.4M
 sampled byte figures and changes `-ngl` on 7.9% of configurations, **every one of them downward**, by
-a median of 1 layer and at most 8. The remainder is [#182](https://github.com/MrZoller/headroom/issues/182),
-and it is blocked on reading `llama-model.cpp` rather than on the arithmetic: which device holds
-`token_embd` under a layer split, and what that means for a **tied** model where one tensor is both
-the lookup and the output projection — which is Gemma 3 4B, the row where the block is largest at
-25% of the file.
+a median of 1 layer and at most 8. The remainder was [#182](https://github.com/MrZoller/headroom/issues/182).
+
+**#182 is fixed, and the sentence that stood here — that it was "blocked on reading
+`llama-model.cpp` rather than on the arithmetic" — was true when it was written and stale the moment
+the source was read.** It was left standing through three PRs afterwards, which is the failure this
+file exists to prevent: a blocker recorded without the thing that would clear it is a note that goes
+stale silently. What the reading settled, at ggml-org/llama.cpp commit `360e134`:
+
+- **`token_embd.weight` is on the host, unconditionally.** `llama-model.cpp:1333-1335` — _"there is
+  very little benefit to offloading the input layer, so always keep it on the CPU"_ — with no
+  `-ngl`, `-sm` or `-ts` input to the decision.
+- **A tied model materialises the table twice**, so the two beliefs the issue posed as alternatives
+  both hold. `TENSOR_DUPLICATED` re-routes the output's creation to `buft_list_output` and the
+  de-dup at `llama-model-loader.cpp:1285-1300` only fires when the same buffer type already holds
+  the tensor — CPU input buft against a last-GPU output buft, so a second tensor is created and
+  llama.cpp adds its bytes to `size_data` itself. Measured on `gemma-3-270m-GGUF`: a 271.81 MiB file
+  resident as 170.00 MiB on the CPU and 271.81 MiB on MTL0.
+- **So the consequence inverts the issue's framing.** For a **tied** model the rig total was already
+  right and only the distribution was wrong — which is Gemma 3 4B, the row the issue nominated as
+  mattering most and the one that moves least. For an **untied** model the cards were being charged
+  a whole extra table: 7.6% of the file on Qwen3 8B, 6.5% on Llama 3.1 8B, and 26 of the 35 catalog
+  rows are untied.
+- **`fixedBytes` is the wrong unit**, because the three tensors have three placements: the input
+  embedding on the host, the output projection on the **last** `-ts` device, a vision tower on the
+  **first** GPU via `clip.cpp`'s own backend list. Lumping them and seeding one bin would have put
+  the input embedding on a card that never holds it and the tower on the card holding the output.
+- **It is `discrete-gpu`-only, and only for a runtime that declares the residency.** With mmap the
+  host tensors are wrapped from the mapping and Metal declares `buffer_from_host_ptr = true`, so
+  unified memory pays once however llama.cpp labels the buffer; and vLLM shards the embedding table
+  across tensor-parallel ranks and keeps every shard on a GPU, so the correction is llama.cpp's
+  placement rather than a universal one. The second gate read `parallelism === 'layer'` until #209,
+  which is a proxy and not the fact: `RuntimeSpec.parallelism` states how layers and their caches
+  _shard_, never where a tensor no layer holds ends up. It picked out llama.cpp alone only by
+  accident of the catalog — MLX is layer-parallel too and is saved by never meeting `discrete-gpu` —
+  so a layer-parallel row added for discrete GPUs would have taken a whole `vocab x hidden` table off
+  its card budget silently. `RuntimeSpec.hostResidentInputEmbedding` is the fact, and it is required
+  rather than optional for the same reason `ModelSpec.tiedEmbeddings` was made required on the same
+  PR — a boolean read as `false` by omission is safe only while the polarity happens to point that
+  way. It decides the input embedding alone: the output projection and any tower are placed by the
+  split, not by the runtime.
 
 Two things found on the way there are worth keeping even though neither is #165. **`weightBytesPerDevice`
 is unstable by construction on hybrid models**: it is the busiest-by-_combined_-load bin's weights,
 and Gemma 3 12B on three 4090s at 128K/8 users puts three bins within 1% of each other on load with
 completely different composition — so a 0.9 GB block moves one sliding layer and changes which card
-the entire readout describes. That is why most of #182's `weightBytesPerDevice` tail (max +833%) is
-identity flipping rather than bytes moving, and why a test resting on which bin is busiest needs a
-margin rather than a coin flip. And **the fixed tensors are a large fraction of exactly the small
-models**: 25.4% of Gemma 3 4B, 21.4% of Ministral 3 3B, 15.2% of Qwen3 8B, 12.3% of Llama 3.2 3B —
-so "the vocabulary is a rounding error" is true for the models nobody has trouble running and false
-for the ones people run on the hardware they already own.
+the entire readout describes. That is why most of #182's `weightBytesPerDevice` tail is identity
+flipping rather than bytes moving, and why a test resting on which bin is busiest needs a margin
+rather than a coin flip. **Two tests turned out to be resting on one**, and both were found by this
+change rather than reasoned about: the placement suite's "names the device that made it impossible"
+and `App.test.tsx`'s "quotes the card that made it impossible" both sat on a Q4_K_M scenario whose
+top two bins were 0.2% apart, and seeding the vision tower onto the first bin swapped them. Both now
+run at Q8_0, where the margin is 24.95 GiB of floor against an 18.57 GiB readout. And **the fixed
+tensors are a large fraction of exactly the small models**: 25.4% of Gemma 3 4B, 21.4% of Ministral
+3 3B, 15.2% of Qwen3 8B, 12.3% of Llama 3.2 3B — so "the vocabulary is a rounding error" is true for
+the models nobody has trouble running and false for the ones people run on the hardware they already
+own.
 
 **The second pair did meet where the table said it does, and #170 is the half that moved the seam.**
 `gradedScenarios` states the tier structure — a `(prompt, window)` for each tier, largest first — and

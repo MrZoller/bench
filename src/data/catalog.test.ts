@@ -13,6 +13,7 @@ import {
   modelSlug,
   modelsByPopularity,
   toDevice,
+  toModel,
   type DeviceRow,
 } from './catalog';
 import devicesJson from './devices.json';
@@ -24,6 +25,7 @@ import { evaluate } from '@/engine';
 import { LLAMA_CPP, GPT_OSS_120B, DEEPSEEK_V3, QWEN3_32B } from '@/engine/fixtures';
 import { GIB } from '@/engine/types';
 import { maxAllocatablePerDevice, raisingCeilingWouldHelp } from '@/engine/placement';
+import { weightBreakdown } from '@/engine/weights';
 import { DEVICE_CLASS_LABELS, deviceOptionLabel, devicePickerNote } from '@/lib/stops';
 
 describe('device catalog', () => {
@@ -1266,6 +1268,52 @@ describe('a hand-typed device row is validated, not trusted', () => {
     for (const dtype of ['fp16', 'bf16', 'fp8', 'fp4', 'int8'] as const) {
       expect(toDevice({ ...ROW, tflops: { [dtype]: 100 } }).flops[dtype]).toBeGreaterThan(0);
     }
+  });
+});
+
+/**
+ * The generated catalog has to *state* the tie, because the omission is no longer conservative.
+ *
+ * `ModelSpec.tiedEmbeddings` was optional, and absent it read as untied — which only over-stated
+ * `fixedBytes` and reported fewer resident layers, both safe. #182 made the same omission unsafe in
+ * the other direction: an untied model's input embedding is charged to host RAM and deducted from
+ * the card budget, so a genuinely tied row that said nothing would give the GPUs a
+ * `vocabSize x hiddenSize` table of headroom they do not have — a fit that becomes an
+ * out-of-memory error on load.
+ *
+ * Asserted on a row the catalog really ships rather than an invented one, and on the *arithmetic*
+ * rather than only on the throw: the guard exists to keep `weightBreakdown` from reading a missing
+ * field as an answer, so the test that matters is that no reading of it survives the field's
+ * absence.
+ */
+describe('a generated model row states its tie rather than defaulting to one', () => {
+  const TIED = getModel('unsloth/gemma-3-12b-it');
+
+  it('accepts the row the catalog actually ships', () => {
+    // A no-throw assertion rather than a value one: `toModel` validates and returns its argument,
+    // so comparing the result to the input would assert nothing. What this pins is that the guard
+    // below is demonstrated against a row the file really carries.
+    expect(() => toModel(TIED)).not.toThrow();
+    expect(TIED.tiedEmbeddings).toBe(true);
+  });
+
+  it('refuses a row whose tie is missing rather than reading it as untied', () => {
+    const withoutTie: Record<string, unknown> = { ...TIED };
+    delete withoutTie.tiedEmbeddings;
+    expect(() => toModel(withoutTie)).toThrow(/does not state tiedEmbeddings/i);
+    expect(() => toModel(withoutTie)).toThrow(/gemma-3-12b-it/);
+  });
+
+  it('would have deducted a whole embedding table from the cards if it had defaulted', () => {
+    // What the guard is protecting: the same row read as untied moves `hostResidentBytes` from
+    // nothing to a full table, and `planPlacement` takes that off what the GPUs are charged.
+    const quant = getQuant('q4_k_m');
+    const table = (TIED.vocabSize * TIED.hiddenSize * (quant.denseBpw ?? quant.bpw)) / 8;
+
+    expect(weightBreakdown(TIED, quant).hostResidentBytes).toBe(0);
+    expect(
+      weightBreakdown({ ...TIED, tiedEmbeddings: false }, quant).hostResidentBytes
+    ).toBeCloseTo(table, -3);
   });
 });
 

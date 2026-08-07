@@ -30,10 +30,62 @@ export interface WeightBreakdown {
    * Weights that sit outside the repeating stack — see {@link fixedParams}.
    *
    * A subset of `denseBytes`, orthogonal to the expert/dense split: that one asks what *rate* a
-   * tensor is charged at, this one asks how many devices it divides across. The answer is one,
-   * which is the whole reason the field exists.
+   * tensor is charged at, this one asks how many devices it divides across.
+   *
+   * **The answer is one device each, and not the *same* one** (#182). This field used to be
+   * documented as "the answer is one, which is the whole reason the field exists", and that premise
+   * is what upstream disproves: llama.cpp routes the three tensors to three different places, and
+   * lumping them into a single scalar cannot express any of them. `token_embd.weight` is pinned to
+   * the host by `llama-model.cpp:1333-1335` — *"there is very little benefit to offloading the
+   * input layer, so always keep it on the CPU"* — with no `-ngl`, `-sm` or `-ts` input to that
+   * decision; the output projection goes to the **last** `-ts` device, whole; a vision tower is
+   * loaded by `tools/mtmd/clip.cpp` onto the **first** GPU, whole. Read at ggml-org/llama.cpp
+   * commit `360e134`.
+   *
+   * So the sum survives, as the part of the file that is in no repeating layer and therefore
+   * divides `layerBytes` off the file — and the three components beside it are what a placement
+   * reads. `hostResidentBytes + outputBytes + towerBytes === fixedBytes` exactly, including when
+   * the clamp below fires.
    */
   fixedBytes: number;
+  /**
+   * Of `fixedBytes`, the part that is resident in host RAM and on **no device of a discrete-GPU
+   * rig** — the input embedding table.
+   *
+   * **Zero for a tied model, and the reason is not that the host holds nothing.** llama.cpp
+   * materialises a tied table *twice*: `TENSOR_DUPLICATED` re-routes the output's creation to
+   * `buft_list_output` (`llama-model-loader.cpp:1101-1106`), and the de-dup at `1285-1300` only
+   * fires when the same buffer type already holds the tensor — input buft is CPU and output buft is
+   * the last GPU, so a second tensor is created and llama.cpp adds its bytes to `size_data` itself.
+   * Measured on `gemma-3-270m-GGUF` at `-ngl 19`: a 271.81 MiB file, resident as 170.00 MiB on the
+   * CPU and 271.81 MiB on MTL0. The file carries one table and the GPU holds one table, so nothing
+   * comes off the device total; what the host holds is a *second* materialisation that was never in
+   * the file. An **untied** model has two tables in the file and the GPU holds one of them, which is
+   * the whole of the over-charge #182 was filed for — 7.6% of the file on Qwen3 8B, 6.5% on
+   * Llama 3.1 8B, and 26 of the 35 catalog rows are untied.
+   *
+   * **Stated here, applied by `planPlacement`**, which is the only layer that knows the device
+   * class and the runtime. It is a discrete-GPU correction for a runtime that declares
+   * `RuntimeSpec.hostResidentInputEmbedding`: on unified memory the host is the rig, and vLLM's
+   * tensor-parallel ranks genuinely slice the embedding table and keep every slice on a card.
+   */
+  hostResidentBytes: number;
+  /**
+   * Of `fixedBytes`, the output projection — or a tied table's GPU duplicate, which is the same
+   * bytes in the same place. Resident **whole on the last `-ts` device**, never divided.
+   */
+  outputBytes: number;
+  /**
+   * Of `fixedBytes`, any non-language tower. Resident **whole on the first GPU**, and only when
+   * `--mmproj` is passed.
+   *
+   * Charged unconditionally all the same, because Headroom has no `--mmproj` axis and the failure
+   * direction of assuming it absent is the one that OOMs a reader. What #182 changes is only where
+   * it sits: `clip.cpp:184-205` builds its own backend list and takes the *first* GPU device,
+   * never `tensor_split` — the opposite end of the rig from the output projection, which is why
+   * seeding one bin with a lumped `fixedBytes` would have been wrong in a new way.
+   */
+  towerBytes: number;
   /**
    * The repeating transformer blocks — `totalBytes - fixedBytes`, and the only part of the file
    * that is `layers` of anything.
@@ -60,12 +112,25 @@ export function weightBreakdown(model: ModelSpec, quant: QuantSpec): WeightBreak
   // Fixed tensors are never routed experts, so `denseBpw` is their rate and `denseBytes` their
   // ceiling. The clamp is defensive rather than reachable: it keeps `layerBytes` non-negative on a
   // row whose vocabulary and tower somehow outweigh its own dense half.
-  const fixedBytes = Math.min(denseBytes, (fixedParams(model) * denseBpw) / 8);
+  const unclamped = (fixedParams(model) * denseBpw) / 8;
+  const fixedBytes = Math.min(denseBytes, unclamped);
+  // The three components are scaled by whatever the clamp took, so they sum to `fixedBytes` on the
+  // clamped path as well as the ordinary one. A defensive clamp that quietly broke the identity a
+  // placement seeds bins from would be worse than the negative `layerBytes` it exists to prevent.
+  const held = unclamped > 0 ? fixedBytes / unclamped : 0;
+
+  const tableBytes = (outputProjectionParams(model) * denseBpw) / 8;
+  const towerBytes = ((model.nonLanguageParams ?? 0) * denseBpw) / 8;
 
   return {
     expertBytes,
     denseBytes,
     fixedBytes,
+    // One table for an untied model, none for a tied one — `fixedParams` counted one table there
+    // and the GPU's duplicate is what it pays for. See the field's docblock.
+    hostResidentBytes: model.tiedEmbeddings ? 0 : tableBytes * held,
+    outputBytes: tableBytes * held,
+    towerBytes: towerBytes * held,
     layerBytes: totalBytes - fixedBytes,
     totalBytes,
     effectiveBpw: (totalBytes * 8) / model.totalParams,
@@ -83,20 +148,33 @@ export function weightBreakdown(model: ModelSpec, quant: QuantSpec): WeightBreak
  *
  * The same three corrections `activeDenseParams` is built from, read for a different purpose:
  * there the question is what a token *reads*, here it is what a device *holds whole*. They pull
- * apart on the tie — a tied table is read every step and still occupies exactly one device.
+ * apart on the tie — a tied table is read every step, and it occupies one device *and* the host,
+ * because llama.cpp materialises it twice. See {@link WeightBreakdown.hostResidentBytes}; the sum
+ * here is a **file** figure, and which device holds which part of it is
+ * {@link WeightBreakdown.outputBytes} and {@link WeightBreakdown.towerBytes}.
  *
  * These are not a rounding error on the models people run smallest. Llama 3.2 3B carries a
  * 128,256-token vocabulary at 3,072 hidden against 3.2B total, so the shared table is over 12% of
- * the weights, and Gemma 3 4B's vocabulary and vision tower together are 25% — charged evenly
- * across 34 layers that hold none of it.
+ * the weights, and Gemma 3 4B's vocabulary and vision tower together are 25% — which no layer holds
+ * any of.
  *
- * `tiedEmbeddings` is read as untied unless it says otherwise, matching the generator's own
- * convention, and the failure direction is the safe one: over-stating the fixed block understates
- * the per-layer weight, which reports *fewer* resident layers rather than more.
+ * **`tiedEmbeddings` is stated, never inferred from its own absence.** It used to be optional and
+ * read as untied when missing, which over-stated the fixed block and was conservative in both
+ * directions it moved — a smaller per-layer weight, fewer resident layers. #182 removed that
+ * safety: an untied model's `hostResidentBytes` is now deducted from what the cards are charged, so
+ * a tied model that failed to say so would give away a whole `vocab x hidden` table of card budget,
+ * the direction that reports a fit and then OOMs. The field is required on {@link ModelSpec} and
+ * `toModel` rejects a catalog without it, so the two readings here and in
+ * {@link WeightBreakdown.hostResidentBytes} cannot come apart on a missing value.
+ *
+ * What makes the stated value trustworthy is its *derivation*: `build-catalog.ts` reads the tie from
+ * the safetensors tensor list — whether an output head exists at all — rather than from
+ * `config.json`'s `tie_word_embeddings`, which is absent on both Gemma 3 repos even though they are
+ * tied. Every catalog row states the field, and none of them guesses it.
  */
 export function fixedParams(model: ModelSpec): number {
   const table = outputProjectionParams(model);
-  return (model.tiedEmbeddings === true ? table : 2 * table) + (model.nonLanguageParams ?? 0);
+  return (model.tiedEmbeddings ? table : 2 * table) + (model.nonLanguageParams ?? 0);
 }
 
 export function weightBytes(model: ModelSpec, quant: QuantSpec): number {

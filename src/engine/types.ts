@@ -93,8 +93,21 @@ export interface ModelSpec {
    * this is the decode basis, not a shared one.
    */
   activeDenseParams: number;
-  /** Whether the output projection reuses the input embedding table. */
-  tiedEmbeddings?: boolean;
+  /**
+   * Whether the output projection reuses the input embedding table.
+   *
+   * **Required, and it was optional until #182 gave the omission an unsafe direction.** Absent, it
+   * used to read as untied and only over-state `fixedBytes`, which understated the per-layer weight
+   * and reported fewer resident layers — conservative on both. Now `hostResidentBytes` is a whole
+   * table on an untied model and `planPlacement` deducts it from the card budget, so a genuinely
+   * tied model that omitted the field would lose `vocabSize x hiddenSize` off what the GPUs are
+   * charged: the direction that reports a fit and then runs out of memory on load.
+   *
+   * Every constructor already states it — `build-catalog.ts` derives it from the safetensors tensor
+   * list rather than guessing, and `toModel` rejects a generated catalog that arrives without it —
+   * so this says at the type boundary what the data already does.
+   */
+  tiedEmbeddings: boolean;
   /** Parameters in non-text towers — resident, but not run for a text token. */
   nonLanguageParams?: number;
   /**
@@ -357,6 +370,42 @@ export interface RuntimeSpec {
    * second, and applying one layout to both rejects rigs that work.
    */
   parallelism: 'tensor' | 'layer';
+  /**
+   * Whether this runtime keeps the **input embedding table** in host RAM, on no device at all.
+   *
+   * llama.cpp does, and unconditionally: `llama-model.cpp:1333-1335` routes `token_embd.weight` to
+   * the CPU buffer type — *"there is very little benefit to offloading the input layer, so always
+   * keep it on the CPU"* — with no `-ngl`, `-sm` or `-ts` input to the decision, so an untied
+   * model's whole `vocab x hidden` table is off the cards however much of the file is resident.
+   * vLLM does not: `VocabParallelEmbedding` shards the table across the tensor-parallel ranks and
+   * every shard stays on a GPU. On Qwen3 8B that is 7.6% of the file, and applying llama.cpp's rule
+   * to vLLM would take it off the card budget in the direction that reports a fit and then runs out
+   * of memory on load (#182).
+   *
+   * **`parallelism` is not a proxy for either, which is what this field exists to stop** (#209).
+   * `planPlacement` gated the deduction on `parallelism === 'layer'`, which selects llama.cpp alone
+   * only by accident of the catalog — MLX is layer-parallel too and is saved by the `discrete-gpu`
+   * half, vLLM is tensor-parallel. `parallelism` states how layers and their caches *shard* and says
+   * nothing about where a tensor no layer holds ends up, so a layer-parallel row added for discrete
+   * GPUs would have inherited llama.cpp's residency silently, with nothing upstream of the figure
+   * saying so.
+   *
+   * **Required, for the reason `ModelSpec.tiedEmbeddings` is** — the finding immediately before this
+   * one, on the same PR. An optional boolean read as `false` by omission is safe only while the
+   * polarity happens to point that way; a runtime added without an answer should fail to compile
+   * rather than have one chosen for it.
+   *
+   * Read only where the host is a separate pool from the rig, which is a `discrete-gpu` rig: on
+   * `unified-soc` and `cpu-ram` the host *is* the rig and the table is paid for either way. That is
+   * why MLX declares `false` rather than a value its hardware cannot express — it pins nothing to a
+   * host it does not have, and stating `true` would be llama.cpp's rule borrowed rather than MLX's
+   * own.
+   *
+   * Scoped to the input embedding alone, because that is all it decides. The other two fixed tensors
+   * are placed by the split rather than by the runtime — the output projection on the last device
+   * holding layers, a vision tower on the first — see `WeightBreakdown`.
+   */
+  hostResidentInputEmbedding: boolean;
   /**
    * Weight formats this runtime can load, by `QuantSpec.id`.
    *

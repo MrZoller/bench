@@ -597,12 +597,18 @@ describe('the measure group says what it colours by', () => {
  * to fix, one cell further in.
  */
 describe('the ramp control needs a ramp, not merely a graded cell', () => {
-  /** Verified: 1 graded cell, 20 spilling, 35 over the ceiling. */
+  /**
+   * Verified: 1 graded cell, 21 spilling, 26 over the ceiling.
+   *
+   * Q8_0 on a 5080 rather than Q5_K_M on a 5070, because #182 gave Qwen3 14B its host-resident
+   * input table back — 5.3% of the file — and the old pairing now grades three cells. The premise
+   * is asserted below rather than trusted, which is how that was caught.
+   */
   const oneCell = {
     ...DEFAULT_CONFIG,
     modelId: 'Qwen/Qwen3-14B',
-    deviceId: 'rtx-5070',
-    quantId: 'q5_k_m',
+    deviceId: 'rtx-5080',
+    quantId: 'q8_0',
     runtimeId: 'llama.cpp',
   };
 

@@ -99,6 +99,66 @@ describe('the runtime catalog is listed in the order it states', () => {
 });
 
 /**
+ * The proxy the host-resident gate used to be, and the equivalence that makes replacing it
+ * figure-neutral (#209).
+ *
+ * `planPlacement` read `rig.device.class === 'discrete-gpu' && runtime.parallelism === 'layer'` and
+ * now reads `rig.device.class === 'discrete-gpu' && runtime.hostResidentInputEmbedding`. The two
+ * cannot be shown equal from the field values alone — MLX is layer-parallel and declares `false` —
+ * so the claim is narrower and is exactly the one that matters: **over every pairing the catalog can
+ * actually reach, the two conditions select the same runtime.** MLX is the row where they disagree,
+ * and `supports` is what keeps it from a discrete GPU at all; a pairing it cannot drive is
+ * `unsupported`, and no surface renders a figure from one.
+ *
+ * Which makes this both the proof that no answer moved and the tripwire for the next row. It is
+ * deliberately a tripwire rather than an invariant: a layer-parallel runtime added for discrete GPUs
+ * fails here whichever residency it declares, because the day the two conditions first differ on a
+ * live pairing is the day someone has to look at what that row does with `token_embd.weight` and
+ * delete this test with the reason written down — rather than inherit llama.cpp's answer from a
+ * field about sharding, which is how it went unnoticed the first time.
+ */
+describe('the host-resident input embedding is stated, not inferred from parallelism', () => {
+  it('selects the same runtime the parallelism proxy did, on every pairing the catalog reaches', () => {
+    const reachable = DEVICES.flatMap((device) =>
+      RUNTIMES.filter((runtime) => runtimeDrives(runtime, device)).map((runtime) => ({
+        device,
+        runtime,
+      }))
+    );
+    // Discrete GPUs are the only class the gate reads at all, and a sweep that reached one runtime
+    // would pass every assertion below while comparing the two conditions on one side each.
+    // Asserted as a set rather than a count, because a count fails on the next GPU row for no
+    // reason — what has to hold is that both answers are represented.
+    const discrete = reachable.filter(({ device }) => device.class === 'discrete-gpu');
+    expect(new Set(discrete.map(({ runtime }) => runtime.hostResidentInputEmbedding))).toEqual(
+      new Set([true, false])
+    );
+
+    for (const { device, runtime } of discrete) {
+      expect(
+        runtime.hostResidentInputEmbedding,
+        `${runtime.id} on ${device.id} changes answer between the two conditions`
+      ).toBe(runtime.parallelism === 'layer');
+    }
+  });
+
+  it('is not the same question as parallelism, and MLX is the row that proves it', () => {
+    // The disagreement is real rather than hypothetical, which is what stops this pair of tests
+    // being read as "the field restates `parallelism`" and simplified back into one.
+    expect(getRuntime('mlx').parallelism).toBe('layer');
+    expect(getRuntime('mlx').hostResidentInputEmbedding).toBe(false);
+    expect(
+      DEVICES.filter((d) => d.class === 'discrete-gpu' && runtimeDrives(getRuntime('mlx'), d)),
+      'MLX reaches a discrete GPU, so the two conditions now differ on a live pairing'
+    ).toEqual([]);
+
+    // And the one row that does claim it is claiming llama.cpp's placement, not layer parallelism.
+    expect(getRuntime('llama.cpp').hostResidentInputEmbedding).toBe(true);
+    expect(getRuntime('vllm').hostResidentInputEmbedding).toBe(false);
+  });
+});
+
+/**
  * Every cache width is either established or marked — the KV half of #18's rule, filed as #33 and
  * settled by #38.
  *

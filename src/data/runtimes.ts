@@ -47,6 +47,9 @@ export const RUNTIMES: readonly RuntimeSpec[] = [
     // GGUF K-quants for the cache as well as the weights: `--cache-type-k q8_0 q4_0`.
     // Splits by whole layers across cards by default, so the cache divides evenly.
     parallelism: 'layer',
+    // `token_embd.weight` goes to the CPU buffer type whatever `-ngl` says — the one row where this
+    // is true, and not because it is the layer-parallel one. See the field's docblock.
+    hostResidentInputEmbedding: true,
     // GGUF: the K-quants and I-quants, plus the plain float baselines it converts to. Not AWQ,
     // which is a different checkpoint format it cannot read, and not the vendor 4-bit schemes.
     weightFormats: ['bf16', 'q8_0', 'q6_k', 'q5_k_m', 'q4_k_m', 'iq4_xs', 'q3_k_m', 'mxfp4'],
@@ -76,6 +79,9 @@ export const RUNTIMES: readonly RuntimeSpec[] = [
     supports: [{ class: 'discrete-gpu' }, { class: 'unified-soc', vendor: 'NVIDIA' }],
     // Tensor-parallel by default: every layer sharded across every rank.
     parallelism: 'tensor',
+    // `VocabParallelEmbedding` shards the table across the ranks and every shard stays on a GPU, so
+    // the cards are charged for all of it.
+    hostResidentInputEmbedding: false,
     // Safetensors checkpoints: float baselines, the vendor low-precision formats, and AWQ.
     // Not GGUF, which is llama.cpp's container.
     weightFormats: ['bf16', 'fp8', 'int8', 'nvfp4', 'mxfp4', 'awq_4bit'],
@@ -100,6 +106,10 @@ export const RUNTIMES: readonly RuntimeSpec[] = [
     // Single-machine only in the catalogue, so this never divides anything today — declared
     // because the field is required, and a layer split is what a multi-device MLX would do.
     parallelism: 'layer',
+    // And this is why that is not the same question. MLX is layer-parallel and pins nothing to a
+    // host, because on unified memory there is no host to pin to: the table is on the one pool
+    // either way. The old gate read `parallelism` and was saved only by `supports` (#209).
+    hostResidentInputEmbedding: false,
     // MLX quantizes with its own affine scheme at 4 and 8 bits, and the catalog has no
     // MLX-native entries for those — so other catalogued formats stand in *by width*, which is
     // what a roofline over bits-per-weight actually consumes. Not exact: MLX 4-bit is nearer 4.5 bpw

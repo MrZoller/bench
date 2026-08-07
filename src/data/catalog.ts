@@ -237,8 +237,11 @@ export interface CatalogModel extends ModelSpec {
  * The file is machine-written from network data, so a shape the engine can't handle — an
  * attention kind its switch doesn't cover, most obviously — would otherwise surface as NaN
  * deep in a throughput readout instead of as an error at startup.
+ *
+ * Exported for the same reason {@link toDevice} is: every committed row satisfies these checks, so
+ * the only way to prove one rejects anything is to hand it a row that should be rejected.
  */
-function toModel(raw: unknown): CatalogModel {
+export function toModel(raw: unknown): CatalogModel {
   const model = raw as CatalogModel;
   const kind = model.attention?.core?.kind;
   if (kind !== 'gqa' && kind !== 'mla') {
@@ -259,6 +262,23 @@ function toModel(raw: unknown): CatalogModel {
           'Regenerate with `npm run catalog`.'
       );
     }
+  }
+  /**
+   * The tie, which is the one absent field that would be read as a value rather than as a NaN.
+   *
+   * `ModelSpec.tiedEmbeddings` is required, and this is where a stale generated catalog would
+   * otherwise arrive without it — the file is machine-written and the cast above checks nothing.
+   * Missing, it reads as untied everywhere, and since #182 that is no longer conservative: an untied
+   * model's input embedding is deducted from the card budget as host-resident, so a genuinely tied
+   * row that omitted the field would hand the GPUs a `vocabSize x hiddenSize` table of headroom they
+   * do not have. Rejected rather than defaulted, because a fit that is wrong in that direction is
+   * discovered by an out-of-memory error on load.
+   */
+  if (typeof model.tiedEmbeddings !== 'boolean') {
+    throw new Error(
+      `Catalog model ${model.id ?? '<unknown>'} does not state tiedEmbeddings. ` +
+        'Regenerate with `npm run catalog`.'
+    );
   }
   return model;
 }

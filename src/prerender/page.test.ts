@@ -87,14 +87,14 @@ describe('a built page', () => {
     const html = build(deviceRoute('rtx-5090'));
 
     expect(html).toContain(
-      'aria-label="63 GiB of 31 GiB allocatable used. ' +
-        'Weights 61 GiB, KV cache 1.1 GiB, Overhead 0.6 GiB. Over budget."'
+      'aria-label="61 GiB of 31 GiB allocatable used. ' +
+        'Weights 60 GiB, KV cache 1.1 GiB, Overhead 0.6 GiB. Over budget."'
     );
-    expect(html).toContain('3678 tok/s prompt processing');
+    expect(html).toContain('3693 tok/s prompt processing');
     expect(html).toContain('>23<span class="ml-1 text-sm text-[var(--color-text-faint)]">tok/s');
     expect(html).toContain('>2.2 s<');
     expect(html).toContain(
-      '>32 GiB<span class="ml-1 text-sm text-[var(--color-text-faint)]">offloaded'
+      '>30 GiB<span class="ml-1 text-sm text-[var(--color-text-faint)]">offloaded'
     );
   });
 

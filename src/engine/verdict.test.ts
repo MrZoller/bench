@@ -38,6 +38,8 @@ const RESIDENT: Placement = {
   usedBytesPerDevice: 3,
   allocatableBytesPerDevice: 10,
   totalWeightBytes: 1,
+  // Nothing host-resident, so the rig holds the whole file — the shape a `verdict.ts` fixture wants.
+  deviceWeightBytes: 1,
   totalKvBytes: 1,
   headroomBytes: 7,
   utilization: 0.3,
