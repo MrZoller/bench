@@ -969,7 +969,7 @@ Two workflows, and the interesting decisions are in what each refuses to do.
 **`catalog-refresh.yml`** regenerates the catalog every Monday and opens a pull request rather
 than pushing to `main` — a model whose KV heads changed overnight is exactly the case a human
 should see, and it is indistinguishable, to the job, from Hugging Face returning plausible
-nonsense. Three things about it are easy to get wrong and are already wrong once elsewhere:
+nonsense. Four things about it are easy to get wrong and are already wrong once elsewhere:
 
 - **`git diff --quiet` is the wrong question.** `build-catalog.ts` stamps `generatedAt` on every
   write, so the file differs after every run whether or not a figure moved. Wired to that, the job
@@ -984,6 +984,27 @@ nonsense. Three things about it are easy to get wrong and are already wrong once
   not trigger workflows on a push made with `GITHUB_TOKEN`, so the pull request it opens gets no CI
   of its own. Verifying in the same job is what stops a new model with an attention shape the
   engine cannot price arriving in a green-looking PR.
+- **Whether to commit on top of `catalog/refresh` or reset it is decided by whether a pull request
+  is open on it** (#193). Committing on top preserves review already left on an open PR, which is
+  the one thing the job exists to invite. With no open PR there is no review to preserve and the
+  branch is nothing but the last run that failed to publish, so building on it carries an
+  ever-older base forward — the branch #193 stranded was cut on 3 August 2026 and was twelve
+  commits behind `main` by the time this fix landed four days later. One
+  `gh pr list --head … --base main --state open` answers both that and the create-versus-edit
+  question at the end; asking twice would let a PR merged mid-run make the two halves disagree
+  silently. Backed by a guard that runs before the push: the branch's diff against `main` must be
+  exactly `models.generated.json` or the job fails and pushes nothing, which is why the checkout is
+  `fetch-depth: 0` — the diff is asked from the merge base, and a shallow clone has none.
+
+**Read this before re-deriving #193's damage estimate.** `git diff main catalog/refresh` on the
+stranded branch read as 3,497 deletions on 5 August 2026 and 6,252 on the 7th, and #193's status
+comment took that as the diff a merge would apply — which is why only `models.generated.json` was
+cherry-picked out of the branch rather than the branch being merged. It would not have applied
+them: GitHub renders and merges a pull request from the **merge base**, and the branch's
+three-dot diff was one file — the catalog — the whole time. It was cut before #178 and #179, not
+on top of a revert of them. The staleness was real and worth fixing; the deletions were an
+artefact of the two-dot diff, and the number growing every time `main` moved is what made a safe
+branch look unmergeable.
 
 **`deploy.yml`** publishes `dist/` to GitHub Pages on every push to `main`, and does. The first
 deploy ran on 28 July 2026.
